@@ -8,7 +8,10 @@
   "preserved_commit_subject": "Merge pull request #10 from beedesk/DOC-Updated-Code-Formatting",
   "preserved_commit_date": "2016-04-30T07:17:02Z",
   "legacy_tag": "legacy-pre-modernization",
-  "legacy_tag_status": "documented; create and push as a maintainer action if not yet present",
+  "legacy_tag_status": "created on origin; annotated tag points at preserved_commit",
+  "legacy_tag_object": "772990cd53dc5932377daf4b26d4052c9d44ac06",
+  "legacy_tag_url": "https://github.com/django-trusts/django-trusts/releases/tag/legacy-pre-modernization",
+  "github_release_url": "https://github.com/django-trusts/django-trusts/releases/tag/legacy-pre-modernization",
   "last_published_version": "0.10.3",
   "last_published_tag": "v0.10.3",
   "last_published_commit": "6222652de6f85e7870e878fb131a93cb39e0ccf7",
@@ -20,7 +23,8 @@
     "bytes": 26404,
     "prefix": "django-trusts-20ef23946d4fcfd9463fcf5953bb9414b8f0521b/",
     "format": "git archive --format=tar | gzip -n",
-    "originating_commit": "20ef23946d4fcfd9463fcf5953bb9414b8f0521b"
+    "originating_commit": "20ef23946d4fcfd9463fcf5953bb9414b8f0521b",
+    "github_release_asset_url": "https://github.com/django-trusts/django-trusts/releases/download/legacy-pre-modernization/django-trusts-legacy-pre-modernization.tar.gz"
   },
   "examples_repository": {
     "repository": "django-trusts/django-trusts-example",

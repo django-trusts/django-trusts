@@ -121,8 +121,13 @@ Verify after the push:
 test "$(git rev-parse legacy-pre-modernization^{commit})" = 20ef23946d4fcfd9463fcf5953bb9414b8f0521b
 ```
 
-Until that tag exists on `origin`, treat this item as incomplete. Creating the
-tag is a repository write that may require maintainer permissions.
+The annotated tag was pushed to `origin` on 2026-09-06 and resolves to
+`20ef23946d4fcfd9463fcf5953bb9414b8f0521b`. Confirm with:
+
+```bash
+git ls-remote --tags origin legacy-pre-modernization
+git rev-parse legacy-pre-modernization^{commit}
+```
 
 ## Source archive
 
@@ -151,27 +156,21 @@ git archive --format=tar --prefix="django-trusts-${COMMIT}/" "$COMMIT" \
 
 ### Durable locations
 
-1. **In-repository path (available when this documentation is merged):**
+1. **GitHub Release asset (canonical download):**
+   https://github.com/django-trusts/django-trusts/releases/download/legacy-pre-modernization/django-trusts-legacy-pre-modernization.tar.gz
+2. **GitHub Release page:**
+   https://github.com/django-trusts/django-trusts/releases/tag/legacy-pre-modernization
+3. **In-repository path (this documentation tree):**
    `docs/legacy/django-trusts-legacy-pre-modernization.tar.gz`
-2. **Intended GitHub Release asset (maintainer action; incomplete until done):**
-   create a GitHub Release on tag `legacy-pre-modernization` and upload the
-   same file. After upload, the durable URL should be:
-   `https://github.com/django-trusts/django-trusts/releases/download/legacy-pre-modernization/django-trusts-legacy-pre-modernization.tar.gz`
-3. **Git object (always):** commit `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`
+4. **Git object:** commit `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`
+
+The release asset was uploaded on 2026-09-06 and downloads to the same
+SHA-256 as the in-repository archive
+(`ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084`).
 
 GitHub's automatic `archive/` tarballs for a commit or tag are convenient but
 are **not** the recorded artifact. Their prefix and gzip metadata can differ,
 so their SHA-256 will not match the value above.
-
-Suggested release commands after the tag exists:
-
-```bash
-gh release create legacy-pre-modernization \
-  --title "Legacy baseline (pre-modernization)" \
-  --notes "Source snapshot of commit 20ef23946d4fcfd9463fcf5953bb9414b8f0521b, the master tip before modernization. Not a PyPI release. SHA-256: ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084" \
-  docs/legacy/django-trusts-legacy-pre-modernization.tar.gz \
-  docs/legacy/SHA256SUMS
-```
 
 ## How to retrieve the legacy source
 
@@ -191,6 +190,14 @@ After the legacy tag is pushed:
 ```bash
 git fetch origin tag legacy-pre-modernization
 git checkout legacy-pre-modernization
+```
+
+Download the GitHub Release asset:
+
+```bash
+curl -fsSL -o django-trusts-legacy-pre-modernization.tar.gz \
+  https://github.com/django-trusts/django-trusts/releases/download/legacy-pre-modernization/django-trusts-legacy-pre-modernization.tar.gz
+echo "ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084  django-trusts-legacy-pre-modernization.tar.gz" | sha256sum -c
 ```
 
 Extract the preserved archive from a clone that contains this documentation:
@@ -316,18 +323,19 @@ Verification performed while writing this document (2026-09-06):
 - Archive file list matched `git ls-tree -r --name-only` of the recorded
   commit (plus the directory prefix entries that `git archive` adds)
 
-## Maintainer follow-up (not done by this documentation PR)
+## Maintainer follow-up
 
-Leave these incomplete until a maintainer with tag and release permission
-performs them:
+Completed on 2026-09-06:
 
-1. Create and push annotated tag `legacy-pre-modernization` at
-   `20ef23946d4fcfd9463fcf5953bb9414b8f0521b` using the commands above.
-2. Confirm `git rev-parse legacy-pre-modernization^{commit}` equals that SHA
-   and that no existing `v*` tag moved.
-3. Create a GitHub Release for that tag and upload
-   `docs/legacy/django-trusts-legacy-pre-modernization.tar.gz` plus
-   `docs/legacy/SHA256SUMS`.
-4. Re-run `./scripts/verify-legacy-baseline.sh`.
-5. Optionally record the resulting release asset URL in
-   [`docs/legacy/baseline.json`](legacy/baseline.json).
+1. Annotated tag `legacy-pre-modernization` pushed to `origin`. The tag object
+   is `772990cd53dc5932377daf4b26d4052c9d44ac06`; the peeled commit is
+   `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`. Existing `v*` tags were not
+   moved (`v0.10.3` remains `6222652de6f85e7870e878fb131a93cb39e0ccf7`).
+2. GitHub Release
+   [legacy-pre-modernization](https://github.com/django-trusts/django-trusts/releases/tag/legacy-pre-modernization)
+   uploaded the archive and `SHA256SUMS`. The downloaded asset SHA-256 matched
+   the recorded digest.
+3. `./scripts/verify-legacy-baseline.sh` passed, including the tag-target
+   check.
+
+No further tag or release action is required for this preservation step.
