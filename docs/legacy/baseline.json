@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "recorded_on": "2026-09-06",
+  "repository": "django-trusts/django-trusts",
+  "default_branch": "master",
+  "preserved_commit": "20ef23946d4fcfd9463fcf5953bb9414b8f0521b",
+  "preserved_tree": "2a0613d074456c44d07006f7d3692b42e3011ff0",
+  "preserved_commit_subject": "Merge pull request #10 from beedesk/DOC-Updated-Code-Formatting",
+  "preserved_commit_date": "2016-04-30T07:17:02Z",
+  "legacy_tag": "legacy-pre-modernization",
+  "legacy_tag_status": "documented; create and push as a maintainer action if not yet present",
+  "last_published_version": "0.10.3",
+  "last_published_tag": "v0.10.3",
+  "last_published_commit": "6222652de6f85e7870e878fb131a93cb39e0ccf7",
+  "last_published_pypi_url": "https://pypi.org/project/django-trusts/0.10.3/",
+  "archive": {
+    "filename": "django-trusts-legacy-pre-modernization.tar.gz",
+    "path": "docs/legacy/django-trusts-legacy-pre-modernization.tar.gz",
+    "sha256": "ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084",
+    "bytes": 26404,
+    "prefix": "django-trusts-20ef23946d4fcfd9463fcf5953bb9414b8f0521b/",
+    "format": "git archive --format=tar | gzip -n",
+    "originating_commit": "20ef23946d4fcfd9463fcf5953bb9414b8f0521b"
+  },
+  "examples_repository": {
+    "repository": "django-trusts/django-trusts-example",
+    "default_branch": "master",
+    "commit": "0b22f2e4768a3c4ed02dd048627d0d596c7b7eb0",
+    "commit_subject": "Updated project name.",
+    "commit_date": "2016-03-07T00:31:38Z",
+    "url": "https://github.com/django-trusts/django-trusts-example/commit/0b22f2e4768a3c4ed02dd048627d0d596c7b7eb0"
+  }
+}
