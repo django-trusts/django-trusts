@@ -251,7 +251,8 @@ classifiers at `20ef239`:
 - `Framework :: Django :: 1.8`
 
 From [`.travis.yml`](https://github.com/django-trusts/django-trusts/blob/20ef23946d4fcfd9463fcf5953bb9414b8f0521b/.travis.yml)
-at `20ef239`:
+at `20ef239` (historical only; Travis was later removed from the current
+tree and is not current CI):
 
 - CI Python: `2.7`
 - Install: `pip install -r requirements.txt`

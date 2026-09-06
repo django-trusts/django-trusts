@@ -1,7 +1,7 @@
 Django Trusts
 -------------
 
-[![Docs](https://readthedocs.org/projects/django-trusts/badge/)](http://django-trusts.readthedocs.org) [![CI](https://travis-ci.org/beedesk/django-trusts.svg?branch=master)](https://travis-ci.org/beedesk/django-trusts) [![Coverage](https://coveralls.io/repos/github/beedesk/django-trusts/badge.svg?branch=master)](https://coveralls.io/github/beedesk/django-trusts?branch=master) [![Version](https://badge.fury.io/py/django-trusts.svg)](https://pypi.python.org/pypi/django-trusts)
+[![Docs](https://readthedocs.org/projects/django-trusts/badge/)](http://django-trusts.readthedocs.org) [![Coverage](https://coveralls.io/repos/github/beedesk/django-trusts/badge.svg?branch=master)](https://coveralls.io/github/beedesk/django-trusts?branch=master) [![Version](https://badge.fury.io/py/django-trusts.svg)](https://pypi.python.org/pypi/django-trusts)
 
 Django authorization add-on for multiple organizations and object-level permission settings
 
