@@ -186,4 +186,3 @@ fi
 
 echo
 echo "legacy baseline verification passed"
-echo "tag push / GitHub release remain maintainer steps if the tag check is incomplete"

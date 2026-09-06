@@ -58,8 +58,8 @@ treat current `master` as a published release.
 All of the following are **lightweight** tags (they point at commits, not
 annotated tag objects). **Do not move or replace them.**
 
-This repository had **no GitHub Releases** when this baseline was recorded
-(2026-09-06). Tags exist only as git refs.
+Before this preservation work, the repository had **no GitHub Releases**.
+The historical `v*` identifiers existed only as lightweight git tags.
 
 | Tag | Commit | Commit date (author) |
 | --- | --- | --- |
