@@ -214,11 +214,16 @@ cd docs/legacy
 sha256sum -c SHA256SUMS
 ```
 
-Or run the helper from the repository root:
+Or run the helper from the repository root. A complete pass requires the
+local tag; fetch it first if this clone does not have it:
 
 ```bash
+git fetch origin tag legacy-pre-modernization
 ./scripts/verify-legacy-baseline.sh
 ```
+
+`--partial` checks the archive, commit, and tree only. That mode always
+reports an incomplete result (exit 2) and never a complete pass.
 
 ## Historical Python and Django requirements
 
@@ -297,11 +302,33 @@ the default-branch baseline.
 
 ## Verification
 
-From a clone that contains the preserved commit (any branch):
+A complete successful run requires the **local** tag
+`legacy-pre-modernization` to point at the recorded commit. The script does
+not query the server and does not treat `refs/remotes/origin/...` as proof
+that the tag exists on origin.
+
+From a clone that contains the preserved commit:
 
 ```bash
+git fetch origin tag legacy-pre-modernization
 ./scripts/verify-legacy-baseline.sh
 ```
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Complete success: archive, commit, tree, and local tag all match |
+| 1 | Failed: a required artifact or SHA does not match |
+| 2 | Incomplete: local tag was not verified |
+
+If the tag is missing locally, the default mode prints `incomplete:` lines,
+exits 2, and tells you to fetch the existing tag. It does **not** recommend
+creating a new tag, and it does **not** print
+`legacy baseline verification passed`.
+
+`--partial` skips the tag requirement. Even when the archive checks pass, it
+exits 2 with `legacy baseline verification incomplete`.
 
 The script checks:
 
@@ -309,10 +336,8 @@ The script checks:
 2. Recreating `git archive | gzip -n` yields the recorded SHA-256.
 3. The stored archive matches `SHA256SUMS` and `MANIFEST`.
 4. Archive paths correspond to `git ls-tree` of the recorded commit.
-5. If `legacy-pre-modernization` exists locally or on `origin`, it points at
-   `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`. If the tag is absent, the
-   script reports that as an incomplete maintainer step rather than a content
-   mismatch.
+5. Unless `--partial` is set, `refs/tags/legacy-pre-modernization` exists
+   locally and peels to `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`.
 
 Verification performed while writing this document (2026-09-06):
 
@@ -322,6 +347,7 @@ Verification performed while writing this document (2026-09-06):
   `ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084`
 - Archive file list matched `git ls-tree -r --name-only` of the recorded
   commit (plus the directory prefix entries that `git archive` adds)
+- Local tag `legacy-pre-modernization` peeled to the recorded commit
 
 ## Maintainer follow-up
 

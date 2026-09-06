@@ -1,8 +1,50 @@
 #!/usr/bin/env bash
 # Recreate and verify the recorded pre-modernization source archive.
 # This script does not install the historical Python/Django stack.
+#
+# Exit codes:
+#   0  complete success (archive, commit, tree, and local tag all match)
+#   1  verification failed (mismatch or missing required content)
+#   2  incomplete (local tag not checked, or --partial mode)
+#
+# A complete pass requires the local tag refs/tags/<legacy_tag>. This script
+# does not query the server. Fetch the existing tag if it is missing locally:
+#   git fetch origin tag legacy-pre-modernization
+# Do not create a new tag merely because it is absent from this clone.
 
 set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/verify-legacy-baseline.sh [--partial]
+
+Verify the recorded pre-modernization source archive against the preserved
+commit. A complete successful run requires the local tag named in
+docs/legacy/baseline.json (legacy-pre-modernization) to point at the
+recorded commit.
+
+  --partial   Check the archive, commit, and tree only. Skip the tag
+              requirement. Even when those checks pass, the result is
+              incomplete (exit 2).
+
+If the tag is missing locally, fetch the existing tag; do not create one:
+
+  git fetch origin tag legacy-pre-modernization
+EOF
+}
+
+PARTIAL=0
+for arg in "$@"; do
+  case "$arg" in
+    --partial) PARTIAL=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      printf 'error: unknown argument: %s\n' "$arg" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -40,9 +82,10 @@ EXPECTED_SHA256="$(python_read archive.sha256)"
 PREFIX="$(python_read archive.prefix)"
 
 fail=0
+incomplete=0
 note() { printf '%s\n' "$*"; }
 ok() { printf 'ok: %s\n' "$*"; }
-warn() { printf 'incomplete: %s\n' "$*"; }
+warn() { printf 'incomplete: %s\n' "$*"; incomplete=1; }
 err() { printf 'error: %s\n' "$*" >&2; fail=1; }
 
 sha256_of() {
@@ -56,6 +99,9 @@ sha256_of() {
 note "Recorded commit: $COMMIT"
 note "Recorded tree:   $TREE"
 note "Legacy tag:      $TAG"
+if [[ "$PARTIAL" -eq 1 ]]; then
+  note "Mode:            --partial (tag check skipped; result cannot be complete)"
+fi
 note
 
 if ! git cat-file -e "${COMMIT}^{commit}" 2>/dev/null; then
@@ -152,37 +198,36 @@ else
   ok "archive files match git ls-tree of the recorded commit"
 fi
 
-resolve_tag() {
-  local ref="$1"
-  local sha=""
-  if sha="$(git rev-parse --verify --quiet "${ref}^{commit}" 2>/dev/null)"; then
-    printf '%s\n' "$sha"
-  fi
-}
-
-tag_commit="$(resolve_tag "refs/tags/${TAG}")"
-if [[ -z "$tag_commit" ]]; then
-  tag_commit="$(resolve_tag "$TAG")"
-fi
-if [[ -z "$tag_commit" ]]; then
-  tag_commit="$(resolve_tag "refs/remotes/origin/${TAG}")"
-fi
-if [[ -z "$tag_commit" ]]; then
-  warn "tag $TAG is not present locally or on origin"
-  warn "create it with: git tag -a $TAG $COMMIT && git push origin refs/tags/$TAG"
+# Only a local tag ref can complete verification. Remote-tracking names such
+# as refs/remotes/origin/<tag> are local leftovers and are not queried.
+if [[ "$PARTIAL" -eq 1 ]]; then
+  warn "tag $TAG was not checked (--partial)"
+  warn "re-run without --partial after: git fetch origin tag $TAG"
 else
-  if [[ "$tag_commit" != "$COMMIT" ]]; then
-    err "tag $TAG points at $tag_commit, expected $COMMIT"
+  tag_commit=""
+  if tag_commit="$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}" 2>/dev/null)"; then
+    if [[ "$tag_commit" != "$COMMIT" ]]; then
+      err "local tag $TAG points at $tag_commit, expected $COMMIT"
+    else
+      ok "local tag $TAG points at the recorded commit"
+    fi
   else
-    ok "tag $TAG points at the recorded commit"
+    warn "local tag $TAG is not present (refs/tags/$TAG)"
+    warn "this is not a complete verification; fetch the existing tag:"
+    warn "  git fetch origin tag $TAG"
+    warn "do not create a new tag because it is missing from this clone"
   fi
-fi
-
-if [[ "$fail" -ne 0 ]]; then
-  echo
-  echo "legacy baseline verification failed"
-  exit 1
 fi
 
 echo
+if [[ "$fail" -ne 0 ]]; then
+  echo "legacy baseline verification failed"
+  exit 1
+fi
+if [[ "$incomplete" -ne 0 ]]; then
+  echo "legacy baseline verification incomplete"
+  echo "archive/commit checks may have passed, but the local tag was not verified"
+  exit 2
+fi
+
 echo "legacy baseline verification passed"
