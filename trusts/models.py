@@ -15,12 +15,42 @@ options.DEFAULT_NAMES += ('roles', 'permission_conditions',
     )
 
 
+class PermissionConditionNotQueryable(ValueError):
+    """Raised when a SQL list/create filter is given a ``:condition`` suffix.
+
+    Conditions (``:own`` and custom ``permission_conditions``) are Python
+    predicates evaluated by ``User.has_perm``. They are not compiled into
+    SQL. ``permitted`` and ``filter_by_user_content_perm`` refuse them so
+    they cannot silently over-grant the underlying permission.
+    """
+
+
+def permission_has_condition(perm):
+    """True when ``perm`` is a string with a ``:condition`` suffix."""
+    return isinstance(perm, str) and ':' in perm
+
+
+def reject_queryable_condition(perm, api_name):
+    if permission_has_condition(perm):
+        raise PermissionConditionNotQueryable(
+            '%s does not support permission conditions (%r). '
+            'Conditions are evaluated by has_perm, not SQL. Use the '
+            'unconditioned permission for the queryset and apply '
+            'has_perm(..., obj) per object until conditions are '
+            'SQL-queryable.' % (api_name, perm)
+        )
+
+
 def resolve_content_permission(model, perm):
     """Resolve ``perm`` via ``TRUSTS_PERMISSION_MODEL``, not hardcoded auth.Permission.
 
     Accepts a permission instance, a codename (``read_category``), a bare
     action (``read`` → ``read_<model>``), or a dotted code
-    (``app.read_category``). Condition suffixes (``:own``) are stripped.
+    (``app.read_category``).
+
+    Queryset APIs must call ``reject_queryable_condition`` first. This
+    helper may still strip a leftover ``:condition`` when resolving a
+    grant/revoke target; it must not be used alone to filter lists.
     """
     Permission = get_permission_model()
     if isinstance(perm, Permission):
@@ -60,7 +90,12 @@ class ContentQuerySet(models.QuerySet):
         or anonymous principals. Role-derived grants are included so list
         results match ``has_perm`` on the supported relational paths.
         Superuser short-circuit is not duplicated (Django ModelBackend).
+
+        A ``:condition`` suffix raises ``PermissionConditionNotQueryable``.
+        Conditions are not SQL-queryable; refusing them avoids over-granting
+        the underlying permission.
         """
+        reject_queryable_condition(perm, 'ContentQuerySet.permitted')
         if not is_active_principal(user):
             return self.none()
         permission = resolve_content_permission(self.model, perm)
@@ -140,7 +175,7 @@ class TrustManager(ContentManager):
         - Parent-trust relations (``trust__trustees`` / ``trust__groups``)
           are not queried. ``#9`` did that accidentally.
         - Settlor identity is not a grant. Use ``has_perm(..., :own)`` for
-          settlor-only operations.
+          settlor-only operations (not this queryset).
         - ``fieldlookup`` from ``Content.get_content_fieldlookup`` is unused:
           this API filters Trust rows by grants, not by existing content
           rows. A Trust with no content yet can still be a create target.
@@ -149,10 +184,15 @@ class TrustManager(ContentManager):
           organization content).
         - ``filter_by_user_perm`` is unchanged (membership/trustee, no
           permission name).
+        - A ``:condition`` suffix raises ``PermissionConditionNotQueryable``
+          (same fail-closed rule as ``permitted``).
         """
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
 
+        reject_queryable_condition(
+            perm_name, 'Trust.objects.filter_by_user_content_perm'
+        )
         if not is_active_principal(user):
             return self.none()
 

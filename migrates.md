@@ -193,14 +193,15 @@ the 2016 UI.
 | | |
 | --- | --- |
 | Previous | Not on master. #9's `permitted` omitted role grants and hardcoded `auth.Permission`. Example PR #2 reimplemented the JOIN in `projects/query.py`. |
-| New | `Content.objects.permitted(perm, user)` — SQL filter of trustee **or** `Group.permissions` **or** role grants on `content.trust`. Empty for inactive/anonymous. Paginate the QuerySet. Superuser short-circuit is **not** duplicated (Django `ModelBackend`). |
-| Replacement | `Model.objects.permitted('read', user)` or `permitted('app.read_model', user)`. Example list helpers can call this instead of a project-local JOIN. |
+| New | `Content.objects.permitted(perm, user)` — SQL filter of trustee **or** `Group.permissions` **or** role grants on `content.trust`. Empty for inactive/anonymous. Paginate the QuerySet. Superuser short-circuit is **not** duplicated (Django `ModelBackend`). A ``:condition`` suffix (``:own`` or a custom condition) raises ``PermissionConditionNotQueryable``. Conditions stay Python predicates on ``has_perm``; they are not compiled into SQL. |
+| Replacement | `Model.objects.permitted('read', user)` or `permitted('app.read_model', user)`. For ``:own`` / custom conditions, filter unconditioned then `has_perm(..., obj)` per row until conditions are SQL-queryable. |
 | Affected | New callers; Content subclasses inherit `ContentManager`. `Trust.objects` is a `TrustManager` that also inherits `permitted`. |
-| Authorization | List results match `has_perm` on the supported relational paths. Read-only principals are listed only for perms they actually hold. |
+| Authorization | Unconditioned list results match `has_perm` on the supported relational paths. Conditioned requests fail closed (do not silently return every object covered by the underlying grant). |
 
 Migration-bot checklist:
 
-- [ ] Replace Python `[obj for obj in qs if user.has_perm(perm, obj)]` list filters with `.permitted(perm, user)` before pagination.
+- [ ] Replace Python `[obj for obj in qs if user.has_perm(perm, obj)]` list filters with `.permitted(perm, user)` before pagination **only** for unconditioned perms.
+- [ ] Do not call `.permitted('app.read_model:own', user)`; catch `PermissionConditionNotQueryable` or use `has_perm` per object.
 - [ ] Do not treat `permitted` as a superuser "return all" API.
 - [ ] Confirm inactive users get an empty queryset.
 
@@ -209,10 +210,10 @@ Migration-bot checklist:
 | | |
 | --- | --- |
 | Previous | #9 hardcoded `from django.contrib.auth.models import Permission`. |
-| New | Resolves via `get_permission_model()` / `TRUSTS_PERMISSION_MODEL`. Accepts a permission instance, codename, bare action (`read` → `read_<model>`), or dotted code. Strips `:own`. |
+| New | Resolves via `get_permission_model()` / `TRUSTS_PERMISSION_MODEL`. Accepts a permission instance, codename, bare action (`read` → `read_<model>`), or dotted code. May strip a leftover `:condition` when resolving a grant/revoke target. Queryset callers must reject conditions first (`permitted` / `filter_by_user_content_perm` do). |
 | Replacement | `Model.objects.get_permission('read')` or `get_permission('read_model')`. |
-| Affected | `grant` / `revoke` / `permitted` / `filter_by_user_content_perm`. Custom permission models must provide `get_by_natural_key` or `codename` + content type fields. |
-| Authorization | Lookup only; does not grant. |
+| Affected | `grant` / `revoke`. List APIs do not use this helper alone. Custom permission models must provide `get_by_natural_key` or `codename` + content type fields. |
+| Authorization | Lookup only; does not grant. Not a list filter. |
 
 Migration-bot checklist:
 
@@ -239,16 +240,17 @@ Migration-bot checklist:
 | | |
 | --- | --- |
 | Previous | Master has only `filter_by_user_perm(user, **kwargs)` (any trustee or group membership). #9 renamed that method, used parent-trust lookups (`trust__trustees`), ignored `fieldlookup`, and treated settlor as a grant. The #9 test was renamed to `filter_by_user_content_perm` (no `test_` prefix) so discovery failed. |
-| New | **Additional** method. Create-under-trust: Trusts where `user` holds `perm_name` for `content` on **that Trust row** via trustee / group.permissions / role. No parent lookup. No settlor shortcut. `fieldlookup` unused (no existing content required). Inactive → empty. `exclude_root` defaults True. `filter_by_user_perm` and `TrustTest.test_filter_by_user_perm` are unchanged. |
-| Replacement | `Trust.objects.filter_by_user_content_perm(user, Project, 'add_project')` for create-target trust pickers. Keep `filter_by_user_perm` for "trusts this user is attached to". |
+| New | **Additional** method. Create-under-trust: Trusts where `user` holds `perm_name` for `content` on **that Trust row** via trustee / group.permissions / role. No parent lookup. No settlor shortcut. `fieldlookup` unused (no existing content required). Inactive → empty. `exclude_root` defaults True. A ``:condition`` suffix raises ``PermissionConditionNotQueryable`` (same fail-closed rule as `permitted`). `filter_by_user_perm` and `TrustTest.test_filter_by_user_perm` are unchanged. |
+| Replacement | `Trust.objects.filter_by_user_content_perm(user, Project, 'add_project')` for create-target trust pickers. Keep `filter_by_user_perm` for "trusts this user is attached to". Settlor-only create still uses `has_perm(..., :own)` per trust, not this queryset. |
 | Affected | Example `ProjectForm` trust queryset (historical #1). |
-| Authorization | Settlor-only is **not** implied. Create forms must not list every settlor trust. |
+| Authorization | Settlor-only is **not** implied. Conditioned names do not silently return every trust covered by the underlying grant. |
 
 Migration-bot checklist:
 
 - [ ] Do not rename or remove `filter_by_user_perm`.
 - [ ] Update any #9-era `filter_by_user_content_perm(self.user)` (old signature) to the four-argument form.
 - [ ] Confirm settlors without an `add_*` grant are omitted.
+- [ ] Do not pass `:own` / custom conditions to this API.
 - [ ] Keep the test named `test_filter_by_user_perm`.
 
 ### 10. `trusts.authorization` administrative helpers (new)

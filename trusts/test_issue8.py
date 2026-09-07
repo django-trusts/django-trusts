@@ -23,7 +23,13 @@ from trusts.authorization import (
     refuse_group_permission_write,
     revoke_trustee,
 )
-from trusts.models import Role, Trust, TrustUserPermission
+from trusts.models import (
+    Content,
+    PermissionConditionNotQueryable,
+    Role,
+    Trust,
+    TrustUserPermission,
+)
 from trusts.tests import (
     ContentModelMixin,
     create_test_users,
@@ -120,6 +126,33 @@ class PermittedQuerySetTest(Issue8FixtureMixin, TestCase):
         reload_test_users(self)
         self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), self.content))
 
+    def test_conditioned_perm_fails_closed(self):
+        """A :condition must not silently return every unconditioned grant.
+
+        Reproduces the #20 review: register an always-false condition,
+        grant the underlying read, then compare has_perm vs permitted.
+        """
+        Content.register_permission_condition(
+            Category, 'never', lambda user, perm, obj: False
+        )
+        TrustUserPermission(
+            trust=self.org, entity=self.user, permission=self.perm_read
+        ).save()
+        reload_test_users(self)
+        unconditioned = self.get_perm_code(self.perm_read)
+        conditioned = '%s:never' % unconditioned
+        self.assertTrue(self.user.has_perm(unconditioned, self.content))
+        self.assertFalse(self.user.has_perm(conditioned, self.content))
+        with self.assertRaises(PermissionConditionNotQueryable):
+            Category.objects.permitted(conditioned, self.user)
+        with self.assertRaises(PermissionConditionNotQueryable):
+            Category.objects.permitted('read_category:own', self.user)
+        # Unconditioned path still lists the granted row only.
+        self.assertEqual(
+            set(Category.objects.permitted(unconditioned, self.user).values_list('pk', flat=True)),
+            {self.content.pk},
+        )
+
 
 class FilterByUserContentPermTest(Issue8FixtureMixin, TestCase):
     def test_filter_by_user_perm_name_still_discovered(self):
@@ -185,6 +218,29 @@ class FilterByUserContentPermTest(Issue8FixtureMixin, TestCase):
             self.user, Category, 'add_category'
         )
         self.assertIn(self.org.pk, trusts.values_list('pk', flat=True))
+
+    def test_conditioned_perm_fails_closed(self):
+        Content.register_permission_condition(
+            Category, 'never', lambda user, perm, obj: False
+        )
+        TrustUserPermission(
+            trust=self.org, entity=self.user, permission=self.perm_add
+        ).save()
+        reload_test_users(self)
+        unconditioned = self.get_perm_code(self.perm_add)
+        conditioned = '%s:never' % unconditioned
+        with self.assertRaises(PermissionConditionNotQueryable):
+            Trust.objects.filter_by_user_content_perm(
+                self.user, Category, conditioned
+            )
+        with self.assertRaises(PermissionConditionNotQueryable):
+            Trust.objects.filter_by_user_content_perm(
+                self.user, Category, 'add_category:own'
+            )
+        trusts = Trust.objects.filter_by_user_content_perm(
+            self.user, Category, unconditioned, exclude_root=True
+        )
+        self.assertEqual(set(trusts.values_list('pk', flat=True)), {self.org.pk})
 
 
 class AuthorizationTest(Issue8FixtureMixin, TestCase):
