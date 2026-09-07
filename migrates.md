@@ -288,7 +288,7 @@ Migration-bot checklist:
 | | |
 | --- | --- |
 | Previous | Core `admin.py` registered only Trust / Role / RolePermission / TrustUserPermission. |
-| New | `options.DEFAULT_NAMES` includes `auto_modeladmin`. `AppConfig.ready` registers concrete `Content` / `Junction` subclasses with `auto_modeladmin = True`. Default is False. Already-registered models are skipped. Proxy and abstract subclasses do not re-register content fieldlookups (a proxy Junction must not overwrite the concrete junction's Group lookup). |
+| New | `options.DEFAULT_NAMES` includes `auto_modeladmin`. `AppConfig.ready` registers concrete `Content` / `Junction` subclasses with `auto_modeladmin = True` **only when `django.contrib.admin` is installed**. Default is False. Already-registered models are skipped. Proxy and abstract subclasses do not re-register content fieldlookups (a proxy Junction must not overwrite the concrete junction's Group lookup). |
 | Replacement | `class Meta: auto_modeladmin = True` on a concrete subclass. |
 | Affected | Project Content/Junction models that want admin without a local `admin.py` line. |
 | Authorization | Django admin permissions still apply; this only registers the class. |
