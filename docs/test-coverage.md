@@ -17,6 +17,10 @@ boundary):
 - `TrustContentTestMixin.test_organization_isolation_denies_cross_trust_access` (added)
 - `TrustTest.test_own_condition_requires_settlor` (added; `:own` is settlor-only)
 - Role tests that a stronger role on one trust does not leak to another
+- `PermittedQuerySetTest` (role grants, inactive parity, filter-before-pagination)
+- `FilterByUserContentPermTest` (create-under-trust, no settlor shortcut, inactive, root exclude)
+- `TeamViewAuthorizationTest` (member cannot add; trustee `change_trust` can; unauthorized group POST is a no-op)
+- `AutoModelAdminTest` (opt-in Content registration)
 
 These run for `Content` subclasses, `Junction` content, and `Trust` as content
 where the mixin applies.
@@ -39,7 +43,7 @@ joined model. That is historical, not a new denial-widening.
 | Decorator `raise_exception=True` | Most decorator tests use `raise_exception=False`. |
 | `TRUSTS_ENTITY_MODEL` swap | Custom entity model is configurable but untested. |
 | Captured production MySQL/Postgres dump | `scripts/verify-legacy-upgrade.py` upgrades a representative 0.10.3-shaped SQLite DB (`trusts.0001_initial` already recorded, historical table DDL). It is not a customer dump and does not replay Django 1.8 contrib tables. |
-| Admin / i18n surfaces | Registered, not exercised. |
+| Admin / i18n surfaces | Core models stay explicitly registered; `auto_modeladmin` is covered for `Category`. |
 
 Do not treat a gap as license to widen access. New grants need an explicit
 test.

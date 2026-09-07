@@ -14,7 +14,7 @@ A ``trust`` is a relationship whereby content access is permitted by the creator
 
 ``django-trusts`` also strives to be a **scalable** solution. Permissions checking is offloaded to the database by design, and the implementation minimizes database hits. Permissions are cached per ``trust`` for the lifecycle of ``request user``. If a project's request lifecycle resolves most checked content to one or few ``trusts``, which should be very typically the case, this design should be a winner in term of performance. Permissions checking is done against an individual content or a ``QuerySet``.
 
-``django-trusts`` supports Django's builtins User models ``has_perm()`` / ``has_perms()`` and does not provides any in-addition.
+``django-trusts`` supports Django's builtins User models ``has_perm()`` / ``has_perms()``. List views can use ``Content.objects.permitted(perm, user)`` (SQL filter; paginate after). Create-under-trust querysets use ``Trust.objects.filter_by_user_content_perm(user, Model, perm_name)``. See [migrates.md](migrates.md).
 
 Read more: http://django-trusts.readthedocs.org/en/latest/
 
