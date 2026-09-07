@@ -1,8 +1,28 @@
 from django.contrib import admin
-from trusts.models import Trust, Role, RolePermission, TrustUserPermission
+from django.apps import apps as django_apps
+
+from trusts.models import Content, Junction, Trust, Role, RolePermission, TrustUserPermission
 
 admin.site.register(Trust, admin.ModelAdmin)
 admin.site.register(Role, admin.ModelAdmin)
 admin.site.register(RolePermission, admin.ModelAdmin)
 admin.site.register(TrustUserPermission, admin.ModelAdmin)
 
+
+def register_auto_modeladmins(admin_site=None):
+    """Register concrete Content/Junction subclasses with ``auto_modeladmin=True``.
+
+    Opt-in only. Core models stay explicitly registered above. Already
+    registered models are skipped. Safe to call more than once.
+    """
+    site = admin_site if admin_site is not None else admin.site
+    for model in django_apps.get_models():
+        if model._meta.abstract:
+            continue
+        if not getattr(model._meta, 'auto_modeladmin', False):
+            continue
+        if not issubclass(model, (Content, Junction)):
+            continue
+        if site.is_registered(model):
+            continue
+        site.register(model)

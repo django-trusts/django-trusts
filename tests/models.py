@@ -29,3 +29,27 @@ class TestGroupJunction(Junction):
             ('admin', ('read_group', 'add_group', 'change_group', 'add_topic_to_group')),
             ('write', ('read_group', 'change_group', 'add_topic_to_group')),
         )
+
+
+class AutoAdminCategory(Category):
+    """Proxy Content subclass opting into auto ModelAdmin registration."""
+
+    class Meta:
+        proxy = True
+        auto_modeladmin = True
+
+
+class ManualAdminCategory(Category):
+    """Proxy Content subclass that must stay unregistered."""
+
+    class Meta:
+        proxy = True
+        auto_modeladmin = False
+
+
+class AutoAdminJunction(TestGroupJunction):
+    """Proxy Junction subclass opting into auto ModelAdmin registration."""
+
+    class Meta:
+        proxy = True
+        auto_modeladmin = True

@@ -4,15 +4,81 @@ from django.db.models import signals, Q, options
 from django.utils.translation import gettext_lazy as _
 
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
-                    DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, utils
+                    DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
+                    get_permission_model, utils
+from trusts.query import is_active_principal, trust_grant_q
 
 
 options.DEFAULT_NAMES += ('roles', 'permission_conditions',
-                          'content_roles', 'content_permission_conditions'
+                          'content_roles', 'content_permission_conditions',
+                          'auto_modeladmin',
     )
 
 
-class TrustManager(models.Manager):
+def resolve_content_permission(model, perm):
+    """Resolve ``perm`` via ``TRUSTS_PERMISSION_MODEL``, not hardcoded auth.Permission.
+
+    Accepts a permission instance, a codename (``read_category``), a bare
+    action (``read`` → ``read_<model>``), or a dotted code
+    (``app.read_category``). Condition suffixes (``:own``) are stripped.
+    """
+    Permission = get_permission_model()
+    if isinstance(perm, Permission):
+        return perm
+
+    app_label = model._meta.app_label
+    model_name = model._meta.model_name
+    perm = str(perm)
+    if '.' in perm:
+        try:
+            applabel, modelname, action, _cond = utils.parse_perm_code(perm)
+            perm = '%s_%s' % (action, modelname)
+            app_label = applabel
+            model_name = modelname
+        except ValueError:
+            app_label, perm = perm.split('.', 1)
+    if ':' in perm:
+        perm = perm.split(':', 1)[0]
+    if not perm.endswith('_' + model_name) and '_' not in perm:
+        perm = '%s_%s' % (perm, model_name)
+
+    manager = Permission.objects
+    if hasattr(manager, 'get_by_natural_key'):
+        return manager.get_by_natural_key(perm, app_label.lower(), model_name)
+    return manager.get(
+        codename=perm,
+        content_type__app_label=app_label.lower(),
+        content_type__model=model_name,
+    )
+
+
+class ContentQuerySet(models.QuerySet):
+    def permitted(self, perm, user):
+        """Content the user may access via trustee, group, or role grants.
+
+        SQL-filtered (paginate the returned QuerySet). Empty for inactive
+        or anonymous principals. Role-derived grants are included so list
+        results match ``has_perm`` on the supported relational paths.
+        Superuser short-circuit is not duplicated (Django ModelBackend).
+        """
+        if not is_active_principal(user):
+            return self.none()
+        permission = resolve_content_permission(self.model, perm)
+        return self.filter(trust_grant_q(user, permission, trust_fk='trust')).distinct()
+
+
+class ContentManager(models.Manager):
+    def get_queryset(self):
+        return ContentQuerySet(self.model, using=self._db)
+
+    def get_permission(self, perm):
+        return resolve_content_permission(self.model, perm)
+
+    def permitted(self, perm, user):
+        return self.get_queryset().permitted(perm, user)
+
+
+class TrustManager(ContentManager):
     def get_or_create_settlor_default(self, settlor, defaults={}, **kwargs):
         if 'trust' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'trust')
@@ -63,6 +129,45 @@ class TrustManager(models.Manager):
 
         return self.filter(Q(groups__user=user) | Q(trustees__entity=user), **kwargs)
 
+    def filter_by_user_content_perm(self, user, content, perm_name, exclude_root=True, **kwargs):
+        """Return Trusts under which ``user`` may exercise ``perm_name``.
+
+        Create-under-trust semantics (verified, not inherited from #9):
+
+        - A Trust is included when ``user`` has ``perm_name`` for ``content``
+          via trustee, ``Group.permissions``, or role grants **on that Trust
+          row**.
+        - Parent-trust relations (``trust__trustees`` / ``trust__groups``)
+          are not queried. ``#9`` did that accidentally.
+        - Settlor identity is not a grant. Use ``has_perm(..., :own)`` for
+          settlor-only operations.
+        - ``fieldlookup`` from ``Content.get_content_fieldlookup`` is unused:
+          this API filters Trust rows by grants, not by existing content
+          rows. A Trust with no content yet can still be a create target.
+        - Inactive / anonymous principals yield an empty queryset.
+        - ``exclude_root=True`` drops ``TRUSTS_ROOT_PK`` (typical for
+          organization content).
+        - ``filter_by_user_perm`` is unchanged (membership/trustee, no
+          permission name).
+        """
+        if 'group__user' in kwargs:
+            raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
+
+        if not is_active_principal(user):
+            return self.none()
+
+        if not isinstance(content, type):
+            content = content.__class__
+
+        if not Content.is_content_model(content):
+            return self.none()
+
+        permission = resolve_content_permission(content, perm_name)
+        qs = self.filter(trust_grant_q(user, permission), **kwargs)
+        if exclude_root and ROOT_PK is not None:
+            qs = qs.exclude(pk=ROOT_PK)
+        return qs.distinct()
+
 
 class ReadonlyFieldsMixin(object):
     def _readonly_attname(self, field_name):
@@ -99,6 +204,7 @@ class ReadonlyFieldsMixin(object):
 class Content(ReadonlyFieldsMixin, models.Model):
     trust = models.ForeignKey('trusts.Trust', related_name='%(app_label)s_%(class)s_content',
                 default=ROOT_PK, null=False, blank=False, on_delete=models.CASCADE)
+    objects = ContentManager()
     _contents = {}
     _conditions = {}
 
@@ -106,6 +212,24 @@ class Content(ReadonlyFieldsMixin, models.Model):
         abstract = True
         default_permissions = ('add', 'change', 'delete', 'read',)
         permission_conditions = ()
+        auto_modeladmin = False
+
+    def grant(self, perm, user):
+        """Create a TrustUserPermission on this content's authorizing trust."""
+        permission = type(self).objects.get_permission(perm)
+        TrustUserPermission.objects.get_or_create(
+            trust=self.trust, entity=user, permission=permission
+        )
+
+    def revoke(self, perm, user):
+        """Remove TrustUserPermission rows on this content's trust.
+
+        ``perm=None`` removes every trustee grant for ``user`` on this trust.
+        """
+        qs = TrustUserPermission.objects.filter(trust=self.trust, entity=user)
+        if perm is not None:
+            qs = qs.filter(permission=type(self).objects.get_permission(perm))
+        qs.delete()
 
     @staticmethod
     def register_permission_condition(klass, cond_code, func):
@@ -255,6 +379,10 @@ class Junction(ReadonlyFieldsMixin, models.Model):
 
 
 def register_content_junction(sender, **kwargs):
+    # Proxy subclasses share the concrete table and must not overwrite the
+    # content/junction fieldlookup registered for that table.
+    if sender._meta.proxy or sender._meta.abstract:
+        return
     if issubclass(sender, Junction):
         Junction.register_junction(sender)
     elif issubclass(sender, Content):

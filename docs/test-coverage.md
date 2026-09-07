@@ -39,7 +39,17 @@ joined model. That is historical, not a new denial-widening.
 | Decorator `raise_exception=True` | Most decorator tests use `raise_exception=False`. |
 | `TRUSTS_ENTITY_MODEL` swap | Custom entity model is configurable but untested. |
 | Captured production MySQL/Postgres dump | `scripts/verify-legacy-upgrade.py` upgrades a representative 0.10.3-shaped SQLite DB (`trusts.0001_initial` already recorded, historical table DDL). It is not a customer dump and does not replay Django 1.8 contrib tables. |
-| Admin / i18n surfaces | Registered, not exercised. |
+| Admin / i18n surfaces | Core models registered; `auto_modeladmin` opt-in is exercised in `AutoModelAdminTest`. |
+
+## Issue #8 recovery tests (do not close #8)
+
+These must keep passing in addition to the table above:
+
+- `PermittedQuerySetTest` — trustee / group.permissions / role list-direct parity, SQL filter, inactive empty, `get_permission`, grant/revoke
+- `FilterByUserContentPermTest` — create-under-trust, no settlor shortcut, no parent-trust leak, inactive empty, `test_filter_by_user_perm` still discovered
+- `AuthorizationTest` — reader/member denial with no mutation, scoped entity IDs, shared-group `Group.permissions` leak demonstration, shared-group membership requires admin on every trust
+- `TeamViewAuthorizationTest` — member GET/POST 403, admin add, unknown user PK does not mutate
+- `AutoModelAdminTest` — Content and Junction proxies with `auto_modeladmin = True` register; opt-out does not
 
 Do not treat a gap as license to widen access. New grants need an explicit
 test.
