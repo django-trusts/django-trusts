@@ -324,6 +324,9 @@ schema. This PR refuses to fake them with `Group.permissions` / shared
 `Group.user_set` writes. A redesign (`TrustGroupPermission` or similar)
 must not merge without an explicit go-ahead.
 
+**Superseded by issue #23** for per-trust group permission *levels*.
+Per-trust group *membership* remains out of scope.
+
 ## Migration-bot summary (issue #8)
 
 - [ ] Adopt `permitted` / `grant` / `revoke` / `filter_by_user_content_perm` instead of #9 copies.
@@ -333,4 +336,178 @@ must not merge without an explicit go-ahead.
 - [ ] Do not add `TrustGroup` or edit `0001_initial`.
 - [ ] Set `auto_modeladmin = True` only where you want automatic admin.
 - [ ] Leave package version at `1.0.0.dev0`.
+
+# Issue #23: fail-closed per-Trust group permission intersection (1.0.0.dev0)
+
+This record covers the `TrustGroup` through model and the four-part AND
+invariant. Version remains **1.0.0.dev0**. `trusts.0001_initial` is not
+edited. Example-project UI is out of scope
+(`django-trusts/django-trusts-example#5`).
+
+## Decision
+
+A group permission applies to Trust-controlled content only when **all**
+of these facts exist:
+
+```
+effective(user, permission, trust, group) =
+    user ∈ group
+    AND TrustGroup(trust, group) exists
+    AND permission ∈ TrustGroup.permissions
+    AND permission ∈ Group.permissions
+```
+
+`Group.permissions` is the global capability **ceiling**. Role assignments
+on a group participate in that ceiling; they are not per-Trust role
+grants. `TrustGroup.permissions` is the locally enabled subset. Missing
+membership, association, local grant, or ceiling permission denies access
+(fail closed). Direct `TrustUserPermission` trustee grants are unchanged.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` signatures via `TrustModelBackend`
+- `trusts.decorators.permission_required`, `P`, `K`, `G`, `O`
+- `Trust.objects.get_or_create_settlor_default`, `get_root`,
+  `filter_by_content`, **`filter_by_user_perm`** (membership/trustee, still
+  no permission name)
+- `Content.grant` / `Content.revoke` (still write `TrustUserPermission`)
+- `filter_by_user_content_perm` / `ContentQuerySet.permitted` signatures
+- Package version `1.0.0.dev0`
+
+Authorization **behavior** for group-derived Trust access **does** change
+(see below). Trustee grants and inactive/anonymous denial do not.
+
+## Changes
+
+### 14. `Trust.groups` uses explicit `TrustGroup` through model
+
+| | |
+| --- | --- |
+| Previous (#8) | Implicit M2M. `trust.groups.add(group)` plus `Group.permissions` (or a role on the group) granted that permission on the trust. |
+| New | `through='trusts.TrustGroup'` on the same table (`trusts_trust_groups`). Association rows are preserved. `TrustGroup.permissions` (via `TrustGroupPermission`) is the local grant set and starts empty. |
+| Replacement | `trust.groups.add(group)` still associates. Enable a local subset with `trust.grant_group_permission(group, permission)` or `TrustGroup.grant_permission`. `trusts.authorization.associate_group_with_trust` / `grant_trust_group_permission` wrap those writes with `change`. |
+| Affected | Any caller that treated `Trust.groups.add` as a grant. |
+| Authorization | Association without local tuples grants nothing. |
+
+Migration-bot checklist:
+
+- [ ] Apply `trusts.0002_trustgroup`. Do not edit or fake `0001_initial`.
+- [ ] Confirm every previous `Trust.groups` pair still exists as a `TrustGroup` row.
+- [ ] Confirm `TrustGroup.permissions` is empty after migrate (no inferred policy).
+- [ ] Replace project code that assumed `groups.add` granted access with an explicit local grant.
+- [ ] Do not write `Group.permissions` from a project form (`refuse_group_permission_write`).
+
+### 15. Group-derived `has_perm` / `.permitted()` / `filter_by_user_content_perm`
+
+| | |
+| --- | --- |
+| Previous | SQL and `get_all_permissions` treated `Group.permissions` and role permissions on an associated group as Trust grants. |
+| New | Group-derived access requires the local/global intersection on the **same** `TrustGroup` / group. Two groups union their *effective* rights without mixing one group's local grant with another group's ceiling. Role-derived permissions are ceiling only. Incomplete or inconsistent `TrustGroupPermission` rows deny (read path still requires the ceiling JOIN/Exists). |
+| Replacement | Same APIs. Direct trustee path is unchanged. |
+| Affected | List views, create-under-trust pickers, team/project authorization helpers that use `has_perm` / `trust_grant_q`. |
+| Authorization | Fail closed at every partial state. |
+
+Migration-bot checklist:
+
+- [ ] Re-run allow/deny tests for group members after migrate (expect deny until local tuples exist).
+- [ ] Confirm `has_perm` and `.permitted()` still agree.
+- [ ] Confirm a later add to `Group.permissions` does not enable that permission on existing Trusts until a local grant is created.
+
+### 16. Application API and ceiling enforcement
+
+| | |
+| --- | --- |
+| Previous | `trust.groups.add` / `.remove`. No local grant API. |
+| New | `Trust.associate_group`, `grant_group_permission`, `revoke_group_permission`, `set_group_permissions`. `TrustGroup.grant_permission` / `revoke_permission` / `set_permissions`. Direct writes outside the ceiling raise `ValidationError` (`save`, `bulk_create`, `.permissions.add`). Actor-gated wrappers: `grant_trust_group_permission`, `revoke_trust_group_permission`, `set_trust_group_permissions`. Optional `permissions=` on `associate_group_with_trust`. |
+| Replacement | Call the Trust/TrustGroup methods or authorization helpers. |
+| Affected | Project settings / team UIs (example app tracks UI separately). |
+| Authorization | Ceiling violations are rejected at write time and still deny at read time if a row is forced in. A rejected `grant_group_permission` / `set_group_permissions` / `associate_group_with_trust(..., permissions=...)` does not create a TrustGroup row for a previously unassociated group. |
+
+Migration-bot checklist:
+
+- [ ] Gate local-grant POSTs on `change`, same as associate/disassociate.
+- [ ] Catch `AuthorizationDenied` / `ValidationError` when a submitted permission is not in the group's ceiling.
+
+### 17. `grandfather_trust_group_permissions` management command
+
+| | |
+| --- | --- |
+| Previous | None. Old implicit access was the default. |
+| New | Operator-controlled copy of each TrustGroup's **current** global ceiling (`Group.permissions` ∪ role permissions) into `TrustGroupPermission`. Default is `--dry-run` (prints exact `trust_id` / `group_id` / `permission_id` tuples, writes nothing). `--apply` inserts. Not run from schema migration. |
+| Replacement | `manage.py grandfather_trust_group_permissions --dry-run` then `--apply` only when a deployment deliberately wants former group-derived access. |
+| Affected | Existing deployments that relied on implicit `Trust.groups` + `Group.permissions`. |
+| Authorization | After `--apply`, former effective group access can be reproduced from the ceiling at apply time. Permissions added to the ceiling later are still not local. |
+
+Migration-bot checklist:
+
+- [ ] Run `--dry-run` and review the tuple list before `--apply`.
+- [ ] Do not invoke this command from `0002` or `post_migrate`.
+- [ ] After `--apply`, confirm a later `Group.permissions.add` still does not grant locally until a new local tuple is created.
+
+## Old vs new behavior
+
+| Situation | Before #23 | After `0002` (no grandfather) | After optional `--apply` |
+| --- | --- | --- | --- |
+| Group member + `Group.permissions` + `Trust.groups` | Allow | Deny (association kept, local empty) | Allow (local copies of then-current ceiling) |
+| `Trust.groups.add` with no `Group.permissions` | Deny | Deny | Deny |
+| Same group, `change` on Trust A and `read` on Trust B | Impossible (global permissions) | Expressible via local grants | Same, if those tuples were in the ceiling at apply |
+| Remove global permission | Revoke everywhere | Revoke everywhere (ceiling) | Same |
+| Remove local permission | N/A | Revoke that Trust only | Same |
+| Add global permission later | Grant on every associated Trust | Ceiling only; local unchanged | Ceiling only; local unchanged |
+| Direct `TrustUserPermission` | Unchanged | Unchanged | Unchanged |
+| Role on a group associated with a Trust | Role perms granted on that Trust | Role perms are ceiling only | Local copies of those ceiling perms if `--apply` |
+| Inactive / anonymous | Deny | Deny | Deny |
+
+## Schema
+
+- Forward migration `trusts.0002_trustgroup` only. **Do not edit `0001_initial`.**
+- `SeparateDatabaseAndState` reuses `trusts_trust_groups` as `TrustGroup` (`unique_together` `(trust, group)`).
+- New table `trusts_trustgrouppermission` for local tuples. Empty after migrate.
+- `TRUSTS_GROUP_MODEL` and `TRUSTS_PERMISSION_MODEL` are respected (same settings as `0001`). Custom group models must keep Django's `auth.Group` query conventions: a `permissions` M2M to the configured permission model and a `user` related-query name for membership. Role.groups already uses `TRUSTS_GROUP_MODEL`. Swapping these settings after tables exist still requires an explicit project migration (same warning as `0001`).
+
+### Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+```
+
+Applies `0001_initial` then `0002_trustgroup` and creates the root trust when
+`TRUSTS_CREATE_ROOT` is true.
+
+### Upgrade of a representative legacy database
+
+`scripts/verify-legacy-upgrade.py` now:
+
+1. Applies Django contrib migrations only.
+2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`.
+3. Records `trusts.0001_initial` as already applied.
+4. Seeds organizations **and** a `Trust.groups` association.
+5. Runs modern `migrate` (applies `0002_trustgroup`, does not re-run `0001`).
+6. Asserts association preserved, local grants empty, group-derived access
+   denied; trustee isolation still holds; grandfather `--dry-run` reports
+   without mutation and `--apply` can restore former group-derived access.
+
+```
+python scripts/verify-legacy-upgrade.py
+```
+
+## Out of scope (unchanged)
+
+- Parent/child Trust inheritance or ceilings
+- Explicit deny / Windows ACL ordering
+- Per-Trust group membership
+- SQL compilation of Python permission conditions
+- Local role assignment on TrustGroup
+- Example-project UI
+
+## Migration-bot summary (issue #23)
+
+- [ ] Apply `trusts.0002_trustgroup`. Do not edit `0001_initial`.
+- [ ] Expect existing `Trust.groups` associations to remain and to grant **nothing** until local tuples exist.
+- [ ] Review `manage.py grandfather_trust_group_permissions --dry-run` if you want former implicit access; `--apply` only with an explicit operator decision.
+- [ ] Stop treating `trust.groups.add` as a grant; use `grant_group_permission` / authorization helpers.
+- [ ] Keep `Group.permissions` and roles as the global ceiling; grant per-Trust subsets on `TrustGroup`.
+- [ ] Reload user objects after grant changes (`_trust_perm_cache`).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Example UI is a separate issue; do not block this core change on it.
 

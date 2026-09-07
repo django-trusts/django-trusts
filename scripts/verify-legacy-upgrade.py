@@ -9,7 +9,10 @@ Builds a 0.10.3-shaped database:
    would have).
 4. Seed a root trust plus two organizations with allow/deny grants.
 5. Run modern ``migrate`` without faking or reapplying Trusts 0001.
-6. Smoke-check the root row and organization isolation.
+   Forward ``0002_trustgroup`` converts ``Trust.groups`` to an explicit
+   through model, preserving association rows with empty local grants.
+6. Smoke-check the root row, organization isolation, and fail-closed
+   group-derived access (association preserved, no implicit grant).
 
 This is not a captured production dump and does not replay a full Django
 1.8→6.1 contrib upgrade. It is the Trusts-specific already-applied-0001
@@ -113,13 +116,17 @@ def main() -> int:
             raise SystemExit('Expected only trusts.0001_initial to be recorded after the seed.')
 
         pending_before = _trusts_plan(connection)
-        if pending_before:
-            raise SystemExit('Modern tree wants extra Trusts migrations before upgrade: %s' % pending_before)
+        expected_pending = [('trusts', '0002_trustgroup', False)]
+        if pending_before != expected_pending:
+            raise SystemExit(
+                'Expected pending Trusts migration %s before upgrade, got %s'
+                % (expected_pending, pending_before)
+            )
 
         # 4. Seed organizations after Django can see the historical tables.
-        from django.contrib.auth.models import Permission, User
+        from django.contrib.auth.models import Group, Permission, User
         from django.contrib.contenttypes.models import ContentType
-        from trusts.models import Trust, TrustUserPermission
+        from trusts.models import Trust, TrustGroup, TrustGroupPermission, TrustUserPermission
 
         user_a = User.objects.create_user('org_a_user', 'a@example.com', 'pass')
         user_b = User.objects.create_user('org_b_user', 'b@example.com', 'pass')
@@ -137,9 +144,13 @@ def main() -> int:
         denied_child = Trust(settlor=user_a, title='No Grant Child', trust=denied)
         denied_child.save()
 
+        legacy_group = Group.objects.create(name='legacy-org-a')
+        legacy_group.user_set.add(user_a)
+        org_a.groups.add(legacy_group)
+
         # 5. Modern migrate: must not reapply or fake Trusts 0001.
         call_command('migrate', verbosity=1, interactive=False)
-        if _applied_trusts(connection) != {'0001_initial'}:
+        if _applied_trusts(connection) != {'0001_initial', '0002_trustgroup'}:
             raise SystemExit('Trusts migration set changed during upgrade: %s' % _applied_trusts(connection))
         pending_after = _trusts_plan(connection)
         if pending_after:
@@ -150,6 +161,11 @@ def main() -> int:
             content_type=ContentType.objects.get_for_model(Trust),
             codename='change_trust',
         )
+        read = Permission.objects.get(
+            content_type=ContentType.objects.get_for_model(Trust),
+            codename='read_trust',
+        )
+        legacy_group.permissions.add(change, read)
         TrustUserPermission(trust=org_a, entity=user_a, permission=change).save()
         TrustUserPermission(trust=org_b, entity=user_b, permission=change).save()
 
@@ -178,12 +194,48 @@ def main() -> int:
         if user_b.has_perm('trusts.change_trust', denied_child):
             raise SystemExit('Unrelated user was allowed on isolated content.')
 
+        org_a = Trust.objects.get(pk=org_a.pk)
+        if not org_a.groups.filter(pk=legacy_group.pk).exists():
+            raise SystemExit('Legacy Trust.groups association was not preserved.')
+        tg = TrustGroup.objects.get(trust=org_a, group=legacy_group)
+        if tg.permissions.exists():
+            raise SystemExit('Schema migration inferred local TrustGroup permissions.')
+        group_only = User.objects.create_user('group_only', 'g@example.com', 'pass')
+        legacy_group.user_set.add(group_only)
+        group_only = User.objects.get(pk=group_only.pk)
+        child_a = Trust.objects.get(pk=child_a.pk)
+        if group_only.has_perm('trusts.change_trust', child_a):
+            raise SystemExit('Group association granted Trust access without local tuples.')
+        if group_only.has_perm('trusts.read_trust', child_a):
+            raise SystemExit('Group association granted read without local tuples.')
+
+        from io import StringIO
+        dry = StringIO()
+        call_command('grandfather_trust_group_permissions', '--dry-run', stdout=dry)
+        dry_out = dry.getvalue()
+        if 'mode=dry-run' not in dry_out:
+            raise SystemExit('Grandfather dry-run did not report mode=dry-run.')
+        if ('trust_id=%s' % org_a.pk) not in dry_out or ('group_id=%s' % legacy_group.pk) not in dry_out:
+            raise SystemExit('Grandfather dry-run missed the legacy association tuple.')
+        if TrustGroupPermission.objects.filter(trustgroup=tg).exists():
+            raise SystemExit('Grandfather dry-run wrote TrustGroupPermission rows.')
+        group_only = User.objects.get(pk=group_only.pk)
+        if group_only.has_perm('trusts.change_trust', child_a):
+            raise SystemExit('Dry-run mutated authorization.')
+
+        call_command('grandfather_trust_group_permissions', '--apply', stdout=StringIO())
+        group_only = User.objects.get(pk=group_only.pk)
+        child_a = Trust.objects.get(pk=child_a.pk)
+        if not group_only.has_perm('trusts.change_trust', child_a):
+            raise SystemExit('Grandfather --apply did not restore former group-derived access.')
+
         print('legacy upgrade ok')
         print('django', django.get_version())
         print('db', db_path)
         print('applied trusts migrations', sorted(_applied_trusts(connection)))
         print('root', root.pk, root.title)
         print('isolation allow/deny passed')
+        print('trustgroup association preserved; group-derived access fail-closed until grandfather')
     return 0
 
 

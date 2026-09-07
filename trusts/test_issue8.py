@@ -33,6 +33,7 @@ from trusts.models import (
 from trusts.tests import (
     ContentModelMixin,
     create_test_users,
+    enable_local_group_grant,
     get_or_create_root_user,
     reload_test_users,
 )
@@ -80,7 +81,7 @@ class PermittedQuerySetTest(Issue8FixtureMixin, TestCase):
     def test_group_permissions_path(self):
         self.perm_read.group_set.add(self.group)
         self.user.groups.add(self.group)
-        self.org.groups.add(self.group)
+        enable_local_group_grant(self.org, self.group, self.perm_read)
         reload_test_users(self)
         self._assert_list_direct_parity(self.perm_read, self.user)
 
@@ -89,6 +90,7 @@ class PermittedQuerySetTest(Issue8FixtureMixin, TestCase):
         self.group.user_set.add(self.user)
         self.org.groups.add(self.group)
         Role.objects.get(name='public').groups.add(self.group)
+        enable_local_group_grant(self.org, self.group, self.perm_read)
         reload_test_users(self)
         self.assertTrue(self.user.has_perm(self.get_perm_code(self.perm_read), self.content))
         qs = Category.objects.permitted('read_category', self.user)
@@ -213,6 +215,7 @@ class FilterByUserContentPermTest(Issue8FixtureMixin, TestCase):
         self.group.user_set.add(self.user)
         self.org.groups.add(self.group)
         admin_role.groups.add(self.group)
+        enable_local_group_grant(self.org, self.group, self.perm_add)
         reload_test_users(self)
         trusts = Trust.objects.filter_by_user_content_perm(
             self.user, Category, 'add_category'
@@ -316,10 +319,10 @@ class AuthorizationTest(Issue8FixtureMixin, TestCase):
         )
 
     def test_shared_group_permissions_are_not_project_local(self):
-        """Two trusts share a group. Group.permissions must not be written.
+        """Two trusts share a group. Group.permissions is ceiling, not a grant.
 
-        Associating the group with org A (or granting a trustee on A) must
-        not change has_perm on org B. Writing Group.permissions would leak.
+        Associating the group, or writing Group.permissions, must not grant
+        access until a local TrustGroup permission exists on that trust.
         """
         shared = Group.objects.create(name='shared-writers')
         self.org.groups.add(shared)
@@ -338,11 +341,15 @@ class AuthorizationTest(Issue8FixtureMixin, TestCase):
         with self.assertRaises(AuthorizationDenied):
             refuse_group_permission_write()
 
-        # Demonstrate the leak that the old UI would have caused:
         shared.permissions.add(self.perm_change)
         reload_test_users(self)
+        self.assertFalse(self.user1.has_perm(self.get_perm_code(self.perm_change), self.content))
+        self.assertFalse(self.user1.has_perm(self.get_perm_code(self.perm_change), self.content_b))
+
+        enable_local_group_grant(self.org, shared, self.perm_change)
+        reload_test_users(self)
         self.assertTrue(self.user1.has_perm(self.get_perm_code(self.perm_change), self.content))
-        self.assertTrue(self.user1.has_perm(self.get_perm_code(self.perm_change), self.content_b))
+        self.assertFalse(self.user1.has_perm(self.get_perm_code(self.perm_change), self.content_b))
 
     def test_shared_group_membership_requires_admin_on_every_trust(self):
         shared = Group.objects.create(name='shared-members')

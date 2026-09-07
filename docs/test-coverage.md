@@ -45,11 +45,12 @@ joined model. That is historical, not a new denial-widening.
 
 These must keep passing in addition to the table above:
 
-- `PermittedQuerySetTest` — trustee / group.permissions / role list-direct parity, SQL filter, inactive empty, `get_permission`, grant/revoke, conditioned names raise `PermissionConditionNotQueryable`
+- `PermittedQuerySetTest` — trustee / TrustGroup local/global intersection / role-as-ceiling list-direct parity, SQL filter, inactive empty, `get_permission`, grant/revoke, conditioned names raise `PermissionConditionNotQueryable`
 - `FilterByUserContentPermTest` — create-under-trust, no settlor shortcut, no parent-trust leak, inactive empty, `test_filter_by_user_perm` still discovered, conditioned names raise
-- `AuthorizationTest` — reader/member denial with no mutation, scoped entity IDs, shared-group `Group.permissions` leak demonstration, shared-group membership requires admin on every trust
+- `AuthorizationTest` — reader/member denial with no mutation, scoped entity IDs, shared-group ceiling vs local grants, shared-group membership requires admin on every trust
 - `TeamViewAuthorizationTest` — member GET/POST 403, admin add, unknown user PK does not mutate
 - `AutoModelAdminTest` — Content and Junction proxies with `auto_modeladmin = True` register; opt-out does not
+- `TrustGroupIntersectionTest` — issue #23 acceptance: no TrustGroup / empty local / local-without-ceiling deny; both layers allow; per-trust local subsets; removing either layer revokes; two groups combine without widening; trustee unchanged; role-derived ceiling; inactive/anonymous deny; `has_perm` / `.permitted` / `filter_by_user_content_perm` parity; legacy association grants nothing; grandfather dry-run/apply; later ceiling adds stay local-off; configured group/permission models
 
 Do not treat a gap as license to widen access. New grants need an explicit
 test.

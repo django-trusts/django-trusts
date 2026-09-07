@@ -1,5 +1,5 @@
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.db.models import signals, Q, options
 from django.utils.translation import gettext_lazy as _
 
@@ -84,12 +84,14 @@ def resolve_content_permission(model, perm):
 
 class ContentQuerySet(models.QuerySet):
     def permitted(self, perm, user):
-        """Content the user may access via trustee, group, or role grants.
+        """Content the user may access via trustee or group local/global grants.
 
         SQL-filtered (paginate the returned QuerySet). Empty for inactive
-        or anonymous principals. Role-derived grants are included so list
-        results match ``has_perm`` on the supported relational paths.
-        Superuser short-circuit is not duplicated (Django ModelBackend).
+        or anonymous principals. Group-derived access requires the
+        TrustGroup local/global intersection; role-derived permissions
+        participate only as the group's global ceiling. List results match
+        ``has_perm`` on the supported relational paths. Superuser
+        short-circuit is not duplicated (Django ModelBackend).
 
         A ``:condition`` suffix raises ``PermissionConditionNotQueryable``.
         Conditions are not SQL-queryable; refusing them avoids over-granting
@@ -170,8 +172,9 @@ class TrustManager(ContentManager):
         Create-under-trust semantics (verified, not inherited from #9):
 
         - A Trust is included when ``user`` has ``perm_name`` for ``content``
-          via trustee, ``Group.permissions``, or role grants **on that Trust
-          row**.
+          via trustee grants or the TrustGroup local/global intersection
+          **on that Trust row**. Role-derived permissions are the global
+          ceiling, not a local assignment.
         - Parent-trust relations (``trust__trustees`` / ``trust__groups``)
           are not queried. ``#9`` did that accidentally.
         - Settlor identity is not a grant. Use ``has_perm(..., :own)`` for
@@ -329,13 +332,52 @@ class Trust(Content):
     settlor = models.ForeignKey(ENTITY_MODEL_NAME, default=DEFAULT_SETTLOR, null=ALLOW_NULL_SETTLOR, blank=False,
                 on_delete=models.CASCADE)
     groups = models.ManyToManyField(GROUP_MODEL_NAME, related_name='trusts',
+                through='trusts.TrustGroup',
                 verbose_name=_('groups'),
-                help_text=_('The groups this trust grants permissions to. A user will'
-                            'get all permissions granted to each of his/her group.'),
+                help_text=_('Groups associated with this trust. Association '
+                            'alone grants nothing; a permission applies only '
+                            'when it is in both the group\'s global ceiling '
+                            'and this trust\'s local TrustGroup grants.'),
     )
     _readonly_fields = ('trust', 'settlor',)
 
     objects = TrustManager()
+
+    def associate_group(self, group):
+        """Create or return the TrustGroup association. Grants nothing."""
+        return TrustGroup.objects.associate(self, group)
+
+    @transaction.atomic
+    def grant_group_permission(self, group, permission):
+        """Enable ``permission`` locally on this trust for ``group``.
+
+        Associates the group only after ``permission`` is accepted as
+        inside the group's global ceiling. A rejected grant does not
+        create a TrustGroup row.
+        """
+        permission = _resolve_configured_permission(permission)
+        require_permissions_in_global_ceiling(group, [permission])
+        return self.associate_group(group).grant_permission(permission)
+
+    def revoke_group_permission(self, group, permission):
+        """Remove a local TrustGroup grant. Association is left in place."""
+        try:
+            tg = TrustGroup.objects.get(trust=self, group=group)
+        except TrustGroup.DoesNotExist:
+            return 0
+        return tg.revoke_permission(permission)
+
+    @transaction.atomic
+    def set_group_permissions(self, group, permissions):
+        """Replace this trust's local grants for ``group``.
+
+        Associates the group only after every permission is accepted as
+        inside the group's global ceiling. A rejected set does not create
+        a TrustGroup row.
+        """
+        resolved = [_resolve_configured_permission(p) for p in permissions]
+        require_permissions_in_global_ceiling(group, resolved)
+        return self.associate_group(group).set_permissions(resolved)
 
     class Meta:
         unique_together = ('settlor', 'title')
@@ -385,6 +427,165 @@ class TrustUserPermission(models.Model):
 
     class Meta:
         unique_together = ('trust', 'entity', 'permission')
+
+
+def get_group_global_ceiling(group):
+    """Permissions the group may exercise anywhere: Group.permissions ∪ roles.
+
+    Role assignments are global ceiling only. They are not per-Trust grants.
+    Custom group models must expose a ``permissions`` M2M to
+    ``TRUSTS_PERMISSION_MODEL`` and a ``user`` related-query name for
+    membership (the same conventions as ``auth.Group``).
+    """
+    Permission = get_permission_model()
+    return Permission.objects.filter(
+        Q(group=group) | Q(roles__groups=group)
+    ).distinct()
+
+
+def permission_in_global_ceiling(group, permission):
+    if group is None or permission is None:
+        return False
+    return get_group_global_ceiling(group).filter(pk=permission.pk).exists()
+
+
+def require_permissions_in_global_ceiling(group, permissions):
+    """Raise ``ValidationError`` if any permission is outside the ceiling.
+
+    Call this before creating a TrustGroup so a rejected grant/set cannot
+    leave an empty association behind.
+    """
+    for permission in permissions:
+        if not permission_in_global_ceiling(group, permission):
+            raise ValidationError(
+                'Permission "%s" is outside the global ceiling of group "%s".' % (
+                    permission, group
+                ),
+                code='local_grant_outside_ceiling',
+            )
+
+
+def _resolve_configured_permission(permission):
+    Permission = get_permission_model()
+    if isinstance(permission, Permission):
+        return permission
+    if isinstance(permission, int) or getattr(permission, 'pk', None) is not None \
+            and not isinstance(permission, (str, bytes)):
+        try:
+            return Permission.objects.get(pk=getattr(permission, 'pk', permission))
+        except (Permission.DoesNotExist, TypeError, ValueError):
+            pass
+    raise ValidationError(
+        'Local TrustGroup grants require a %s instance.' % Permission.__name__
+    )
+
+
+class TrustGroupManager(models.Manager):
+    def associate(self, trust, group):
+        obj, _created = self.get_or_create(trust=trust, group=group)
+        return obj
+
+
+class TrustGroup(models.Model):
+    """Through model for ``Trust.groups`` plus per-trust local grants.
+
+    Association without local permissions grants nothing. Effective access
+    still requires group membership and the group's global ceiling.
+    """
+    trust = models.ForeignKey('trusts.Trust', related_name='trustgroups', null=False, blank=False,
+                on_delete=models.CASCADE)
+    group = models.ForeignKey(GROUP_MODEL_NAME, related_name='trustgroups', null=False, blank=False,
+                on_delete=models.CASCADE)
+    permissions = models.ManyToManyField(PERMISSION_MODEL_NAME,
+                through='trusts.TrustGroupPermission',
+                related_name='granted_trustgroups', blank=True,
+                verbose_name=_('permissions'))
+
+    objects = TrustGroupManager()
+
+    class Meta:
+        db_table = 'trusts_trust_groups'
+        unique_together = ('trust', 'group')
+
+    def __str__(self):
+        return 'TrustGroup[%s]: trust=%s group=%s' % (self.pk, self.trust_id, self.group_id)
+
+    def grant_permission(self, permission):
+        """Add a local grant. Rejected when the permission is outside the ceiling."""
+        permission = _resolve_configured_permission(permission)
+        require_permissions_in_global_ceiling(self.group, [permission])
+        obj, _created = TrustGroupPermission.objects.get_or_create(
+            trustgroup=self, permission=permission
+        )
+        return obj
+
+    def revoke_permission(self, permission):
+        permission = _resolve_configured_permission(permission)
+        deleted, _ = TrustGroupPermission.objects.filter(
+            trustgroup=self, permission=permission
+        ).delete()
+        return deleted
+
+    @transaction.atomic
+    def set_permissions(self, permissions):
+        """Replace local grants. Every permission must be in the global ceiling."""
+        resolved = [_resolve_configured_permission(p) for p in permissions]
+        require_permissions_in_global_ceiling(self.group, resolved)
+        wanted = {p.pk for p in resolved}
+        existing = set(self.permissions.values_list('pk', flat=True))
+        TrustGroupPermission.objects.filter(
+            trustgroup=self, permission_id__in=(existing - wanted)
+        ).delete()
+        for permission in resolved:
+            if permission.pk not in existing:
+                TrustGroupPermission.objects.create(
+                    trustgroup=self, permission=permission
+                )
+        return list(self.permissions.all())
+
+
+class TrustGroupPermissionQuerySet(models.QuerySet):
+    def bulk_create(self, objs, **kwargs):
+        for obj in objs:
+            obj.full_clean()
+        return super(TrustGroupPermissionQuerySet, self).bulk_create(objs, **kwargs)
+
+
+class TrustGroupPermission(models.Model):
+    """Local permission tuple on a TrustGroup. Must stay inside the ceiling."""
+    trustgroup = models.ForeignKey('trusts.TrustGroup', related_name='trustgrouppermissions',
+                null=False, blank=False, on_delete=models.CASCADE)
+    permission = models.ForeignKey(PERMISSION_MODEL_NAME, related_name='trustgrouppermissions',
+                null=False, blank=False, on_delete=models.CASCADE)
+
+    objects = TrustGroupPermissionQuerySet.as_manager()
+
+    class Meta:
+        unique_together = ('trustgroup', 'permission')
+
+    def __str__(self):
+        return 'TrustGroupPermission[%s]: trustgroup=%s permission=%s' % (
+            self.pk, self.trustgroup_id, self.permission_id
+        )
+
+    def clean(self):
+        super(TrustGroupPermission, self).clean()
+        if not self.trustgroup_id or not self.permission_id:
+            raise ValidationError(
+                'TrustGroupPermission requires trustgroup and permission.',
+                code='incomplete_trustgroup_permission',
+            )
+        if not permission_in_global_ceiling(self.trustgroup.group, self.permission):
+            raise ValidationError(
+                'Permission "%s" is outside the global ceiling of group "%s".' % (
+                    self.permission, self.trustgroup.group
+                ),
+                code='local_grant_outside_ceiling',
+            )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super(TrustGroupPermission, self).save(*args, **kwargs)
 
 
 class Junction(ReadonlyFieldsMixin, models.Model):
