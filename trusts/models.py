@@ -8,11 +8,25 @@ from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
 
 
 options.DEFAULT_NAMES += ('roles', 'permission_conditions',
-                          'content_roles', 'content_permission_conditions'
+                          'content_roles', 'content_permission_conditions',
+                          'auto_modeladmin',
     )
 
 
-class TrustManager(models.Manager):
+class ContentQuerySet(models.QuerySet):
+    def permitted(self, perm, user):
+        """SQL-filter this Content queryset to Trusts-granted rows. Paginate after this."""
+        from trusts.query import content_permitted
+        return content_permitted(self, perm, user)
+
+
+class ContentManager(models.Manager.from_queryset(ContentQuerySet)):
+    def get_permission(self, perm):
+        from trusts.query import get_model_permission
+        return get_model_permission(self.model, perm)
+
+
+class TrustManager(ContentManager):
     def get_or_create_settlor_default(self, settlor, defaults={}, **kwargs):
         if 'trust' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'trust')
@@ -63,6 +77,16 @@ class TrustManager(models.Manager):
 
         return self.filter(Q(groups__user=user) | Q(trustees__entity=user), **kwargs)
 
+    def filter_by_user_content_perm(self, user, content, perm_name, exclude_root=True, **kwargs):
+        """Trusts where ``user`` holds ``perm_name`` for Content subclass ``content``.
+
+        Create-under-trust helper. See ``trusts.query.trusts_with_content_perm``.
+        """
+        from trusts.query import trusts_with_content_perm
+        return trusts_with_content_perm(
+            self, user, content, perm_name, exclude_root=exclude_root, **kwargs
+        )
+
 
 class ReadonlyFieldsMixin(object):
     def _readonly_attname(self, field_name):
@@ -99,6 +123,7 @@ class ReadonlyFieldsMixin(object):
 class Content(ReadonlyFieldsMixin, models.Model):
     trust = models.ForeignKey('trusts.Trust', related_name='%(app_label)s_%(class)s_content',
                 default=ROOT_PK, null=False, blank=False, on_delete=models.CASCADE)
+    objects = ContentManager()
     _contents = {}
     _conditions = {}
 
@@ -106,6 +131,13 @@ class Content(ReadonlyFieldsMixin, models.Model):
         abstract = True
         default_permissions = ('add', 'change', 'delete', 'read',)
         permission_conditions = ()
+
+    def grant(self, perm, user):
+        """Create a trustee grant on this object's trust for ``perm``."""
+        permission = type(self)._default_manager.get_permission(perm)
+        return TrustUserPermission.objects.get_or_create(
+            trust=self.trust, entity=user, permission=permission
+        )
 
     @staticmethod
     def register_permission_condition(klass, cond_code, func):

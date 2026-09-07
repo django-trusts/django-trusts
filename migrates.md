@@ -157,6 +157,93 @@ and not a full Django 1.8→6.1 contrib-schema upgrade. Project models still
 need Django's own 1.8→6.1 path (removed APIs, `on_delete`, middleware,
 auto fields). No intermediate Trusts migration is required.
 
+## #8 recovery API additions (1.0.0.dev0)
+
+These are new helpers recovered from historical PR #9 / example PR #1.
+They do **not** rename or remove `filter_by_user_perm`. `0001_initial` is
+unchanged. No `TrustGroup` through table. Package version stays `1.0.0.dev0`.
+
+### 6. `ContentQuerySet.permitted(perm, user)`
+
+| | |
+| --- | --- |
+| Previous | No list-filter API. Callers iterated objects or used `has_perm` per row. Historical #9 `permitted` omitted role grants and used `Group.permissions` only. |
+| New | `Content` subclasses inherit `objects.permitted(perm, user)`. SQL JOIN on trustee, trust-attached `Group.permissions`, and role grants — the same paths as `TrustModelBackend.get_all_permissions`. Paginate **after** this filter. |
+| Replacement | `Model.objects.permitted('read_thing', user)` or `qs.permitted(...)`. |
+| Affected | List views that need Trusts-aware membership. `:own` predicates are **not** in SQL (still Python-side on `has_perm`). Superuser short-circuit is Django `has_perm` only; `permitted` is grant-backed. |
+| Authorization | Anonymous and `is_active=False` return an empty queryset (parity with Django `has_perm`). |
+
+Migration-bot checklist:
+
+- [ ] Find Python loops that call `has_perm` per row to build a list page.
+- [ ] Replace with `qs.permitted(codename, user)` before slicing / paginating.
+- [ ] Confirm inactive users are excluded from both the list and `has_perm`.
+- [ ] Confirm role-granted rows appear (not only `TrustUserPermission` / `Group.permissions`).
+
+### 7. `Trust.objects.filter_by_user_content_perm(user, content, perm_name, exclude_root=True)`
+
+| | |
+| --- | --- |
+| Previous | Only `filter_by_user_perm(user, **kwargs)` (any trustee row or group membership; no permission name). Historical #9 rename queried parent `trust__*` relations, ignored `fieldlookup`, and treated settlor as a grant. The renamed test was not collected. |
+| New | Additional manager method. Returns trusts where `user` holds `perm_name` for Content subclass `content` via the same grant paths as `permitted` / `has_perm`. Settlor identity is **not** a shortcut. Root is excluded by default. |
+| Replacement | Keep `filter_by_user_perm` for the old “any attachment” query. Use `filter_by_user_content_perm` for create-under-trust (trust dropdown). |
+| Affected | Project/content create forms that need trusts the user may attach new rows to. |
+| Authorization | Inactive / anonymous → empty. Does not grant create rights by being settlor alone. |
+
+Migration-bot checklist:
+
+- [ ] Do not replace existing `filter_by_user_perm` callers unless they meant a named permission.
+- [ ] Create-form trust querysets should call `filter_by_user_content_perm(user, Model, 'add_model')`.
+- [ ] Verify a settlor with no trustee/role/group grant is omitted.
+- [ ] Keep `test_filter_by_user_perm` collected; add/keep `test_filter_by_user_content_perm_*`.
+
+### 8. `Content.get_permission` / `Content.grant`
+
+| | |
+| --- | --- |
+| Previous | No public helpers. Historical #9 hardcoded `django.contrib.auth.models.Permission`. |
+| New | `Model.objects.get_permission(perm)` uses `get_permission_model()` (`TRUSTS_PERMISSION_MODEL`). `content.grant(perm, user)` creates a `TrustUserPermission` on `content.trust`. |
+| Replacement | New API. `perm` is a codename or `app_label.codename` (`:condition` stripped). |
+| Affected | Apps that issued trustee rows by hand. Custom permission models now resolve correctly. |
+| Authorization | Grant writes an explicit trustee row; it does not use `Group.permissions`. |
+
+Migration-bot checklist:
+
+- [ ] Replace hardcoded `Permission.objects.get_by_natural_key` on Content managers with `get_permission` if the project uses `TRUSTS_PERMISSION_MODEL`.
+- [ ] Prefer `content.grant(codename, user)` over assembling `TrustUserPermission` by hand.
+
+### 9. `auto_modeladmin` Meta flag
+
+| | |
+| --- | --- |
+| Previous | Only core models registered in `trusts.admin`. #8 milestone 2 was unspecified in #9. |
+| New | Concrete `Content` / `Junction` subclasses with `class Meta: auto_modeladmin = True` are registered in `AppConfig.ready` when `django.contrib.admin` is installed. |
+| Replacement | Opt-in. Existing explicit `admin.site.register` is left alone (`AlreadyRegistered` avoided). |
+| Affected | Project models that set the flag. `auto_modeladmin` is added to Django `options.DEFAULT_NAMES`. |
+| Authorization | Admin registration only; object-level grants are unchanged. |
+
+Migration-bot checklist:
+
+- [ ] Set `auto_modeladmin = True` on concrete Content/Junction models that should appear in admin.
+- [ ] Do not set it on abstract bases.
+- [ ] Confirm admin is in `INSTALLED_APPS`.
+
+### 10. Team views (`trusts.views.newteam` / `team`)
+
+| | |
+| --- | --- |
+| Previous | Historical #9: any group member could add members. No Trusts manage check. |
+| New | `newteam` creates a Django Group and enrolls the creator (membership ≠ manage). `team` GET requires membership (or manage). POST add-member requires a **trustee** `change_trust` grant on a trust that includes the group. Does not write `Group.permissions`. |
+| Replacement | Same URL ideas (`/teams/new/`, `/teams/<pk>/`); authorization is stricter. |
+| Affected | Callers that assumed membership was enough to add people. Wire URLs explicitly. |
+| Authorization | Reader/member POST is 403 with no membership change. POST to a group the user cannot manage is 403. |
+
+Migration-bot checklist:
+
+- [ ] Include `trusts.views` URLs only if the project wants built-in team pages.
+- [ ] Do not treat group membership as permission-administration.
+- [ ] Do not set `Group.permissions` from a project settings form (global, not per-trust). Use `Trust.groups` + `Role` / trustee rows.
+
 ## Migration-bot summary
 
 - [ ] Locate `ForeignKey` without `on_delete` and `user.is_anonymous()` call sites.
