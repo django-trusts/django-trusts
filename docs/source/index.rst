@@ -301,7 +301,7 @@ lookups; equality uses ``==`` / ``!=`` on the refs.
 Supported in this experiment:
 
 * Principal and object field references, including ``ForeignKey`` / ``OneToOneField`` traversal (``o.organization.manager``)
-* Literal constants (``None``, booleans, numbers, strings)
+* Literal constants (``None``, booleans, numbers, strings) whose Python type matches the field; relations compare to model instances, not raw primary keys
 * ``==`` and ``!=``
 * Nested ``&`` and ``|`` (grouping is preserved)
 
@@ -313,7 +313,7 @@ Unsupported (fail closed; do not drop the condition):
 * Source or bytecode inspection; automatic probing of callables
 * Permission attribute traversal (``p.codename``); ``p`` is unused in V1 except as a ref
 * Terminal ``ManyToManyField`` and reverse one-to-many refs (``o.owner.groups``) until membership is defined
-* ``TQ`` lookups such as ``iexact`` / ``in`` (namespace reserved; not implemented)
+* Django field coercion (``Q(status=1)`` becoming ``"1"`` on a ``CharField``, or a ``ForeignKey`` accepting a raw PK). Incompatible ``Eq`` / ``Ne`` operands raise ``PermissionConditionError`` on both ``has_perm`` and ``.permitted()``.
 
 Object and principal field paths are resolved against the target model and
 ``TRUSTS_ENTITY_MODEL`` / ``AUTH_USER_MODEL`` respectively (``_meta`` fields
@@ -321,7 +321,9 @@ and ``ForeignKey`` / ``OneToOneField`` traversal). Unknown or misspelled
 names raise ``PermissionConditionError`` on both ``has_perm`` and
 ``.permitted()``; they are not treated as SQL/Python ``NULL``. Legitimate
 nullable relations may still compare as ``None``. Python ``@property``
-values are not V1 field paths. ``filter_by_user_content_perm`` still rejects
+values are not V1 field paths. Operand types are checked without Django
+``get_prep_value`` coercion: ``o.status == 1`` and ``o.owner == "1"``
+raise on both paths. ``filter_by_user_content_perm`` still rejects
 every ``:condition`` suffix: that API filters Trust rows, not the content
 model the condition is registered on.
 

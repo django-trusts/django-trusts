@@ -25,6 +25,7 @@ from trusts.conditions import (
     object_ref,
     permission_ref,
     principal_ref,
+    validate_expression,
 )
 from trusts.models import (
     Content,
@@ -162,6 +163,21 @@ class ConditionGrammarTest(SimpleTestCase):
             Content.register_permission_condition(Ticket, 'bare', o.owner)
         with self.assertRaises(TypeError):
             Content.register_permission_condition(Ticket, 'bad', 'not-a-condition')
+
+    def test_incompatible_literal_types_rejected_at_validate(self):
+        u, p, o = condition_refs()
+        with self.assertRaises(PermissionConditionError) as ctx:
+            validate_expression(o.status == 1, Ticket)
+        self.assertIn('incompatible', str(ctx.exception))
+        with self.assertRaises(PermissionConditionError):
+            validate_expression(o.status != 1, Ticket)
+        with self.assertRaises(PermissionConditionError):
+            validate_expression(o.owner == '1', Ticket)
+        with self.assertRaises(PermissionConditionError):
+            validate_expression(o.owner != 1, Ticket)
+        validate_expression(o.status == 'open', Ticket)
+        validate_expression(u == o.owner, Ticket)
+        validate_expression(o.region == None, Ticket)
 
 
 class QueryableConditionTest(TestCase):
@@ -488,6 +504,46 @@ class QueryableConditionTest(TestCase):
         )
         perm = 'trusts_tests.change_ticket:same_people'
         self._assert_parity(perm, self.user)
+
+    def test_charfield_integer_literal_rejected_on_eq_and_ne(self):
+        """Django would coerce Q(status=1) to '1'; Python '"1" == 1' is False."""
+        self.owned_open.status = '1'
+        self.owned_open.save()
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'status_eq_int', o.status == 1)
+        Content.register_permission_condition(Ticket, 'status_ne_int', o.status != 1)
+        Content.register_permission_condition(Ticket, 'status_eq_str', o.status == '1')
+        for code in ('status_eq_int', 'status_ne_int'):
+            perm = 'trusts_tests.change_ticket:%s' % code
+            with self.assertRaises(PermissionConditionError) as direct:
+                self.user.has_perm(perm, self.owned_open)
+            self.assertIn('incompatible', str(direct.exception))
+            with self.assertRaises(PermissionConditionError) as listed:
+                Ticket.objects.permitted(perm, self.user)
+            self.assertIn('incompatible', str(listed.exception))
+        self.assertTrue(self.user.has_perm('trusts_tests.change_ticket:status_eq_str', self.owned_open))
+        self.assertIn(
+            self.owned_open.pk,
+            Ticket.objects.permitted('trusts_tests.change_ticket:status_eq_str', self.user).values_list('pk', flat=True),
+        )
+
+    def test_relation_raw_pk_rejected_on_eq_and_ne(self):
+        """Django would coerce Q(owner='1') through the FK; Python compares the User."""
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'owner_eq_str', o.owner == '1')
+        Content.register_permission_condition(Ticket, 'owner_ne_str', o.owner != '1')
+        Content.register_permission_condition(Ticket, 'owner_eq_int', o.owner == 1)
+        Content.register_permission_condition(Ticket, 'owner_ne_int', o.owner != 1)
+        for code in ('owner_eq_str', 'owner_ne_str', 'owner_eq_int', 'owner_ne_int'):
+            perm = 'trusts_tests.change_ticket:%s' % code
+            with self.assertRaises(PermissionConditionError) as direct:
+                self.user.has_perm(perm, self.owned_open)
+            self.assertIn('incompatible', str(direct.exception))
+            self.assertIn('primary keys', str(direct.exception))
+            with self.assertRaises(PermissionConditionError) as listed:
+                Ticket.objects.permitted(perm, self.user)
+            self.assertIn('incompatible', str(listed.exception))
+        self.assertTrue(self.user.has_perm(self.change_own, self.owned_open))
 
     def test_builtin_own_is_registered_expression(self):
         record = Content.get_permission_condition_record(Trust, 'own')

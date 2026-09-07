@@ -618,6 +618,22 @@ Migration-bot checklist:
 - [ ] Do not wrap arbitrary callbacks as expressions; they will fail closed on ``has_perm`` if they are not V1 predicates.
 - [ ] Confirm callables are invoked once with real objects on ``has_perm``, never during registration or ``.permitted()``.
 
+### 24. Incompatible ``Eq`` / ``Ne`` operands fail closed (review on #28)
+
+| | |
+| --- | --- |
+| Previous (this PR head) | ``o.status == 1`` compiled to ``Q(status=1)``; Django coerced the int through ``CharField`` so ``.permitted()`` matched ``"1"`` while ``has_perm`` used Python ``"1" == 1`` (false). ``o.owner == "1"`` similarly coerced through the FK. ``Ne`` diverged in the opposite direction. |
+| New | V1 compares Python types, not Django lookup-prepared values. ``CharField`` vs ``int`` and a relation vs a raw PK raise ``PermissionConditionError`` on both paths. ``None`` remains valid. Related instances and same-type scalars still match. |
+| Replacement | Write ``o.status == "1"`` and ``u == o.owner`` (or ``o.owner == user``). Do not rely on Django coercing ``1`` or ``"1"``. |
+| Affected | V1 conditions that mixed a field with a differently typed literal. |
+| Authorization | Fail closed. Django backend coercion is not canonical V1 semantics. |
+
+Migration-bot checklist:
+
+- [ ] Replace ``o.char_field == 1`` with a string literal if the comparison was intentional.
+- [ ] Replace ``o.fk == pk`` with a model instance comparison.
+- [ ] Confirm ``has_perm`` and ``.permitted()`` still agree after the type check.
+
 ## Noted conflict (no broader DSL)
 
 Queryable compile is **opt-in by type**. Callables are never invoked with

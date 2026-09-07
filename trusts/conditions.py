@@ -11,13 +11,33 @@ dispatches by type and never invokes a callable with symbolic refs.
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
 Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
-``|``. Missing attribute names fail closed; they are not treated as
-``NULL``. Python ``and`` / ``or`` / ``not`` and chained comparisons
-cannot be overloaded and raise ``PermissionConditionBooleanError``.
+``|``. Operand types must match without Django field coercion:
+``CharField`` compares to ``str``, relations compare to model instances
+(not raw primary keys). Missing attribute names fail closed; they are
+not treated as ``NULL``. Python ``and`` / ``or`` / ``not`` and chained
+comparisons cannot be overloaded and raise
+``PermissionConditionBooleanError``.
 """
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
-from django.db.models import F, Model, Q
+from django.db.models import (
+    F,
+    Model,
+    Q,
+    BinaryField,
+    BooleanField,
+    CharField,
+    DateField,
+    DateTimeField,
+    DecimalField,
+    DurationField,
+    FloatField,
+    IntegerField,
+    TextField,
+    TimeField,
+    UUIDField,
+)
+from django.db.models.fields import GenericIPAddressField
 
 
 class PermissionConditionError(Exception):
@@ -397,8 +417,144 @@ def resolve_object_field_path(model, path):
     return resolve_field_path(model, path, ref_kind='object')
 
 
+def _terminal_field(model, path, ref_kind='object'):
+    resolve_field_path(model, path, ref_kind=ref_kind)
+    current = model
+    field = None
+    for i, name in enumerate(path):
+        field = current._meta.get_field(name)
+        if i != len(path) - 1:
+            current = field.remote_field.model
+    return field
+
+
+def _concrete_model(model):
+    meta = getattr(model, '_meta', None)
+    if meta is not None:
+        return meta.concrete_model
+    return model
+
+
+def _models_compatible(left, right):
+    left = _concrete_model(left)
+    right = _concrete_model(right)
+    return (
+        left is right or
+        issubclass(left, right) or
+        issubclass(right, left)
+    )
+
+
+def _scalar_types_for_field(field):
+    if isinstance(field, BooleanField):
+        return (bool,)
+    if isinstance(field, IntegerField):
+        return (int,)
+    if isinstance(field, FloatField):
+        return (float, int)
+    if isinstance(field, DecimalField):
+        from decimal import Decimal
+        return (Decimal,)
+    if isinstance(field, (CharField, TextField, GenericIPAddressField)):
+        return (str,)
+    if isinstance(field, UUIDField):
+        from uuid import UUID
+        return (UUID,)
+    if isinstance(field, DateTimeField):
+        from datetime import datetime
+        return (datetime,)
+    if isinstance(field, DateField):
+        from datetime import date
+        return (date,)
+    if isinstance(field, TimeField):
+        from datetime import time
+        return (time,)
+    if isinstance(field, DurationField):
+        from datetime import timedelta
+        return (timedelta,)
+    if isinstance(field, BinaryField):
+        return (bytes,)
+    return ()
+
+
+def _spec_from_field(field):
+    if field.is_relation and not field.many_to_many and not field.one_to_many:
+        related = field.related_model
+        return ('instance', related, '%s %s' % (field.get_internal_type(), field.name))
+    types = _scalar_types_for_field(field)
+    return ('scalar', types, '%s %s' % (field.get_internal_type(), field.name))
+
+
+def _spec_from_const(value):
+    if value is None:
+        return ('null', None, 'None')
+    if isinstance(value, Model):
+        return ('instance', value.__class__, value._meta.label)
+    if isinstance(value, bool):
+        return ('scalar', (bool,), 'bool')
+    if isinstance(value, int):
+        return ('scalar', (int,), 'int')
+    if isinstance(value, float):
+        return ('scalar', (float,), 'float')
+    if isinstance(value, str):
+        return ('scalar', (str,), 'str')
+    if isinstance(value, bytes):
+        return ('scalar', (bytes,), 'bytes')
+    return ('scalar', (type(value),), type(value).__name__)
+
+
+def _operand_spec(node, model):
+    if isinstance(node, Const):
+        return _spec_from_const(node.value)
+    if isinstance(node, Ref):
+        if node.source == 'object':
+            return _spec_from_field(_terminal_field(model, node.path, 'object'))
+        if node.source == 'principal':
+            if not node.path:
+                entity = _entity_model()
+                return ('instance', entity, entity._meta.label)
+            return _spec_from_field(
+                _terminal_field(_entity_model(), node.path, 'principal')
+            )
+        if node.source == 'permission':
+            return ('scalar', (str,), 'permission')
+    raise PermissionConditionError(
+        'Cannot type-check permission condition node %r.' % (node,)
+    )
+
+
+def _specs_compatible(left, right):
+    if left[0] == 'null' or right[0] == 'null':
+        return True
+    if left[0] == 'instance' and right[0] == 'instance':
+        return _models_compatible(left[1], right[1])
+    if left[0] == 'scalar' and right[0] == 'scalar':
+        return bool(set(left[1]) & set(right[1]))
+    return False
+
+
+def _check_comparison_types(node, model):
+    left = _operand_spec(node.left, model)
+    right = _operand_spec(node.right, model)
+    if _specs_compatible(left, right):
+        return
+    raise PermissionConditionError(
+        'Permission condition compares incompatible types (%s vs %s). '
+        'V1 does not coerce literals through Django field preparation; '
+        'CharField values are strings, and relations compare to model '
+        'instances (not raw primary keys).' % (left[2], right[2])
+    )
+
+
 def validate_expression(node, model):
-    """Resolve object paths against ``model`` and principal paths against the entity model."""
+    """Resolve paths and require comparable operand types on ``Eq`` / ``Ne``.
+
+    Object paths are validated against ``model``; principal paths against
+    the entity model. Incompatible field/literal pairs (for example
+    ``CharField`` vs ``int``, or a ``ForeignKey`` vs a raw PK) raise
+    ``PermissionConditionError`` so Django lookup coercion cannot make
+    ``has_perm`` and ``.permitted()`` diverge.
+    """
     if not is_predicate(node):
         raise PermissionConditionError(
             'Permission condition did not produce a comparison expression.'
@@ -407,9 +563,14 @@ def validate_expression(node, model):
 
 
 def _validate_node(node, model):
-    if isinstance(node, (And, Or, Eq, Ne)):
+    if isinstance(node, (And, Or)):
         _validate_node(node.left, model)
         _validate_node(node.right, model)
+        return
+    if isinstance(node, (Eq, Ne)):
+        _validate_node(node.left, model)
+        _validate_node(node.right, model)
+        _check_comparison_types(node, model)
         return
     if isinstance(node, Const):
         return
