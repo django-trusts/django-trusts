@@ -1,5 +1,5 @@
 from django.db import models
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import Group, User
 
 from trusts.models import Content, Junction
 
@@ -53,3 +53,37 @@ class AutoAdminJunction(TestGroupJunction):
     class Meta:
         proxy = True
         auto_modeladmin = True
+
+
+class Organization(models.Model):
+    """Non-content related model for permission-condition traversal tests."""
+
+    name = models.CharField(max_length=40, null=False, blank=False)
+    manager = models.ForeignKey(
+        User, null=False, blank=False, related_name='managed_organizations',
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class Ticket(Content):
+    """Content model with owner / organization / status for V1 conditions."""
+
+    title = models.CharField(max_length=40, null=False, blank=False)
+    owner = models.ForeignKey(
+        User, null=False, blank=False, related_name='tickets',
+        on_delete=models.CASCADE,
+    )
+    organization = models.ForeignKey(
+        Organization, null=False, blank=False, related_name='tickets',
+        on_delete=models.CASCADE,
+    )
+    status = models.CharField(max_length=20, null=False, blank=False, default='open')
+
+    class Meta:
+        default_permissions = ('add', 'read', 'change', 'delete')
+
+    def __str__(self):
+        return self.title

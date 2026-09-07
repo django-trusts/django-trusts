@@ -263,7 +263,43 @@ A condition can also be used with the decorator::
 
 .. warning::
 
-   A permission condition is an additional constraint; it does not grant the underlying permission. For example, ``change_receipt:own`` requires both ``change_receipt`` and a successful ``own`` condition. Registered condition functions run in Python, so checks that use them are not database-only and cannot be used as database-side queryset filters.
+   A permission condition is an additional constraint; it does not grant the underlying permission. For example, ``change_receipt:own`` requires both ``change_receipt`` and a successful ``own`` condition.
+
+   V1 declarative conditions (``==``, ``!=``, ``&``, ``|`` over principal and object fields) are compiled into a language-neutral expression tree. ``has_perm`` and ``.permitted()`` consume the same tree: object checks evaluate it in Python, and queryset filtering is ``base relational grant AND compiled condition`` before pagination.
+
+   Genuinely arbitrary Python callbacks remain object-only. ``ContentQuerySet.permitted`` and ``filter_by_user_content_perm`` raise ``PermissionConditionNotQueryable`` for those callbacks so they cannot silently return the underlying grant.
+
+
+Queryable permission conditions
++++++++++++++++++++++++++++++++
+
+Register a V1 lambda. Invoke it with symbolic ``u``, ``p``, ``o`` so operator overloading builds an expression tree (Django ``Q`` is a compiler target, not the canonical form)::
+
+   Content.register_permission_condition(
+       Receipt, 'editable',
+       lambda u, p, o: (
+           (u == o.owner) |
+           ((u == o.organization.manager) & (o.status != "locked"))
+       )
+   )
+
+   request.user.has_perm('app.change_receipt:editable', receipt)
+   Receipt.objects.permitted('app.change_receipt:editable', request.user)
+
+Supported in this experiment:
+
+* Principal and object field references, including ``ForeignKey`` / ``OneToOneField`` traversal (``o.organization.manager``)
+* Literal constants (``None``, booleans, numbers, strings)
+* ``==`` and ``!=``
+* Nested ``&`` and ``|`` (grouping is preserved)
+
+Unsupported (fail closed; do not drop the condition):
+
+* Python ``and`` / ``or`` / ``not`` (they cannot be overloaded). Symbolic truth testing raises ``PermissionConditionBooleanError`` directing callers to ``&`` / ``|``.
+* Function or method calls, loops, indexing, I/O, arithmetic, mutable state
+* Source or bytecode inspection
+
+Object field paths are resolved against the target model. Unknown fields raise ``PermissionConditionError``. ``filter_by_user_content_perm`` still rejects every ``:condition`` suffix: that API filters Trust rows, not the content model the condition is registered on.
 
 
 P() Expressions

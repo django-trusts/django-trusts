@@ -3,6 +3,7 @@ from django.contrib.auth.backends import ModelBackend
 
 from trusts.models import Trust, Content
 from trusts.query import permission_granted_via_group_exists
+from trusts.conditions import evaluate_condition_func
 from trusts import get_permission_model, utils
 
 
@@ -87,12 +88,18 @@ class TrustModelBackendMixin(object):
     def permission_condition_met(self, func, user_obj, perm, obj):
         if isinstance(obj, QuerySet):
             objs = obj.all()
+            model = obj.model
         elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
             objs = obj
+            model = None
         else:
             objs = [obj]
+            model = obj.__class__
 
-        return all([func(user_obj, perm, o) for o in objs])
+        return all([
+            evaluate_condition_func(func, user_obj, perm, o, model=model or o.__class__)
+            for o in objs
+        ])
 
     def has_perm(self, user_obj, permext, obj=None):
         applabel, modelname, action, cond = utils.parse_perm_code(permext)

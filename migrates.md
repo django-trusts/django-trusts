@@ -496,7 +496,8 @@ python scripts/verify-legacy-upgrade.py
 - Parent/child Trust inheritance or ceilings
 - Explicit deny / Windows ACL ordering
 - Per-Trust group membership
-- SQL compilation of Python permission conditions
+- SQL compilation of **arbitrary** Python permission callbacks
+  (V1 declarative conditions are compiled; see the issue #4 section)
 - Local role assignment on TrustGroup
 - Example-project UI
 
@@ -510,4 +511,96 @@ python scripts/verify-legacy-upgrade.py
 - [ ] Reload user objects after grant changes (`_trust_perm_cache`).
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Example UI is a separate issue; do not block this core change on it.
+
+# Issue #4: queryable V1 permission conditions (1.0.0.dev0)
+
+This record covers the first queryable-condition experiment. Version
+remains **1.0.0.dev0**. It does **not** close #4 (arbitrary callbacks,
+cross-language serialization, and a policy service remain open).
+
+## Decision
+
+A permission condition is a **restricted declarative expression**, not
+source/bytecode parsing and not arbitrary Python execution. A Python
+lambda may be invoked with symbolic principal / permission / object
+references so operator overloading produces a language-neutral
+expression tree. Django ``Q`` is one compiler target.
+
+V1 grammar: principal/object field refs and relationship traversal;
+literal constants; ``==`` / ``!=``; nested ``&`` / ``|``.
+
+## No change to these public call sites
+
+- `Content.register_permission_condition(model, code, func)`
+- `Meta.permission_conditions` / `content_permission_conditions`
+- `User.has_perm('app.change_model:cond', obj)` signature
+- `ContentQuerySet.permitted(perm, user)` signature
+- `filter_by_user_perm` / `filter_by_user_content_perm` signatures
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 18. V1 declarative conditions are queryable on `.permitted()`
+
+| | |
+| --- | --- |
+| Previous | Any ``:condition`` suffix on `.permitted()` raised ``PermissionConditionNotQueryable``. Conditions were Python predicates on ``has_perm`` only. |
+| New | If the registered callback produces a V1 expression tree, `.permitted()` filters ``trust_grant_q AND compiled condition`` in SQL before pagination. ``has_perm`` evaluates the same tree. Nested ``&`` / ``|`` keep grouping. Object field paths are validated against the target model. |
+| Replacement | ``Model.objects.permitted('app.change_model:editable', user)`` for V1 lambdas. Keep ``has_perm`` per object for arbitrary callbacks. |
+| Affected | List views that previously caught ``PermissionConditionNotQueryable`` for ``:own``-style field equality. ``Trust``'s built-in ``own`` (``u == o.settlor``) is now queryable. |
+| Authorization | A condition still never grants the base permission. Inactive/anonymous stay empty. Unsupported or malformed expressions fail closed (specific exception); the underlying grant is not returned. |
+
+Migration-bot checklist:
+
+- [ ] Replace Python ``[obj for obj in qs if user.has_perm('app.change_model:cond', obj)]`` with ``.permitted('app.change_model:cond', user)`` **only** when the callback is V1 (``==`` / ``!=`` / ``&`` / ``|``).
+- [ ] Do not use Python ``and`` / ``or`` in queryable lambdas; use ``&`` / ``|``. ``.permitted()`` raises ``PermissionConditionBooleanError``.
+- [ ] Keep catching ``PermissionConditionNotQueryable`` for genuinely arbitrary callbacks.
+- [ ] Do not pass ``:condition`` to ``filter_by_user_content_perm`` (still refused: that API filters Trust rows).
+- [ ] Confirm ``has_perm`` and ``.permitted()`` agree for each V1 condition.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+### 20. ``parse_perm_code`` partitions ``:condition`` before the last ``_``
+
+| | |
+| --- | --- |
+| Previous | ``app.change_ticket:python_or`` parsed the condition as empty because ``rsplit('_')`` ran first. |
+| New | Colon is partitioned first; condition codes may contain underscores. |
+| Replacement | Same ``app.action_model:cond`` strings. |
+| Affected | Condition names with ``_``. Unconditioned codes are unchanged. |
+| Authorization | Lookup only. |
+
+### 19. Arbitrary callbacks remain object-only
+
+| | |
+| --- | --- |
+| Previous | Every condition was object-only. |
+| New | Callbacks that do not produce a V1 tree (return a boolean constant, call methods, use loops, and so on) still run in ``has_perm``. Queryset use raises ``PermissionConditionNotQueryable``. |
+| Replacement | Same as #8 for those callbacks. |
+| Affected | Custom ``lambda u, p, o: False`` / method-call predicates. |
+| Authorization | Fail closed on lists. |
+
+## Noted conflict (no broader DSL)
+
+Symbolic invocation is tried first. Callbacks that truth-test a
+comparison with Python ``and`` / ``or`` / ``if`` hit
+``PermissionConditionBooleanError`` during capture. ``has_perm`` falls
+back to the original callable so existing object-only predicates keep
+working; ``.permitted()`` raises the boolean error (clear ``&`` / ``|``
+guidance) instead of inventing a source parser.
+
+Object paths are validated against ``model._meta`` fields, not Python
+properties. A condition that compares a ``@property`` is treated as
+not queryable: ``has_perm`` falls back to the callable, ``.permitted()``
+raises. Registration is unchanged.
+
+``filter_by_user_content_perm`` is not a content-row filter; compiling a
+content-model condition against Trust rows would change that surface.
+It still rejects every ``:condition`` suffix.
+
+## Out of scope (not acceptance criteria)
+
+- Cross-language serialization / policy service / multi-language framework
+- Closing #4 for arbitrary Python callbacks
+- Arithmetic, calls, indexing, ``not``, ordering comparisons
+
 

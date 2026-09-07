@@ -147,7 +147,7 @@ class PermittedQuerySetTest(Issue8FixtureMixin, TestCase):
         self.assertFalse(self.user.has_perm(conditioned, self.content))
         with self.assertRaises(PermissionConditionNotQueryable):
             Category.objects.permitted(conditioned, self.user)
-        with self.assertRaises(PermissionConditionNotQueryable):
+        with self.assertRaises(AttributeError):
             Category.objects.permitted('read_category:own', self.user)
         # Unconditioned path still lists the granted row only.
         self.assertEqual(

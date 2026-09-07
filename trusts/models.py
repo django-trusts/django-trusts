@@ -7,6 +7,10 @@ from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
                     get_permission_model, utils
 from trusts.query import is_active_principal, trust_grant_q
+from trusts.conditions import (
+    PermissionConditionBooleanError,
+    queryable_condition_q,
+)
 
 
 options.DEFAULT_NAMES += ('roles', 'permission_conditions',
@@ -16,12 +20,13 @@ options.DEFAULT_NAMES += ('roles', 'permission_conditions',
 
 
 class PermissionConditionNotQueryable(ValueError):
-    """Raised when a SQL list/create filter is given a ``:condition`` suffix.
+    """Raised when a SQL list/create filter cannot compile a ``:condition``.
 
-    Conditions (``:own`` and custom ``permission_conditions``) are Python
-    predicates evaluated by ``User.has_perm``. They are not compiled into
-    SQL. ``permitted`` and ``filter_by_user_content_perm`` refuse them so
-    they cannot silently over-grant the underlying permission.
+    V1 declarative conditions (``==`` / ``!=`` / ``&`` / ``|`` over
+    principal and object fields) compile into the same expression tree
+    ``has_perm`` evaluates. Genuinely arbitrary Python callbacks stay
+    object-only: ``permitted`` and ``filter_by_user_content_perm`` refuse
+    them so they cannot silently over-grant the underlying permission.
     """
 
 
@@ -34,11 +39,53 @@ def reject_queryable_condition(perm, api_name):
     if permission_has_condition(perm):
         raise PermissionConditionNotQueryable(
             '%s does not support permission conditions (%r). '
-            'Conditions are evaluated by has_perm, not SQL. Use the '
-            'unconditioned permission for the queryset and apply '
-            'has_perm(..., obj) per object until conditions are '
-            'SQL-queryable.' % (api_name, perm)
+            'Create-under-trust filters Trust rows, not the content '
+            'model the condition is registered on. Use the unconditioned '
+            'permission for this queryset, or ContentQuerySet.permitted '
+            'for V1 declarative conditions on content rows.' % (api_name, perm)
         )
+
+
+def _condition_code(perm):
+    if not isinstance(perm, str) or ':' not in perm:
+        return ''
+    if '.' in perm:
+        try:
+            return utils.parse_perm_code(perm)[3]
+        except ValueError:
+            pass
+    return perm.split(':', 1)[1]
+
+
+def compile_registered_condition_q(model, perm, user):
+    """Compile a ``:condition`` suffix to ``Q``, or raise fail-closed.
+
+    Unregistered codes raise ``AttributeError`` (same as ``has_perm``).
+    ``and`` / ``or`` raise ``PermissionConditionBooleanError``. Arbitrary
+    callbacks raise ``PermissionConditionNotQueryable``.
+    """
+    cond = _condition_code(perm)
+    func = Content.get_permission_condition_func(model, cond)
+    if func is None:
+        raise AttributeError(
+            'Permission condition code "%s" is not associate with model "%s_%s"' % (
+                cond, model._meta.app_label, model._meta.model_name
+            )
+        )
+    try:
+        q = queryable_condition_q(func, model, user, perm.split(':', 1)[0])
+    except PermissionConditionBooleanError:
+        raise
+    if q is None:
+        raise PermissionConditionNotQueryable(
+            'ContentQuerySet.permitted does not support permission '
+            'condition %r on %s. The registered callback is not a V1 '
+            'declarative expression (==, !=, &, | over principal and '
+            'object fields). It remains object-only via has_perm; this '
+            'queryset API refuses it so the underlying grant cannot be '
+            'returned without the condition.' % (perm, model._meta.label)
+        )
+    return q
 
 
 def resolve_content_permission(model, perm):
@@ -48,9 +95,10 @@ def resolve_content_permission(model, perm):
     action (``read`` → ``read_<model>``), or a dotted code
     (``app.read_category``).
 
-    Queryset APIs must call ``reject_queryable_condition`` first. This
-    helper may still strip a leftover ``:condition`` when resolving a
-    grant/revoke target; it must not be used alone to filter lists.
+    Queryset list APIs must reject or compile ``:condition`` suffixes
+    before using this helper to resolve the grant. This helper may still
+    strip a leftover ``:condition`` when resolving a grant/revoke target;
+    it must not be used alone to filter lists.
     """
     Permission = get_permission_model()
     if isinstance(perm, Permission):
@@ -93,15 +141,21 @@ class ContentQuerySet(models.QuerySet):
         ``has_perm`` on the supported relational paths. Superuser
         short-circuit is not duplicated (Django ModelBackend).
 
-        A ``:condition`` suffix raises ``PermissionConditionNotQueryable``.
-        Conditions are not SQL-queryable; refusing them avoids over-granting
-        the underlying permission.
+        A ``:condition`` suffix compiles a V1 declarative expression and
+        filters ``base relational grant AND condition`` in SQL (paginate
+        the returned QuerySet). Genuinely arbitrary callbacks raise
+        ``PermissionConditionNotQueryable`` so they cannot over-grant.
         """
-        reject_queryable_condition(perm, 'ContentQuerySet.permitted')
+        condition_q = None
+        if permission_has_condition(perm):
+            condition_q = compile_registered_condition_q(self.model, perm, user)
         if not is_active_principal(user):
             return self.none()
         permission = resolve_content_permission(self.model, perm)
-        return self.filter(trust_grant_q(user, permission, trust_fk='trust')).distinct()
+        granted = trust_grant_q(user, permission, trust_fk='trust')
+        if condition_q is None:
+            return self.filter(granted).distinct()
+        return self.filter(granted & condition_q).distinct()
 
 
 class ContentManager(models.Manager):
@@ -187,8 +241,9 @@ class TrustManager(ContentManager):
           organization content).
         - ``filter_by_user_perm`` is unchanged (membership/trustee, no
           permission name).
-        - A ``:condition`` suffix raises ``PermissionConditionNotQueryable``
-          (same fail-closed rule as ``permitted``).
+        - A ``:condition`` suffix raises ``PermissionConditionNotQueryable``.
+          This API filters Trust rows, not content rows, so it does not
+          compile V1 conditions (unlike ``ContentQuerySet.permitted``).
         """
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
