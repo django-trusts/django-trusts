@@ -1,9 +1,9 @@
 from django.db.models import Q, QuerySet
 from django.contrib.auth.backends import ModelBackend
 
-from trusts.models import Trust, Content
+from trusts.models import Trust, Content, legacy_permission_callbacks_allowed
 from trusts.query import permission_granted_via_group_exists
-from trusts.conditions import evaluate_registered_expression
+from trusts.conditions import PermissionConditionError, evaluate_registered_expression
 from trusts import get_permission_model, utils
 
 
@@ -103,6 +103,14 @@ class TrustModelBackendMixin(object):
                 )
                 for o in objs
             ])
+        if not legacy_permission_callbacks_allowed():
+            raise PermissionConditionError(
+                'Callable permission conditions are disabled. Set '
+                'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True to use '
+                'the object-only has_perm path, or register an Expr from '
+                'condition_refs(). Silencing trusts.E002 does not enable '
+                'the callback.'
+            )
         return all([record.func(user_obj, perm, o) for o in objs])
 
     def has_perm(self, user_obj, permext, obj=None):

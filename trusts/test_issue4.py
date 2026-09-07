@@ -8,7 +8,7 @@ probed with symbolic refs.
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from django_trusts import Query as DjangoTrustsQuery, TQ as DjangoTrustsTQ, condition_refs as django_condition_refs
 from trusts.conditions import (
@@ -180,6 +180,7 @@ class ConditionGrammarTest(SimpleTestCase):
         validate_expression(o.region == None, Ticket)
 
 
+@override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True)
 class QueryableConditionTest(TestCase):
     def setUp(self):
         super(QueryableConditionTest, self).setUp()
@@ -550,6 +551,7 @@ class QueryableConditionTest(TestCase):
         self.assertIsNotNone(record)
         self.assertIsNotNone(record.expr)
         self.assertIsNone(record.func)
+        self.assertIs(record.model, Trust)
         self.assertTrue(is_predicate(record.expr))
         self.assertEqual(
             record.expr.to_tuple(),

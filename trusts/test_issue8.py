@@ -8,7 +8,7 @@ from django.contrib import admin
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 from trusts.admin import register_auto_modeladmins
 from trusts.authorization import (
@@ -128,6 +128,7 @@ class PermittedQuerySetTest(Issue8FixtureMixin, TestCase):
         reload_test_users(self)
         self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), self.content))
 
+    @override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True)
     def test_conditioned_perm_fails_closed(self):
         """A :condition must not silently return every unconditioned grant.
 

@@ -1,7 +1,10 @@
 from django.db import models
 from django.contrib.auth.models import Group, User
 
+from trusts.conditions import condition_refs
 from trusts.models import Content, Junction
+
+_u, _p, _o = condition_refs()
 
 
 class Category(Content):
@@ -85,6 +88,9 @@ class Ticket(Content):
 
     class Meta:
         default_permissions = ('add', 'read', 'change', 'delete')
+        permission_conditions = (
+            ('meta_own', _u == _o.owner),
+        )
 
     def __str__(self):
         return self.title

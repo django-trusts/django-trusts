@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import signals, Q, options
+from django.conf import settings as django_settings
 from django.utils.translation import gettext_lazy as _
 
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
@@ -59,14 +60,31 @@ def _condition_code(perm):
     return perm.split(':', 1)[1]
 
 
+def legacy_permission_callbacks_allowed():
+    """True only when ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is set.
+
+    Read at call time so ``override_settings`` works. Missing or False
+    means registered callables are a system-check error and runtime
+    fail-closed (the callback is never invoked).
+    """
+    return bool(getattr(
+        django_settings, 'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', False
+    ))
+
+
 class _ConditionRecord(object):
-    """Registered condition: an ``Expr`` tree or a legacy callable."""
+    """Registered condition: an ``Expr`` tree or a legacy callable.
 
-    __slots__ = ('expr', 'func')
+    ``model`` is retained so a ``class_prepared`` registration can be
+    validated by the system check after all apps have loaded.
+    """
 
-    def __init__(self, expr=None, func=None):
+    __slots__ = ('expr', 'func', 'model')
+
+    def __init__(self, expr=None, func=None, model=None):
         self.expr = expr
         self.func = func
+        self.model = model
 
 
 _u, _p, _o = condition_refs()
@@ -351,6 +369,12 @@ class Content(ReadonlyFieldsMixin, models.Model):
         compile/evaluate. Pass a callable to keep the historical
         object-only ``has_perm`` path. Dispatch is by type: callables are
         never invoked with symbolic ``Ref`` arguments.
+
+        Construction-time shape errors (bare non-predicate ``Expr``, a
+        value that is neither ``Expr`` nor callable) still raise here.
+        Model-aware semantic validation is reported by the registered
+        Django system check as ``CheckMessage``s, not raised from this
+        method, so ``SILENCED_SYSTEM_CHECKS`` can filter the diagnostic.
         """
         if isinstance(condition, Expr):
             if not is_predicate(condition):
@@ -358,9 +382,9 @@ class Content(ReadonlyFieldsMixin, models.Model):
                     'Registered expression must be a V1 comparison '
                     '(==, != combined with & / |), not %r.' % (condition,)
                 )
-            record = _ConditionRecord(expr=condition)
+            record = _ConditionRecord(expr=condition, model=klass)
         elif callable(condition):
-            record = _ConditionRecord(func=condition)
+            record = _ConditionRecord(func=condition, model=klass)
         else:
             raise TypeError(
                 'register_permission_condition expected an Expr or a '
@@ -422,6 +446,18 @@ class Content(ReadonlyFieldsMixin, models.Model):
         if record is None:
             return None
         return record.func
+
+    @staticmethod
+    def iter_permission_conditions():
+        """Yield ``(model, cond_code, record)`` for every registration.
+
+        Used by the system check after model loading. Identity comes from
+        the record so ``class_prepared`` registrations remain validatable
+        without importing extra application modules.
+        """
+        for codes in Content._conditions.values():
+            for cond_code, record in codes.items():
+                yield record.model, cond_code, record
 
 
 class Trust(Content):

@@ -524,8 +524,9 @@ A permission condition is a **restricted declarative expression**, not
 source/bytecode parsing and not arbitrary Python execution. Callers
 build a language-neutral ``Expr`` tree from ``condition_refs()``
 (``u``, ``p``, ``o``) and register that object. Django ``Q`` is one
-compiler target. Callables keep the legacy object-only path and are
-never invoked with symbolic refs.
+compiler target. Callables keep an object-only path when
+``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is True (see issue #29)
+and are never invoked with symbolic refs.
 
 V1 grammar: principal/object field refs and relationship traversal;
 literal constants; ``==`` / ``!=``; nested ``&`` / ``|``.
@@ -539,6 +540,8 @@ literal constants; ``==`` / ``!=``; nested ``&`` / ``|``.
 
 `Content.register_permission_condition(model, code, condition)` still
 accepts a callable. Passing an ``Expr`` is the new queryable form.
+Issue #29 disables callables unless
+``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is True.
 
 ## Changes
 
@@ -597,7 +600,7 @@ Migration-bot checklist:
 | | |
 | --- | --- |
 | Previous | Every condition was object-only. |
-| New | Callables still run in ``has_perm`` with real arguments only (never ``Ref``s). Queryset use raises ``PermissionConditionNotQueryable``. |
+| New | Callables still run in ``has_perm`` with real arguments only (never ``Ref``s). Queryset use raises ``PermissionConditionNotQueryable``. Issue #29 disables this path unless ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is True. |
 | Replacement | Same as #8 for those callbacks. |
 | Affected | Custom ``lambda u, p, o: False`` / method-call predicates. |
 | Authorization | Fail closed on lists. |
@@ -661,5 +664,103 @@ It still rejects every ``:condition`` suffix.
 - Cross-language serialization / policy service / multi-language framework
 - Closing #4 for arbitrary Python callbacks
 - Arithmetic, calls, indexing, ``not``, ordering comparisons, ``TQ`` lookups
+
+# Issue #29: validate declarative permission expressions before request time (1.0.0.dev0)
+
+This record covers Django system-check validation of registered ``Expr``
+conditions and the explicit legacy-callback compatibility flag. Version
+remains **1.0.0.dev0**. It closes the #29 slice; it does **not** close #4
+(arbitrary callbacks, serialization, policy service). It does **not**
+raise from ``AppConfig.ready()``.
+
+## Decision
+
+Invalid registered ``Expr`` policy is reported by Django's system-check
+framework (`python manage.py check`) as ``checks.Error`` messages with
+stable IDs. Construction-time operator/rejection errors from #28 stay
+exceptions. Model-aware semantic validation is **not** thrown from
+registration or import — including after ``apps.models_ready`` — so
+``SILENCED_SYSTEM_CHECKS`` can filter the diagnostic. Silencing an ID
+does not make the policy executable: ``has_perm()`` / ``.permitted()``
+still validate and fail closed.
+
+Legacy callables are opt-in:
+
+```python
+TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True  # opt-in escape hatch
+```
+
+Missing / ``False`` (default): registered callables are ``trusts.E002``
+and remain runtime-fail-closed (the callback is never invoked). ``True``:
+#28 object-only ``has_perm`` behavior; ``.permitted()`` still refuses
+them; ``trusts.W001`` is emitted as a ``checks.Warning`` (not
+``DeprecationWarning``, which is commonly filtered). Enabling the flag
+is the only way to run the callback.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``ContentQuerySet.permitted`` signatures
+- ``Content.register_permission_condition(model, code, condition)`` signature
+- Authentication-backend composition (OR across backends is unchanged)
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 25. Registered ``Expr`` conditions are reported by ``manage.py check``
+
+| | |
+| --- | --- |
+| Previous (#28) | Invalid field names, traversal, multi-valued relations, and operand types raised ``PermissionConditionError`` on first ``has_perm`` / ``.permitted()`` use. |
+| New | The same ``validate_expression`` runs in a registered Django system check (``trusts.E001``) after models load. Every invalid condition is aggregated in one run. ``class_prepared`` registrations retain ``(model, code, Expr)`` identity so they can be checked without importing extra application modules or assuming ``trusts`` loads after the entity-model app. ``AppConfig.ready()`` does not raise. |
+| Replacement | Keep registering ``Expr`` objects. Run ``python manage.py check`` in CI and before deploy. |
+| Affected | ``Meta.permission_conditions`` and dynamic ``register_permission_condition`` of ``Expr`` values. |
+| Authorization | Runtime still fail-closed. Silencing ``trusts.E001`` hides the diagnostic only. |
+
+Migration-bot checklist:
+
+- [ ] Add ``python manage.py check`` to CI and the deploy gate.
+- [ ] Fix ``trusts.E001`` messages (unknown fields, multi-valued relations, incompatible ``Eq``/``Ne`` operands) before serving traffic.
+- [ ] Do not rely on ``SILENCED_SYSTEM_CHECKS = ['trusts.E001']`` to make a bad expression executable.
+- [ ] Confirm valid ``Trust:own``, custom content ``Expr``s, proxy models, and cross-app FK/O2O registrations still load.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+### 26. Legacy callable conditions require an explicit opt-in
+
+| | |
+| --- | --- |
+| Previous (#28) | A callable argument was object-only ``has_perm`` by default; ``.permitted()`` raised ``PermissionConditionNotQueryable``. Callables were never invoked with ``Ref``s. |
+| New | Missing / ``False`` (default): ``trusts.E002`` and runtime ``PermissionConditionError`` without invoking the callable. ``True``: previous object-only ``has_perm`` behavior plus ``trusts.W001``. ``.permitted()`` still refuses callables. Declarative ``Expr`` registrations are unaffected. Checks never inspect or invoke callables. |
+| Replacement | Rewrite callables as ``Expr`` from ``condition_refs()``. Set ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True`` only as a transitional escape hatch. |
+| Affected | ``lambda u, p, o: ...`` and other callable registrations. |
+| Authorization | Fail closed. Silencing ``trusts.E002`` does not enable the callback. |
+
+Migration-bot checklist:
+
+- [ ] Inventory ``register_permission_condition(..., callable)`` and ``Meta.permission_conditions`` callables.
+- [ ] Rewrite V1-shaped callables as ``u, p, o = condition_refs()`` plus an ``Expr``.
+- [ ] If a callable cannot be rewritten yet, set ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True`` and treat ``trusts.W001`` as a visible deprecation.
+- [ ] Do not silence ``trusts.E002`` expecting the callback to run.
+- [ ] Confirm ``.permitted()`` still raises ``PermissionConditionNotQueryable`` for remaining callables.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Old vs new behavior
+
+| Situation | After #28 | After #29 |
+| --- | --- | --- |
+| Valid ``Trust:own`` / custom ``Expr`` | Runtime validate | ``manage.py check`` passes; runtime still validates |
+| Misspelled field / bad operand type | Fail on first request | ``trusts.E001`` at check; runtime still raises |
+| ``SILENCED_SYSTEM_CHECKS`` includes ``trusts.E001`` | n/a | Check passes; ``has_perm`` / ``.permitted()`` still raise |
+| Callable, flag missing/False | Object-only ``has_perm`` | ``trusts.E002``; runtime raises; callback not invoked |
+| Callable, flag True | Object-only ``has_perm`` | ``trusts.W001``; object-only ``has_perm``; ``.permitted()`` still refuses |
+| ``AppConfig.ready()`` with invalid ``Expr`` | n/a (no early check) | Does not raise; ``manage.py check`` reports |
+| Python ``and`` / ``or`` / calls at construction | Exception | Unchanged exception |
+
+## Out of scope (not acceptance criteria)
+
+- Raising from ``AppConfig.ready()`` to block shell/migrations
+- A custom ``manage.py`` command parallel to ``check``
+- Authentication-backend composition / multi-backend OR semantics
+- Closing #4 for arbitrary Python callbacks
+
 
 
