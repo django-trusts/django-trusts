@@ -11,17 +11,21 @@ Django authorization add-on for multiple organizations and object-level permissi
 Introduction
 ------------
 
-``django-trusts`` is a add-on to Django's builtin [1]_ authorization. It strives to be a **minimal** implementation, adding only a single concept, ``trust``, to enable maintainable per-object permission settings for a django project that hosts users of multiple organizations [2]_ with a single user namespace.
+``django-trusts`` is an add-on to Django's built-in [1]_ authorization. It strives to be a **minimal** implementation, adding only a single concept, ``trust``, to enable maintainable per-object permission settings for a Django project that hosts users from multiple organizations [2]_ in a single user namespace.
 
-A ``trust`` is a relationship whereby content access is permitted by the creator [``settlor``] to specific user(s) [``trustee`` (s)] or ``group`` (s). Content can be an instance of a `Content` subclass, or of an existing model via a junction table. Access to multiple content can be permitted by a single ``trust`` for maintainable permssion settings. Django's builtin model, `group`, is supported and can be used to define reusuable permissions for a ``group`` of ``user``'s.
+A ``trust`` associates content with a ``settlor`` and grants permissions to specific users (``trustees``) or groups. The settlor identifies the entity under whose trust the content is held; django-trusts does not require the settlor to be the content's creator and does not automatically grant the settlor permissions. Content can be an instance of a ``Content`` subclass or an existing model connected through a junction table. A single trust can cover multiple content objects so their permission settings can be maintained together. Django's built-in ``Group`` model is supported and can define reusable permissions for groups of users.
 
-``django-trusts`` also strives to be a **scalable** solution. Permissions checking is offloaded to the database by design, and the implementation minimizes database hits. Permissions are cached per ``trust`` for the lifecycle of ``request user``. If a project's request lifecycle resolves most checked content to one or few ``trusts``, which should be very typically the case, this design should be a winner in term of performance. Permissions checking is done against an individual content or a ``QuerySet``.
+``django-trusts`` also strives to be a **scalable** solution. Trust and grant resolution uses database queries, and the implementation minimizes database hits. Permissions are cached per ``trust`` on the user object. Permission checks can be made against an individual content object or a ``QuerySet``.
 
-``django-trusts`` supports Django's builtins User models ``has_perms()`` / ``has_perms()`` and does not provides any in-addition.
+.. warning::
+
+   The per-trust permission cache is not automatically invalidated when grants, group membership, or roles change. Reload the user object, or explicitly remove its ``_trust_perm_cache`` attribute, before making further permission checks with the same user instance.
+
+``django-trusts`` supports Django's built-in user permission methods, ``has_perm()`` and ``has_perms()``.
 
 
 .. [1]  See: `Django Object Permissions <https://github.com/djangoadvent/djangoadvent-articles/blob/master/1.2/06_object-permissions.rst>`_.
-.. [2]  Even ``django-trusts`` is incepted to support multiple organizations in a single project, it does not define or restrict oraganization model design. One natural approach is to model an organization as a special user. With this arrangment, an organization can be the `settlor` of `trusts`. Alternative approach is to create another model for organization. With this arrangment, the `settlor` of `trust`s can simple be the creating user and one might or might not have all permissions of organization's content.
+.. [2]  Although ``django-trusts`` was created to support multiple organizations in one project, it does not define or restrict the organization model. One approach is to model an organization as a special user that can be the settlor of trusts. Another is to create a separate organization model. In that arrangement, a trust's settlor may be the creating user, who may or may not have every permission on the organization's content.
 
 Usages
 ----- 
@@ -31,15 +35,21 @@ Installation
 
 Steps:
 
-1. pip install django-trusts
+1. Install django-trusts::
 
-2. Replace ``AUTHENTICATION_BACKENDS`` in ``settings.py`` ::
+     python -m pip install django-trusts
+
+2. Set ``AUTHENTICATION_BACKENDS`` in ``settings.py``::
 
    AUTHENTICATION_BACKENDS = (
      'trusts.backends.TrustModelBackend',
    )
 
-3. Add ``trusts`` to INSTALLED_APPS in your settings.py
+3. Add ``trusts`` to ``INSTALLED_APPS`` in ``settings.py``.
+
+4. Apply migrations::
+
+     python manage.py migrate
 
 Implementation
 ~~~~~~~~~~~~~~
@@ -84,7 +94,7 @@ Example::
    from trusts.models import Trust
 
    # Helper function
-   def grant_user_group_permssion_to_model(user, group_name, model_name, code='change', app='app'):
+   def grant_user_group_permission_to_model(user, group_name, model_name, code='change', app='app'):
        # Django's auth permission mechanism, nothing specific to `django-trust`
 
        # get perm by name
@@ -138,7 +148,7 @@ model of ReceiptImage. The following code makes both model available for permiss
 Role
 ~~~~
 
-``Role`` can be specified in Content's Meta class. The management command ``update_roles_permissions.py`` will update corresponding entries in the database.
+``Role`` can be specified in a ``Content`` model's ``Meta`` class. The management command ``python manage.py update_roles_permissions`` updates the corresponding database entries.
 
 Here is an example of how roles can be specified::
 
@@ -158,12 +168,12 @@ Here is an example of how roles can be specified::
                ('accounting', ('read_receipt', 'add_receipt', 'change_receipt', 'ask_question_about_receipt')),
            )
 
-Roles specified in different models with the same role name are merged. Once the database entries is created, all user in groups that links to a role will automatically inherits all permissions specified for that roles for all models.
+Roles specified in different models with the same role name are merged. Once the database entries are created, users in groups linked to a role inherit the permissions assigned to that role.
 
-Add a role to a group to instead of adding each permissions one-by-one::
+Add a role to a group instead of adding each permission individually::
 
    accountants = Group.objects.get(name='accountants')
-   accountants.roles.add(Role.objects.get(name='accounting')
+   accountants.roles.add(Role.objects.get(name='accounting'))
 
    trust.groups.add(accountants)
    r = Receipt(trust=trust, ...)
@@ -184,7 +194,7 @@ To check permission, simply use Django builtin API::
 Decorators
 ~~~~~~~~~~
 
-Trusts provides a decorator that check permission on object level. (in contrast to builtin one only verify permission at model level)::
+Trusts provides a decorator that checks permissions at the object level::
 
    from trusts.decorators import permission_required
    from app.models import Xyz
@@ -214,18 +224,17 @@ Alternatively, `fieldlookups_kwargs` can be expressed with K() lookup::
 
 Similar to K() lookup, G() and O() can also be used.
 
-G() lookup maps permissible object's field and request's GET dict.
+``G()`` maps a permissible object's field to the request's ``GET`` dictionary.
 
-G() lookup maps permissible object's field and request's POST dict.
+``O()`` maps a permissible object's field to the request's ``POST`` dictionary.
 
 
 Permission Conditions
 +++++++++++++++++++++
 
-In additional ``Group`` and ``Permission`` based check, object level permission condition can be used.
+In addition to ``Group`` and ``Permission`` based checks, an object-level permission condition can be used.
 
-For example, a user should be let to modify a ``Receipt`` if he was the creation owner. In
-this case, a condition code should be registered::
+For example, a user may modify a ``Receipt`` only if the user owns it. In this case, register a condition code::
 
    Content.register_permission_condition(Receipt, 'own', lambda u, p, o: u == o.user)
 
@@ -234,12 +243,16 @@ To check ``own`` permission, a colon and the condition name should be added afte
    def check_permission_to_a_specific_receipt(request, receipt_id):
      return request.user.has_perm('app.change_receipt:own', Receipt.objects.get(id=receipt_id))
 
-Condition can also be used with decorator as follow::
+A condition can also be used with the decorator::
 
    @permission_required('app.change_receipt:own', pk=K('pk'))
    def edit_receipt_view(request, pk):
      # ...
      pass
+
+.. warning::
+
+   A permission condition is an additional constraint; it does not grant the underlying permission. For example, ``change_receipt:own`` requires both ``change_receipt`` and a successful ``own`` condition. Registered condition functions run in Python, so checks that use them are not database-only and cannot be used as database-side queryset filters.
 
 
 P() Expressions
@@ -260,19 +273,17 @@ In particular, it is not otherwise possible to use OR in permission::
 Customization
 ~~~~~~~~~~~~~
 
-The folllowing settings (django.conf) allow for customization and adaptation.
+The following Django settings allow customization and adaptation.
 
 
 Initial Options
 +++++++++++++++
 
-..  Warning:: Changing the options below affects the construction of foreign keys and many-to-many
-    relationships. If you intend to set these options, you should set it before creating any
-    migrations or running `manage.py migrate` for the first time, and should not be changed afterward.
+.. warning::
 
-    Changing this setting after you have tables created is not supported by `makemigrations` and
-    will result in you having to manually fix your schema, port your data from the old user table,
-    and possibly manually reapply some migrations.
+   Set ``TRUSTS_ENTITY_MODEL``, ``TRUSTS_GROUP_MODEL``, ``TRUSTS_PERMISSION_MODEL``, ``TRUSTS_ALLOW_NULL_SETTLOR``, and ``TRUSTS_DEFAULT_SETTLOR`` before creating migrations or running ``manage.py migrate`` for the first time. These settings affect model fields and relationships. Changing them after tables exist is not handled automatically by ``makemigrations`` and requires an explicit schema and data migration.
+
+   The root settings control initial root creation. Changing ``TRUSTS_CREATE_ROOT``, ``TRUSTS_ROOT_PK``, ``TRUSTS_ROOT_SETTLOR``, or ``TRUSTS_ROOT_TITLE`` after the root exists does not update that row automatically. In particular, changing ``TRUSTS_ROOT_PK`` can invalidate existing references and defaults and requires a deliberate data migration.
 
 * TRUSTS_ENTITY_MODEL -- The model name for `settlors` and `trustees` field. Must be specified in contenttypes format, ie, 'app_label.model_name'. (default: `settings.AUTH_USER_MODEL`.)
 * TRUSTS_GROUP_MODEL -- The model name for `groups` field. (default: `auth.Group`)
@@ -282,4 +293,12 @@ Initial Options
 * TRUSTS_ROOT_SETTLOR -- The `pk` of settlor of the root trust object. (default: None)
 * TRUSTS_ALLOW_NULL_SETTLOR -- A boolean set to True indicates Trust.settlor field can be null. (default: TRUSTS_DEFAULT_SETTLOR == None)
 * TRUSTS_DEFAULT_SETTLOR -- The default value for `settlor` field on Trust model. (default: None)
-* TRUSTS_ROOT_TITLE -- The title of root rust object. (default: "In Trust We Trust")
+* TRUSTS_ROOT_TITLE -- The title of the root trust object. (default: "In Trust We Trust")
+
+
+Further Documentation
+~~~~~~~~~~~~~~~~~~~~~
+
+* `Migration record <https://github.com/django-trusts/django-trusts/blob/master/migrates.md>`_
+* `Supported Python and Django versions <https://github.com/django-trusts/django-trusts/blob/master/docs/support-matrix.md>`_
+* `Runnable example application <https://github.com/django-trusts/django-trusts-example>`_
