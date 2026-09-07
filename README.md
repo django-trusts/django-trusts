@@ -1,7 +1,7 @@
 Django Trusts
 -------------
 
-[![Docs](https://readthedocs.org/projects/django-trusts/badge/)](http://django-trusts.readthedocs.org) [![Coverage](https://coveralls.io/repos/github/beedesk/django-trusts/badge.svg?branch=master)](https://coveralls.io/github/beedesk/django-trusts?branch=master) [![Version](https://badge.fury.io/py/django-trusts.svg)](https://pypi.python.org/pypi/django-trusts)
+[![Docs](https://readthedocs.org/projects/django-trusts/badge/)](http://django-trusts.readthedocs.org) [![CI](https://github.com/django-trusts/django-trusts/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/django-trusts/django-trusts/actions/workflows/ci.yml)
 
 Django authorization add-on for multiple organizations and object-level permission settings
 
@@ -14,28 +14,58 @@ A ``trust`` is a relationship whereby content access is permitted by the creator
 
 ``django-trusts`` also strives to be a **scalable** solution. Permissions checking is offloaded to the database by design, and the implementation minimizes database hits. Permissions are cached per ``trust`` for the lifecycle of ``request user``. If a project's request lifecycle resolves most checked content to one or few ``trusts``, which should be very typically the case, this design should be a winner in term of performance. Permissions checking is done against an individual content or a ``QuerySet``.
 
-``django-trusts`` supports Django's builtins User models ``has_perms()`` / ``has_perms()`` and does not provides any in-addition.
+``django-trusts`` supports Django's builtins User models ``has_perm()`` / ``has_perms()`` and does not provides any in-addition.
 
 Read more: http://django-trusts.readthedocs.org/en/latest/
+
+Supported versions
+------------------
+
+The `1.0.0.dev0` development line requires **Python 3.12–3.14** and **Django 6.1**.
+Sources checked on 2026-09-07 and the rationale are in
+[docs/support-matrix.md](docs/support-matrix.md).
+
+This is not a published PyPI release. Install from a local checkout or sdist/wheel
+built from this tree.
+
+```
+python -m pip install "Django>=6.1,<6.2"
+python -m pip install .
+```
+
+Add `trusts` to `INSTALLED_APPS` and set:
+
+```
+AUTHENTICATION_BACKENDS = (
+    'trusts.backends.TrustModelBackend',
+)
+```
+
+API and compatibility notes for this modernization are in [migrates.md](migrates.md).
 
 Test
 ----
 
-To run unit tests:
+```
+python -m pip install "Django>=6.1,<6.2" coverage
+python -m pip install -e .
+python -m tests.runtests
+python scripts/verify-legacy-upgrade.py
+```
 
-```
-pip install virtualenv
-virtualenv venv/
-source venv/bin/activate
-python setup.py test
-```
+CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
+fresh migrate, and the legacy-upgrade script on Python 3.12, 3.13, and 3.14
+with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel
+and imports it from a temporary directory so the source tree cannot satisfy
+the import. Job names: `tests (Python 3.12)`, `tests (Python 3.13)`,
+`tests (Python 3.14)`, `package`. Do not treat a removed Travis check as a
+stand-in green status.
 
 Development version
 -------------------
 
-The active package version is **1.0.0.dev0**. That is a development-line mark
-ahead of the planned Python/Django compatibility break, not a production 1.0
-release. See [docs/development-version.md](docs/development-version.md).
+The active package version is **1.0.0.dev0**. That is a development-line mark,
+not a production 1.0 release. See [docs/development-version.md](docs/development-version.md).
 
 Legacy baseline
 ---------------

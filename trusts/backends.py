@@ -1,7 +1,4 @@
-from __future__ import unicode_literals
-
-from django.db.models import F, Q, QuerySet
-from django.contrib.auth import get_user_model
+from django.db.models import Q, QuerySet
 from django.contrib.auth.backends import ModelBackend
 
 from trusts.models import Trust, Content
@@ -45,7 +42,7 @@ class TrustModelBackendMixin(object):
         groups.
         """
 
-        if user_obj.is_anonymous() or obj is None:
+        if user_obj.is_anonymous or obj is None:
             return super(TrustModelBackendMixin, self).get_group_permissions(user_obj, obj)
 
         if Content.is_content(obj):
@@ -55,7 +52,7 @@ class TrustModelBackendMixin(object):
         return []
 
     def get_all_permissions(self, user_obj, obj=None):
-        if user_obj.is_anonymous() or obj is None:
+        if user_obj.is_anonymous or obj is None:
             return super(TrustModelBackendMixin, self).get_all_permissions(user_obj, obj)
 
         if not hasattr(user_obj, '_trust_perm_cache'):
@@ -87,7 +84,7 @@ class TrustModelBackendMixin(object):
     def permission_condition_met(self, func, user_obj, perm, obj):
         if isinstance(obj, QuerySet):
             objs = obj.all()
-        elif hasattr(trusts, '__iter__'):
+        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
             objs = obj
         else:
             objs = [obj]

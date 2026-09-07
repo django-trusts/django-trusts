@@ -1,14 +1,14 @@
 from functools import wraps
+from urllib.parse import urlparse
+from operator import and_, or_
 
 from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME
+from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from django.shortcuts import resolve_url
 from django.contrib.contenttypes.models import ContentType
-from django.utils.decorators import available_attrs
-from django.utils.six.moves.urllib.parse import urlparse
 from django.http import Http404
-from operator import and_, or_
 
 from trusts import utils
 
@@ -23,7 +23,7 @@ class P(object):
 
     def __and__(self, other):
         if not isinstance(other, self.__class__):
-            raise TypeError("unsupported operand type(s) for &: '%s' and '%s'" % type(self), type(other))
+            raise TypeError("unsupported operand type(s) for &: '%s' and '%s'" % (type(self), type(other)))
 
         p = type(self)('')
         p._left_operand = self
@@ -33,7 +33,7 @@ class P(object):
 
     def __or__(self, other):
         if not isinstance(other, self.__class__):
-            raise TypeError("unsupported operand type(s) for |: '%s' and '%s'" % type(self), type(other))
+            raise TypeError("unsupported operand type(s) for |: '%s' and '%s'" % (type(self), type(other)))
 
         p = type(self)('')
         p._left_operand = self
@@ -42,11 +42,11 @@ class P(object):
         return p
 
     def __repr__(self):
-        return self.__unicode__()
+        return self.__str__()
 
-    def __unicode__(self):
+    def __str__(self):
         if not self._operator:
-            return self.perm
+            return self._perm
 
         return 'P object'
 
@@ -101,7 +101,7 @@ def request_passes_test(test_func, login_url=None, redirect_field_name=REDIRECT_
     '''
 
     def decorator(view_func):
-        @wraps(view_func, assigned=available_attrs(view_func))
+        @wraps(view_func)
         def _wrapped_view(request, *args, **kwargs):
             if test_func(request, *args, **kwargs):
                 return view_func(request, *args, **kwargs)
@@ -115,7 +115,6 @@ def request_passes_test(test_func, login_url=None, redirect_field_name=REDIRECT_
             if ((not login_scheme or login_scheme == current_scheme) and
                     (not login_netloc or login_netloc == current_netloc)):
                 path = request.get_full_path()
-            from django.contrib.auth.views import redirect_to_login
             return redirect_to_login(
                 path, resolved_login_url, redirect_field_name)
         return _wrapped_view
@@ -128,7 +127,7 @@ def _collect_args(args, fieldlookups):
     if not fieldlookups:
         return results
 
-    for lookup, arg_name in fieldlookups.iteritems():
+    for lookup, arg_name in fieldlookups.items():
         if arg_name in args:
             results[lookup] = args[arg_name]
         else:
@@ -147,7 +146,7 @@ def _get_permissible_items(perm, request, fieldlookups):
 
         return ctype.model_class().objects.filter(**fieldlookups)
     except ObjectDoesNotExist:
-        raise ValueError('Permission code must be of the form "app_label.action_modelname". Actual: %s' % permext)
+        raise ValueError('Permission code must be of the form "app_label.action_modelname". Actual: %s' % perm)
 
 
 def _resolve_fieldlookups(request, kwargs, fieldlookups_kwargs=None, fieldlookups_getparams=None, fieldlookups_postparams=None, **fieldlookups):

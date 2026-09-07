@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-
-from __future__ import unicode_literals
-
 from django.core.management.base import BaseCommand
 from django.conf import settings
 
+
 def create_root_trust(Trust, pk, settlor, title):
+    if Trust.objects.filter(pk=pk).exists():
+        return Trust.objects.get(pk=pk)
+
     kwargs = {'id': pk, 'title': title}
     if settlor is not None:
         kwargs.update({'settlor_id': settlor})
@@ -13,6 +13,7 @@ def create_root_trust(Trust, pk, settlor, title):
     trust = Trust(**kwargs)
     trust.trust = trust
     trust.save()
+    return trust
 
 
 class Command(BaseCommand):
@@ -25,9 +26,5 @@ class Command(BaseCommand):
         settlor = getattr(settings, 'TRUSTS_ROOT_SETTLOR', None)
         title = getattr(settings, 'TRUSTS_ROOT_TITLE', 'In Trust We Trust')
 
-        if 'apps' in options:
-            apps = options['apps']
-            Trust = apps.get_model('trusts', 'trust')
-        else:
-            from trusts.models import Trust
+        from trusts.models import Trust
         create_root_trust(Trust, pk, settlor, title)

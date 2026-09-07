@@ -3,10 +3,9 @@ import json
 import unittest
 
 from decimal import Decimal
-from urllib import urlencode
-from urlparse import urlparse
+from urllib.parse import urlencode, urlparse
 from datetime import date, datetime, timedelta
-from mock import Mock
+from unittest.mock import Mock
 
 from django.apps import apps
 from django.db import models, connection, IntegrityError
@@ -15,12 +14,11 @@ from django.db.models.base import ModelBase
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.core.management.color import no_style
 from django.contrib.auth.models import User, Group, Permission
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.management import create_permissions
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.contenttypes.management import update_contenttypes
+from django.contrib.contenttypes.management import create_contenttypes
 from django.test import TestCase, TransactionTestCase
 from django.test.client import MULTIPART_CONTENT, Client
 from django.http.request import HttpRequest
@@ -29,6 +27,7 @@ from trusts.models import Trust, TrustManager, Content, Junction, \
                           Role, RolePermission, TrustUserPermission
 from trusts.backends import TrustModelBackend
 from trusts.decorators import permission_required, P, K, G, O
+from tests.models import Category, TestGroupJunction
 
 
 def create_test_users(test):
@@ -159,6 +158,26 @@ class TrustTest(TestCase):
         except ValidationError as ve:
             pass
 
+    def test_own_condition_requires_settlor(self):
+        """The :own condition is settlor-only and does not leak across users."""
+        trust = Trust(settlor=self.user, trust=Trust.objects.get_root(), title='Owned Trust')
+        trust.save()
+        change = Permission.objects.get(
+            content_type=ContentType.objects.get_for_model(Trust),
+            codename='change_trust',
+        )
+        TrustUserPermission(trust=trust, entity=self.user, permission=change).save()
+        TrustUserPermission(trust=trust, entity=self.user1, permission=change).save()
+
+        reload_test_users(self)
+        child = Trust(settlor=self.user, title='Child of owned', trust=trust)
+        child.save()
+        # Permissions resolve via the parent trust; :own is evaluated on the object.
+        self.assertTrue(self.user.has_perm('trusts.change_trust', child))
+        self.assertTrue(self.user.has_perm('trusts.change_trust:own', child))
+        self.assertTrue(self.user1.has_perm('trusts.change_trust', child))
+        self.assertFalse(self.user1.has_perm('trusts.change_trust:own', child))
+
 class DecoratorsTest(TestCase):
     def setUp(self):
         super(DecoratorsTest, self).setUp()
@@ -265,48 +284,6 @@ class DecoratorsTest(TestCase):
         self.assertEqual(obj.first().pk, self.group.pk)
 
 
-class RuntimeModel(object):
-    """
-    Base class for tests of runtime model mixins.
-    """
-
-    def setUp(self):
-        # Create the schema for our test model
-        self._style = no_style()
-        sql, _ = connection.creation.sql_create_model(self.model, self._style)
-
-        with connection.cursor() as c:
-            for statement in sql:
-                c.execute(statement)
-
-        content_model = self.content_model if hasattr(self, 'content_model') else self.model
-        app_config = apps.get_app_config(content_model._meta.app_label)
-        update_contenttypes(app_config, verbosity=1, interactive=False)
-        create_permissions(app_config, verbosity=1, interactive=False)
-
-        super(RuntimeModel, self).setUp()
-
-    def workaround_contenttype_cache_bug(self):
-        # workaround bug: https://code.djangoproject.com/ticket/10827
-        from django.contrib.contenttypes.models import ContentType
-        ContentType.objects.clear_cache()
-
-    def tearDown(self):
-        # Delete the schema for the test model
-        content_model = self.content_model if hasattr(self, 'content_model') else self.model
-        sql = connection.creation.sql_destroy_model(self.model, (), self._style)
-
-        with connection.cursor() as c:
-            for statement in sql:
-                c.execute(statement)
-
-        self.workaround_contenttype_cache_bug()
-
-        super(RuntimeModel, self).tearDown()
-
-        apps.get_app_config('trusts').models.pop(self.model._meta.model_name.lower())
-
-
 class ContentModel(object):
     def create_test_fixtures(self):
         self.group = Group(name="Test Group")
@@ -338,38 +315,28 @@ class ContentModel(object):
         self.app_label = content_model._meta.app_label
         self.model_name = content_model._meta.model_name
 
+        # Junction content_roles reference extra Group permissions.
+        group_ct = ContentType.objects.get_for_model(Group)
+        Permission.objects.get_or_create(codename='read_group', content_type=group_ct)
+        Permission.objects.get_or_create(codename='add_topic_to_group', content_type=group_ct)
+
         self.set_perms()
 
 
-class ContentModelMixin(RuntimeModel, ContentModel):
-    class CategoryMixin(Content):
-        name = models.CharField(max_length=40, null=False, blank=False)
-
-        class Meta:
-            abstract = True
-            default_permissions = ('add', 'read', 'change', 'delete')
-            permissions = (
-                ('add_topic_to_category', 'Add topic to a category'),
-            )
-            roles = (
-                ('public', ('read_category', 'add_topic_to_category')),
-                ('admin', ('read_category', 'add_category', 'change_category', 'add_topic_to_category')),
-                ('write', ('read_category', 'change_category', 'add_topic_to_category')),
-            )
-
+class ContentModelMixin(ContentModel):
     def setUp(self):
-        mixin = self.CategoryMixin
-
-        # Create a dummy model which extends the mixin
-        self.model = ModelBase('Category', (mixin, models.Model),
-            {'__module__': mixin.__module__})
-
+        self.model = Category
+        self._original_roles = tuple(Category._meta.roles)
         super(ContentModelMixin, self).setUp()
 
-    def create_content(self, trust):
-        content = self.model(trust=trust)
-        content.save()
+    def tearDown(self):
+        Category._meta.roles = self._original_roles
+        super(ContentModelMixin, self).tearDown()
 
+    def create_content(self, trust):
+        import uuid
+        content = self.model(trust=trust, name='category-%s' % uuid.uuid4())
+        content.save()
         return content
 
     def append_model_roles(self, rolename, perms):
@@ -382,31 +349,21 @@ class ContentModelMixin(RuntimeModel, ContentModel):
         return self.model._meta.roles
 
 
-class JunctionModelMixin(RuntimeModel, ContentModel):
-    class GroupJunctionMixin(Junction):
-        content = models.ForeignKey(Group, unique=True, null=False, blank=False)
-        name = models.CharField(max_length=40, null=False, blank=False)
-
-        class Meta:
-            abstract = True
-            content_roles = (
-                ('public', ('read_group', 'add_topic_to_group')),
-                ('admin', ('read_group', 'add_group', 'change_group', 'add_topic_to_group')),
-                ('write', ('read_group', 'change_group', 'add_topic_to_group')),
-            )
-
+class JunctionModelMixin(ContentModel):
     def setUp(self):
-        mixin = self.GroupJunctionMixin
-        self.model = ModelBase('TestGroupJunction', (mixin, models.Model),
-            {'__module__': mixin.__module__})
-
+        self.model = TestGroupJunction
         self.content_model = Group
+        self._original_roles = tuple(TestGroupJunction._meta.content_roles)
 
         ctype = ContentType.objects.get_for_model(Group)
         Permission.objects.get_or_create(codename='read_group', content_type=ctype)
         Permission.objects.get_or_create(codename='add_topic_to_group', content_type=ctype)
 
         super(JunctionModelMixin, self).setUp()
+
+    def tearDown(self):
+        TestGroupJunction._meta.content_roles = self._original_roles
+        super(JunctionModelMixin, self).tearDown()
 
     def append_model_roles(self, rolename, perms):
         self.model._meta.content_roles += ((rolename, perms, ), )
@@ -423,7 +380,7 @@ class JunctionModelMixin(RuntimeModel, ContentModel):
         content = self.content_model(name=str(uuid.uuid4()))
         content.save()
 
-        junction = self.model(content=content, trust=trust)
+        junction = self.model(content=content, trust=trust, name='junction-%s' % content.pk)
         junction.save()
 
         return content
@@ -588,6 +545,47 @@ class TrustContentTestMixin(ContentModel):
 
         self.assertFalse(had)
 
+    def test_organization_isolation_denies_cross_trust_access(self):
+        """Users authorized in one organization must be denied in another.
+
+        A trust is the organization boundary. Granting change on Org A must
+        not grant change on Org B, including mixed QuerySet checks.
+        """
+        org_a = Trust(settlor=self.user, trust=Trust.objects.get_root(), title='Org A')
+        org_a.save()
+        org_b = Trust(settlor=self.user1, trust=Trust.objects.get_root(), title='Org B')
+        org_b.save()
+
+        content_a = self.create_content(org_a)
+        content_b = self.create_content(org_b)
+
+        TrustUserPermission(trust=org_a, entity=self.user, permission=self.perm_change).save()
+        TrustUserPermission(trust=org_b, entity=self.user1, permission=self.perm_change).save()
+
+        reload_test_users(self)
+
+        self.assertTrue(self.user.has_perm(self.get_perm_code(self.perm_change), content_a))
+        self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), content_b))
+        self.assertTrue(self.user1.has_perm(self.get_perm_code(self.perm_change), content_b))
+        self.assertFalse(self.user1.has_perm(self.get_perm_code(self.perm_change), content_a))
+
+        content_model = self.content_model if hasattr(self, 'content_model') else self.model
+        mixed = content_model.objects.filter(pk__in=[content_a.pk, content_b.pk])
+        self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), mixed))
+        self.assertFalse(self.user1.has_perm(self.get_perm_code(self.perm_change), mixed))
+
+    def test_denied_access_without_grant(self):
+        """A user with no trustee/group grant is denied on organization content."""
+        org = Trust(settlor=self.user, trust=Trust.objects.get_root(), title='Denied Org')
+        org.save()
+        content = self.create_content(org)
+
+        reload_test_users(self)
+        self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), content))
+        self.assertFalse(self.user1.has_perm(self.get_perm_code(self.perm_change), content))
+        self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_add), content))
+        self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_delete), content))
+
     def test_read_permissions_added(self):
         ct = ContentType.objects.get_for_model(self.model)
         self.assertIsNotNone(Permission.objects.get(
@@ -613,11 +611,11 @@ class RoleTestMixin(object):
         rp.save()
 
         try:
-            rp = RolePermission(role=role, permission=self.perm_change)
+            rp = RolePermission(role=self.role, permission=self.perm_change)
             rp.save()
 
-            fail('Duplicate is not detected')
-        except:
+            self.fail('Duplicate is not detected')
+        except IntegrityError:
             pass
 
     def test_has_perm(self):
@@ -811,7 +809,7 @@ class RoleTestMixin(object):
 class TrustJunctionTestCase(TrustContentTestMixin, JunctionModelMixin, TransactionTestCase):
     @unittest.expectedFailure
     def test_read_permissions_added(self):
-        super(JunctionTestCase, self).test_read_permissions_added()
+        super(TrustJunctionTestCase, self).test_read_permissions_added()
 
 
 class TrustContentTestCase(TrustContentTestMixin, ContentModelMixin, TransactionTestCase):

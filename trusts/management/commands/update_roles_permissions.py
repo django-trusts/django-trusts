@@ -1,18 +1,7 @@
-# -*- coding: utf-8 -*-
-
-from __future__ import unicode_literals
-
-
-import getpass
-import unicodedata
-
-from django.conf import settings
-from django.core import exceptions
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from django.db import DEFAULT_DB_ALIAS, router
 from django.db.models import Q
-from django.utils.encoding import DEFAULT_LOCALE_ENCODING
-from django.utils import six
+
 
 def _process_roles(Permission, model_roles, content_klass, roles, using):
     for rolename, perm_names in roles:
@@ -27,6 +16,7 @@ def _process_roles(Permission, model_roles, content_klass, roles, using):
         model_roles[rolename].update([Permission.objects.get(content_type=ctype, codename=perm_name)
                 for perm_name in perm_names
         ])
+
 
 def update_roles_permissions(Role, Permission, RolePermission, app_config, verbosity=2, interactive=True, using=DEFAULT_DB_ALIAS, **kwargs):
     if not router.allow_migrate_model(using, Role):
