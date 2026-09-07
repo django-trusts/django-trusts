@@ -15,7 +15,7 @@ os.chdir(os.path.normpath(os.path.join(os.path.abspath(__file__), os.pardir)))
 
 setup(
     name='django-trusts',
-    version='0.10.3',
+    version='1.0.0.dev0',
     description='Django authorization add-on for multiple organizations and object-level permission settings',
     author='Thomas Yip',
     author_email='thomasleaf@gmail.com',

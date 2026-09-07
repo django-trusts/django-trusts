@@ -2,12 +2,14 @@
 
 This document records the django-trusts source as it existed on the default
 branch before any modernization. It is a historical snapshot, not a supported
-install or test matrix.
+install or test matrix. The active development version after this snapshot is
+documented in [development-version.md](development-version.md). Version numbers
+below describe the preserved baseline, not current package metadata.
 
 **This preservation work makes no API, method, runtime, packaging, or
-authorization behavior changes.** `setup.py` still declares version `0.10.3`.
-`requirements.txt` is unchanged. No `migrates.md` update is required because
-no API or method changed.
+authorization behavior changes.** At preservation time, `setup.py` declared
+version `0.10.3`. `requirements.txt` is unchanged. No `migrates.md` update is
+required because no API or method changed.
 
 Recorded on 2026-09-06 from
 [`django-trusts/django-trusts`](https://github.com/django-trusts/django-trusts)
