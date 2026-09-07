@@ -28,7 +28,7 @@ A ``trust`` associates content with a ``settlor`` and grants permissions to spec
 .. [2]  Although ``django-trusts`` was created to support multiple organizations in one project, it does not define or restrict the organization model. One approach is to model an organization as a special user that can be the settlor of trusts. Another is to create a separate organization model. In that arrangement, a trust's settlor may be the creating user, who may or may not have every permission on the organization's content.
 
 Usages
------ 
+------
 
 Installation
 ~~~~~~~~~~~~
