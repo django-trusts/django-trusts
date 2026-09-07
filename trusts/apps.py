@@ -16,3 +16,6 @@ class AppConfig(DjangoAppConfig):
         if django_apps.is_installed('django.contrib.admin'):
             from trusts.admin import register_auto_modeladmins
             register_auto_modeladmins()
+        # Register system checks. Do not validate conditions here: raising
+        # from ready() would block shell, migrations, and recovery.
+        from trusts import checks as _trusts_checks  # noqa: F401

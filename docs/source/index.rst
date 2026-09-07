@@ -51,6 +51,10 @@ Steps:
 
      python manage.py migrate
 
+5. Run Django system checks in CI and before deploy::
+
+     python manage.py check
+
 Implementation
 ~~~~~~~~~~~~~~
 
@@ -250,8 +254,10 @@ For example, a user may modify a ``Receipt`` only if the user owns it. In this c
    Content.register_permission_condition(Receipt, 'own', lambda u, p, o: u == o.user)
 
 Callables stay object-only (``has_perm``); they are never invoked with
-symbolic references. Register an ``Expr`` from ``condition_refs()`` to
-compile a V1 expression for ``.permitted()`` (see below).
+symbolic references. They require
+``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True`` (see the migration
+record). Register an ``Expr`` from ``condition_refs()`` to compile a V1
+expression for ``.permitted()`` (see below).
 
 To check ``own`` permission, a colon and the condition name should be added after the condition name::
 
@@ -271,7 +277,16 @@ A condition can also be used with the decorator::
 
    V1 declarative conditions are **registered expression objects** (``==``, ``!=``, ``&``, ``|`` over principal and object fields), not probed lambdas. ``has_perm`` and ``.permitted()`` consume the same tree: object checks evaluate it in Python, and queryset filtering is ``base relational grant AND compiled condition`` before pagination.
 
-   Callables remain object-only. ``ContentQuerySet.permitted`` and ``filter_by_user_content_perm`` raise ``PermissionConditionNotQueryable`` for those callbacks so they cannot silently return the underlying grant. Invalid registered expressions fail closed on both paths.
+   Callables remain object-only. They are a system-check error
+   (``trusts.E002``) unless ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is
+   True. ``ContentQuerySet.permitted`` and ``filter_by_user_content_perm``
+   raise ``PermissionConditionNotQueryable`` for those callbacks so they
+   cannot silently return the underlying grant. Invalid registered
+   expressions fail closed on both paths.
+
+   Run ``python manage.py check`` in CI and before deploy so invalid
+   ``Expr`` registrations (``trusts.E001``) are reported before requests
+   are served. Silencing a check ID does not make the policy executable.
 
 
 Queryable permission conditions
@@ -323,9 +338,12 @@ names raise ``PermissionConditionError`` on both ``has_perm`` and
 nullable relations may still compare as ``None``. Python ``@property``
 values are not V1 field paths. Operand types are checked without Django
 ``get_prep_value`` coercion: ``o.status == 1`` and ``o.owner == "1"``
-raise on both paths. ``filter_by_user_content_perm`` still rejects
+raise ``PermissionConditionError`` on both ``has_perm`` and
+``.permitted()``. ``filter_by_user_content_perm`` still rejects
 every ``:condition`` suffix: that API filters Trust rows, not the content
-model the condition is registered on.
+model the condition is registered on. Field names, relation traversal, and
+operand types are also reported by ``python manage.py check``
+(``trusts.E001``) after models load.
 
 
 P() Expressions
@@ -367,6 +385,7 @@ Initial Options
 * TRUSTS_ALLOW_NULL_SETTLOR -- A boolean set to True indicates Trust.settlor field can be null. (default: TRUSTS_DEFAULT_SETTLOR == None)
 * TRUSTS_DEFAULT_SETTLOR -- The default value for `settlor` field on Trust model. (default: None)
 * TRUSTS_ROOT_TITLE -- The title of the root trust object. (default: "In Trust We Trust")
+* TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS -- Opt-in for registered callable permission conditions on ``has_perm`` (default: False). See the migration record.
 
 
 Further Documentation
