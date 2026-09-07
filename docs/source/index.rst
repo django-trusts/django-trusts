@@ -55,8 +55,8 @@ Use ``Content`` ::
    from trusts.models import Content
 
    class Receipt(Content, models.Model):
-       account = models.ForeignKey(Account, null=True)
-       merchant = models.ForeignKey(Merchant, null=True)
+       account = models.ForeignKey(Account, null=True, on_delete=models.CASCADE)
+       merchant = models.ForeignKey(Merchant, null=True, on_delete=models.CASCADE)
        # ... other field
 
 Alternative 2
@@ -73,7 +73,7 @@ Use ``Junction`` ::
    # New Junction to model that is not under your control
    class GroupJunction(Junction, models.Model):
        # field name must be named as `content` and unique=True, null=False, blank=False
-       content = models.ForeignKey(django.contrib.auth.models.Group, unique=True, null=False, blank=False)
+       content = models.ForeignKey(django.contrib.auth.models.Group, unique=True, null=False, blank=False, on_delete=models.CASCADE)
 
 Permission Assignments
 ~~~~~~~~~~~~~~~~~~~~~~

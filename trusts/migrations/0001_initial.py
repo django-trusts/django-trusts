@@ -1,17 +1,18 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 from django.db import migrations, models
 from django.conf import settings
-from django.core.management import call_command
 
 from trusts import ENTITY_MODEL_NAME, GROUP_MODEL_NAME, PERMISSION_MODEL_NAME, DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK
+from trusts.management.commands.create_trust_root import create_root_trust
 import trusts.models
 
 
 def forward(apps, schema_editor):
     if getattr(settings, 'TRUSTS_CREATE_ROOT', True):
-        call_command('create_trust_root', apps=apps)
+        Trust = apps.get_model('trusts', 'trust')
+        pk = getattr(settings, 'TRUSTS_ROOT_PK', 1)
+        settlor = getattr(settings, 'TRUSTS_ROOT_SETTLOR', None)
+        title = getattr(settings, 'TRUSTS_ROOT_TITLE', 'In Trust We Trust')
+        create_root_trust(Trust, pk, settlor, title)
 
 def backward(apps, schema_editor):
     pass
@@ -29,8 +30,8 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(verbose_name='ID', auto_created=True, primary_key=True, serialize=False)),
                 ('title', models.CharField(verbose_name='title', max_length=40)),
-                ('settlor', models.ForeignKey(to=ENTITY_MODEL_NAME, default=DEFAULT_SETTLOR, null=ALLOW_NULL_SETTLOR)),
-                ('trust', models.ForeignKey(to='trusts.Trust', related_name='trusts_trust_content', default=ROOT_PK)),
+                ('settlor', models.ForeignKey(to=ENTITY_MODEL_NAME, default=DEFAULT_SETTLOR, null=ALLOW_NULL_SETTLOR, on_delete=models.CASCADE)),
+                ('trust', models.ForeignKey(to='trusts.Trust', related_name='trusts_trust_content', default=ROOT_PK, on_delete=models.CASCADE)),
                 ('groups', models.ManyToManyField(to=GROUP_MODEL_NAME, related_name='trusts', verbose_name='groups', help_text='The groups this trust grants permissions to. A user willget all permissions granted to each of his/her group.')),
             ],
             options={
@@ -42,9 +43,9 @@ class Migration(migrations.Migration):
             name='TrustUserPermission',
             fields=[
                 ('id', models.AutoField(auto_created=True, primary_key=True, verbose_name='ID', serialize=False)),
-                ('entity', models.ForeignKey(to=ENTITY_MODEL_NAME, related_name='trustpermissions')),
-                ('permission', models.ForeignKey(to=PERMISSION_MODEL_NAME, related_name='trustentities')),
-                ('trust', models.ForeignKey(to='trusts.Trust', related_name='trustees')),
+                ('entity', models.ForeignKey(to=ENTITY_MODEL_NAME, related_name='trustpermissions', on_delete=models.CASCADE)),
+                ('permission', models.ForeignKey(to=PERMISSION_MODEL_NAME, related_name='trustentities', on_delete=models.CASCADE)),
+                ('trust', models.ForeignKey(to='trusts.Trust', related_name='trustees', on_delete=models.CASCADE)),
             ],
         ),
         migrations.CreateModel(
@@ -52,7 +53,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.AutoField(verbose_name='ID', primary_key=True, serialize=False, auto_created=True)),
                 ('managed', models.BooleanField(default=False)),
-                ('permission', models.ForeignKey(to='auth.Permission', related_name='rolepermissions')),
+                ('permission', models.ForeignKey(to='auth.Permission', related_name='rolepermissions', on_delete=models.CASCADE)),
             ],
         ),
         migrations.CreateModel(
@@ -67,7 +68,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='rolepermission',
             name='role',
-            field=models.ForeignKey(to='trusts.Role', related_name='rolepermissions'),
+            field=models.ForeignKey(to='trusts.Role', related_name='rolepermissions', on_delete=models.CASCADE),
         ),
         migrations.AlterUniqueTogether(
             name='trust',

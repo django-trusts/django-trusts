@@ -1,28 +1,38 @@
 # Development version 1.0.0.dev0
 
-The revived Trusts development line is now **1.0.0.dev0**. This is a
+The revived Trusts development line is **1.0.0.dev0**. This is a
 development-version mark only. It is not a production 1.0 release, not a PyPI
 publication, and not a claim that the declarative permission model has been
 validated.
 
 ## Why a new major version
 
-The last published package was **0.10.3** (`v0.10.3`). Upcoming Python 3 and
-modern Django work is expected to break compatibility with that historical
-stack (Python 2.7 / Django 1.8). Starting the next line at `1.0.0.dev0`
-records that planned break before those runtime changes land.
+The last published package was **0.10.3** (`v0.10.3`). The Python 3 and
+Django 6.1 work is a compatibility break with that historical stack
+(Python 2.7 / Django 1.8). The version was marked `1.0.0.dev0` in #18 before
+those runtime changes landed.
 
-This note does not change runtime support claims. Classifiers and
-`requirements.txt` still describe the historical environment until a later
-modernization PR updates them.
+## Current runtime claim
 
-## What this bump does not do
+See [support-matrix.md](support-matrix.md). Declared and CI-tested:
 
-- No API or method changes
-- No `migrates.md` entry (none is required)
+- Python 3.12, 3.13, 3.14
+- Django `>=6.1,<6.2`
+
+Package metadata lives in `pyproject.toml`. `setup.py` is a thin setuptools
+wrapper. Obsolete Python 2 classifiers and `six` / `funcsigs` / `mock` / `pbr`
+install dependencies are removed.
+
+API and method changes for the modernization are recorded in
+[../migrates.md](../migrates.md).
+
+## What this line still does not do
+
 - No final `1.0.0` tag or GitHub Release
+- No PyPI publication
 - No move or replacement of existing tags, including `v0.10.3` and
   `legacy-pre-modernization`
+- No permission-model redesign
 
 ## Preserved legacy source
 
@@ -42,12 +52,10 @@ version.
 
 ## Version sources
 
-| Location | Role | Previous | Now |
-| --- | --- | --- | --- |
-| `setup.py` | Authoritative package metadata | `0.10.3` | `1.0.0.dev0` |
-| `docs/source/conf.py` | Sphinx `version` / `release` | `0.9.4` (already stale vs 0.10.3) | `1.0.0.dev0` |
-| `trusts/__init__.py` | No `__version__` | — | unchanged |
-| `docs/legacy-baseline.md`, `docs/legacy/baseline.json` | Historical 0.10.3 record | `0.10.3` | preserved |
-
-No `pyproject.toml` or `setup.cfg` version field exists. Existing git tags were
-not moved.
+| Location | Role | Value |
+| --- | --- | --- |
+| `pyproject.toml` | Authoritative package metadata | `1.0.0.dev0` |
+| `setup.py` | Thin wrapper; no duplicate version field | defers to `pyproject.toml` |
+| `docs/source/conf.py` | Sphinx `version` / `release` | `1.0.0.dev0` |
+| `trusts/__init__.py` | No `__version__` | unchanged |
+| `docs/legacy-baseline.md`, `docs/legacy/baseline.json` | Historical 0.10.3 record | preserved |

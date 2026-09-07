@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-trusts"
+version = "1.0.0.dev0"
+description = "Django authorization add-on for multiple organizations and object-level permission settings"
+readme = "README.md"
+license = "BSD-2-Clause"
+authors = [
+    { name = "Thomas Yip", email = "thomasleaf@gmail.com" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "Django>=6.1,<6.2",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Django",
+    "Framework :: Django :: 6.1",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+]
+keywords = ["django", "authorization", "permissions", "organizations"]
+
+[project.urls]
+Homepage = "https://github.com/django-trusts/django-trusts"
+Repository = "https://github.com/django-trusts/django-trusts"
+Issues = "https://github.com/django-trusts/django-trusts/issues"
+Documentation = "https://django-trusts.readthedocs.org/en/latest/"
+"Legacy baseline" = "https://github.com/django-trusts/django-trusts/blob/master/docs/legacy-baseline.md"
+"Support matrix" = "https://github.com/django-trusts/django-trusts/blob/master/docs/support-matrix.md"
+
+[project.optional-dependencies]
+test = [
+    "coverage>=7.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+include = ["trusts*"]
+exclude = ["tests*", "docs*", "scripts*"]
+
+[tool.setuptools.package-data]
+trusts = ["*"]

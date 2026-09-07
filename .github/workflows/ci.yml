@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package and Django 6.1
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "Django>=6.1,<6.2" coverage
+          python -m pip install -e .
+      - name: Authorization tests
+        run: |
+          coverage run -m tests.runtests
+          coverage report
+      - name: Fresh migrate
+        run: python -m django migrate --noinput --settings=tests.settings
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check dist/*
+      - name: Install wheel and import
+        run: |
+          python -m pip install "Django>=6.1,<6.2"
+          python -m pip install dist/django_trusts-*.whl
+          python -c "import django; import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'tests.settings'); import sys; sys.path.insert(0, '.'); django.setup(); import trusts; from trusts.models import Trust; from trusts.backends import TrustModelBackend; print('imported', trusts.ENTITY_MODEL_NAME, Trust, TrustModelBackend)"
