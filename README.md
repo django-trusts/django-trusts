@@ -30,10 +30,17 @@ source venv/bin/activate
 python setup.py test
 ```
 
+Development version
+-------------------
+
+The active package version is **1.0.0.dev0**. That is a development-line mark
+ahead of the planned Python/Django compatibility break, not a production 1.0
+release. See [docs/development-version.md](docs/development-version.md).
+
 Legacy baseline
 ---------------
 
 The exact pre-modernization default-branch commit, existing release tags, source
 archive checksum, and historical Python/Django requirements are recorded in
 [docs/legacy-baseline.md](docs/legacy-baseline.md). That snapshot is historical
-documentation only and does not change the package API or version.
+documentation only.
