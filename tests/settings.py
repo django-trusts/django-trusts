@@ -1,3 +1,5 @@
+from os.path import dirname, join
+
 SECRET_KEY = '01)%8q7ub=+yw7^#dz5s!6kkff6%al5f)_ayvep9_b&w1q-dvs'
 
 USE_TZ = True
@@ -33,6 +35,9 @@ TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'APP_DIRS': True,
+        'DIRS': [
+            join(dirname(__file__), 'templates'),
+        ],
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.request',
