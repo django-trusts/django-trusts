@@ -293,11 +293,57 @@ class TrustGroupIntersectionTest(Issue8FixtureMixin, TestCase):
             get_permission_model(),
         )
 
-    def test_application_api_rejects_outside_ceiling_and_authorization_wraps(self):
-        extra = Permission.objects.get(
+    def _outside_ceiling_perm(self):
+        return Permission.objects.get(
             content_type=ContentType.objects.get_for_model(Category),
             codename='delete_category',
         )
+
+    def _assert_unassociated(self, group=None):
+        group = group if group is not None else self.group
+        self.assertFalse(TrustGroup.objects.filter(trust=self.org, group=group).exists())
+        self.assertFalse(self.org.groups.filter(pk=group.pk).exists())
+
+    def test_rejected_grant_does_not_create_association(self):
+        extra = self._outside_ceiling_perm()
+        self._assert_unassociated()
+        with self.assertRaises(ValidationError):
+            self.org.grant_group_permission(self.group, extra)
+        self._assert_unassociated()
+
+    def test_rejected_set_permissions_does_not_create_association(self):
+        extra = self._outside_ceiling_perm()
+        self._assert_unassociated()
+        with self.assertRaises(ValidationError):
+            self.org.set_group_permissions(self.group, [self.perm_read, extra])
+        self._assert_unassociated()
+
+    def test_rejected_associate_with_permissions_does_not_create_association(self):
+        extra = self._outside_ceiling_perm()
+        TrustUserPermission(
+            trust=self.org, entity=self.user, permission=self.perm_change
+        ).save()
+        reload_test_users(self)
+        self._assert_unassociated()
+        with self.assertRaises(AuthorizationDenied):
+            associate_group_with_trust(
+                self.user, self.content, self.group, permissions=[extra]
+            )
+        self._assert_unassociated()
+
+    def test_rejected_grant_keeps_existing_association(self):
+        extra = self._outside_ceiling_perm()
+        self.org.groups.add(self.group)
+        with self.assertRaises(ValidationError):
+            self.org.grant_group_permission(self.group, extra)
+        self.assertTrue(TrustGroup.objects.filter(trust=self.org, group=self.group).exists())
+        self.assertEqual(
+            TrustGroup.objects.get(trust=self.org, group=self.group).permissions.count(),
+            0,
+        )
+
+    def test_application_api_rejects_outside_ceiling_and_authorization_wraps(self):
+        extra = self._outside_ceiling_perm()
         with self.assertRaises(ValidationError):
             self.org.grant_group_permission(self.group, extra)
         TrustUserPermission(

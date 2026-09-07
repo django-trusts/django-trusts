@@ -347,12 +347,16 @@ class Trust(Content):
         """Create or return the TrustGroup association. Grants nothing."""
         return TrustGroup.objects.associate(self, group)
 
+    @transaction.atomic
     def grant_group_permission(self, group, permission):
         """Enable ``permission`` locally on this trust for ``group``.
 
-        Associates the group if needed. Rejects permissions outside the
-        group's global ceiling (``Group.permissions`` or role-derived).
+        Associates the group only after ``permission`` is accepted as
+        inside the group's global ceiling. A rejected grant does not
+        create a TrustGroup row.
         """
+        permission = _resolve_configured_permission(permission)
+        require_permissions_in_global_ceiling(group, [permission])
         return self.associate_group(group).grant_permission(permission)
 
     def revoke_group_permission(self, group, permission):
@@ -363,13 +367,17 @@ class Trust(Content):
             return 0
         return tg.revoke_permission(permission)
 
+    @transaction.atomic
     def set_group_permissions(self, group, permissions):
         """Replace this trust's local grants for ``group``.
 
-        Associates the group if needed. Every permission must be inside
-        the group's global ceiling.
+        Associates the group only after every permission is accepted as
+        inside the group's global ceiling. A rejected set does not create
+        a TrustGroup row.
         """
-        return self.associate_group(group).set_permissions(permissions)
+        resolved = [_resolve_configured_permission(p) for p in permissions]
+        require_permissions_in_global_ceiling(group, resolved)
+        return self.associate_group(group).set_permissions(resolved)
 
     class Meta:
         unique_together = ('settlor', 'title')
@@ -441,6 +449,22 @@ def permission_in_global_ceiling(group, permission):
     return get_group_global_ceiling(group).filter(pk=permission.pk).exists()
 
 
+def require_permissions_in_global_ceiling(group, permissions):
+    """Raise ``ValidationError`` if any permission is outside the ceiling.
+
+    Call this before creating a TrustGroup so a rejected grant/set cannot
+    leave an empty association behind.
+    """
+    for permission in permissions:
+        if not permission_in_global_ceiling(group, permission):
+            raise ValidationError(
+                'Permission "%s" is outside the global ceiling of group "%s".' % (
+                    permission, group
+                ),
+                code='local_grant_outside_ceiling',
+            )
+
+
 def _resolve_configured_permission(permission):
     Permission = get_permission_model()
     if isinstance(permission, Permission):
@@ -489,13 +513,7 @@ class TrustGroup(models.Model):
     def grant_permission(self, permission):
         """Add a local grant. Rejected when the permission is outside the ceiling."""
         permission = _resolve_configured_permission(permission)
-        if not permission_in_global_ceiling(self.group, permission):
-            raise ValidationError(
-                'Permission "%s" is outside the global ceiling of group "%s".' % (
-                    permission, self.group
-                ),
-                code='local_grant_outside_ceiling',
-            )
+        require_permissions_in_global_ceiling(self.group, [permission])
         obj, _created = TrustGroupPermission.objects.get_or_create(
             trustgroup=self, permission=permission
         )
@@ -512,14 +530,7 @@ class TrustGroup(models.Model):
     def set_permissions(self, permissions):
         """Replace local grants. Every permission must be in the global ceiling."""
         resolved = [_resolve_configured_permission(p) for p in permissions]
-        for permission in resolved:
-            if not permission_in_global_ceiling(self.group, permission):
-                raise ValidationError(
-                    'Permission "%s" is outside the global ceiling of group "%s".' % (
-                        permission, self.group
-                    ),
-                    code='local_grant_outside_ceiling',
-                )
+        require_permissions_in_global_ceiling(self.group, resolved)
         wanted = {p.pk for p in resolved}
         existing = set(self.permissions.values_list('pk', flat=True))
         TrustGroupPermission.objects.filter(

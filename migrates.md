@@ -421,7 +421,7 @@ Migration-bot checklist:
 | New | `Trust.associate_group`, `grant_group_permission`, `revoke_group_permission`, `set_group_permissions`. `TrustGroup.grant_permission` / `revoke_permission` / `set_permissions`. Direct writes outside the ceiling raise `ValidationError` (`save`, `bulk_create`, `.permissions.add`). Actor-gated wrappers: `grant_trust_group_permission`, `revoke_trust_group_permission`, `set_trust_group_permissions`. Optional `permissions=` on `associate_group_with_trust`. |
 | Replacement | Call the Trust/TrustGroup methods or authorization helpers. |
 | Affected | Project settings / team UIs (example app tracks UI separately). |
-| Authorization | Ceiling violations are rejected at write time and still deny at read time if a row is forced in. |
+| Authorization | Ceiling violations are rejected at write time and still deny at read time if a row is forced in. A rejected `grant_group_permission` / `set_group_permissions` / `associate_group_with_trust(..., permissions=...)` does not create a TrustGroup row for a previously unassociated group. |
 
 Migration-bot checklist:
 

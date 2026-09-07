@@ -164,12 +164,13 @@ def associate_group_with_trust(actor, content, group, permissions=None):
 
     Optional ``permissions`` are local TrustGroup grants and must be a
     subset of the group's global ceiling. Omitting them associates the
-    group without granting anything.
+    group without granting anything. When ``permissions`` is given, the
+    association is created only if every grant is accepted; a rejected
+    set leaves no TrustGroup row for a previously unassociated group.
     """
     _require(can_administer_content(actor, content),
              'change permission is required to associate a team.')
     group = _resolve_group(group)
-    content.trust.groups.add(group)
     if permissions:
         try:
             content.trust.set_group_permissions(group, [
@@ -177,6 +178,8 @@ def associate_group_with_trust(actor, content, group, permissions=None):
             ])
         except ValidationError as exc:
             raise AuthorizationDenied(str(exc))
+    else:
+        content.trust.groups.add(group)
     return group
 
 
