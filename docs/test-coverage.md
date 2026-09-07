@@ -51,7 +51,7 @@ These must keep passing in addition to the table above:
 - `TeamViewAuthorizationTest` — member GET/POST 403, admin add, unknown user PK does not mutate
 - `AutoModelAdminTest` — Content and Junction proxies with `auto_modeladmin = True` register; opt-out does not
 - `TrustGroupIntersectionTest` — issue #23 acceptance: no TrustGroup / empty local / local-without-ceiling deny; both layers allow; per-trust local subsets; removing either layer revokes; two groups combine without widening; trustee unchanged; role-derived ceiling; inactive/anonymous deny; `has_perm` / `.permitted` / `filter_by_user_content_perm` parity; legacy association grants nothing; grandfather dry-run/apply; later ceiling adds stay local-off; configured group/permission models
-- `QueryableConditionTest` — issue #4 V1: nested `&`/`|` grouping, relationship traversal, constants, `has_perm` / `.permitted` parity, inactive empty, no base grant, arbitrary callbacks stay object-only (`PermissionConditionNotQueryable`), `and`/`or` raises `PermissionConditionBooleanError` on queryset, unsupported calls fail closed
+- `QueryableConditionTest` — issue #4 V1: nested `&`/`|` grouping, relationship traversal, constants, `has_perm` / `.permitted` parity, inactive empty, no base grant, arbitrary callbacks stay object-only (`PermissionConditionNotQueryable`), `and`/`or` raises `PermissionConditionBooleanError` on queryset, unsupported calls fail closed, misspelled principal field vs nullable object field raises `PermissionConditionError` (does not allow NULL rows)
 
 Do not treat a gap as license to widen access. New grants need an explicit
 test.

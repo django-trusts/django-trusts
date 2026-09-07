@@ -569,6 +569,16 @@ Migration-bot checklist:
 | Affected | Condition names with ``_``. Unconditioned codes are unchanged. |
 | Authorization | Lookup only. |
 
+### 21. Principal field paths fail closed (review on #28)
+
+| | |
+| --- | --- |
+| Previous (this PR head) | Unvalidated ``u.attr`` plus ``except Exception: return None`` treated a misspelled principal attribute as ``None``, matching nullable object fields. |
+| New | Principal paths are resolved against ``TRUSTS_ENTITY_MODEL`` ``_meta`` (same FK/O2O rules as object paths). Missing names raise ``PermissionConditionError`` on ``has_perm`` and ``.permitted()``. Legitimate nullable relations still compare as ``None``. Python properties are not executed. |
+| Replacement | Keep ``u == o.owner``. Use ``u.username`` only when that column exists on the entity model. |
+| Affected | V1 conditions that traversed an unvalidated user attribute. |
+| Authorization | Fail closed. A typo cannot grant NULL-region rows. |
+
 ### 19. Arbitrary callbacks remain object-only
 
 | | |
@@ -588,10 +598,15 @@ back to the original callable so existing object-only predicates keep
 working; ``.permitted()`` raises the boolean error (clear ``&`` / ``|``
 guidance) instead of inventing a source parser.
 
-Object paths are validated against ``model._meta`` fields, not Python
-properties. A condition that compares a ``@property`` is treated as
-not queryable: ``has_perm`` falls back to the callable, ``.permitted()``
-raises. Registration is unchanged.
+Object paths are validated against the content model's ``_meta`` fields.
+Principal paths are validated against ``TRUSTS_ENTITY_MODEL`` /
+``AUTH_USER_MODEL`` the same way. A missing or misspelled attribute
+raises ``PermissionConditionError`` on both ``has_perm`` and
+``.permitted()``; it is never collapsed to ``None`` (which would match
+a nullable object field). Python ``@property`` access is not a V1 field
+path and is not executed during compile or evaluation. Arbitrary user
+properties remain a decision for a later issue, not an implicit grant.
+Registration is unchanged.
 
 ``filter_by_user_content_perm`` is not a content-row filter; compiling a
 content-model condition against Trust rows would change that surface.

@@ -64,7 +64,7 @@ class QueryableConditionTest(TestCase):
         )
         self.owned_locked = Ticket.objects.create(
             trust=self.org_trust, title='owned-locked', owner=self.user,
-            organization=self.other_company, status='locked',
+            organization=self.other_company, status='locked', region='west',
         )
         self.managed_open = Ticket.objects.create(
             trust=self.org_trust, title='managed-open', owner=self.user1,
@@ -267,9 +267,57 @@ class QueryableConditionTest(TestCase):
         missing = 'trusts_tests.change_ticket:missing'
         with self.assertRaises(PermissionConditionError):
             Ticket.objects.permitted(missing, self.user)
-        # has_perm falls back to the callback, which errors on the instance.
-        with self.assertRaises(Exception):
+        with self.assertRaises(PermissionConditionError):
             self.user.has_perm(missing, self.owned_open)
+
+    def test_misspelled_principal_field_does_not_match_null_object_field(self):
+        """A typo on ``u`` must not compile to ``region__isnull=True``.
+
+        ``owned_open.region`` is NULL and the user has a base grant. Binding
+        a missing principal attribute as ``None`` would allow that row.
+        """
+        Content.register_permission_condition(
+            Ticket, 'typo', lambda u, p, o: u.regoin == o.region
+        )
+        typo = 'trusts_tests.change_ticket:typo'
+        with self.assertRaises(PermissionConditionError) as direct:
+            self.user.has_perm(typo, self.owned_open)
+        self.assertIn('regoin', str(direct.exception))
+        with self.assertRaises(PermissionConditionError) as listed:
+            Ticket.objects.permitted(typo, self.user)
+        self.assertIn('regoin', str(listed.exception))
+        # Unconditioned grant still includes the NULL-region row; the typo
+        # must not have been treated as a successful condition.
+        self.assertIn(
+            self.owned_open.pk,
+            Ticket.objects.permitted(self.change, self.user).values_list('pk', flat=True),
+        )
+        self.assertIsNone(self.owned_open.region)
+
+    def test_nullable_object_field_none_is_not_a_missing_attribute(self):
+        Content.register_permission_condition(
+            Ticket, 'unset_region', lambda u, p, o: o.region == None
+        )
+        unset = 'trusts_tests.change_ticket:unset_region'
+        self.assertTrue(self.user.has_perm(unset, self.owned_open))
+        self.assertFalse(self.user.has_perm(unset, self.owned_locked))
+        pks = set(Ticket.objects.permitted(unset, self.user).values_list('pk', flat=True))
+        self.assertIn(self.owned_open.pk, pks)
+        self.assertNotIn(self.owned_locked.pk, pks)
+        self._assert_parity(unset, self.user)
+
+    def test_validated_principal_field_path(self):
+        self.owned_open.region = self.user.username
+        self.owned_open.save()
+        Content.register_permission_condition(
+            Ticket, 'named', lambda u, p, o: u.username == o.region
+        )
+        named = 'trusts_tests.change_ticket:named'
+        self.assertTrue(self.user.has_perm(named, self.owned_open))
+        self.assertFalse(self.user.has_perm(named, self.owned_locked))
+        pks = set(Ticket.objects.permitted(named, self.user).values_list('pk', flat=True))
+        self.assertEqual(pks, {self.owned_open.pk})
+        self._assert_parity(named, self.user)
 
     def test_builtin_own_on_trust_is_queryable(self):
         change_trust = Permission.objects.get(

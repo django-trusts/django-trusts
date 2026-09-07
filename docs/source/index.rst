@@ -299,7 +299,15 @@ Unsupported (fail closed; do not drop the condition):
 * Function or method calls, loops, indexing, I/O, arithmetic, mutable state
 * Source or bytecode inspection
 
-Object field paths are resolved against the target model. Unknown fields raise ``PermissionConditionError``. ``filter_by_user_content_perm`` still rejects every ``:condition`` suffix: that API filters Trust rows, not the content model the condition is registered on.
+Object and principal field paths are resolved against the target model and
+``TRUSTS_ENTITY_MODEL`` / ``AUTH_USER_MODEL`` respectively (``_meta`` fields
+and ``ForeignKey`` / ``OneToOneField`` traversal). Unknown or misspelled
+names raise ``PermissionConditionError`` on both ``has_perm`` and
+``.permitted()``; they are not treated as SQL/Python ``NULL``. Legitimate
+nullable relations may still compare as ``None``. Python ``@property``
+values are not V1 field paths. ``filter_by_user_content_perm`` still rejects
+every ``:condition`` suffix: that API filters Trust rows, not the content
+model the condition is registered on.
 
 
 P() Expressions

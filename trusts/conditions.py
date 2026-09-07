@@ -5,12 +5,15 @@ symbolic principal / permission / object references produces a
 language-neutral expression tree. Django ``Q`` is one compiler target, not
 the canonical representation.
 
-V1 grammar: principal/object field refs and relationship traversal; literal
-constants; ``==`` / ``!=``; nested ``&`` / ``|``. Python ``and`` / ``or`` /
-``not`` cannot be overloaded and raise ``PermissionConditionBooleanError``.
+V1 grammar: principal/object field refs and relationship traversal
+(``_meta`` fields on the content model and the entity/user model; not
+Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
+``|``. Missing attribute names fail closed; they are not treated as
+``NULL``. Python ``and`` / ``or`` / ``not`` cannot be overloaded and
+raise ``PermissionConditionBooleanError``.
 """
 
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db.models import F, Model, Q
 
 
@@ -278,32 +281,26 @@ def build_expression(func):
     return None
 
 
-def _object_paths(node):
-    if isinstance(node, Ref) and node.source == 'object':
-        yield node.path
-    elif isinstance(node, (Eq, Ne, And, Or)):
-        yield from _object_paths(node.left)
-        yield from _object_paths(node.right)
-    elif isinstance(node, Const):
-        return
-    elif isinstance(node, Ref):
-        return
-    else:
-        raise PermissionConditionError(
-            'Malformed permission condition node %r.' % (node,)
-        )
+def _entity_model():
+    from trusts import get_entity_model
+    return get_entity_model()
 
 
-def resolve_object_field_path(model, path):
+def resolve_field_path(model, path, ref_kind='object'):
     """Validate ``path`` against ``model`` and return the Django lookup string.
 
     Relationship traversal is allowed; a non-relational field may only appear
-    as the last component.
+    as the last component. Missing names raise ``PermissionConditionError``
+    rather than resolving to ``None``.
     """
     if not path:
         raise PermissionConditionError(
-            'Object references must name a field (for example o.owner), '
-            'not the object itself.'
+            '%s references must name a field (for example %s.owner), '
+            'not the %s itself.' % (
+                ref_kind.capitalize(),
+                'o' if ref_kind == 'object' else 'u',
+                ref_kind,
+            )
         )
     current = model
     for i, name in enumerate(path):
@@ -332,23 +329,21 @@ def resolve_object_field_path(model, path):
     return '__'.join(path)
 
 
+def resolve_object_field_path(model, path):
+    return resolve_field_path(model, path, ref_kind='object')
+
+
 def validate_expression(node, model):
-    """Resolve every object field path against ``model``. Fail closed."""
+    """Resolve object paths against ``model`` and principal paths against the entity model."""
     if not is_predicate(node):
         raise PermissionConditionError(
             'Permission condition did not produce a comparison expression.'
         )
-    for path in _object_paths(node):
-        resolve_object_field_path(model, path)
     _validate_node(node, model)
 
 
 def _validate_node(node, model):
-    if isinstance(node, (And, Or)):
-        _validate_node(node.left, model)
-        _validate_node(node.right, model)
-        return
-    if isinstance(node, (Eq, Ne)):
+    if isinstance(node, (And, Or, Eq, Ne)):
         _validate_node(node.left, model)
         _validate_node(node.right, model)
         return
@@ -356,61 +351,107 @@ def _validate_node(node, model):
         return
     if isinstance(node, Ref):
         if node.source == 'object':
-            resolve_object_field_path(model, node.path)
-        elif node.source == 'principal' and node.path:
-            # Principal paths are resolved against the live user at
-            # evaluation / compile time, not the content model.
-            pass
+            resolve_field_path(model, node.path, ref_kind='object')
+        elif node.source == 'principal':
+            if node.path:
+                resolve_field_path(_entity_model(), node.path, ref_kind='principal')
+        elif node.source == 'permission':
+            if node.path:
+                raise PermissionConditionError(
+                    'Permission references cannot traverse attributes in V1.'
+                )
         return
     raise PermissionConditionError(
         'Malformed permission condition node %r.' % (node,)
     )
 
 
-def _resolve_runtime(node, user, perm, obj):
+def _walk_model_path(instance, model, path):
+    """Follow a ``_meta`` field path on ``instance``.
+
+    A missing field name raises ``PermissionConditionError``. A legitimate
+    nullable relation (or a missing reverse one-to-one) resolves to ``None``.
+    Python properties are not consulted: only model fields.
+    """
+    current = instance
+    current_model = model
+    for i, name in enumerate(path):
+        try:
+            field = current_model._meta.get_field(name)
+        except FieldDoesNotExist:
+            raise PermissionConditionError(
+                'Permission condition field %r is not on model %s '
+                '(path %s).' % (
+                    name,
+                    current_model._meta.label,
+                    '.'.join(path[:i + 1]),
+                )
+            )
+        last = i == len(path) - 1
+        if not last and (
+            not field.is_relation or field.many_to_many or field.one_to_many
+        ):
+            raise PermissionConditionError(
+                'Cannot traverse field %r on %s in a permission '
+                'condition; relationship traversal requires a '
+                'ForeignKey or OneToOneField.' % (
+                    name, current_model._meta.label
+                )
+            )
+        if current is None:
+            return None
+        if field.is_relation and not field.many_to_many and not field.one_to_many:
+            try:
+                current = getattr(current, field.name)
+            except ObjectDoesNotExist:
+                current = None
+            if not last:
+                current_model = field.remote_field.model
+            continue
+        current = getattr(current, field.attname)
+    return current
+
+
+def _resolve_runtime(node, user, perm, obj, model):
     if isinstance(node, Const):
         return node.value
     if isinstance(node, Ref):
         if node.source == 'principal':
-            return _walk_attr(user, node.path)
+            if not node.path:
+                return user
+            return _walk_model_path(user, _entity_model(), node.path)
         if node.source == 'permission':
-            return _walk_attr(perm, node.path)
+            if node.path:
+                raise PermissionConditionError(
+                    'Permission references cannot traverse attributes in V1.'
+                )
+            return perm
         if node.source == 'object':
-            return _walk_attr(obj, node.path)
+            return _walk_model_path(obj, model, node.path)
     raise PermissionConditionError(
         'Cannot evaluate permission condition node %r.' % (node,)
     )
 
 
-def _walk_attr(root, path):
-    current = root
-    for name in path:
-        if current is None:
-            return None
-        try:
-            current = getattr(current, name)
-        except Exception:
-            return None
-    return current
-
-
-def evaluate_expression(node, user, perm, obj):
+def evaluate_expression(node, user, perm, obj, model=None):
     """Evaluate a captured expression against a real principal/permission/object."""
+    if model is None:
+        model = obj.__class__
     if isinstance(node, And):
-        return evaluate_expression(node.left, user, perm, obj) and (
-            evaluate_expression(node.right, user, perm, obj)
+        return evaluate_expression(node.left, user, perm, obj, model) and (
+            evaluate_expression(node.right, user, perm, obj, model)
         )
     if isinstance(node, Or):
-        return evaluate_expression(node.left, user, perm, obj) or (
-            evaluate_expression(node.right, user, perm, obj)
+        return evaluate_expression(node.left, user, perm, obj, model) or (
+            evaluate_expression(node.right, user, perm, obj, model)
         )
     if isinstance(node, Eq):
-        return _resolve_runtime(node.left, user, perm, obj) == (
-            _resolve_runtime(node.right, user, perm, obj)
+        return _resolve_runtime(node.left, user, perm, obj, model) == (
+            _resolve_runtime(node.right, user, perm, obj, model)
         )
     if isinstance(node, Ne):
-        return _resolve_runtime(node.left, user, perm, obj) != (
-            _resolve_runtime(node.right, user, perm, obj)
+        return _resolve_runtime(node.left, user, perm, obj, model) != (
+            _resolve_runtime(node.right, user, perm, obj, model)
         )
     raise PermissionConditionError(
         'Permission condition did not produce a comparison expression.'
@@ -434,9 +475,15 @@ def _classify(node, model, user, perm):
         if node.source == 'object':
             return _Unbound(resolve_object_field_path(model, node.path))
         if node.source == 'principal':
-            return _Bound(_walk_attr(user, node.path))
+            if not node.path:
+                return _Bound(user)
+            return _Bound(_walk_model_path(user, _entity_model(), node.path))
         if node.source == 'permission':
-            return _Bound(_walk_attr(perm, node.path))
+            if node.path:
+                raise PermissionConditionError(
+                    'Permission references cannot traverse attributes in V1.'
+                )
+            return _Bound(perm)
     raise PermissionConditionError(
         'Cannot compile permission condition node %r.' % (node,)
     )
@@ -540,8 +587,11 @@ def evaluate_condition_func(func, user, perm, obj, model=None):
     """Evaluate ``func`` using a captured expression when possible.
 
     Shares the tree with queryset compilation. Falls back to calling
-    ``func`` with real arguments for genuinely arbitrary callbacks, and
-    for declarative trees that cannot be bound to ``model``.
+    ``func`` with real arguments only for genuinely arbitrary callbacks
+    (no V1 tree). A captured tree that fails field validation raises
+    ``PermissionConditionError`` on the object path as well as the queryset
+    path; it must not fall back and must not treat a missing attribute as
+    ``None``.
     """
     try:
         expr = build_expression(func)
@@ -552,8 +602,5 @@ def evaluate_condition_func(func, user, perm, obj, model=None):
     klass = model
     if klass is None:
         klass = obj.model if hasattr(obj, 'model') and not isinstance(obj, Model) else obj.__class__
-    try:
-        validate_expression(expr, klass)
-    except PermissionConditionError:
-        return func(user, perm, obj)
-    return evaluate_expression(expr, user, perm, obj)
+    validate_expression(expr, klass)
+    return evaluate_expression(expr, user, perm, obj, model=klass)
