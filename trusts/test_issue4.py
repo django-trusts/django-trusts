@@ -1,17 +1,27 @@
 """Queryable V1 permission conditions (issue #4).
 
-Parity between ``has_perm`` and ``ContentQuerySet.permitted`` for the
-restricted declarative grammar; arbitrary callbacks stay object-only.
+Parity between ``has_perm`` and ``ContentQuerySet.permitted`` for
+registered ``Expr`` trees; callables stay object-only and are never
+probed with symbolic refs.
 """
 
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
-from django.test import TestCase
+from django.core.management import call_command
+from django.test import SimpleTestCase, TestCase
 
+from django_trusts import Query as DjangoTrustsQuery, TQ as DjangoTrustsTQ, condition_refs as django_condition_refs
 from trusts.conditions import (
+    Const,
+    Expr,
     PermissionConditionBooleanError,
     PermissionConditionError,
-    build_expression,
+    PermissionConditionUnsupported,
+    Query,
+    Ref,
+    TQ,
+    condition_refs,
+    is_predicate,
     object_ref,
     permission_ref,
     principal_ref,
@@ -28,13 +38,130 @@ from trusts.tests import (
     reload_test_users,
 )
 from tests.models import Organization, Ticket
-from django.core.management import call_command
 
 
-OWNED_OR_MANAGER_UNLOCKED = lambda u, p, o: (
+u, p, o = condition_refs()
+OWNED_OR_MANAGER_UNLOCKED = (
     (u == o.owner) |
     ((u == o.organization.manager) & (o.status != 'locked'))
 )
+
+
+class _CallLog(object):
+    """Callable that records arguments so tests can detect symbolic probes."""
+
+    def __init__(self, impl):
+        self.impl = impl
+        self.calls = []
+
+    def __call__(self, user, perm, obj):
+        self.calls.append((user, perm, obj))
+        return self.impl(user, perm, obj)
+
+    def saw_ref(self):
+        return any(isinstance(arg, Ref) for call in self.calls for arg in call)
+
+
+class ConditionGrammarTest(SimpleTestCase):
+    def test_supported_nodes_to_tuple(self):
+        u, p, o = condition_refs()
+        eq = u == o.owner
+        ne = o.status != 'locked'
+        conjunction = eq & ne
+        disjunction = eq | ne
+        self.assertEqual(
+            eq.to_tuple(),
+            ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
+        )
+        self.assertEqual(
+            ne.to_tuple(),
+            ('ne', ('ref', 'object', ('status',)), ('const', 'locked')),
+        )
+        self.assertEqual(conjunction.to_tuple()[0], 'and')
+        self.assertEqual(disjunction.to_tuple()[0], 'or')
+        self.assertEqual(Const(None).to_tuple(), ('const', None))
+        self.assertEqual(principal_ref().to_tuple(), ('ref', 'principal', ()))
+        self.assertEqual(permission_ref().to_tuple(), ('ref', 'permission', ()))
+        self.assertEqual(object_ref().to_tuple(), ('ref', 'object', ()))
+        self.assertTrue(is_predicate(eq))
+        self.assertTrue(is_predicate(conjunction))
+        self.assertFalse(is_predicate(o.owner))
+
+    def test_nested_grouping_is_preserved(self):
+        self.assertEqual(
+            OWNED_OR_MANAGER_UNLOCKED.to_tuple(),
+            (
+                'or',
+                ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
+                (
+                    'and',
+                    (
+                        'eq',
+                        ('ref', 'principal', ()),
+                        ('ref', 'object', ('organization', 'manager')),
+                    ),
+                    ('ne', ('ref', 'object', ('status',)), ('const', 'locked')),
+                ),
+            ),
+        )
+
+    def test_python_or_at_construction_raises_boolean_error(self):
+        u, p, o = condition_refs()
+        with self.assertRaises(PermissionConditionBooleanError) as ctx:
+            (u == o.owner) or (o.status == 'open')
+        self.assertIn('&', str(ctx.exception))
+        self.assertIn('|', str(ctx.exception))
+
+    def test_chained_comparison_raises_boolean_error(self):
+        u, p, o = condition_refs()
+        with self.assertRaises(PermissionConditionBooleanError) as ctx:
+            0 < o.amount < 100
+        self.assertIn('chained', str(ctx.exception))
+
+    def test_ordering_expr_is_not_a_v1_predicate(self):
+        u, p, o = condition_refs()
+        ordering = o.amount < 100
+        self.assertIsInstance(ordering, Expr)
+        self.assertFalse(is_predicate(ordering))
+        with self.assertRaises(PermissionConditionError):
+            Content.register_permission_condition(Ticket, 'range', ordering)
+
+    def test_calls_indexing_arithmetic_setters_rejected(self):
+        u, p, o = condition_refs()
+        with self.assertRaises(PermissionConditionUnsupported):
+            o.status.lower()
+        with self.assertRaises(PermissionConditionUnsupported):
+            o.status[0]
+        with self.assertRaises(PermissionConditionUnsupported):
+            o.amount + 1
+        with self.assertRaises(PermissionConditionUnsupported):
+            o.owner = u
+        with self.assertRaises(PermissionConditionUnsupported):
+            o.status[0] = 'x'
+        with self.assertRaises(PermissionConditionUnsupported):
+            ~ (u == o.owner)
+        with self.assertRaises(PermissionConditionUnsupported):
+            1 in o.status
+        with self.assertRaises(PermissionConditionUnsupported):
+            list(o.owner)
+
+    def test_tq_namespace_is_reserved_without_v1_lookups(self):
+        self.assertIs(Query, TQ)
+        self.assertIs(DjangoTrustsQuery, Query)
+        self.assertIs(DjangoTrustsTQ, TQ)
+        self.assertEqual(django_condition_refs()[0].to_tuple(), ('ref', 'principal', ()))
+        with self.assertRaises(PermissionConditionUnsupported) as ctx:
+            TQ.iexact
+        self.assertIn('iexact', str(ctx.exception))
+        with self.assertRaises(PermissionConditionUnsupported):
+            TQ.isin
+
+    def test_non_predicate_and_non_callable_rejected_at_register(self):
+        u, p, o = condition_refs()
+        with self.assertRaises(PermissionConditionError):
+            Content.register_permission_condition(Ticket, 'bare', o.owner)
+        with self.assertRaises(TypeError):
+            Content.register_permission_condition(Ticket, 'bad', 'not-a-condition')
 
 
 class QueryableConditionTest(TestCase):
@@ -92,30 +219,28 @@ class QueryableConditionTest(TestCase):
         ).save()
         reload_test_users(self)
 
-        Content.register_permission_condition(
-            Ticket, 'editable', OWNED_OR_MANAGER_UNLOCKED
-        )
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'editable', OWNED_OR_MANAGER_UNLOCKED)
         Content.register_permission_condition(
             Ticket, 'unlocked',
-            lambda u, p, o: (
-                ((u == o.owner) | (u == o.organization.manager)) &
-                (o.status != 'locked')
-            )
+            ((u == o.owner) | (u == o.organization.manager)) & (o.status != 'locked'),
+        )
+        Content.register_permission_condition(Ticket, 'own', u == o.owner)
+        Content.register_permission_condition(Ticket, 'open', o.status == 'open')
+        Content.register_permission_condition(
+            Ticket, 'never', lambda user, perm, obj: False
         )
         Content.register_permission_condition(
-            Ticket, 'own', lambda u, p, o: u == o.owner
+            Ticket, 'python_or',
+            lambda user, perm, obj: user == obj.owner or obj.status == 'open',
         )
         Content.register_permission_condition(
-            Ticket, 'open', lambda u, p, o: o.status == 'open'
+            Ticket, 'called',
+            lambda user, perm, obj: obj.status.lower() == 'open',
         )
         Content.register_permission_condition(
-            Ticket, 'never', lambda u, p, o: False
-        )
-        Content.register_permission_condition(
-            Ticket, 'python_or', lambda u, p, o: u == o.owner or o.status == 'open'
-        )
-        Content.register_permission_condition(
-            Ticket, 'called', lambda u, p, o: o.status.lower() == 'open'
+            Ticket, 'legacy_own',
+            lambda user, perm, obj: user == obj.owner,
         )
 
         self.change = 'trusts_tests.change_ticket'
@@ -140,26 +265,9 @@ class QueryableConditionTest(TestCase):
         self.assertEqual(list(qs[:50]), list(qs))
 
     def test_expression_tree_preserves_nested_grouping(self):
-        u, p, o = principal_ref(), permission_ref(), object_ref()
+        u, p, o = condition_refs()
         expr = (u == o.owner) | ((u == o.organization.manager) & (o.status != 'locked'))
-        self.assertEqual(
-            expr.to_tuple(),
-            (
-                'or',
-                ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
-                (
-                    'and',
-                    (
-                        'eq',
-                        ('ref', 'principal', ()),
-                        ('ref', 'object', ('organization', 'manager')),
-                    ),
-                    ('ne', ('ref', 'object', ('status',)), ('const', 'locked')),
-                ),
-            ),
-        )
-        captured = build_expression(OWNED_OR_MANAGER_UNLOCKED)
-        self.assertEqual(captured.to_tuple(), expr.to_tuple())
+        self.assertEqual(expr.to_tuple(), OWNED_OR_MANAGER_UNLOCKED.to_tuple())
 
     def test_nested_expression_object_and_queryset_parity(self):
         self.assertTrue(self.user.has_perm(self.change, self.owned_open))
@@ -237,33 +345,50 @@ class QueryableConditionTest(TestCase):
         self.assertFalse(self.user.has_perm(never, self.owned_open))
         with self.assertRaises(PermissionConditionNotQueryable):
             Ticket.objects.permitted(never, self.user)
-        # Must not silently list the underlying grant.
         self.assertIn(
             self.owned_open.pk,
             Ticket.objects.permitted(self.change, self.user).values_list('pk', flat=True),
         )
 
-    def test_python_and_or_raises_clear_error_on_queryset(self):
+    def test_python_or_callable_stays_object_only(self):
         conditioned = 'trusts_tests.change_ticket:python_or'
-        with self.assertRaises(PermissionConditionBooleanError) as ctx:
+        with self.assertRaises(PermissionConditionNotQueryable):
             Ticket.objects.permitted(conditioned, self.user)
-        self.assertIn('&', str(ctx.exception))
-        self.assertIn('|', str(ctx.exception))
-        # Object-only path still evaluates the original callback.
         self.assertTrue(self.user.has_perm(conditioned, self.owned_open))
 
-    def test_unsupported_syntax_fails_closed_on_queryset(self):
+    def test_method_call_callable_stays_object_only(self):
         called = 'trusts_tests.change_ticket:called'
         with self.assertRaises(PermissionConditionNotQueryable):
             Ticket.objects.permitted(called, self.user)
-        # Method calls remain object-only; they must not over-grant on lists.
         self.assertTrue(self.user.has_perm(called, self.owned_open))
         self.assertFalse(self.user.has_perm(called, self.managed_locked))
 
+    def test_v1_shaped_lambda_is_not_queryable(self):
+        """A callable that *looks* like V1 stays object-only; dispatch is by type."""
+        legacy = 'trusts_tests.change_ticket:legacy_own'
+        self.assertTrue(self.user.has_perm(legacy, self.owned_open))
+        self.assertFalse(self.user.has_perm(legacy, self.managed_open))
+        with self.assertRaises(PermissionConditionNotQueryable):
+            Ticket.objects.permitted(legacy, self.user)
+
+    def test_legacy_callback_never_symbolically_invoked(self):
+        log = _CallLog(lambda user, perm, obj: user == obj.owner)
+        Content.register_permission_condition(Ticket, 'spy', log)
+        self.assertEqual(log.calls, [])
+        spy = 'trusts_tests.change_ticket:spy'
+        with self.assertRaises(PermissionConditionNotQueryable):
+            Ticket.objects.permitted(spy, self.user)
+        self.assertEqual(log.calls, [])
+        self.assertTrue(self.user.has_perm(spy, self.owned_open))
+        self.assertEqual(len(log.calls), 1)
+        self.assertFalse(log.saw_ref())
+        self.assertFalse(self.user.has_perm(spy, self.managed_open))
+        self.assertEqual(len(log.calls), 2)
+        self.assertFalse(log.saw_ref())
+
     def test_invalid_field_path_fails_closed(self):
-        Content.register_permission_condition(
-            Ticket, 'missing', lambda u, p, o: u == o.not_a_field
-        )
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'missing', u == o.not_a_field)
         missing = 'trusts_tests.change_ticket:missing'
         with self.assertRaises(PermissionConditionError):
             Ticket.objects.permitted(missing, self.user)
@@ -276,9 +401,8 @@ class QueryableConditionTest(TestCase):
         ``owned_open.region`` is NULL and the user has a base grant. Binding
         a missing principal attribute as ``None`` would allow that row.
         """
-        Content.register_permission_condition(
-            Ticket, 'typo', lambda u, p, o: u.regoin == o.region
-        )
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'typo', u.regoin == o.region)
         typo = 'trusts_tests.change_ticket:typo'
         with self.assertRaises(PermissionConditionError) as direct:
             self.user.has_perm(typo, self.owned_open)
@@ -286,8 +410,6 @@ class QueryableConditionTest(TestCase):
         with self.assertRaises(PermissionConditionError) as listed:
             Ticket.objects.permitted(typo, self.user)
         self.assertIn('regoin', str(listed.exception))
-        # Unconditioned grant still includes the NULL-region row; the typo
-        # must not have been treated as a successful condition.
         self.assertIn(
             self.owned_open.pk,
             Ticket.objects.permitted(self.change, self.user).values_list('pk', flat=True),
@@ -295,9 +417,8 @@ class QueryableConditionTest(TestCase):
         self.assertIsNone(self.owned_open.region)
 
     def test_nullable_object_field_none_is_not_a_missing_attribute(self):
-        Content.register_permission_condition(
-            Ticket, 'unset_region', lambda u, p, o: o.region == None
-        )
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'unset_region', o.region == None)
         unset = 'trusts_tests.change_ticket:unset_region'
         self.assertTrue(self.user.has_perm(unset, self.owned_open))
         self.assertFalse(self.user.has_perm(unset, self.owned_locked))
@@ -309,9 +430,8 @@ class QueryableConditionTest(TestCase):
     def test_validated_principal_field_path(self):
         self.owned_open.region = self.user.username
         self.owned_open.save()
-        Content.register_permission_condition(
-            Ticket, 'named', lambda u, p, o: u.username == o.region
-        )
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'named', u.username == o.region)
         named = 'trusts_tests.change_ticket:named'
         self.assertTrue(self.user.has_perm(named, self.owned_open))
         self.assertFalse(self.user.has_perm(named, self.owned_locked))
@@ -321,12 +441,9 @@ class QueryableConditionTest(TestCase):
 
     def test_nonempty_permission_path_fails_closed(self):
         """``p.codenmae`` must not become an always-true ``None == None``."""
-        Content.register_permission_condition(
-            Ticket, 'ptypo', lambda u, p, o: p.codenmae == None
-        )
-        Content.register_permission_condition(
-            Ticket, 'pcode', lambda u, p, o: p.codename == None
-        )
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'ptypo', p.codenmae == None)
+        Content.register_permission_condition(Ticket, 'pcode', p.codename == None)
         for code in ('ptypo', 'pcode'):
             perm = 'trusts_tests.change_ticket:%s' % code
             with self.assertRaises(PermissionConditionError) as direct:
@@ -342,11 +459,10 @@ class QueryableConditionTest(TestCase):
     def test_terminal_m2m_and_reverse_o2m_fail_closed_on_both_paths(self):
         group = Group.objects.create(name='cond-group')
         self.user.groups.add(group)
+        u, p, o = condition_refs()
+        Content.register_permission_condition(Ticket, 'ingroup', o.owner.groups == group)
         Content.register_permission_condition(
-            Ticket, 'ingroup', lambda u, p, o: o.owner.groups == group
-        )
-        Content.register_permission_condition(
-            Ticket, 'siblings', lambda u, p, o: o.organization.tickets == None
+            Ticket, 'siblings', o.organization.tickets == None
         )
         for code, needle in (
             ('ingroup', 'groups'),
@@ -365,7 +481,25 @@ class QueryableConditionTest(TestCase):
             Ticket.objects.permitted(self.change, self.user).values_list('pk', flat=True),
         )
 
-    def test_builtin_own_on_trust_is_queryable(self):
+    def test_two_object_field_equality_parity(self):
+        u, p, o = condition_refs()
+        Content.register_permission_condition(
+            Ticket, 'same_people', o.owner == o.organization.manager
+        )
+        perm = 'trusts_tests.change_ticket:same_people'
+        self._assert_parity(perm, self.user)
+
+    def test_builtin_own_is_registered_expression(self):
+        record = Content.get_permission_condition_record(Trust, 'own')
+        self.assertIsNotNone(record)
+        self.assertIsNotNone(record.expr)
+        self.assertIsNone(record.func)
+        self.assertTrue(is_predicate(record.expr))
+        self.assertEqual(
+            record.expr.to_tuple(),
+            ('eq', ('ref', 'principal', ()), ('ref', 'object', ('settlor',))),
+        )
+
         change_trust = Permission.objects.get(
             content_type=ContentType.objects.get_for_model(Trust),
             codename='change_trust',

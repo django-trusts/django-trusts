@@ -8,8 +8,11 @@ from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     get_permission_model, utils
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.conditions import (
-    PermissionConditionBooleanError,
-    queryable_condition_q,
+    Expr,
+    PermissionConditionError,
+    condition_refs,
+    compile_expression_q,
+    is_predicate,
 )
 
 
@@ -22,11 +25,10 @@ options.DEFAULT_NAMES += ('roles', 'permission_conditions',
 class PermissionConditionNotQueryable(ValueError):
     """Raised when a SQL list/create filter cannot compile a ``:condition``.
 
-    V1 declarative conditions (``==`` / ``!=`` / ``&`` / ``|`` over
-    principal and object fields) compile into the same expression tree
-    ``has_perm`` evaluates. Genuinely arbitrary Python callbacks stay
-    object-only: ``permitted`` and ``filter_by_user_content_perm`` refuse
-    them so they cannot silently over-grant the underlying permission.
+    Only a registered ``Expr`` compiles into the tree ``has_perm``
+    evaluates. Callables stay object-only: ``permitted`` and
+    ``filter_by_user_content_perm`` refuse them so they cannot silently
+    over-grant the underlying permission.
     """
 
 
@@ -57,35 +59,46 @@ def _condition_code(perm):
     return perm.split(':', 1)[1]
 
 
+class _ConditionRecord(object):
+    """Registered condition: an ``Expr`` tree or a legacy callable."""
+
+    __slots__ = ('expr', 'func')
+
+    def __init__(self, expr=None, func=None):
+        self.expr = expr
+        self.func = func
+
+
+_u, _p, _o = condition_refs()
+
+
 def compile_registered_condition_q(model, perm, user):
     """Compile a ``:condition`` suffix to ``Q``, or raise fail-closed.
 
     Unregistered codes raise ``AttributeError`` (same as ``has_perm``).
-    ``and`` / ``or`` raise ``PermissionConditionBooleanError``. Arbitrary
-    callbacks raise ``PermissionConditionNotQueryable``.
+    Callables raise ``PermissionConditionNotQueryable`` without being
+    invoked. Registered ``Expr`` trees that are not valid V1 fail closed.
     """
     cond = _condition_code(perm)
-    func = Content.get_permission_condition_func(model, cond)
-    if func is None:
+    record = Content.get_permission_condition_record(model, cond)
+    if record is None:
         raise AttributeError(
             'Permission condition code "%s" is not associate with model "%s_%s"' % (
                 cond, model._meta.app_label, model._meta.model_name
             )
         )
-    try:
-        q = queryable_condition_q(func, model, user, perm.split(':', 1)[0])
-    except PermissionConditionBooleanError:
-        raise
-    if q is None:
+    if record.expr is None:
         raise PermissionConditionNotQueryable(
             'ContentQuerySet.permitted does not support permission '
-            'condition %r on %s. The registered callback is not a V1 '
-            'declarative expression (==, !=, &, | over principal and '
-            'object fields). It remains object-only via has_perm; this '
-            'queryset API refuses it so the underlying grant cannot be '
-            'returned without the condition.' % (perm, model._meta.label)
+            'condition %r on %s. Register an Expr from condition_refs() '
+            'to compile a V1 declarative expression. Callables remain '
+            'object-only via has_perm; this queryset API refuses them so '
+            'the underlying grant cannot be returned without the '
+            'condition.' % (perm, model._meta.label)
         )
-    return q
+    return compile_expression_q(
+        record.expr, model, user, perm.split(':', 1)[0]
+    )
 
 
 def resolve_content_permission(model, perm):
@@ -141,10 +154,11 @@ class ContentQuerySet(models.QuerySet):
         ``has_perm`` on the supported relational paths. Superuser
         short-circuit is not duplicated (Django ModelBackend).
 
-        A ``:condition`` suffix compiles a V1 declarative expression and
-        filters ``base relational grant AND condition`` in SQL (paginate
-        the returned QuerySet). Genuinely arbitrary callbacks raise
-        ``PermissionConditionNotQueryable`` so they cannot over-grant.
+        A ``:condition`` suffix compiles only when the registered value
+        is an ``Expr``. Filtering is ``base relational grant AND
+        condition`` in SQL (paginate the returned QuerySet). Callables
+        raise ``PermissionConditionNotQueryable`` so they cannot
+        over-grant.
         """
         condition_q = None
         if permission_has_condition(perm):
@@ -330,11 +344,32 @@ class Content(ReadonlyFieldsMixin, models.Model):
         qs.delete()
 
     @staticmethod
-    def register_permission_condition(klass, cond_code, func):
+    def register_permission_condition(klass, cond_code, condition):
+        """Register a ``:cond_code`` condition on ``klass``.
+
+        Pass an ``Expr`` built from ``condition_refs()`` to opt into V1
+        compile/evaluate. Pass a callable to keep the historical
+        object-only ``has_perm`` path. Dispatch is by type: callables are
+        never invoked with symbolic ``Ref`` arguments.
+        """
+        if isinstance(condition, Expr):
+            if not is_predicate(condition):
+                raise PermissionConditionError(
+                    'Registered expression must be a V1 comparison '
+                    '(==, != combined with & / |), not %r.' % (condition,)
+                )
+            record = _ConditionRecord(expr=condition)
+        elif callable(condition):
+            record = _ConditionRecord(func=condition)
+        else:
+            raise TypeError(
+                'register_permission_condition expected an Expr or a '
+                'callable, got %r.' % (type(condition).__name__,)
+            )
         short_name = utils.get_short_model_name(klass)
         if short_name not in Content._conditions:
             Content._conditions[short_name] = {}
-        Content._conditions[short_name][cond_code] = func
+        Content._conditions[short_name][cond_code] = record
 
     @staticmethod
     def register_content(klass, fieldlookup=None):
@@ -346,8 +381,8 @@ class Content(ReadonlyFieldsMixin, models.Model):
         Content._contents[short_name] = fieldlookup
 
         if hasattr(klass._meta, 'permission_conditions'):
-            for permcond, func in klass._meta.permission_conditions:
-                Content.register_permission_condition(klass, permcond, func)
+            for permcond, condition in klass._meta.permission_conditions:
+                Content.register_permission_condition(klass, permcond, condition)
 
     @staticmethod
     def is_content_model(klass):
@@ -374,12 +409,19 @@ class Content(ReadonlyFieldsMixin, models.Model):
         return Content.is_content_model(klass)
 
     @staticmethod
-    def get_permission_condition_func(klass, cond_code):
+    def get_permission_condition_record(klass, cond_code):
         short_name = utils.get_short_model_name(klass)
         if short_name in Content._conditions:
             if cond_code in Content._conditions[short_name]:
                 return Content._conditions[short_name][cond_code]
         return None
+
+    @staticmethod
+    def get_permission_condition_func(klass, cond_code):
+        record = Content.get_permission_condition_record(klass, cond_code)
+        if record is None:
+            return None
+        return record.func
 
 
 class Trust(Content):
@@ -437,7 +479,7 @@ class Trust(Content):
     class Meta:
         unique_together = ('settlor', 'title')
         default_permissions = ('add', 'change', 'delete', 'read',)
-        permission_conditions = (('own', lambda u, p, o: u == o.settlor), )
+        permission_conditions = (('own', _u == _o.settlor), )
 
     def __str__(self):
         settlor_str = ' of %s' % str(self.settlor) if self.settlor is not None else ''
@@ -658,8 +700,8 @@ class Junction(ReadonlyFieldsMixin, models.Model):
     def register_junction(klass, content_model=None):
         Content.register_content(klass.get_content_model(), klass.get_fieldlookup())
         if hasattr(klass._meta, 'content_permission_conditions'):
-            for permcond, func in klass._meta.content_permission_conditions:
-                Content.register_permission_condition(klass, permcond, func)
+            for permcond, condition in klass._meta.content_permission_conditions:
+                Content.register_permission_condition(klass, permcond, condition)
 
     @classmethod
     def get_content_model(cls):

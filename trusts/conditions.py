@@ -1,16 +1,19 @@
 """Restricted declarative permission conditions (issue #4 V1).
 
-A registered condition may be a convenient Python lambda. Invoking it with
-symbolic principal / permission / object references produces a
-language-neutral expression tree. Django ``Q`` is one compiler target, not
-the canonical representation.
+Register an ``Expr`` tree built from ``condition_refs()`` (``u``, ``p``,
+``o``). That tree is policy data: ``has_perm`` evaluates it and
+``.permitted()`` compiles it to SQL. Django ``Q`` is one compiler
+target, not the canonical representation.
+
+A callable argument is the legacy object-only predicate. Registration
+dispatches by type and never invokes a callable with symbolic refs.
 
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
 Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
 ``|``. Missing attribute names fail closed; they are not treated as
-``NULL``. Python ``and`` / ``or`` / ``not`` cannot be overloaded and
-raise ``PermissionConditionBooleanError``.
+``NULL``. Python ``and`` / ``or`` / ``not`` and chained comparisons
+cannot be overloaded and raise ``PermissionConditionBooleanError``.
 """
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
@@ -34,8 +37,10 @@ class PermissionConditionUnsupported(PermissionConditionError):
 
 _BOOLEAN_ERROR_MESSAGE = (
     "Python 'and'/'or'/'not' cannot be used in permission conditions "
-    "because they cannot be overloaded. Use '&' and '|' for conjunction "
-    "and disjunction, and '!=' instead of combining 'not' with '=='."
+    "because they cannot be overloaded; chained comparisons such as "
+    "`0 < o.amount < 100` also truth-test a symbolic node. Use '&' and "
+    "'|' for conjunction and disjunction, and '!=' instead of combining "
+    "'not' with '=='."
 )
 
 _LITERAL_TYPES = (type(None), bool, int, float, str, bytes)
@@ -118,16 +123,19 @@ class Expr(object):
         _unsupported('Arithmetic')
 
     def __lt__(self, other):
-        _unsupported('Ordering comparisons')
+        return _Ordering('lt', self, as_node(other))
 
     def __le__(self, other):
-        _unsupported('Ordering comparisons')
+        return _Ordering('le', self, as_node(other))
 
     def __gt__(self, other):
-        _unsupported('Ordering comparisons')
+        return _Ordering('gt', self, as_node(other))
 
     def __ge__(self, other):
-        _unsupported('Ordering comparisons')
+        return _Ordering('ge', self, as_node(other))
+
+    def __setitem__(self, key, value):
+        _unsupported('Item assignment')
 
     def __invert__(self):
         _unsupported("Unary '~' / 'not'")
@@ -155,6 +163,15 @@ class Ref(Expr):
         if name.startswith('_'):
             raise AttributeError(name)
         return Ref(self.source, self.path + (name,))
+
+    def __setattr__(self, name, value):
+        if name in ('source', 'path'):
+            object.__setattr__(self, name, value)
+            return
+        _unsupported('Assignment to symbolic fields')
+
+    def __delattr__(self, name):
+        _unsupported('Deletion of symbolic fields')
 
     def to_tuple(self):
         return ('ref', self.source, self.path)
@@ -225,6 +242,25 @@ class Or(Expr):
         return '(%r | %r)' % (self.left, self.right)
 
 
+class _Ordering(Expr):
+    """Ordering comparison node so chained ``a < b < c`` hits ``__bool__``.
+
+    Not part of the V1 grammar. Registering one as a condition is rejected.
+    """
+
+    def __init__(self, op, left, right):
+        self.op = op
+        self.left = left
+        self.right = right
+
+    def to_tuple(self):
+        return (self.op, self.left.to_tuple(), self.right.to_tuple())
+
+    def __repr__(self):
+        symbols = {'lt': '<', 'le': '<=', 'gt': '>', 'ge': '>='}
+        return '(%r %s %r)' % (self.left, symbols.get(self.op, self.op), self.right)
+
+
 def is_predicate(node):
     return isinstance(node, (Eq, Ne, And, Or))
 
@@ -260,25 +296,42 @@ def object_ref():
     return Ref('object')
 
 
-def build_expression(func):
-    """Invoke ``func`` with symbolic refs.
+def condition_refs():
+    """Return symbolic ``(u, p, o)`` for building a registered ``Expr``.
 
-    Returns a predicate ``Expr`` when the callback is a V1 declarative
-    condition. Returns ``None`` when the callback is genuinely arbitrary
-    Python (object-only). Raises ``PermissionConditionBooleanError`` when
-    the callback truth-tests a symbolic node (``and`` / ``or`` / ``not``).
+    Combine the refs with ``==`` / ``!=`` / ``&`` / ``|`` and pass the
+    resulting tree to ``Content.register_permission_condition``. These
+    objects are policy data, not live principals or content rows.
     """
-    try:
-        result = func(principal_ref(), permission_ref(), object_ref())
-    except PermissionConditionBooleanError:
-        raise
-    except PermissionConditionUnsupported:
-        return None
-    except Exception:
-        return None
-    if is_predicate(result):
-        return result
-    return None
+    return principal_ref(), permission_ref(), object_ref()
+
+
+class _QueryNamespace(object):
+    """Controlled lookup namespace for declarative permission conditions.
+
+    Not a Django ``QuerySet``. V1 equality uses ``==`` / ``!=`` on
+    ``condition_refs()``. Future relational operations (Django-style
+    lookup names such as ``iexact`` or ``in``) belong here so they are
+    not added as ad-hoc methods on ``Ref``. V1 does not implement those
+    lookups.
+    """
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        raise PermissionConditionUnsupported(
+            'TQ.%s is not implemented in V1 permission conditions. '
+            'The implemented grammar is field refs, constants, ==, !=, '
+            '& and |. Additional lookups will be added to this namespace '
+            'explicitly.' % name
+        )
+
+    def __repr__(self):
+        return 'TQ'
+
+
+Query = _QueryNamespace()
+TQ = Query
 
 
 def _entity_model():
@@ -588,37 +641,24 @@ def compile_to_q(node, model, user, perm):
     )
 
 
-def queryable_condition_q(func, model, user, perm):
-    """Return a ``Q`` for ``func``, or raise if it is not a V1 expression.
-
-    ``PermissionConditionBooleanError`` is left uncaught so callers see the
-    ``and`` / ``or`` guidance. Genuinely arbitrary callbacks yield ``None``
-    from ``build_expression``; the caller raises
-    ``PermissionConditionNotQueryable``.
-    """
-    expr = build_expression(func)
-    if expr is None:
-        return None
+def compile_expression_q(expr, model, user, perm):
+    """Compile a registered ``Expr`` to ``Q``. Fail closed if invalid."""
+    if not is_predicate(expr):
+        raise PermissionConditionError(
+            'Permission condition did not produce a V1 comparison '
+            'expression (==, !=, &, | over principal and object fields).'
+        )
     validate_expression(expr, model)
     return compile_to_q(expr, model, user, perm)
 
 
-def evaluate_condition_func(func, user, perm, obj, model=None):
-    """Evaluate ``func`` using a captured expression when possible.
-
-    Shares the tree with queryset compilation. Falls back to calling
-    ``func`` with real arguments only for genuinely arbitrary callbacks
-    (no V1 tree). A captured tree that fails field validation raises
-    ``PermissionConditionError`` on the object path as well as the queryset
-    path; it must not fall back and must not treat a missing attribute as
-    ``None``.
-    """
-    try:
-        expr = build_expression(func)
-    except PermissionConditionBooleanError:
-        return func(user, perm, obj)
-    if expr is None:
-        return func(user, perm, obj)
+def evaluate_registered_expression(expr, user, perm, obj, model=None):
+    """Evaluate a registered ``Expr`` against a real principal/object."""
+    if not is_predicate(expr):
+        raise PermissionConditionError(
+            'Permission condition did not produce a V1 comparison '
+            'expression (==, !=, &, | over principal and object fields).'
+        )
     klass = model
     if klass is None:
         klass = obj.model if hasattr(obj, 'model') and not isinstance(obj, Model) else obj.__class__

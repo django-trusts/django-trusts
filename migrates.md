@@ -521,22 +521,24 @@ cross-language serialization, and a policy service remain open).
 ## Decision
 
 A permission condition is a **restricted declarative expression**, not
-source/bytecode parsing and not arbitrary Python execution. A Python
-lambda may be invoked with symbolic principal / permission / object
-references so operator overloading produces a language-neutral
-expression tree. Django ``Q`` is one compiler target.
+source/bytecode parsing and not arbitrary Python execution. Callers
+build a language-neutral ``Expr`` tree from ``condition_refs()``
+(``u``, ``p``, ``o``) and register that object. Django ``Q`` is one
+compiler target. Callables keep the legacy object-only path and are
+never invoked with symbolic refs.
 
 V1 grammar: principal/object field refs and relationship traversal;
 literal constants; ``==`` / ``!=``; nested ``&`` / ``|``.
 
 ## No change to these public call sites
 
-- `Content.register_permission_condition(model, code, func)`
-- `Meta.permission_conditions` / `content_permission_conditions`
 - `User.has_perm('app.change_model:cond', obj)` signature
 - `ContentQuerySet.permitted(perm, user)` signature
 - `filter_by_user_perm` / `filter_by_user_content_perm` signatures
 - Package version `1.0.0.dev0`
+
+`Content.register_permission_condition(model, code, condition)` still
+accepts a callable. Passing an ``Expr`` is the new queryable form.
 
 ## Changes
 
@@ -545,18 +547,19 @@ literal constants; ``==`` / ``!=``; nested ``&`` / ``|``.
 | | |
 | --- | --- |
 | Previous | Any ``:condition`` suffix on `.permitted()` raised ``PermissionConditionNotQueryable``. Conditions were Python predicates on ``has_perm`` only. |
-| New | If the registered callback produces a V1 expression tree, `.permitted()` filters ``trust_grant_q AND compiled condition`` in SQL before pagination. ``has_perm`` evaluates the same tree. Nested ``&`` / ``|`` keep grouping. Object field paths are validated against the target model. |
-| Replacement | ``Model.objects.permitted('app.change_model:editable', user)`` for V1 lambdas. Keep ``has_perm`` per object for arbitrary callbacks. |
-| Affected | List views that previously caught ``PermissionConditionNotQueryable`` for ``:own``-style field equality. ``Trust``'s built-in ``own`` (``u == o.settlor``) is now queryable. |
+| New | If the registered value is an ``Expr`` tree, `.permitted()` filters ``trust_grant_q AND compiled condition`` in SQL before pagination. ``has_perm`` evaluates the same tree. Nested ``&`` / ``|`` keep grouping. Object field paths are validated against the target model. |
+| Replacement | Register ``(u == o.owner) | ...`` from ``condition_refs()``, then ``Model.objects.permitted('app.change_model:editable', user)``. Keep ``has_perm`` per object for callables. |
+| Affected | List views that previously caught ``PermissionConditionNotQueryable`` for ``:own``-style field equality. ``Trust``'s built-in ``own`` is registered as ``u == o.settlor``. |
 | Authorization | A condition still never grants the base permission. Inactive/anonymous stay empty. Unsupported or malformed expressions fail closed (specific exception); the underlying grant is not returned. |
 
 Migration-bot checklist:
 
-- [ ] Replace Python ``[obj for obj in qs if user.has_perm('app.change_model:cond', obj)]`` with ``.permitted('app.change_model:cond', user)`` **only** when the callback is V1 (``==`` / ``!=`` / ``&`` / ``|``).
-- [ ] Do not use Python ``and`` / ``or`` in queryable lambdas; use ``&`` / ``|``. ``.permitted()`` raises ``PermissionConditionBooleanError``.
-- [ ] Keep catching ``PermissionConditionNotQueryable`` for genuinely arbitrary callbacks.
+- [ ] Replace Python ``[obj for obj in qs if user.has_perm('app.change_model:cond', obj)]`` with ``.permitted('app.change_model:cond', user)`` **only** when the condition is a registered ``Expr``.
+- [ ] Convert V1 lambdas to ``u, p, o = condition_refs()`` plus ``register_permission_condition(..., expr)``. A lambda that looks like V1 stays object-only.
+- [ ] Do not use Python ``and`` / ``or`` when building expressions; use ``&`` / ``|``. Construction raises ``PermissionConditionBooleanError``.
+- [ ] Keep catching ``PermissionConditionNotQueryable`` for callables.
 - [ ] Do not pass ``:condition`` to ``filter_by_user_content_perm`` (still refused: that API filters Trust rows).
-- [ ] Confirm ``has_perm`` and ``.permitted()`` agree for each V1 condition.
+- [ ] Confirm ``has_perm`` and ``.permitted()`` agree for each registered ``Expr``.
 - [ ] Leave package version at ``1.0.0.dev0``.
 
 ### 20. ``parse_perm_code`` partitions ``:condition`` before the last ``_``
@@ -594,19 +597,35 @@ Migration-bot checklist:
 | | |
 | --- | --- |
 | Previous | Every condition was object-only. |
-| New | Callbacks that do not produce a V1 tree (return a boolean constant, call methods, use loops, and so on) still run in ``has_perm``. Queryset use raises ``PermissionConditionNotQueryable``. |
+| New | Callables still run in ``has_perm`` with real arguments only (never ``Ref``s). Queryset use raises ``PermissionConditionNotQueryable``. |
 | Replacement | Same as #8 for those callbacks. |
 | Affected | Custom ``lambda u, p, o: False`` / method-call predicates. |
 | Authorization | Fail closed on lists. |
 
+### 23. Registered expression objects (option 4 on #28)
+
+| | |
+| --- | --- |
+| Previous (this PR before option 4) | Every registered callback was probed with symbolic ``Ref``s. Legacy ``or`` callbacks ran twice on ``has_perm``; I/O before an unsupported op ran at compile time. |
+| New | ``register_permission_condition`` dispatches by type. An ``Expr`` is queryable policy data. A callable is object-only and is never invoked with ``Ref``s. ``Trust`` ``:own`` is ``u == o.settlor``. ``django_trusts.Query`` / ``TQ`` is reserved for later lookups; V1 does not implement them. |
+| Replacement | ``u, p, o = condition_refs()`` then register the ``Expr``. Leave existing lambdas unchanged for object-only ``has_perm``. |
+| Affected | Any project that expected auto-discovery of V1 lambdas. Those lambdas stay object-only until rewritten as ``Expr``. |
+| Authorization | Fail closed on lists for callables. Invalid ``Expr`` trees fail on both paths. |
+
+Migration-bot checklist:
+
+- [ ] Rewrite queryable conditions as ``Expr`` objects; do not add ``queryable=True``.
+- [ ] Do not wrap arbitrary callbacks as expressions; they will fail closed on ``has_perm`` if they are not V1 predicates.
+- [ ] Confirm callables are invoked once with real objects on ``has_perm``, never during registration or ``.permitted()``.
+
 ## Noted conflict (no broader DSL)
 
-Symbolic invocation is tried first. Callbacks that truth-test a
-comparison with Python ``and`` / ``or`` / ``if`` hit
-``PermissionConditionBooleanError`` during capture. ``has_perm`` falls
-back to the original callable so existing object-only predicates keep
-working; ``.permitted()`` raises the boolean error (clear ``&`` / ``|``
-guidance) instead of inventing a source parser.
+Queryable compile is **opt-in by type**. Callables are never invoked with
+``Ref`` values. Building an expression with Python ``and`` / ``or`` /
+``if`` or a chained comparison such as ``0 < o.amount < 100`` raises
+``PermissionConditionBooleanError`` at construction. No source/bytecode
+parser. Ordering comparisons are not in V1 (do not treat
+``(o.amount > 0) & (o.amount < 100)`` as supported).
 
 Object paths are validated against the content model's ``_meta`` fields.
 Principal paths are validated against ``TRUSTS_ENTITY_MODEL`` /
@@ -616,22 +635,15 @@ raises ``PermissionConditionError`` on both ``has_perm`` and
 a nullable object field). Python ``@property`` access is not a V1 field
 path and is not executed during compile or evaluation. Arbitrary user
 properties remain a decision for a later issue, not an implicit grant.
-Registration is unchanged.
 
 ``filter_by_user_content_perm`` is not a content-row filter; compiling a
 content-model condition against Trust rows would change that surface.
 It still rejects every ``:condition`` suffix.
 
-Symbolic probing still invokes every registered callback with ``Ref``
-values before deciding it is object-only. That is a registration-surface
-conflict (#4: stop if symbolic invocation changes existing callback
-behavior). Options are posted on PR #28; no capture-lifecycle change is
-chosen in this record.
-
 ## Out of scope (not acceptance criteria)
 
 - Cross-language serialization / policy service / multi-language framework
 - Closing #4 for arbitrary Python callbacks
-- Arithmetic, calls, indexing, ``not``, ordering comparisons
+- Arithmetic, calls, indexing, ``not``, ordering comparisons, ``TQ`` lookups
 
 

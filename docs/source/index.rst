@@ -249,6 +249,10 @@ For example, a user may modify a ``Receipt`` only if the user owns it. In this c
 
    Content.register_permission_condition(Receipt, 'own', lambda u, p, o: u == o.user)
 
+Callables stay object-only (``has_perm``); they are never invoked with
+symbolic references. Register an ``Expr`` from ``condition_refs()`` to
+compile a V1 expression for ``.permitted()`` (see below).
+
 To check ``own`` permission, a colon and the condition name should be added after the condition name::
 
    def check_permission_to_a_specific_receipt(request, receipt_id):
@@ -265,26 +269,34 @@ A condition can also be used with the decorator::
 
    A permission condition is an additional constraint; it does not grant the underlying permission. For example, ``change_receipt:own`` requires both ``change_receipt`` and a successful ``own`` condition.
 
-   V1 declarative conditions (``==``, ``!=``, ``&``, ``|`` over principal and object fields) are compiled into a language-neutral expression tree. ``has_perm`` and ``.permitted()`` consume the same tree: object checks evaluate it in Python, and queryset filtering is ``base relational grant AND compiled condition`` before pagination.
+   V1 declarative conditions are **registered expression objects** (``==``, ``!=``, ``&``, ``|`` over principal and object fields), not probed lambdas. ``has_perm`` and ``.permitted()`` consume the same tree: object checks evaluate it in Python, and queryset filtering is ``base relational grant AND compiled condition`` before pagination.
 
-   Genuinely arbitrary Python callbacks remain object-only. ``ContentQuerySet.permitted`` and ``filter_by_user_content_perm`` raise ``PermissionConditionNotQueryable`` for those callbacks so they cannot silently return the underlying grant.
+   Callables remain object-only. ``ContentQuerySet.permitted`` and ``filter_by_user_content_perm`` raise ``PermissionConditionNotQueryable`` for those callbacks so they cannot silently return the underlying grant. Invalid registered expressions fail closed on both paths.
 
 
 Queryable permission conditions
 +++++++++++++++++++++++++++++++
 
-Register a V1 lambda. Invoke it with symbolic ``u``, ``p``, ``o`` so operator overloading builds an expression tree (Django ``Q`` is a compiler target, not the canonical form)::
+Build an ``Expr`` from symbolic ``u``, ``p``, ``o`` and register that tree.
+Django ``Q`` is a compiler target, not the canonical form. Dispatch is by
+type: an ``Expr`` is queryable policy data; a callable is never probed::
 
+   from trusts.conditions import condition_refs
+   from trusts.models import Content
+
+   u, p, o = condition_refs()
    Content.register_permission_condition(
        Receipt, 'editable',
-       lambda u, p, o: (
-           (u == o.owner) |
-           ((u == o.organization.manager) & (o.status != "locked"))
-       )
+       (u == o.owner) |
+       ((u == o.organization.manager) & (o.status != "locked")),
    )
 
    request.user.has_perm('app.change_receipt:editable', receipt)
    Receipt.objects.permitted('app.change_receipt:editable', request.user)
+
+``django_trusts.Query`` / ``TQ`` is the reserved namespace for later
+Django-style lookups (not a ``QuerySet``). V1 does not implement extra
+lookups; equality uses ``==`` / ``!=`` on the refs.
 
 Supported in this experiment:
 
@@ -296,10 +308,12 @@ Supported in this experiment:
 Unsupported (fail closed; do not drop the condition):
 
 * Python ``and`` / ``or`` / ``not`` (they cannot be overloaded). Symbolic truth testing raises ``PermissionConditionBooleanError`` directing callers to ``&`` / ``|``.
-* Function or method calls, loops, indexing, I/O, arithmetic, mutable state
-* Source or bytecode inspection
-* Permission attribute traversal (``p.codename``); ``p`` is unused in V1 except as the lambda parameter
+* Chained comparisons such as ``0 < o.amount < 100`` (they truth-test the first comparison). Ordering comparisons are not in V1.
+* Function or method calls, loops, indexing, I/O, arithmetic, assignment to symbolic fields
+* Source or bytecode inspection; automatic probing of callables
+* Permission attribute traversal (``p.codename``); ``p`` is unused in V1 except as a ref
 * Terminal ``ManyToManyField`` and reverse one-to-many refs (``o.owner.groups``) until membership is defined
+* ``TQ`` lookups such as ``iexact`` / ``in`` (namespace reserved; not implemented)
 
 Object and principal field paths are resolved against the target model and
 ``TRUSTS_ENTITY_MODEL`` / ``AUTH_USER_MODEL`` respectively (``_meta`` fields
