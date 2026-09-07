@@ -2,6 +2,7 @@ from django.db.models import Q, QuerySet
 from django.contrib.auth.backends import ModelBackend
 
 from trusts.models import Trust, Content
+from trusts.query import permission_granted_via_group_exists
 from trusts import get_permission_model, utils
 
 
@@ -46,8 +47,12 @@ class TrustModelBackendMixin(object):
             return super(TrustModelBackendMixin, self).get_group_permissions(user_obj, obj)
 
         if Content.is_content(obj):
-            filter = self.perm_model.objects.filter
-            return filter(group__trusts__in=self._get_trusts(obj), group__user=user_obj)
+            trusts = self._get_trusts(obj)
+            if not trusts:
+                return self.perm_model.objects.none()
+            return self.perm_model.objects.filter(
+                permission_granted_via_group_exists(user_obj, trusts)
+            )
 
         return []
 
@@ -66,11 +71,9 @@ class TrustModelBackendMixin(object):
                 if trust.pk not in perm_cache.keys():
                     trust_perm = set([self._get_perm_code(p) for p in
                         self.perm_model.objects.filter(
-                            Q(group__trusts=trust, group__user=user_obj) |
-                            Q(roles__groups__trusts=trust, roles__groups__user=user_obj) |
-                            Q(trustentities__trust=trust, trustentities__entity=user_obj)
+                            Q(trustentities__trust=trust, trustentities__entity=user_obj) |
+                            permission_granted_via_group_exists(user_obj, trust)
                         )
-                        .order_by('group__trusts', 'trustentities__entity')
                     ])
 
                     perm_cache[trust.pk] = trust_perm

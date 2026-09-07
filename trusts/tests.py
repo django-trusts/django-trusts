@@ -24,7 +24,7 @@ from django.test.client import MULTIPART_CONTENT, Client
 from django.http.request import HttpRequest
 
 from trusts.models import Trust, TrustManager, Content, Junction, \
-                          Role, RolePermission, TrustUserPermission
+                          Role, RolePermission, TrustUserPermission, TrustGroup
 from trusts.backends import TrustModelBackend
 from trusts.decorators import permission_required, P, K, G, O
 from tests.models import Category, TestGroupJunction
@@ -56,6 +56,19 @@ def reload_test_users(self):
     self.user_root = User._default_manager.get(pk=self.user_root.pk)
     self.user = User._default_manager.get(pk=self.user.pk)
     self.user1 = User._default_manager.get(pk=self.user1.pk)
+
+
+def enable_local_group_grant(trust, group, *permissions):
+    """Associate ``group`` with ``trust`` and enable the given local grants.
+
+    Each permission must already be in the group's global ceiling
+    (``Group.permissions`` or a role assigned to the group).
+    """
+    trust.groups.add(group)
+    tg = TrustGroup.objects.get(trust=trust, group=group)
+    for perm in permissions:
+        tg.grant_permission(perm)
+    return tg
 
 
 class TrustTest(TestCase):
@@ -461,7 +474,7 @@ class TrustContentTestMixin(ContentModel):
 
         reload_test_users(self)
 
-        self.trust.groups.add(self.group)
+        enable_local_group_grant(self.trust, self.group, self.perm_change)
 
         had = self.user.has_perm(self.get_perm_code(self.perm_change), self.content)
         self.assertTrue(had)
@@ -633,6 +646,7 @@ class RoleTestMixin(object):
         self.group.user_set.add(self.user)
         self.trust.groups.add(self.group)
         Role.objects.get(name='public').groups.add(self.group)
+        enable_local_group_grant(self.trust, self.group, self.perm_read)
 
         self.assertTrue(self.user.has_perm(self.get_perm_code(self.perm_read), self.content1))
         self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), self.content1))
@@ -656,6 +670,7 @@ class RoleTestMixin(object):
         self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), self.content1))
 
         trust3.groups.add(self.group)
+        enable_local_group_grant(trust3, self.group, self.perm_read)
 
         reload_test_users(self)
         self.assertTrue(self.user.has_perm(self.get_perm_code(self.perm_read), content3))
@@ -690,7 +705,7 @@ class RoleTestMixin(object):
         group3 = Group(name='write group')
         group3.save()
         Role.objects.get(name='write').groups.add(group3)
-        self.trust.groups.add(group3)
+        enable_local_group_grant(self.trust, group3, self.perm_change)
 
         reload_test_users(self)
         self.assertTrue(self.user.has_perm(self.get_perm_code(self.perm_read), self.content1))

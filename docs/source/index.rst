@@ -19,7 +19,7 @@ A ``trust`` associates content with a ``settlor`` and grants permissions to spec
 
 .. warning::
 
-   The per-trust permission cache is not automatically invalidated when grants, group membership, or roles change. Reload the user object, or explicitly remove its ``_trust_perm_cache`` attribute, before making further permission checks with the same user instance.
+   The per-trust permission cache is not automatically invalidated when grants, group membership, local TrustGroup permissions, or roles change. Reload the user object, or explicitly remove its ``_trust_perm_cache`` attribute, before making further permission checks with the same user instance.
 
 ``django-trusts`` supports Django's built-in user permission methods, ``has_perm()`` and ``has_perms()``.
 
@@ -168,14 +168,25 @@ Here is an example of how roles can be specified::
                ('accounting', ('read_receipt', 'add_receipt', 'change_receipt', 'ask_question_about_receipt')),
            )
 
-Roles specified in different models with the same role name are merged. Once the database entries are created, users in groups linked to a role inherit the permissions assigned to that role.
+Roles specified in different models with the same role name are merged. Once
+the database entries are created, those role permissions become part of the
+group's **global capability ceiling**. Associating a group with a trust
+(``trust.groups.add``) does not grant access by itself. A group permission
+applies to Trust-controlled content only when the user is a member, a
+``TrustGroup`` row exists, the permission is enabled locally on that
+``TrustGroup``, and the permission is in the group's ceiling
+(``Group.permissions`` or a role assigned to the group).
 
-Add a role to a group instead of adding each permission individually::
+Add a role to a group, associate the group, then enable the local subset::
+
+   from trusts.models import TrustGroup
 
    accountants = Group.objects.get(name='accountants')
    accountants.roles.add(Role.objects.get(name='accounting'))
 
    trust.groups.add(accountants)
+   tg = TrustGroup.objects.get(trust=trust, group=accountants)
+   tg.grant_permission(change_receipt)
    r = Receipt(trust=trust, ...)
    r.save()
 

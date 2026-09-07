@@ -1,21 +1,22 @@
 """Administrative authority for trust-scoped mutations.
 
 Ordinary ``read`` and mere group membership are not enough to mutate
-collaborators, group associations, or team membership. Callers must use
-these helpers (or equivalent ``change`` checks) before writing.
+collaborators, group associations, local TrustGroup grants, or team
+membership. Callers must use these helpers (or equivalent ``change``
+checks) before writing.
 
-``Group.permissions`` is a global Django M2M. Helpers here never write it.
-Associating a group with a trust is ``Trust.groups.add`` only. Genuine
-per-trust group permission *levels* are not expressible with the current
-schema; that redesign is flagged for Thomas and is not implemented here.
+``Group.permissions`` (and role assignments on a group) are the global
+capability ceiling. Per-trust group rights are ``TrustGroup.permissions``,
+a locally enabled subset. Helpers here never write ``Group.permissions``.
+Associating a group without local grants grants nothing.
 
 ``Group.user_set`` is also global. Adding a member to a group that two
-trusts share grants that group's rights in both. Membership changes
-therefore require administrative ``change`` on every trust that uses the
-group.
+trusts share grants that group's *effective* rights in both (still subject
+to each trust's local grants). Membership changes therefore require
+administrative ``change`` on every trust that uses the group.
 """
 
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 
 from trusts import get_entity_model, get_group_model
 from trusts.query import is_active_principal, trust_grant_q
@@ -47,7 +48,7 @@ def can_administer_content(user, obj):
 
 
 def has_trust_row_perm(user, trust, perm):
-    """Grant on this Trust row (trustee / group.permissions / role).
+    """Grant on this Trust row (trustee or TrustGroup local/global intersection).
 
     This does **not** follow ``Trust.trust`` parent resolution used by
     ``has_perm`` when the object itself is a ``Trust``. Create-under-trust
@@ -144,14 +145,38 @@ def revoke_trustee(actor, content, user, perm=None):
     return user
 
 
-def associate_group_with_trust(actor, content, group):
-    """Attach ``group`` to ``content.trust``. Does not write Group.permissions."""
+def _resolve_group(group, queryset=None):
+    Group = get_group_model()
+    if isinstance(group, Group):
+        return group
+    return resolve_entity_id(Group, group, queryset=queryset)
+
+
+def _resolve_content_perm(content, perm):
+    if perm is None:
+        return None
+    Permission = type(content).objects.get_permission(perm) if isinstance(perm, str) else perm
+    return Permission
+
+
+def associate_group_with_trust(actor, content, group, permissions=None):
+    """Attach ``group`` to ``content.trust``. Does not write Group.permissions.
+
+    Optional ``permissions`` are local TrustGroup grants and must be a
+    subset of the group's global ceiling. Omitting them associates the
+    group without granting anything.
+    """
     _require(can_administer_content(actor, content),
              'change permission is required to associate a team.')
-    Group = get_group_model()
-    if not isinstance(group, Group):
-        group = resolve_entity_id(Group, group)
+    group = _resolve_group(group)
     content.trust.groups.add(group)
+    if permissions:
+        try:
+            content.trust.set_group_permissions(group, [
+                _resolve_content_perm(content, perm) for perm in permissions
+            ])
+        except ValidationError as exc:
+            raise AuthorizationDenied(str(exc))
     return group
 
 
@@ -169,13 +194,50 @@ def disassociate_group_from_trust(actor, content, group):
     return group
 
 
+def grant_trust_group_permission(actor, content, group, perm):
+    """Enable a local TrustGroup grant. Requires ``change``; ceiling-enforced."""
+    _require(can_administer_content(actor, content),
+             'change permission is required to grant team permissions.')
+    group = _resolve_group(group)
+    if not content.trust.groups.filter(pk=group.pk).exists():
+        raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    permission = _resolve_content_perm(content, perm)
+    try:
+        content.trust.grant_group_permission(group, permission)
+    except ValidationError as exc:
+        raise AuthorizationDenied(str(exc))
+    return group
+
+
+def revoke_trust_group_permission(actor, content, group, perm):
+    """Remove a local TrustGroup grant. Requires ``change``."""
+    _require(can_administer_content(actor, content),
+             'change permission is required to revoke team permissions.')
+    group = _resolve_group(group, queryset=content.trust.groups.all())
+    permission = _resolve_content_perm(content, perm)
+    content.trust.revoke_group_permission(group, permission)
+    return group
+
+
+def set_trust_group_permissions(actor, content, group, permissions):
+    """Replace local TrustGroup grants. Requires ``change``; ceiling-enforced."""
+    _require(can_administer_content(actor, content),
+             'change permission is required to set team permissions.')
+    group = _resolve_group(group, queryset=content.trust.groups.all())
+    resolved = [_resolve_content_perm(content, perm) for perm in permissions]
+    try:
+        content.trust.set_group_permissions(group, resolved)
+    except ValidationError as exc:
+        raise AuthorizationDenied(str(exc))
+    return group
+
+
 def refuse_group_permission_write():
-    """Group.permissions is global; never treat it as project-local."""
+    """Group.permissions is the global ceiling; never treat it as project-local."""
     raise AuthorizationDenied(
-        'Group.permissions is a global Django relation, not a per-trust '
-        'setting. Associate the group with the trust (Trust.groups) and '
-        'use Role permissions or TrustUserPermission. Genuine per-trust '
-        'group rights need a model redesign and are not implemented.'
+        'Group.permissions is a global Django relation (the capability '
+        'ceiling), not a per-trust setting. Associate the group with the '
+        'trust and grant a local subset on TrustGroup.permissions.'
     )
 
 
@@ -217,7 +279,10 @@ def remove_group_member(actor, group, user, via_content=None):
 
 
 def create_team(actor, trust, name, via_content=None):
-    """Create a Group, attach it to ``trust``, and add ``actor`` as a member."""
+    """Create a Group, attach it to ``trust``, and add ``actor`` as a member.
+
+    The new association has an empty local grant set (fail closed).
+    """
     _require(
         can_administer_trust(actor, trust, via_content=via_content),
         'change permission is required to create a team on this trust.',
@@ -243,10 +308,13 @@ __all__ = [
     'create_team',
     'disassociate_group_from_trust',
     'grant_trustee',
+    'grant_trust_group_permission',
     'has_trust_row_perm',
     'refuse_group_permission_write',
     'remove_group_member',
     'resolve_entity_id',
     'revoke_trustee',
+    'revoke_trust_group_permission',
+    'set_trust_group_permissions',
     'trusts_using_group',
 ]

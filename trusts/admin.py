@@ -1,12 +1,28 @@
 from django.contrib import admin
 from django.apps import apps as django_apps
 
-from trusts.models import Content, Junction, Trust, Role, RolePermission, TrustUserPermission
+from trusts.models import (
+    Content, Junction, Trust, Role, RolePermission, TrustUserPermission,
+    TrustGroup, TrustGroupPermission,
+)
+
+
+class TrustGroupPermissionInline(admin.TabularInline):
+    model = TrustGroupPermission
+    extra = 0
+
+
+class TrustGroupAdmin(admin.ModelAdmin):
+    list_display = ('id', 'trust', 'group')
+    inlines = (TrustGroupPermissionInline,)
+
 
 admin.site.register(Trust, admin.ModelAdmin)
 admin.site.register(Role, admin.ModelAdmin)
 admin.site.register(RolePermission, admin.ModelAdmin)
 admin.site.register(TrustUserPermission, admin.ModelAdmin)
+admin.site.register(TrustGroup, TrustGroupAdmin)
+admin.site.register(TrustGroupPermission, admin.ModelAdmin)
 
 
 def register_auto_modeladmins(admin_site=None):
