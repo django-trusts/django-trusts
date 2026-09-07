@@ -8,6 +8,7 @@ class Category(Content):
     name = models.CharField(max_length=40, null=False, blank=False)
 
     class Meta:
+        auto_modeladmin = True
         default_permissions = ('add', 'read', 'change', 'delete')
         permissions = (
             ('add_topic_to_category', 'Add topic to a category'),

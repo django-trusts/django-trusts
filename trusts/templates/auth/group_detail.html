@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h1>{{ object }}</h1>
+<h2>Members</h2>
+<div>
+{% for u in object.user_set.all %}
+{{ u }}<br>
+{% endfor %}
+</div>
+{% if can_manage %}
+<form method="post">
+    {% csrf_token %}
+    Add member: {{ adduserform.user }}
+    <input type="submit" value="Add">
+</form>
+{% endif %}
+</body>
+</html>
