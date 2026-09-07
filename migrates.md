@@ -116,7 +116,9 @@ result. No change for the supported QuerySet and single-object paths.
 
 - Historical migration `trusts.0001_initial` is kept. `on_delete=CASCADE` was
   added in place so Django 6.1 can load it. That matches the implicit 1.8
-  default and does not change the database schema.
+  default and does not change the database schema. `Trust.trust.related_name`
+  in that migration uses the same `%(app_label)s_%(class)s_content` template
+  as the model (the rendered `trusts_trust_content` value is unchanged).
 - Primary keys remain `AutoField`. `AppConfig.default_auto_field` is set to
   `django.db.models.AutoField` so new Trusts models do not switch to
   `BigAutoField`.
@@ -134,17 +136,26 @@ is true (default).
 
 ### Upgrade of a representative legacy database
 
-If `django_migrations` already contains `trusts 0001_initial`:
+`scripts/verify-legacy-upgrade.py` is the executable check. It:
 
-1. Install the modernized package on Python ≥3.12 with Django 6.1.
-2. Do **not** fake or re-run `0001_initial`.
-3. Run `migrate` to apply any other app migrations. Trusts adds no `0002`.
-4. Run `create_trust_root` if the root row is missing (idempotent).
-5. Re-run authorization tests, including denied access and isolation.
+1. Applies Django contrib migrations only.
+2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`
+   (0.10.3 / `0001_initial` field layout).
+3. Records `trusts.0001_initial` as already applied. It does **not** fake
+   or re-run that migration.
+4. Seeds a root row and two organizations.
+5. Runs modern `migrate` and asserts the Trusts plan stays empty and the
+   applied set remains `{0001_initial}`.
+6. Checks the root row plus allow/deny/isolation on `Trust` content.
 
-No intermediate Trusts migration is required. Project models still need
-Django's own 1.8→6.1 upgrade path (removed APIs, `on_delete`, middleware,
-auto fields).
+```
+python scripts/verify-legacy-upgrade.py
+```
+
+That is a representative Trusts upgrade, not a captured production dump
+and not a full Django 1.8→6.1 contrib-schema upgrade. Project models still
+need Django's own 1.8→6.1 path (removed APIs, `on_delete`, middleware,
+auto fields). No intermediate Trusts migration is required.
 
 ## Migration-bot summary
 
@@ -155,5 +166,6 @@ auto fields).
       `AUTHENTICATION_BACKENDS` includes `trusts.backends.TrustModelBackend`.
 - [ ] `pip install` the modernized package; do not install `six` / `funcsigs` /
       `mock` / `pbr` for Trusts itself.
-- [ ] Migrate a fresh DB and an already-applied `0001_initial` DB as above.
+- [ ] Migrate a fresh DB (`python -m django migrate --settings=tests.settings`).
+- [ ] Run `python scripts/verify-legacy-upgrade.py` for the already-applied `0001_initial` path.
 - [ ] Verify allow, deny, `:own`, and cross-organization isolation tests.

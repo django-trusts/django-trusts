@@ -50,13 +50,16 @@ Test
 python -m pip install "Django>=6.1,<6.2" coverage
 python -m pip install -e .
 python -m tests.runtests
+python scripts/verify-legacy-upgrade.py
 ```
 
-CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests on
-Python 3.12, 3.13, and 3.14 with Django 6.1, plus an sdist/wheel build and
-install check. Those job names (`tests (Python 3.12)`, `tests (Python 3.13)`,
-`tests (Python 3.14)`, `package`) are the current required-status candidates.
-Do not treat a removed Travis check as a stand-in green status.
+CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
+fresh migrate, and the legacy-upgrade script on Python 3.12, 3.13, and 3.14
+with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel
+and imports it from a temporary directory so the source tree cannot satisfy
+the import. Job names: `tests (Python 3.12)`, `tests (Python 3.13)`,
+`tests (Python 3.14)`, `package`. Do not treat a removed Travis check as a
+stand-in green status.
 
 Development version
 -------------------

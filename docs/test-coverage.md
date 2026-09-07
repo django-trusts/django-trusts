@@ -38,7 +38,7 @@ joined model. That is historical, not a new denial-widening.
 | `get_group_permissions` content path | Returns a permission queryset, not the string set `ModelBackend` uses; no dedicated assertion. |
 | Decorator `raise_exception=True` | Most decorator tests use `raise_exception=False`. |
 | `TRUSTS_ENTITY_MODEL` swap | Custom entity model is configurable but untested. |
-| Legacy SQLite/MySQL dump upgrade | Fresh `migrate` is in CI; a captured 0.10.3 database file is not. |
+| Captured production MySQL/Postgres dump | `scripts/verify-legacy-upgrade.py` upgrades a representative 0.10.3-shaped SQLite DB (`trusts.0001_initial` already recorded, historical table DDL). It is not a customer dump and does not replay Django 1.8 contrib tables. |
 | Admin / i18n surfaces | Registered, not exercised. |
 
 Do not treat a gap as license to widen access. New grants need an explicit

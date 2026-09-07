@@ -31,7 +31,7 @@ class Migration(migrations.Migration):
                 ('id', models.AutoField(verbose_name='ID', auto_created=True, primary_key=True, serialize=False)),
                 ('title', models.CharField(verbose_name='title', max_length=40)),
                 ('settlor', models.ForeignKey(to=ENTITY_MODEL_NAME, default=DEFAULT_SETTLOR, null=ALLOW_NULL_SETTLOR, on_delete=models.CASCADE)),
-                ('trust', models.ForeignKey(to='trusts.Trust', related_name='trusts_trust_content', default=ROOT_PK, on_delete=models.CASCADE)),
+                ('trust', models.ForeignKey(to='trusts.Trust', related_name='%(app_label)s_%(class)s_content', default=ROOT_PK, on_delete=models.CASCADE)),
                 ('groups', models.ManyToManyField(to=GROUP_MODEL_NAME, related_name='trusts', verbose_name='groups', help_text='The groups this trust grants permissions to. A user willget all permissions granted to each of his/her group.')),
             ],
             options={
