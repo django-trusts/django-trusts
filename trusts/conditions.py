@@ -315,9 +315,20 @@ def resolve_field_path(model, path, ref_kind='object'):
                     '.'.join(path[:i + 1]),
                 )
             )
+        if field.many_to_many or field.one_to_many:
+            raise PermissionConditionError(
+                'Multi-valued relation %r on %s is not supported in V1 '
+                'permission conditions (path %s). ManyToManyField and '
+                'reverse one-to-many membership is not defined; '
+                'has_perm and permitted both reject these refs.' % (
+                    name,
+                    current._meta.label,
+                    '.'.join(path[:i + 1]),
+                )
+            )
         last = i == len(path) - 1
         if not last:
-            if not field.is_relation or field.many_to_many or field.one_to_many:
+            if not field.is_relation:
                 raise PermissionConditionError(
                     'Cannot traverse field %r on %s in a permission '
                     'condition; relationship traversal requires a '
@@ -388,9 +399,18 @@ def _walk_model_path(instance, model, path):
                 )
             )
         last = i == len(path) - 1
-        if not last and (
-            not field.is_relation or field.many_to_many or field.one_to_many
-        ):
+        if field.many_to_many or field.one_to_many:
+            raise PermissionConditionError(
+                'Multi-valued relation %r on %s is not supported in V1 '
+                'permission conditions (path %s). ManyToManyField and '
+                'reverse one-to-many membership is not defined; '
+                'has_perm and permitted both reject these refs.' % (
+                    name,
+                    current_model._meta.label,
+                    '.'.join(path[:i + 1]),
+                )
+            )
+        if not last and not field.is_relation:
             raise PermissionConditionError(
                 'Cannot traverse field %r on %s in a permission '
                 'condition; relationship traversal requires a '

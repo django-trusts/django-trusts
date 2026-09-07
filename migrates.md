@@ -579,6 +579,16 @@ Migration-bot checklist:
 | Affected | V1 conditions that traversed an unvalidated user attribute. |
 | Authorization | Fail closed. A typo cannot grant NULL-region rows. |
 
+### 22. Permission paths and terminal multi-valued relations fail closed (review on #28)
+
+| | |
+| --- | --- |
+| Previous | Non-empty ``p.*`` was not part of the advertised V1 grammar. Terminal ``ManyToManyField`` / reverse one-to-many compiled to Django SQL membership while Python compared a manager to the right-hand value, so ``has_perm`` and ``.permitted()`` diverged. |
+| New | Every non-empty permission path raises ``PermissionConditionError``. Terminal (and intermediate) M2M and reverse one-to-many refs raise on both paths. Membership is not defined in V1. |
+| Replacement | Keep ``u == o.owner``. Do not write ``p.codename`` or ``o.owner.groups == group``. |
+| Affected | V1 conditions that traversed ``p`` or a multi-valued relation. |
+| Authorization | Fail closed. ``p.codenmae == None`` cannot become always-true. ``o.owner.groups == group`` cannot list-allow while object-deny. |
+
 ### 19. Arbitrary callbacks remain object-only
 
 | | |
@@ -611,6 +621,12 @@ Registration is unchanged.
 ``filter_by_user_content_perm`` is not a content-row filter; compiling a
 content-model condition against Trust rows would change that surface.
 It still rejects every ``:condition`` suffix.
+
+Symbolic probing still invokes every registered callback with ``Ref``
+values before deciding it is object-only. That is a registration-surface
+conflict (#4: stop if symbolic invocation changes existing callback
+behavior). Options are posted on PR #28; no capture-lifecycle change is
+chosen in this record.
 
 ## Out of scope (not acceptance criteria)
 

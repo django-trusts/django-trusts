@@ -298,6 +298,8 @@ Unsupported (fail closed; do not drop the condition):
 * Python ``and`` / ``or`` / ``not`` (they cannot be overloaded). Symbolic truth testing raises ``PermissionConditionBooleanError`` directing callers to ``&`` / ``|``.
 * Function or method calls, loops, indexing, I/O, arithmetic, mutable state
 * Source or bytecode inspection
+* Permission attribute traversal (``p.codename``); ``p`` is unused in V1 except as the lambda parameter
+* Terminal ``ManyToManyField`` and reverse one-to-many refs (``o.owner.groups``) until membership is defined
 
 Object and principal field paths are resolved against the target model and
 ``TRUSTS_ENTITY_MODEL`` / ``AUTH_USER_MODEL`` respectively (``_meta`` fields

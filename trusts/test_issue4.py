@@ -4,7 +4,7 @@ Parity between ``has_perm`` and ``ContentQuerySet.permitted`` for the
 restricted declarative grammar; arbitrary callbacks stay object-only.
 """
 
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 
@@ -318,6 +318,52 @@ class QueryableConditionTest(TestCase):
         pks = set(Ticket.objects.permitted(named, self.user).values_list('pk', flat=True))
         self.assertEqual(pks, {self.owned_open.pk})
         self._assert_parity(named, self.user)
+
+    def test_nonempty_permission_path_fails_closed(self):
+        """``p.codenmae`` must not become an always-true ``None == None``."""
+        Content.register_permission_condition(
+            Ticket, 'ptypo', lambda u, p, o: p.codenmae == None
+        )
+        Content.register_permission_condition(
+            Ticket, 'pcode', lambda u, p, o: p.codename == None
+        )
+        for code in ('ptypo', 'pcode'):
+            perm = 'trusts_tests.change_ticket:%s' % code
+            with self.assertRaises(PermissionConditionError) as direct:
+                self.user.has_perm(perm, self.owned_open)
+            self.assertIn('Permission', str(direct.exception))
+            with self.assertRaises(PermissionConditionError):
+                Ticket.objects.permitted(perm, self.user)
+        self.assertIn(
+            self.owned_open.pk,
+            Ticket.objects.permitted(self.change, self.user).values_list('pk', flat=True),
+        )
+
+    def test_terminal_m2m_and_reverse_o2m_fail_closed_on_both_paths(self):
+        group = Group.objects.create(name='cond-group')
+        self.user.groups.add(group)
+        Content.register_permission_condition(
+            Ticket, 'ingroup', lambda u, p, o: o.owner.groups == group
+        )
+        Content.register_permission_condition(
+            Ticket, 'siblings', lambda u, p, o: o.organization.tickets == None
+        )
+        for code, needle in (
+            ('ingroup', 'groups'),
+            ('siblings', 'tickets'),
+        ):
+            perm = 'trusts_tests.change_ticket:%s' % code
+            with self.assertRaises(PermissionConditionError) as direct:
+                self.user.has_perm(perm, self.owned_open)
+            self.assertIn(needle, str(direct.exception))
+            with self.assertRaises(PermissionConditionError) as listed:
+                Ticket.objects.permitted(perm, self.user)
+            self.assertIn(needle, str(listed.exception))
+        self.assertTrue(self.user.has_perm(self.change, self.owned_open))
+        self.assertIn(
+            self.owned_open.pk,
+            Ticket.objects.permitted(self.change, self.user).values_list('pk', flat=True),
+        )
 
     def test_builtin_own_on_trust_is_queryable(self):
         change_trust = Permission.objects.get(
