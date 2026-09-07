@@ -496,7 +496,8 @@ python scripts/verify-legacy-upgrade.py
 - Parent/child Trust inheritance or ceilings
 - Explicit deny / Windows ACL ordering
 - Per-Trust group membership
-- SQL compilation of Python permission conditions
+- SQL compilation of **arbitrary** Python permission callbacks
+  (V1 declarative conditions are compiled; see the issue #4 section)
 - Local role assignment on TrustGroup
 - Example-project UI
 
@@ -510,4 +511,155 @@ python scripts/verify-legacy-upgrade.py
 - [ ] Reload user objects after grant changes (`_trust_perm_cache`).
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Example UI is a separate issue; do not block this core change on it.
+
+# Issue #4: queryable V1 permission conditions (1.0.0.dev0)
+
+This record covers the first queryable-condition experiment. Version
+remains **1.0.0.dev0**. It does **not** close #4 (arbitrary callbacks,
+cross-language serialization, and a policy service remain open).
+
+## Decision
+
+A permission condition is a **restricted declarative expression**, not
+source/bytecode parsing and not arbitrary Python execution. Callers
+build a language-neutral ``Expr`` tree from ``condition_refs()``
+(``u``, ``p``, ``o``) and register that object. Django ``Q`` is one
+compiler target. Callables keep the legacy object-only path and are
+never invoked with symbolic refs.
+
+V1 grammar: principal/object field refs and relationship traversal;
+literal constants; ``==`` / ``!=``; nested ``&`` / ``|``.
+
+## No change to these public call sites
+
+- `User.has_perm('app.change_model:cond', obj)` signature
+- `ContentQuerySet.permitted(perm, user)` signature
+- `filter_by_user_perm` / `filter_by_user_content_perm` signatures
+- Package version `1.0.0.dev0`
+
+`Content.register_permission_condition(model, code, condition)` still
+accepts a callable. Passing an ``Expr`` is the new queryable form.
+
+## Changes
+
+### 18. V1 declarative conditions are queryable on `.permitted()`
+
+| | |
+| --- | --- |
+| Previous | Any ``:condition`` suffix on `.permitted()` raised ``PermissionConditionNotQueryable``. Conditions were Python predicates on ``has_perm`` only. |
+| New | If the registered value is an ``Expr`` tree, `.permitted()` filters ``trust_grant_q AND compiled condition`` in SQL before pagination. ``has_perm`` evaluates the same tree. Nested ``&`` / ``|`` keep grouping. Object field paths are validated against the target model. |
+| Replacement | Register ``(u == o.owner) | ...`` from ``condition_refs()``, then ``Model.objects.permitted('app.change_model:editable', user)``. Keep ``has_perm`` per object for callables. |
+| Affected | List views that previously caught ``PermissionConditionNotQueryable`` for ``:own``-style field equality. ``Trust``'s built-in ``own`` is registered as ``u == o.settlor``. |
+| Authorization | A condition still never grants the base permission. Inactive/anonymous stay empty. Unsupported or malformed expressions fail closed (specific exception); the underlying grant is not returned. |
+
+Migration-bot checklist:
+
+- [ ] Replace Python ``[obj for obj in qs if user.has_perm('app.change_model:cond', obj)]`` with ``.permitted('app.change_model:cond', user)`` **only** when the condition is a registered ``Expr``.
+- [ ] Convert V1 lambdas to ``u, p, o = condition_refs()`` plus ``register_permission_condition(..., expr)``. A lambda that looks like V1 stays object-only.
+- [ ] Do not use Python ``and`` / ``or`` when building expressions; use ``&`` / ``|``. Construction raises ``PermissionConditionBooleanError``.
+- [ ] Keep catching ``PermissionConditionNotQueryable`` for callables.
+- [ ] Do not pass ``:condition`` to ``filter_by_user_content_perm`` (still refused: that API filters Trust rows).
+- [ ] Confirm ``has_perm`` and ``.permitted()`` agree for each registered ``Expr``.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+### 20. ``parse_perm_code`` partitions ``:condition`` before the last ``_``
+
+| | |
+| --- | --- |
+| Previous | ``app.change_ticket:python_or`` parsed the condition as empty because ``rsplit('_')`` ran first. |
+| New | Colon is partitioned first; condition codes may contain underscores. |
+| Replacement | Same ``app.action_model:cond`` strings. |
+| Affected | Condition names with ``_``. Unconditioned codes are unchanged. |
+| Authorization | Lookup only. |
+
+### 21. Principal field paths fail closed (review on #28)
+
+| | |
+| --- | --- |
+| Previous (this PR head) | Unvalidated ``u.attr`` plus ``except Exception: return None`` treated a misspelled principal attribute as ``None``, matching nullable object fields. |
+| New | Principal paths are resolved against ``TRUSTS_ENTITY_MODEL`` ``_meta`` (same FK/O2O rules as object paths). Missing names raise ``PermissionConditionError`` on ``has_perm`` and ``.permitted()``. Legitimate nullable relations still compare as ``None``. Python properties are not executed. |
+| Replacement | Keep ``u == o.owner``. Use ``u.username`` only when that column exists on the entity model. |
+| Affected | V1 conditions that traversed an unvalidated user attribute. |
+| Authorization | Fail closed. A typo cannot grant NULL-region rows. |
+
+### 22. Permission paths and terminal multi-valued relations fail closed (review on #28)
+
+| | |
+| --- | --- |
+| Previous | Non-empty ``p.*`` was not part of the advertised V1 grammar. Terminal ``ManyToManyField`` / reverse one-to-many compiled to Django SQL membership while Python compared a manager to the right-hand value, so ``has_perm`` and ``.permitted()`` diverged. |
+| New | Every non-empty permission path raises ``PermissionConditionError``. Terminal (and intermediate) M2M and reverse one-to-many refs raise on both paths. Membership is not defined in V1. |
+| Replacement | Keep ``u == o.owner``. Do not write ``p.codename`` or ``o.owner.groups == group``. |
+| Affected | V1 conditions that traversed ``p`` or a multi-valued relation. |
+| Authorization | Fail closed. ``p.codenmae == None`` cannot become always-true. ``o.owner.groups == group`` cannot list-allow while object-deny. |
+
+### 19. Arbitrary callbacks remain object-only
+
+| | |
+| --- | --- |
+| Previous | Every condition was object-only. |
+| New | Callables still run in ``has_perm`` with real arguments only (never ``Ref``s). Queryset use raises ``PermissionConditionNotQueryable``. |
+| Replacement | Same as #8 for those callbacks. |
+| Affected | Custom ``lambda u, p, o: False`` / method-call predicates. |
+| Authorization | Fail closed on lists. |
+
+### 23. Registered expression objects (option 4 on #28)
+
+| | |
+| --- | --- |
+| Previous (this PR before option 4) | Every registered callback was probed with symbolic ``Ref``s. Legacy ``or`` callbacks ran twice on ``has_perm``; I/O before an unsupported op ran at compile time. |
+| New | ``register_permission_condition`` dispatches by type. An ``Expr`` is queryable policy data. A callable is object-only and is never invoked with ``Ref``s. ``Trust`` ``:own`` is ``u == o.settlor``. ``django_trusts.Query`` / ``TQ`` is reserved for later lookups; V1 does not implement them. |
+| Replacement | ``u, p, o = condition_refs()`` then register the ``Expr``. Leave existing lambdas unchanged for object-only ``has_perm``. |
+| Affected | Any project that expected auto-discovery of V1 lambdas. Those lambdas stay object-only until rewritten as ``Expr``. |
+| Authorization | Fail closed on lists for callables. Invalid ``Expr`` trees fail on both paths. |
+
+Migration-bot checklist:
+
+- [ ] Rewrite queryable conditions as ``Expr`` objects; do not add ``queryable=True``.
+- [ ] Do not wrap arbitrary callbacks as expressions; they will fail closed on ``has_perm`` if they are not V1 predicates.
+- [ ] Confirm callables are invoked once with real objects on ``has_perm``, never during registration or ``.permitted()``.
+
+### 24. Incompatible ``Eq`` / ``Ne`` operands fail closed (review on #28)
+
+| | |
+| --- | --- |
+| Previous (this PR head) | ``o.status == 1`` compiled to ``Q(status=1)``; Django coerced the int through ``CharField`` so ``.permitted()`` matched ``"1"`` while ``has_perm`` used Python ``"1" == 1`` (false). ``o.owner == "1"`` similarly coerced through the FK. ``Ne`` diverged in the opposite direction. |
+| New | V1 compares Python types, not Django lookup-prepared values. ``CharField`` vs ``int`` and a relation vs a raw PK raise ``PermissionConditionError`` on both paths. ``None`` remains valid. Related instances and same-type scalars still match. |
+| Replacement | Write ``o.status == "1"`` and ``u == o.owner`` (or ``o.owner == user``). Do not rely on Django coercing ``1`` or ``"1"``. |
+| Affected | V1 conditions that mixed a field with a differently typed literal. |
+| Authorization | Fail closed. Django backend coercion is not canonical V1 semantics. |
+
+Migration-bot checklist:
+
+- [ ] Replace ``o.char_field == 1`` with a string literal if the comparison was intentional.
+- [ ] Replace ``o.fk == pk`` with a model instance comparison.
+- [ ] Confirm ``has_perm`` and ``.permitted()`` still agree after the type check.
+
+## Noted conflict (no broader DSL)
+
+Queryable compile is **opt-in by type**. Callables are never invoked with
+``Ref`` values. Building an expression with Python ``and`` / ``or`` /
+``if`` or a chained comparison such as ``0 < o.amount < 100`` raises
+``PermissionConditionBooleanError`` at construction. No source/bytecode
+parser. Ordering comparisons are not in V1 (do not treat
+``(o.amount > 0) & (o.amount < 100)`` as supported).
+
+Object paths are validated against the content model's ``_meta`` fields.
+Principal paths are validated against ``TRUSTS_ENTITY_MODEL`` /
+``AUTH_USER_MODEL`` the same way. A missing or misspelled attribute
+raises ``PermissionConditionError`` on both ``has_perm`` and
+``.permitted()``; it is never collapsed to ``None`` (which would match
+a nullable object field). Python ``@property`` access is not a V1 field
+path and is not executed during compile or evaluation. Arbitrary user
+properties remain a decision for a later issue, not an implicit grant.
+
+``filter_by_user_content_perm`` is not a content-row filter; compiling a
+content-model condition against Trust rows would change that surface.
+It still rejects every ``:condition`` suffix.
+
+## Out of scope (not acceptance criteria)
+
+- Cross-language serialization / policy service / multi-language framework
+- Closing #4 for arbitrary Python callbacks
+- Arithmetic, calls, indexing, ``not``, ordering comparisons, ``TQ`` lookups
+
 

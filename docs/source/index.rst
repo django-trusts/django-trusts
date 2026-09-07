@@ -249,6 +249,10 @@ For example, a user may modify a ``Receipt`` only if the user owns it. In this c
 
    Content.register_permission_condition(Receipt, 'own', lambda u, p, o: u == o.user)
 
+Callables stay object-only (``has_perm``); they are never invoked with
+symbolic references. Register an ``Expr`` from ``condition_refs()`` to
+compile a V1 expression for ``.permitted()`` (see below).
+
 To check ``own`` permission, a colon and the condition name should be added after the condition name::
 
    def check_permission_to_a_specific_receipt(request, receipt_id):
@@ -263,7 +267,65 @@ A condition can also be used with the decorator::
 
 .. warning::
 
-   A permission condition is an additional constraint; it does not grant the underlying permission. For example, ``change_receipt:own`` requires both ``change_receipt`` and a successful ``own`` condition. Registered condition functions run in Python, so checks that use them are not database-only and cannot be used as database-side queryset filters.
+   A permission condition is an additional constraint; it does not grant the underlying permission. For example, ``change_receipt:own`` requires both ``change_receipt`` and a successful ``own`` condition.
+
+   V1 declarative conditions are **registered expression objects** (``==``, ``!=``, ``&``, ``|`` over principal and object fields), not probed lambdas. ``has_perm`` and ``.permitted()`` consume the same tree: object checks evaluate it in Python, and queryset filtering is ``base relational grant AND compiled condition`` before pagination.
+
+   Callables remain object-only. ``ContentQuerySet.permitted`` and ``filter_by_user_content_perm`` raise ``PermissionConditionNotQueryable`` for those callbacks so they cannot silently return the underlying grant. Invalid registered expressions fail closed on both paths.
+
+
+Queryable permission conditions
++++++++++++++++++++++++++++++++
+
+Build an ``Expr`` from symbolic ``u``, ``p``, ``o`` and register that tree.
+Django ``Q`` is a compiler target, not the canonical form. Dispatch is by
+type: an ``Expr`` is queryable policy data; a callable is never probed::
+
+   from trusts.conditions import condition_refs
+   from trusts.models import Content
+
+   u, p, o = condition_refs()
+   Content.register_permission_condition(
+       Receipt, 'editable',
+       (u == o.owner) |
+       ((u == o.organization.manager) & (o.status != "locked")),
+   )
+
+   request.user.has_perm('app.change_receipt:editable', receipt)
+   Receipt.objects.permitted('app.change_receipt:editable', request.user)
+
+``django_trusts.Query`` / ``TQ`` is the reserved namespace for later
+Django-style lookups (not a ``QuerySet``). V1 does not implement extra
+lookups; equality uses ``==`` / ``!=`` on the refs.
+
+Supported in this experiment:
+
+* Principal and object field references, including ``ForeignKey`` / ``OneToOneField`` traversal (``o.organization.manager``)
+* Literal constants (``None``, booleans, numbers, strings) whose Python type matches the field; relations compare to model instances, not raw primary keys
+* ``==`` and ``!=``
+* Nested ``&`` and ``|`` (grouping is preserved)
+
+Unsupported (fail closed; do not drop the condition):
+
+* Python ``and`` / ``or`` / ``not`` (they cannot be overloaded). Symbolic truth testing raises ``PermissionConditionBooleanError`` directing callers to ``&`` / ``|``.
+* Chained comparisons such as ``0 < o.amount < 100`` (they truth-test the first comparison). Ordering comparisons are not in V1.
+* Function or method calls, loops, indexing, I/O, arithmetic, assignment to symbolic fields
+* Source or bytecode inspection; automatic probing of callables
+* Permission attribute traversal (``p.codename``); ``p`` is unused in V1 except as a ref
+* Terminal ``ManyToManyField`` and reverse one-to-many refs (``o.owner.groups``) until membership is defined
+* Django field coercion (``Q(status=1)`` becoming ``"1"`` on a ``CharField``, or a ``ForeignKey`` accepting a raw PK). Incompatible ``Eq`` / ``Ne`` operands raise ``PermissionConditionError`` on both ``has_perm`` and ``.permitted()``.
+
+Object and principal field paths are resolved against the target model and
+``TRUSTS_ENTITY_MODEL`` / ``AUTH_USER_MODEL`` respectively (``_meta`` fields
+and ``ForeignKey`` / ``OneToOneField`` traversal). Unknown or misspelled
+names raise ``PermissionConditionError`` on both ``has_perm`` and
+``.permitted()``; they are not treated as SQL/Python ``NULL``. Legitimate
+nullable relations may still compare as ``None``. Python ``@property``
+values are not V1 field paths. Operand types are checked without Django
+``get_prep_value`` coercion: ``o.status == 1`` and ``o.owner == "1"``
+raise on both paths. ``filter_by_user_content_perm`` still rejects
+every ``:condition`` suffix: that API filters Trust rows, not the content
+model the condition is registered on.
 
 
 P() Expressions

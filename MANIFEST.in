@@ -3,6 +3,7 @@ include README.md
 include requirements.txt
 include migrates.md
 include pyproject.toml
+include django_trusts.py
 recursive-include trusts *
 global-exclude __pycache__
 global-exclude *.py[cod]

@@ -66,6 +66,7 @@ def main() -> int:
     import trusts
     from trusts.models import Trust
     from trusts.backends import TrustModelBackend
+    from django_trusts import TQ, condition_refs
 
     trusts_file = Path(trusts.__file__).resolve()
     if checkout == trusts_file or checkout in trusts_file.parents:
@@ -78,6 +79,8 @@ def main() -> int:
     print('trusts.__file__', trusts_file)
     print('Trust', Trust)
     print('TrustModelBackend', TrustModelBackend)
+    print('TQ', TQ)
+    print('condition_refs', condition_refs)
     return 0
 
 

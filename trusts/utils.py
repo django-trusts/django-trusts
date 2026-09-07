@@ -18,8 +18,13 @@ def get_short_model_name(klass):
 
 
 def parse_perm_code(perm):
-    applabel, action_modelname_permcode = perm.split('.', 1)
-    action, modelname_permcode = action_modelname_permcode.rsplit('_', 1)
-    modelname, sep, cond = modelname_permcode.partition(':')
+    """Split ``app.action_model`` plus an optional ``:condition`` suffix.
 
+The condition is partitioned first so condition codes may contain
+underscores (``app.change_ticket:own_item``). This is a parse-order
+fix, not a new permission form.
+    """
+    applabel, rest = perm.split('.', 1)
+    rest, _sep, cond = rest.partition(':')
+    action, modelname = rest.rsplit('_', 1)
     return applabel, modelname, action, cond

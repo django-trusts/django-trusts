@@ -3,6 +3,7 @@ from django.contrib.auth.backends import ModelBackend
 
 from trusts.models import Trust, Content
 from trusts.query import permission_granted_via_group_exists
+from trusts.conditions import evaluate_registered_expression
 from trusts import get_permission_model, utils
 
 
@@ -84,21 +85,32 @@ class TrustModelBackendMixin(object):
             return set.intersection(*all_perms)
         return []
 
-    def permission_condition_met(self, func, user_obj, perm, obj):
+    def permission_condition_met(self, record, user_obj, perm, obj):
         if isinstance(obj, QuerySet):
             objs = obj.all()
+            model = obj.model
         elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
             objs = obj
+            model = None
         else:
             objs = [obj]
+            model = obj.__class__
 
-        return all([func(user_obj, perm, o) for o in objs])
+        if record.expr is not None:
+            return all([
+                evaluate_registered_expression(
+                    record.expr, user_obj, perm, o, model=model or o.__class__
+                )
+                for o in objs
+            ])
+        return all([record.func(user_obj, perm, o) for o in objs])
 
     def has_perm(self, user_obj, permext, obj=None):
         applabel, modelname, action, cond = utils.parse_perm_code(permext)
+        record = None
         if len(cond) != 0:
-            func = Content.get_permission_condition_func(self._get_class(obj), cond)
-            if func is None:
+            record = Content.get_permission_condition_record(self._get_class(obj), cond)
+            if record is None:
                 raise AttributeError('Permission condition code "%s" is not associate with model "%s_%s"' % (cond, applabel, modelname))
 
         perm = '%s.%s_%s' % (applabel, action, modelname)
@@ -107,7 +119,7 @@ class TrustModelBackendMixin(object):
             if len(cond) == 0:
                 return True
 
-            if self.permission_condition_met(func, user_obj, perm, obj):
+            if self.permission_condition_met(record, user_obj, perm, obj):
                 return True
         return False
 
