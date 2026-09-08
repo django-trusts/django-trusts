@@ -11,9 +11,13 @@ installable `trusts/` package:
 - `tests/core/test_core.py` — ordinary authorization tests
 - `tests/regressions/test_issue_*.py` — historical issue regressions
 - `python -m tests.runtests` — discovers the core and regression modules
-  by explicit labels (`tests.core.test_core`, `tests.regressions.test_issue_*`)
+  by explicit labels (`tests.core.test_core`, `tests.core.test_wheel_install`,
+  `tests.regressions.test_issue_*`)
 - `python -m tests.runtests_custom` — isolated custom-user suite
   (`tests.custom_content`)
+- `scripts/verify-wheel-install.py` — uses `importlib.util.find_spec` so a
+  leaked `trusts.tests` whose body raises `ImportError` (it imports
+  `tests.models`) is still reported as present
 
 ## Tests that must keep passing
 
