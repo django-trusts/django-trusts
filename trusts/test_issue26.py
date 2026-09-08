@@ -83,7 +83,7 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
         }
 
     def test_scalar_user_field_is_e005(self):
-        with isolate_apps('trusts_tests'):
+        with isolate_apps('trusts'):
             class ScalarUserGroup(models.Model):
                 user = models.IntegerField()
                 permissions = models.ManyToManyField(
@@ -91,18 +91,18 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
                 )
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             self.assertIsNone(lookup_relation(ScalarUserGroup, 'user'))
             self.assertIn(CHECK_ID_GROUP_USER, self._ids(ScalarUserGroup))
 
     def test_wrong_model_user_relation_is_e005(self):
-        with isolate_apps('trusts_tests'):
+        with isolate_apps('trusts'):
             class OtherPrincipal(models.Model):
                 name = models.CharField(max_length=40)
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             class WrongModelUserGroup(models.Model):
                 user = models.ForeignKey(
@@ -113,7 +113,7 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
                 )
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             rel = lookup_relation(WrongModelUserGroup, 'user')
             self.assertIsNotNone(rel)
@@ -121,28 +121,28 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
             self.assertIn(CHECK_ID_GROUP_USER, self._ids(WrongModelUserGroup))
 
     def test_permissions_wrong_reverse_query_name_is_e004(self):
-        with isolate_apps('trusts_tests'):
+        with isolate_apps('trusts'):
             class WrongPermQueryGroup(models.Model):
                 permissions = models.ManyToManyField(
                     Permission, related_name='+', related_query_name='team',
                 )
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             self.assertIn(
                 CHECK_ID_GROUP_PERMISSIONS, self._ids(WrongPermQueryGroup),
             )
 
     def test_content_type_must_be_contenttype_relation(self):
-        with isolate_apps('trusts_tests'):
+        with isolate_apps('trusts'):
             class ScalarContentTypePermission(models.Model):
                 name = models.CharField(max_length=255)
                 content_type = models.CharField(max_length=40)
                 codename = models.CharField(max_length=100)
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             class WrongModelContentTypePermission(models.Model):
                 name = models.CharField(max_length=255)
@@ -152,7 +152,7 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
                 codename = models.CharField(max_length=100)
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             self.assertIn(
                 CHECK_ID_PERMISSION_SHAPE,
@@ -178,12 +178,12 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
         group, not this field. The colliding OtherPrincipal must not become a
         Trusts grant.
         """
-        with isolate_apps('trusts_tests'):
+        with isolate_apps('trusts'):
             class OtherPrincipal(models.Model):
                 name = models.CharField(max_length=40)
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             class WrongModelUserGroup(models.Model):
                 user = models.ForeignKey(
@@ -194,7 +194,7 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
                 )
 
                 class Meta:
-                    app_label = 'trusts_tests'
+                    app_label = 'trusts'
 
             with connection.schema_editor() as editor:
                 editor.create_model(OtherPrincipal)
