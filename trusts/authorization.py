@@ -16,9 +16,12 @@ to each trust's local grants). Membership changes therefore require
 administrative ``change`` on every trust that uses the group.
 """
 
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db.models import Model
 
-from trusts import get_entity_model, get_group_model
+from trusts import supported_entity_contract, supported_group_contract
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.models import Trust
 
@@ -77,6 +80,8 @@ def can_administer_trust(user, trust, via_content=None):
 
 
 def trusts_using_group(group):
+    if not supported_group_contract():
+        return Trust.objects.none()
     return Trust.objects.filter(groups=group).distinct()
 
 
@@ -118,13 +123,38 @@ def resolve_entity_id(model, pk, queryset=None):
         raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
 
 
+def _configured_or_pk(obj, model, queryset=None):
+    """Resolve ``obj`` as ``model`` or a PK. Other model instances fail closed."""
+    if isinstance(obj, model):
+        return obj
+    if isinstance(obj, Model):
+        raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    return resolve_entity_id(model, obj, queryset=queryset)
+
+
+def _require_entity_contract():
+    if not supported_entity_contract():
+        raise AuthorizationDenied(
+            'TRUSTS_ENTITY_MODEL must be AUTH_USER_MODEL; '
+            'silencing trusts.E003 does not enable a non-user entity.'
+        )
+    return get_user_model()
+
+
+def _require_group_contract():
+    if not supported_group_contract():
+        raise AuthorizationDenied(
+            'TRUSTS_GROUP_MODEL must be auth.Group; '
+            'silencing trusts.E004 does not enable a non-auth group model.'
+        )
+    return Group
+
+
 def grant_trustee(actor, content, user, perm):
     """Grant a TrustUserPermission on ``content.trust``. Requires ``change``."""
     _require(can_administer_content(actor, content),
              'change permission is required to grant collaborators.')
-    Entity = get_entity_model()
-    if not isinstance(user, Entity):
-        user = resolve_entity_id(Entity, user)
+    user = _configured_or_pk(user, _require_entity_contract())
     content.grant(perm, user)
     return user
 
@@ -133,23 +163,23 @@ def revoke_trustee(actor, content, user, perm=None):
     """Revoke trustee rows on ``content.trust`` only. Requires ``change``."""
     _require(can_administer_content(actor, content),
              'change permission is required to revoke collaborators.')
-    Entity = get_entity_model()
+    Entity = _require_entity_contract()
     scope = Entity._default_manager.filter(
         trustpermissions__trust=content.trust
     ).distinct()
-    if not isinstance(user, Entity):
-        user = resolve_entity_id(Entity, user, queryset=scope)
-    elif not scope.filter(pk=user.pk).exists():
+    if isinstance(user, Entity):
+        if not scope.filter(pk=user.pk).exists():
+            raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    elif isinstance(user, Model):
         raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    else:
+        user = resolve_entity_id(Entity, user, queryset=scope)
     content.revoke(perm, user)
     return user
 
 
 def _resolve_group(group, queryset=None):
-    Group = get_group_model()
-    if isinstance(group, Group):
-        return group
-    return resolve_entity_id(Group, group, queryset=queryset)
+    return _configured_or_pk(group, _require_group_contract(), queryset=queryset)
 
 
 def _resolve_content_perm(content, perm):
@@ -187,12 +217,15 @@ def disassociate_group_from_trust(actor, content, group):
     """Detach ``group`` from ``content.trust`` only. Requires ``change``."""
     _require(can_administer_content(actor, content),
              'change permission is required to remove a team.')
-    Group = get_group_model()
+    Group = _require_group_contract()
     scope = content.trust.groups.all()
-    if not isinstance(group, Group):
-        group = resolve_entity_id(Group, group, queryset=scope)
-    elif not scope.filter(pk=group.pk).exists():
+    if isinstance(group, Group):
+        if not scope.filter(pk=group.pk).exists():
+            raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    elif isinstance(group, Model):
         raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    else:
+        group = resolve_entity_id(Group, group, queryset=scope)
     content.trust.groups.remove(group)
     return group
 
@@ -246,37 +279,34 @@ def refuse_group_permission_write():
 
 def add_group_member(actor, group, user, via_content=None):
     """Add ``user`` to ``group``. Requires admin on every trust using the group."""
-    Group = get_group_model()
-    if not isinstance(group, Group):
-        group = resolve_entity_id(Group, group)
+    group = _configured_or_pk(group, _require_group_contract())
     _require(
         can_manage_group_membership(actor, group, via_content=via_content),
         'Administrative change on every trust using this group is required '
         'to add members. Membership or read alone is not enough.',
     )
-    Entity = get_entity_model()
-    if not isinstance(user, Entity):
-        user = resolve_entity_id(Entity, user)
+    user = _configured_or_pk(user, _require_entity_contract())
     group.user_set.add(user)
     return user
 
 
 def remove_group_member(actor, group, user, via_content=None):
     """Remove ``user`` from ``group``. Same authority as ``add_group_member``."""
-    Group = get_group_model()
-    if not isinstance(group, Group):
-        group = resolve_entity_id(Group, group)
+    group = _configured_or_pk(group, _require_group_contract())
     _require(
         can_manage_group_membership(actor, group, via_content=via_content),
         'Administrative change on every trust using this group is required '
         'to remove members. Membership or read alone is not enough.',
     )
-    Entity = get_entity_model()
+    Entity = _require_entity_contract()
     scope = group.user_set.all()
-    if not isinstance(user, Entity):
-        user = resolve_entity_id(Entity, user, queryset=scope)
-    elif not scope.filter(pk=user.pk).exists():
+    if isinstance(user, Entity):
+        if not scope.filter(pk=user.pk).exists():
+            raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    elif isinstance(user, Model):
         raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
+    else:
+        user = resolve_entity_id(Entity, user, queryset=scope)
     group.user_set.remove(user)
     return user
 
@@ -290,7 +320,7 @@ def create_team(actor, trust, name, via_content=None):
         can_administer_trust(actor, trust, via_content=via_content),
         'change permission is required to create a team on this trust.',
     )
-    Group = get_group_model()
+    Group = _require_group_contract()
     group = Group.objects.create(name=name)
     trust.groups.add(group)
     group.user_set.add(actor)

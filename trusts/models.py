@@ -7,7 +7,9 @@ from django.utils.translation import gettext_lazy as _
 
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
-                    get_permission_model, utils
+                    get_permission_model, utils, \
+                    supported_entity_contract, supported_group_contract, \
+                    supported_permission_contract
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
@@ -134,7 +136,7 @@ def compile_registered_condition_q(model, perm, user):
 
 
 def resolve_content_permission(model, perm):
-    """Resolve ``perm`` via ``TRUSTS_PERMISSION_MODEL``, not hardcoded auth.Permission.
+    """Resolve ``perm`` on ``auth.Permission``.
 
     Accepts a permission instance, a codename (``read_category``), a bare
     action (``read`` → ``read_<model>``), or a dotted code
@@ -145,6 +147,12 @@ def resolve_content_permission(model, perm):
     strip a leftover ``:condition`` when resolving a grant/revoke target;
     it must not be used alone to filter lists.
     """
+    if not supported_permission_contract():
+        raise ValidationError(
+            'TRUSTS_PERMISSION_MODEL must be auth.Permission. '
+            'Silencing trusts.E005 does not enable a non-auth permission model.',
+            code='unsupported_permission_model',
+        )
     Permission = get_permission_model()
     if isinstance(perm, Permission):
         return perm
@@ -196,6 +204,8 @@ class ContentQuerySet(models.QuerySet):
         if permission_has_condition(perm):
             condition_q = compile_registered_condition_q(self.model, perm, user)
         if not is_active_principal(user):
+            return self.none()
+        if not supported_entity_contract() or not supported_permission_contract():
             return self.none()
         permission = resolve_content_permission(self.model, perm)
         granted = trust_grant_q(user, permission, trust_fk='trust')
@@ -266,7 +276,15 @@ class TrustManager(ContentManager):
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
 
-        return self.filter(Q(groups__user=user) | Q(trustees__entity=user), **kwargs)
+        if not supported_entity_contract():
+            return self.none()
+        parts = [Q(trustees__entity=user)]
+        if supported_group_contract():
+            parts.append(Q(groups__user=user))
+        grant_q = parts[0]
+        for part in parts[1:]:
+            grant_q |= part
+        return self.filter(grant_q, **kwargs)
 
     def filter_by_user_content_perm(self, user, content, perm_name, exclude_root=True, **kwargs):
         """Return Trusts under which ``user`` may exercise ``perm_name``.
@@ -300,6 +318,8 @@ class TrustManager(ContentManager):
             perm_name, 'Trust.objects.filter_by_user_content_perm'
         )
         if not is_active_principal(user):
+            return self.none()
+        if not supported_entity_contract() or not supported_permission_contract():
             return self.none()
 
         if not isinstance(content, type):
@@ -362,6 +382,7 @@ class Content(ReadonlyFieldsMixin, models.Model):
 
     def grant(self, perm, user):
         """Create a TrustUserPermission on this content's authorizing trust."""
+        user = _require_configured_entity(user)
         permission = type(self).objects.get_permission(perm)
         TrustUserPermission.objects.get_or_create(
             trust=self.trust, entity=user, permission=permission
@@ -372,6 +393,7 @@ class Content(ReadonlyFieldsMixin, models.Model):
 
         ``perm=None`` removes every trustee grant for ``user`` on this trust.
         """
+        user = _require_configured_entity(user)
         qs = TrustUserPermission.objects.filter(trust=self.trust, entity=user)
         if perm is not None:
             qs = qs.filter(permission=type(self).objects.get_permission(perm))
@@ -704,6 +726,8 @@ class Trust(Content):
 
     def revoke_group_permission(self, group, permission):
         """Remove a local TrustGroup grant. Association is left in place."""
+        group = _require_configured_group(group)
+        permission = _resolve_configured_permission(permission)
         try:
             tg = TrustGroup.objects.get(trust=self, group=group)
         except TrustGroup.DoesNotExist:
@@ -772,15 +796,68 @@ class TrustUserPermission(models.Model):
         unique_together = ('trust', 'entity', 'permission')
 
 
+def _require_supported_entity_contract():
+    if not supported_entity_contract():
+        raise ValidationError(
+            'TRUSTS_ENTITY_MODEL must be AUTH_USER_MODEL. '
+            'Silencing trusts.E003 does not enable a non-user entity.',
+            code='unsupported_entity_model',
+        )
+
+
+def _require_supported_group_contract():
+    if not supported_group_contract():
+        raise ValidationError(
+            'TRUSTS_GROUP_MODEL must be auth.Group. '
+            'Silencing trusts.E004 does not enable a non-auth group model.',
+            code='unsupported_group_model',
+        )
+
+
+def _require_supported_permission_contract():
+    if not supported_permission_contract():
+        raise ValidationError(
+            'TRUSTS_PERMISSION_MODEL must be auth.Permission. '
+            'Silencing trusts.E005 does not enable a non-auth permission model.',
+            code='unsupported_permission_model',
+        )
+
+
+def _require_configured_entity(entity):
+    from django.contrib.auth import get_user_model
+
+    _require_supported_entity_contract()
+    User = get_user_model()
+    if isinstance(entity, User):
+        return entity
+    raise ValidationError(
+        'Trustee grants require a %s instance.' % User.__name__,
+        code='mismatched_entity_model',
+    )
+
+
+def _require_configured_group(group):
+    from django.contrib.auth.models import Group
+
+    _require_supported_group_contract()
+    if isinstance(group, Group):
+        return group
+    raise ValidationError(
+        'TrustGroup operations require a %s instance.' % Group.__name__,
+        code='mismatched_group_model',
+    )
+
+
 def get_group_global_ceiling(group):
     """Permissions the group may exercise anywhere: Group.permissions ∪ roles.
 
     Role assignments are global ceiling only. They are not per-Trust grants.
-    Custom group models must expose a ``permissions`` M2M to
-    ``TRUSTS_PERMISSION_MODEL`` and a ``user`` related-query name for
-    membership (the same conventions as ``auth.Group``).
+    Uses Django ``auth.Group`` / ``auth.Permission``.
     """
-    Permission = get_permission_model()
+    from django.contrib.auth.models import Permission
+
+    group = _require_configured_group(group)
+    _require_supported_permission_contract()
     return Permission.objects.filter(
         Q(group=group) | Q(roles__groups=group)
     ).distinct()
@@ -809,22 +886,36 @@ def require_permissions_in_global_ceiling(group, permissions):
 
 
 def _resolve_configured_permission(permission):
-    Permission = get_permission_model()
+    """Accept ``auth.Permission`` or an integer PK.
+
+    Other model instances fail closed. Primary keys are not taken from a
+    mismatched instance. A silenced ``trusts.E005`` does not authorize a
+    non-``auth.Permission`` setting.
+    """
+    from django.contrib.auth.models import Permission
+
+    _require_supported_permission_contract()
     if isinstance(permission, Permission):
         return permission
-    if isinstance(permission, int) or getattr(permission, 'pk', None) is not None \
-            and not isinstance(permission, (str, bytes)):
+    if isinstance(permission, models.Model):
+        raise ValidationError(
+            'Local TrustGroup grants require a %s instance.' % Permission.__name__,
+            code='mismatched_permission_model',
+        )
+    if isinstance(permission, int) and not isinstance(permission, bool):
         try:
-            return Permission.objects.get(pk=getattr(permission, 'pk', permission))
+            return Permission.objects.get(pk=permission)
         except (Permission.DoesNotExist, TypeError, ValueError):
             pass
     raise ValidationError(
-        'Local TrustGroup grants require a %s instance.' % Permission.__name__
+        'Local TrustGroup grants require a %s instance.' % Permission.__name__,
+        code='mismatched_permission_model',
     )
 
 
 class TrustGroupManager(models.Manager):
     def associate(self, trust, group):
+        group = _require_configured_group(group)
         obj, _created = self.get_or_create(trust=trust, group=group)
         return obj
 

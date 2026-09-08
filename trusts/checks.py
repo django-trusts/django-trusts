@@ -12,8 +12,13 @@ Silencing an ID does not make the policy executable: ``has_perm`` and
 under ``manage.py check``.
 """
 
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group as AuthGroup
+from django.contrib.auth.models import Permission as AuthPermission
 from django.core import checks as django_checks
+from django.core.exceptions import ImproperlyConfigured
 
+from trusts import get_entity_model, get_group_model, get_permission_model
 from trusts.conditions import PermissionConditionError, validate_expression
 from trusts.models import Content, legacy_permission_callbacks_allowed
 
@@ -21,6 +26,9 @@ from trusts.models import Content, legacy_permission_callbacks_allowed
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
+CHECK_ID_ENTITY_NOT_USER = 'trusts.E003'
+CHECK_ID_GROUP_NOT_AUTH = 'trusts.E004'
+CHECK_ID_PERMISSION_NOT_AUTH = 'trusts.E005'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -96,4 +104,106 @@ def check_permission_conditions(app_configs, **kwargs):
             messages.extend(_messages_for_expr(model, cond_code, record.expr))
         elif record.func is not None:
             messages.extend(_messages_for_callable(model, cond_code))
+    return messages
+
+
+_SILENCE_DOES_NOT_AUTHORIZE_HINT = (
+    'Silencing this check ID suppresses only the early diagnostic. '
+    'Runtime grants and authorization queries still fail closed on the '
+    'supported AUTH_USER_MODEL / auth.Group / auth.Permission contract. '
+    'Deprecation and removal of TRUSTS_GROUP_MODEL / TRUSTS_PERMISSION_MODEL '
+    'are tracked separately (issue #33).'
+)
+
+
+@django_checks.register(django_checks.Tags.models)
+def check_configured_auth_models(app_configs, **kwargs):
+    """Report the verified AUTH_USER_MODEL-only contract (issue #26).
+
+    Django does not swap ``auth.Group`` or ``auth.Permission``. A custom
+    user is the supported entity swap. ``app_configs`` is ignored so
+    ``manage.py check trusts`` still reports project settings.
+
+    Each getter is resolved independently so an invalid Group or
+    Permission reference is ``trusts.E004`` / ``trusts.E005``, not
+    ``trusts.E003``. These IDs are deployment diagnostics; runtime
+    enforcement does not depend on them remaining unsilenced.
+    """
+    messages = []
+
+    try:
+        Entity = get_entity_model()
+    except ImproperlyConfigured as exc:
+        messages.append(django_checks.Error(
+            str(exc),
+            hint=_SILENCE_DOES_NOT_AUTHORIZE_HINT,
+            obj=None,
+            id=CHECK_ID_ENTITY_NOT_USER,
+        ))
+    else:
+        User = get_user_model()
+        if Entity is not User:
+            messages.append(django_checks.Error(
+                'TRUSTS_ENTITY_MODEL (%s) must be AUTH_USER_MODEL (%s). '
+                'Settlor and trustee rows are the same principal '
+                'User.has_perm uses. A separate non-user model is not a '
+                'Django permission principal.' % (
+                    _model_label(Entity), _model_label(User),
+                ),
+                hint=(
+                    'Set TRUSTS_ENTITY_MODEL to the same app_label.Model as '
+                    'AUTH_USER_MODEL (a custom user is the supported entity '
+                    'swap). ' + _SILENCE_DOES_NOT_AUTHORIZE_HINT
+                ),
+                obj=Entity,
+                id=CHECK_ID_ENTITY_NOT_USER,
+            ))
+
+    try:
+        Group = get_group_model()
+    except ImproperlyConfigured as exc:
+        messages.append(django_checks.Error(
+            str(exc),
+            hint=_SILENCE_DOES_NOT_AUTHORIZE_HINT,
+            obj=None,
+            id=CHECK_ID_GROUP_NOT_AUTH,
+        ))
+    else:
+        if Group is not AuthGroup:
+            messages.append(django_checks.Error(
+                'TRUSTS_GROUP_MODEL (%s) must be auth.Group. Django does not '
+                'swap Group; django-trusts does not maintain a private '
+                'parallel group model.' % _model_label(Group),
+                hint=(
+                    'Leave TRUSTS_GROUP_MODEL unset (default auth.Group). '
+                    'Removal of the setting is issue #33. '
+                    + _SILENCE_DOES_NOT_AUTHORIZE_HINT
+                ),
+                obj=Group,
+                id=CHECK_ID_GROUP_NOT_AUTH,
+            ))
+
+    try:
+        Permission = get_permission_model()
+    except ImproperlyConfigured as exc:
+        messages.append(django_checks.Error(
+            str(exc),
+            hint=_SILENCE_DOES_NOT_AUTHORIZE_HINT,
+            obj=None,
+            id=CHECK_ID_PERMISSION_NOT_AUTH,
+        ))
+    else:
+        if Permission is not AuthPermission:
+            messages.append(django_checks.Error(
+                'TRUSTS_PERMISSION_MODEL (%s) must be auth.Permission. Django '
+                'does not swap Permission; django-trusts does not maintain a '
+                'private parallel permission model.' % _model_label(Permission),
+                hint=(
+                    'Leave TRUSTS_PERMISSION_MODEL unset (default auth.Permission). '
+                    'Removal of the setting is issue #33. '
+                    + _SILENCE_DOES_NOT_AUTHORIZE_HINT
+                ),
+                obj=Permission,
+                id=CHECK_ID_PERMISSION_NOT_AUTH,
+            ))
     return messages

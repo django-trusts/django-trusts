@@ -1,15 +1,19 @@
 from django.db.models import Q, QuerySet
 from django.contrib.auth.backends import ModelBackend
+from django.contrib.auth.models import Permission
 
 from trusts.models import Trust, Content, legacy_permission_callbacks_allowed
 from trusts.query import permission_granted_via_group_exists
 from trusts.conditions import PermissionConditionError, evaluate_registered_expression
-from trusts import get_permission_model, utils
+from trusts import (
+    supported_entity_contract,
+    supported_group_contract,
+    supported_permission_contract,
+    utils,
+)
 
 
 class TrustModelBackendMixin(object):
-    perm_model = get_permission_model()
-
     @staticmethod
     def _get_perm_code(perm):
         return '%s.%s' % (
@@ -47,11 +51,14 @@ class TrustModelBackendMixin(object):
         if user_obj.is_anonymous or obj is None:
             return super(TrustModelBackendMixin, self).get_group_permissions(user_obj, obj)
 
+        if not _group_permission_queries_allowed():
+            return set()
+
         if Content.is_content(obj):
             trusts = self._get_trusts(obj)
             if not trusts:
-                return self.perm_model.objects.none()
-            return self.perm_model.objects.filter(
+                return Permission.objects.none()
+            return Permission.objects.filter(
                 permission_granted_via_group_exists(user_obj, trusts)
             )
 
@@ -60,6 +67,9 @@ class TrustModelBackendMixin(object):
     def get_all_permissions(self, user_obj, obj=None):
         if user_obj.is_anonymous or obj is None:
             return super(TrustModelBackendMixin, self).get_all_permissions(user_obj, obj)
+
+        if not supported_entity_contract() or not supported_permission_contract():
+            return []
 
         if not hasattr(user_obj, '_trust_perm_cache'):
             setattr(user_obj, '_trust_perm_cache', dict())
@@ -70,12 +80,13 @@ class TrustModelBackendMixin(object):
             all_perms = []
             for trust in trusts:
                 if trust.pk not in perm_cache.keys():
-                    trust_perm = set([self._get_perm_code(p) for p in
-                        self.perm_model.objects.filter(
-                            Q(trustentities__trust=trust, trustentities__entity=user_obj) |
-                            permission_granted_via_group_exists(user_obj, trust)
-                        )
-                    ])
+                    grant_q = _trust_permission_grant_q(user_obj, trust)
+                    if grant_q is None:
+                        trust_perm = set()
+                    else:
+                        trust_perm = set([self._get_perm_code(p) for p in
+                            Permission.objects.filter(grant_q)
+                        ])
 
                     perm_cache[trust.pk] = trust_perm
                 else:
@@ -130,6 +141,28 @@ class TrustModelBackendMixin(object):
             if self.permission_condition_met(record, user_obj, perm, obj):
                 return True
         return False
+
+
+def _group_permission_queries_allowed():
+    return (
+        supported_entity_contract()
+        and supported_group_contract()
+        and supported_permission_contract()
+    )
+
+
+def _trust_permission_grant_q(user_obj, trust):
+    parts = []
+    if supported_entity_contract():
+        parts.append(Q(trustentities__trust=trust, trustentities__entity=user_obj))
+    if _group_permission_queries_allowed():
+        parts.append(permission_granted_via_group_exists(user_obj, trust))
+    if not parts:
+        return None
+    grant_q = parts[0]
+    for part in parts[1:]:
+        grant_q |= part
+    return grant_q
 
 
 class TrustModelBackend(TrustModelBackendMixin, ModelBackend):
