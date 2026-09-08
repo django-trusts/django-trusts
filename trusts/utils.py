@@ -30,19 +30,69 @@ fix, not a new permission form.
     return applabel, modelname, action, cond
 
 
-def has_related_query_name(model, query_name):
-    """True when ``model.objects.filter(**{query_name: ...})`` is a valid lookup."""
+def lookup_relation(model, query_name):
+    """Return the relation used by ``model.objects.filter(**{query_name: v})``.
+
+    ``None`` when the lookup is missing or is not a relation. A scalar
+    field with that name is ``None``: Django may coerce a model instance
+    to a pk or string through that field, which must not count as
+    membership.
+    """
     from django.core.exceptions import FieldDoesNotExist
 
     try:
-        model._meta.get_field(query_name)
-        return True
+        field = model._meta.get_field(query_name)
     except FieldDoesNotExist:
-        pass
+        field = None
+    else:
+        if getattr(field, 'is_relation', False):
+            return field
+        return None
     for rel in model._meta.related_objects:
         if rel.related_query_name() == query_name:
-            return True
-    return False
+            return rel
+    return None
+
+
+def related_model_of(field_or_rel):
+    if field_or_rel is None:
+        return None
+    remote = getattr(field_or_rel, 'remote_field', None)
+    if remote is not None and getattr(remote, 'model', None) is not None:
+        return remote.model
+    return getattr(field_or_rel, 'related_model', None)
+
+
+def same_concrete_model(left, right):
+    if left is None or right is None:
+        return False
+    left_meta = getattr(left, '_meta', None)
+    right_meta = getattr(right, '_meta', None)
+    if left_meta is None or right_meta is None:
+        return left is right
+    return left_meta.concrete_model is right_meta.concrete_model
+
+
+def group_user_set_related_model(group_model):
+    """Related model of ``group.user_set``, or ``None`` if that accessor is absent.
+
+    Reverse M2M descriptors expose the forward field on the entity; using
+    ``field.related_model`` would return the group model itself.
+    """
+    try:
+        descriptor = getattr(group_model, 'user_set')
+    except AttributeError:
+        return None
+    reverse = getattr(descriptor, 'reverse', False)
+    field = getattr(descriptor, 'field', None)
+    if field is not None:
+        if reverse:
+            return getattr(field, 'model', None)
+        return related_model_of(field)
+    rel = getattr(descriptor, 'rel', None)
+    if rel is not None:
+        return getattr(rel, 'related_model', None) or getattr(rel, 'model', None)
+    return None
 
 
 def sync_configured_permissions():
@@ -69,4 +119,3 @@ def sync_configured_permissions():
         )
         created += int(was_created)
     return created
-

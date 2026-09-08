@@ -41,6 +41,8 @@ jobs:
         run: python -m django check --settings=tests.settings
       - name: Legacy database upgrade
         run: python scripts/verify-legacy-upgrade.py
+      - name: Custom-model Role colliding-PK upgrade
+        run: python scripts/verify-custom-role-upgrade.py
 
   package:
     name: package

@@ -436,16 +436,20 @@ Initial Options
   ``auth.Group``). Django does **not** swap ``auth.Group``;
   ``User.groups`` remains ``auth.Group``. A custom group must provide
   ``auth.Group`` query conventions: a ``permissions`` M2M to
-  ``TRUSTS_PERMISSION_MODEL`` (related query name ``group``) and
-  membership via related query name ``user`` / reverse ``user_set``
-  (``trusts.E004``, ``trusts.E005``). Trusts object-level membership uses
+  ``TRUSTS_PERMISSION_MODEL`` whose reverse query name is ``group``
+  (``get_group_global_ceiling()`` filters ``Permission.objects.filter(group=...)``)
+  and membership via a **relation** named ``user`` whose related model is
+  ``AUTH_USER_MODEL`` / ``TRUSTS_ENTITY_MODEL``, plus reverse ``user_set``
+  (``trusts.E004``, ``trusts.E005``). A scalar ``user`` field or a relation
+  to another model is not membership. Trusts object-level membership uses
   that ``user`` relation, not ``User.groups``.
 * TRUSTS_PERMISSION_MODEL -- Permission model used by trustee rows,
   TrustGroup local grants, and Role (default: ``auth.Permission``).
   Django does **not** swap ``auth.Permission``. ``User.has_perm``
   without an object still uses Django's ``ModelBackend`` /
   ``auth.Permission``. A custom permission model must provide
-  ``name``, ``content_type``, ``codename`` (and ``get_by_natural_key``
+  ``name``, ``content_type`` (a relation to ``ContentType``, not a
+  similarly named scalar), ``codename`` (and ``get_by_natural_key``
   or equivalent). Django only auto-creates ``auth.Permission`` rows; a
   separate table must be populated (``trusts.utils.sync_configured_permissions``
   copies the Django shape). ``auth.Group.permissions`` is hardcoded to
@@ -465,7 +469,12 @@ Changing these settings after tables exist is not handled automatically
 by ``makemigrations`` and requires an explicit schema and data
 migration. Role historically pointed at ``auth.Group`` /
 ``auth.Permission`` in ``0001_initial``; ``0003_role_configured_models``
-aligns Role with the same settings without rewriting ``0001``.
+aligns Role with the same settings without rewriting ``0001``. When the
+settings name models other than ``auth.Group`` / ``auth.Permission``,
+``0003`` deletes existing Role group/permission joins before retargeting
+so an ``auth`` primary key cannot silently become a grant on an unrelated
+custom row with the same id. Rebuild Role assignments after that
+upgrade.
 * TRUSTS_CREATE_ROOT -- A boolean set to True indicates root Trust model object to be created during the initial migration. (default: True)
 * TRUSTS_ROOT_PK -- The `pk` of the root trust model object. (default: 1)
 * TRUSTS_ROOT_SETTLOR -- The `pk` of settlor of the root trust object. (default: None)
