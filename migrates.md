@@ -813,17 +813,19 @@ Migration-bot checklist:
 
 | | |
 | --- | --- |
-| Previous | RST documented string interpolation of a possibly-`None` lookup. Invalid paths were not rejected at register time. |
-| New | `Content.compose_content_fieldlookup(klass, related_name)` joins one reverse hop. Unregistered parent → `AttributeError`. Empty / multi-hop `related_name` → `ValueError`. `register_content` rejects empty lookups and path segments `None` (`None__image`). Missing registration: `has_perm` denies, `filter_by_content` is empty. An unresolvable lookup raises at query time. `filter_by_content` no longer synthesizes a path when the stored lookup is missing; it returns `none()`. |
-| Replacement | Register `ReceiptImage` / `ReceiptImageMeta` as in the RST Dependent content section. |
-| Affected | Manual `register_content` of non-Content models. Junction auto-registration still passes an explicit string. |
-| Authorization | Fail closed. Invalid or missing registration never broadens access. |
+| Previous | RST documented string interpolation of a possibly-`None` lookup. Invalid paths were not rejected at register time. A scalar hop such as `compose(Receipt, 'title')` was accepted; if `receipt.title == str(note)`, Django coerced the instance and `filter_by_content` / `has_perm` could grant the receipt's Trust. |
+| New | `Content.compose_content_fieldlookup(klass, related_name)` joins one reverse hop. Unregistered parent → `AttributeError`. Empty / multi-hop `related_name` → `ValueError`. A named scalar field → `InvalidContentFieldlookup`. `register_content` rejects empty lookups, `None__…` paths, non-relation hops, and paths whose terminal model is not the registered class. Missing registration: `has_perm` denies, `filter_by_content` is empty. Relation-path validation may defer until `apps.models_ready`; `filter_by_content` / `has_perm` call `require_valid_content_fieldlookup` and raise rather than query an invalid registration. |
+| Replacement | Register `ReceiptImage` / `ReceiptImageMeta` as in the RST Dependent content section. Catch `InvalidContentFieldlookup` (a `ValueError`) for bad hops. |
+| Affected | Manual `register_content` of non-Content models. Junction auto-registration still passes an explicit relation path. |
+| Authorization | Fail closed. Invalid or missing registration never broadens access, including scalar-field coercion. |
 
 Migration-bot checklist:
 
 - [ ] Register each dependent hop; do not leave related models implicit.
+- [ ] Use a relation `related_name`, not a scalar field, as the hop.
 - [ ] Confirm `has_perm` at the Content row and each dependent hop.
 - [ ] Confirm `filter_by_content` accepts an instance and a QuerySet.
+- [ ] Confirm a forced scalar lookup raises on `filter_by_content` and `has_perm`.
 - [ ] Do not implement parent/child ceilings or per-object Python loops.
 
 ## Out of scope (unchanged)

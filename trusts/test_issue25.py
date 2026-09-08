@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.test import TestCase
 
-from trusts.models import Content, Trust, TrustUserPermission
+from trusts.models import Content, InvalidContentFieldlookup, Trust, TrustUserPermission
 from trusts.tests import create_test_users, get_or_create_root_user, reload_test_users
 from trusts.utils import get_short_model_name
 from tests.models import (
@@ -243,10 +243,47 @@ class DependentContentTrustTest(TestCase):
                 Content.register_content(UnregisteredReceiptNote, '')
             self.assertFalse(Content.is_content_model(UnregisteredReceiptNote))
 
-            Content.register_content(UnregisteredReceiptNote, 'not_a_trust_relation')
-            self.assertTrue(Content.is_content_model(UnregisteredReceiptNote))
-            with self.assertRaises(Exception):
+            with self.assertRaises(InvalidContentFieldlookup):
+                Content.register_content(UnregisteredReceiptNote, 'not_a_trust_relation')
+            self.assertFalse(Content.is_content_model(UnregisteredReceiptNote))
+            with self.assertRaises(InvalidContentFieldlookup):
+                Content.register_content(
+                    UnregisteredReceiptNote,
+                    Content.get_content_fieldlookup(ReceiptImage),
+                )
+        finally:
+            Content._contents.pop(key, None)
+        self.assertFalse(Content.is_content_model(UnregisteredReceiptNote))
+
+    def test_scalar_hop_does_not_grant_via_str_coercion(self):
+        """A CharField hop must not match str(dependent) and grant the Trust.
+
+        Review on #31: compose(Receipt, 'title') produced
+        trusts_tests_receipt_content__title. Django coerced the note
+        instance to text; filter_by_content selected the receipt's Trust.
+        """
+        self.receipt_a.title = str(self.note_a)
+        self.receipt_a.save()
+        self.assertEqual(self.receipt_a.title, str(self.note_a))
+        self._grant(self.trust_a, self.user, self.perm_note)
+        reload_test_users(self)
+
+        with self.assertRaises(InvalidContentFieldlookup):
+            Content.compose_content_fieldlookup(Receipt, 'title')
+        with self.assertRaises(InvalidContentFieldlookup):
+            Content.register_content(
+                UnregisteredReceiptNote,
+                '%s__title' % Content.get_content_fieldlookup(Receipt),
+            )
+        self.assertFalse(Content.is_content_model(UnregisteredReceiptNote))
+
+        key = get_short_model_name(UnregisteredReceiptNote)
+        Content._contents[key] = '%s__title' % RECEIPT_LOOKUP
+        try:
+            with self.assertRaises(InvalidContentFieldlookup):
                 list(Trust.objects.filter_by_content(self.note_a))
+            with self.assertRaises(InvalidContentFieldlookup):
+                self.user.has_perm(self._code(self.perm_note), self.note_a)
         finally:
             Content._contents.pop(key, None)
         self.assertFalse(Content.is_content_model(UnregisteredReceiptNote))

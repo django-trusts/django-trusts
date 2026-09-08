@@ -187,10 +187,17 @@ Example: ``Receipt`` is ``Content``; ``ReceiptImage`` and
 
 An unregistered dependent model is not Trust content: ``has_perm`` denies
 and ``Trust.objects.filter_by_content`` is empty. Registering a lookup
-composed from ``None`` (or an empty path) raises ``ValueError``.
+composed from ``None`` (or an empty path) raises ``InvalidContentFieldlookup``.
 ``compose_content_fieldlookup`` raises ``AttributeError`` if the parent
-is not registered. A lookup Django cannot resolve on ``Trust`` raises at
-query time; it does not grant access.
+is not registered, and ``InvalidContentFieldlookup`` if ``related_name``
+is a scalar field (for example ``Receipt.title``) rather than a relation.
+The registered path must be a Trust-origin relation chain whose terminal
+model is the registered class. If reverse relations cannot be checked
+during model import, validation is deferred until the app registry is
+ready; ``filter_by_content`` / ``has_perm`` still raise on an invalid
+registration rather than querying it. A lookup that does not resolve, or
+that would compare a scalar field to the dependent instance, never
+grants access.
 
 Role
 ~~~~

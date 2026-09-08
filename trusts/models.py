@@ -1,4 +1,5 @@
-from django.core.exceptions import ValidationError
+from django.apps import apps
+from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist, ValidationError
 from django.db import models, transaction
 from django.db.models import signals, Q, options
 from django.conf import settings as django_settings
@@ -21,6 +22,19 @@ options.DEFAULT_NAMES += ('roles', 'permission_conditions',
                           'content_roles', 'content_permission_conditions',
                           'auto_modeladmin',
     )
+
+
+class ContentLookupNotReady(ValueError):
+    """A Trust→content lookup cannot be fully resolved until models are loaded."""
+
+
+class InvalidContentFieldlookup(ValueError):
+    """A Trust→content lookup is not a relation path to the registered model.
+
+    Raised for scalar hops, missing relations, and paths whose terminal
+    model is not the model passed to ``register_content``. Invalid
+    registrations must raise rather than query.
+    """
 
 
 class PermissionConditionNotQueryable(ValueError):
@@ -239,6 +253,8 @@ class TrustManager(ContentManager):
         if not fieldlookup:
             return self.none()
 
+        Content.require_valid_content_fieldlookup(klass, fieldlookup)
+
         filters = {}
         if is_qs:
             filters['%s__in' % fieldlookup] = obj
@@ -408,18 +424,110 @@ class Content(ReadonlyFieldsMixin, models.Model):
     @staticmethod
     def _validate_content_fieldlookup(fieldlookup):
         if not isinstance(fieldlookup, str) or not fieldlookup:
-            raise ValueError(
+            raise InvalidContentFieldlookup(
                 'fieldlookup must be a non-empty string, not %r.' % (fieldlookup,)
             )
         parts = fieldlookup.split('__')
         if any(part == '' or part == 'None' for part in parts):
-            raise ValueError(
+            raise InvalidContentFieldlookup(
                 'fieldlookup %r is not a composable Trust-to-content path. '
                 'Content.get_content_fieldlookup returns a resolved lookup '
                 'for registered models. Use compose_content_fieldlookup for '
                 'dependent hops; do not interpolate None.' % (fieldlookup,)
             )
         return fieldlookup
+
+    @staticmethod
+    def _trust_model():
+        try:
+            return apps.get_model('trusts', 'Trust', require_ready=False)
+        except (LookupError, AppRegistryNotReady):
+            raise ContentLookupNotReady('trusts.Trust')
+
+    @staticmethod
+    def _related_model(field):
+        related = field.related_model
+        if related is None:
+            raise InvalidContentFieldlookup(
+                'Relation %r has no related model.' % (field,)
+            )
+        if isinstance(related, str):
+            try:
+                related = apps.get_model(related, require_ready=False)
+            except (LookupError, AppRegistryNotReady):
+                raise ContentLookupNotReady(related)
+        return related
+
+    @staticmethod
+    def resolve_trust_content_lookup(fieldlookup, missing_as_unready=False):
+        """Walk ``fieldlookup`` from Trust and return the terminal model.
+
+        Each hop must be a relation. A named scalar field always raises
+        ``InvalidContentFieldlookup``. A missing hop raises
+        ``ContentLookupNotReady`` when ``missing_as_unready`` is True or
+        ``apps.models_ready`` is False (reverse relations may still be
+        contributing during ``class_prepared``), and
+        ``InvalidContentFieldlookup`` afterward.
+        """
+        fieldlookup = Content._validate_content_fieldlookup(fieldlookup)
+        model = Content._trust_model()
+        for part in fieldlookup.split('__'):
+            try:
+                field = model._meta.get_field(part)
+            except FieldDoesNotExist:
+                if missing_as_unready or not apps.models_ready:
+                    raise ContentLookupNotReady(fieldlookup)
+                raise InvalidContentFieldlookup(
+                    'fieldlookup %r: %r is not a field or relation on %s.' % (
+                        fieldlookup, part, model._meta.label,
+                    )
+                )
+            if not field.is_relation:
+                raise InvalidContentFieldlookup(
+                    'fieldlookup %r: %r on %s is not a relation. '
+                    'Dependent hops must be relations, not scalar fields.' % (
+                        fieldlookup, part, model._meta.label,
+                    )
+                )
+            model = Content._related_model(field)
+        return model
+
+    @staticmethod
+    def _same_content_model(left, right):
+        return left._meta.concrete_model == right._meta.concrete_model
+
+    @staticmethod
+    def validate_content_fieldlookup_target(klass, fieldlookup, defer_if_unready=False):
+        """Ensure ``fieldlookup`` is a Trust-origin relation path to ``klass``.
+
+        Returns True when validated. Returns False only when validation is
+        deferred because the app registry is not ready. Runtime callers
+        must use ``require_valid_content_fieldlookup``.
+        """
+        try:
+            target = Content.resolve_trust_content_lookup(
+                fieldlookup, missing_as_unready=defer_if_unready,
+            )
+        except (ContentLookupNotReady, AppRegistryNotReady):
+            if defer_if_unready:
+                return False
+            raise InvalidContentFieldlookup(
+                'fieldlookup %r cannot be resolved from Trust.' % (fieldlookup,)
+            )
+        if not Content._same_content_model(target, klass):
+            raise InvalidContentFieldlookup(
+                'fieldlookup %r resolves to %s, not registered model %s.' % (
+                    fieldlookup, target._meta.label, klass._meta.label,
+                )
+            )
+        return True
+
+    @staticmethod
+    def require_valid_content_fieldlookup(klass, fieldlookup):
+        """Runtime check: raise rather than query an invalid registration."""
+        Content.validate_content_fieldlookup_target(
+            klass, fieldlookup, defer_if_unready=False,
+        )
 
     @staticmethod
     def compose_content_fieldlookup(klass, related_name):
@@ -429,6 +537,8 @@ class Content(ReadonlyFieldsMixin, models.Model):
         (for example ``Receipt.image`` or ``ReceiptImage.meta``), not a
         field on Trust. Raises ``AttributeError`` if ``klass`` is not a
         registered content model so callers cannot build ``None__…`` paths.
+        A named scalar field is always rejected, even before
+        ``apps.models_ready``.
         """
         parent = Content.get_content_fieldlookup(klass)
         if parent is None:
@@ -448,7 +558,33 @@ class Content(ReadonlyFieldsMixin, models.Model):
                     related_name,
                 )
             )
-        return Content._validate_content_fieldlookup('%s__%s' % (parent, related_name))
+        parent_model = klass
+        if isinstance(parent_model, str):
+            try:
+                parent_model = apps.get_model(parent_model)
+            except (LookupError, ValueError):
+                parent_model = None
+        if parent_model is not None:
+            try:
+                hop = parent_model._meta.get_field(related_name)
+            except FieldDoesNotExist:
+                hop = None
+            else:
+                if not hop.is_relation:
+                    raise InvalidContentFieldlookup(
+                        'related_name %r on %s is not a relation. '
+                        'Dependent hops must be relations, not scalar fields.' % (
+                            related_name, parent_model._meta.label,
+                        )
+                    )
+        composed = Content._validate_content_fieldlookup(
+            '%s__%s' % (parent, related_name)
+        )
+        try:
+            Content.resolve_trust_content_lookup(composed)
+        except ContentLookupNotReady:
+            return composed
+        return composed
 
     @staticmethod
     def register_content(klass, fieldlookup=None):
@@ -458,8 +594,14 @@ class Content(ReadonlyFieldsMixin, models.Model):
             if len(content_model_fields) != 1:
                 raise AttributeError('Expect "trust" field in model %s.' % short_name)
             fieldlookup = Content.direct_content_fieldlookup(klass)
+            # class_prepared fires before Trust has the reverse relation.
+            defer = True
         else:
             fieldlookup = Content._validate_content_fieldlookup(fieldlookup)
+            defer = not apps.models_ready
+        Content.validate_content_fieldlookup_target(
+            klass, fieldlookup, defer_if_unready=defer,
+        )
         Content._contents[short_name] = fieldlookup
 
         if hasattr(klass._meta, 'permission_conditions'):
