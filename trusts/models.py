@@ -232,19 +232,19 @@ class TrustManager(ContentManager):
             klass = obj.__class__
             is_qs = False
 
-        if Content.is_content_model(klass):
-            fieldlookup = Content.get_content_fieldlookup(klass)
-            if fieldlookup is None:
-                fieldlookup = '%s_content' % utils.get_short_model_name_lower(klass).replace('.', '_')
+        if not Content.is_content_model(klass):
+            return self.none()
 
-            filters = {}
-            if is_qs:
-                filters['%s__in' % fieldlookup] = obj
-            else:
-                filters[fieldlookup] = obj
-            return self.filter(**filters).distinct()
+        fieldlookup = Content.get_content_fieldlookup(klass)
+        if not fieldlookup:
+            return self.none()
 
-        return self.none()
+        filters = {}
+        if is_qs:
+            filters['%s__in' % fieldlookup] = obj
+        else:
+            filters[fieldlookup] = obj
+        return self.filter(**filters).distinct()
 
     def filter_by_user_perm(self, user, **kwargs):
         if 'group__user' in kwargs:
@@ -396,12 +396,70 @@ class Content(ReadonlyFieldsMixin, models.Model):
         Content._conditions[short_name][cond_code] = record
 
     @staticmethod
+    def direct_content_fieldlookup(klass):
+        """Return the Trust → Content-subclass ORM path.
+
+        This is the reverse related name of ``Content.trust``
+        (``%(app_label)s_%(class)s_content``). It is a composable lookup
+        prefix, never ``None``.
+        """
+        return '%s_content' % utils.get_short_model_name_lower(klass).replace('.', '_')
+
+    @staticmethod
+    def _validate_content_fieldlookup(fieldlookup):
+        if not isinstance(fieldlookup, str) or not fieldlookup:
+            raise ValueError(
+                'fieldlookup must be a non-empty string, not %r.' % (fieldlookup,)
+            )
+        parts = fieldlookup.split('__')
+        if any(part == '' or part == 'None' for part in parts):
+            raise ValueError(
+                'fieldlookup %r is not a composable Trust-to-content path. '
+                'Content.get_content_fieldlookup returns a resolved lookup '
+                'for registered models. Use compose_content_fieldlookup for '
+                'dependent hops; do not interpolate None.' % (fieldlookup,)
+            )
+        return fieldlookup
+
+    @staticmethod
+    def compose_content_fieldlookup(klass, related_name):
+        """Join a registered content lookup with one reverse-relation hop.
+
+        ``related_name`` is the related query name on the parent model
+        (for example ``Receipt.image`` or ``ReceiptImage.meta``), not a
+        field on Trust. Raises ``AttributeError`` if ``klass`` is not a
+        registered content model so callers cannot build ``None__…`` paths.
+        """
+        parent = Content.get_content_fieldlookup(klass)
+        if parent is None:
+            raise AttributeError(
+                'Cannot compose a content fieldlookup for %r: the model is '
+                'not registered. Register the parent with '
+                'Content.register_content before adding a dependent hop.' % (
+                    utils.get_short_model_name(klass),
+                )
+            )
+        if not isinstance(related_name, str) or not related_name:
+            raise ValueError('related_name must be a non-empty string.')
+        if '__' in related_name:
+            raise ValueError(
+                'related_name must be a single hop, not %r. Call '
+                'compose_content_fieldlookup once per reverse relation.' % (
+                    related_name,
+                )
+            )
+        return Content._validate_content_fieldlookup('%s__%s' % (parent, related_name))
+
+    @staticmethod
     def register_content(klass, fieldlookup=None):
         short_name = utils.get_short_model_name(klass)
         if fieldlookup is None:
             content_model_fields = [f for f in klass._meta.fields if f.remote_field is not None and f.name == 'trust']
             if len(content_model_fields) != 1:
                 raise AttributeError('Expect "trust" field in model %s.' % short_name)
+            fieldlookup = Content.direct_content_fieldlookup(klass)
+        else:
+            fieldlookup = Content._validate_content_fieldlookup(fieldlookup)
         Content._contents[short_name] = fieldlookup
 
         if hasattr(klass._meta, 'permission_conditions'):
@@ -417,10 +475,20 @@ class Content(ReadonlyFieldsMixin, models.Model):
 
     @staticmethod
     def get_content_fieldlookup(klass):
+        """Return the Trust → content ORM lookup, or None if unregistered.
+
+        Direct ``Content`` subclasses resolve to
+        ``direct_content_fieldlookup`` (a composable string). Dependent
+        models return the lookup they were registered with. Never returns
+        a value that string-formats to ``None__…``.
+        """
         short_name = utils.get_short_model_name(klass)
-        if short_name in Content._contents.keys():
-            return Content._contents[short_name]
-        return None
+        if short_name not in Content._contents:
+            return None
+        fieldlookup = Content._contents[short_name]
+        if fieldlookup is None:
+            return Content.direct_content_fieldlookup(klass)
+        return fieldlookup
 
     @staticmethod
     def is_content(obj):

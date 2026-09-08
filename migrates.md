@@ -762,5 +762,77 @@ Migration-bot checklist:
 - Authentication-backend composition / multi-backend OR semantics
 - Closing #4 for arbitrary Python callbacks
 
+# Issue #25: dependent-content Trust resolution (1.0.0.dev0)
+
+This record covers relational reuse of one Trust through related
+non-Content rows. Version remains **1.0.0.dev0**. **No Trusts schema
+migration is required.** Test fixtures add `trusts_tests` models only
+(`0003_receipt`).
+
+## Decision
+
+A dependent model does not carry a `trust` FK. Its authorizing Trust is
+the related `Content` object's Trust, reached by an ORM lookup from
+`Trust`. `Content.get_content_fieldlookup` returns that lookup as a
+composable string for every registered model. Direct `Content` subclasses
+resolve to the reverse of `Content.trust` (`app_label_model_content`),
+never `None`. One- and two-hop dependents register with
+`Content.compose_content_fieldlookup(parent, related_name)`.
+
+This is not parent/child permission ceilings, explicit deny, delegation,
+or Windows ACL inheritance. Granting `change_receipt` does not grant
+`change_receiptimage` on the same Trust.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` signatures
+- `Trust.objects.filter_by_content(obj)` signature (instance or QuerySet)
+- `Content.register_content(klass, fieldlookup=None)` signature
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 27. `get_content_fieldlookup` returns a resolved lookup
+
+| | |
+| --- | --- |
+| Previous | Direct `Content` subclasses stored `None`. `'%s__image' % Content.get_content_fieldlookup(Receipt)` produced `None__image`. |
+| New | Registered models store a string. `get_content_fieldlookup` returns that string, or `direct_content_fieldlookup(klass)` if a legacy `None` is still stored. Unregistered models still return `None`. |
+| Replacement | `Content.get_content_fieldlookup(Receipt)` → `'app_receipt_content'`. Compose with `compose_content_fieldlookup` or interpolate the returned string. |
+| Affected | Callers that treated `None` as "this is a direct Content model". Use `is_content_model` plus a lookup that equals `direct_content_fieldlookup` if that distinction is still needed. |
+| Authorization | Same Trust rows. Lookups are no longer built from `None`. |
+
+Migration-bot checklist:
+
+- [ ] Replace `'%s__hop' % Content.get_content_fieldlookup(parent)` with `Content.compose_content_fieldlookup(parent, 'hop')` (safer if `parent` is unregistered).
+- [ ] If you compared `get_content_fieldlookup(klass) is None` to detect a `Content` subclass, compare to `Content.direct_content_fieldlookup(klass)` or inspect the model.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] No Trusts migrate step. Do not edit `0001_initial` or `0002_trustgroup`.
+
+### 28. `compose_content_fieldlookup` and fail-closed registration
+
+| | |
+| --- | --- |
+| Previous | RST documented string interpolation of a possibly-`None` lookup. Invalid paths were not rejected at register time. |
+| New | `Content.compose_content_fieldlookup(klass, related_name)` joins one reverse hop. Unregistered parent → `AttributeError`. Empty / multi-hop `related_name` → `ValueError`. `register_content` rejects empty lookups and path segments `None` (`None__image`). Missing registration: `has_perm` denies, `filter_by_content` is empty. An unresolvable lookup raises at query time. `filter_by_content` no longer synthesizes a path when the stored lookup is missing; it returns `none()`. |
+| Replacement | Register `ReceiptImage` / `ReceiptImageMeta` as in the RST Dependent content section. |
+| Affected | Manual `register_content` of non-Content models. Junction auto-registration still passes an explicit string. |
+| Authorization | Fail closed. Invalid or missing registration never broadens access. |
+
+Migration-bot checklist:
+
+- [ ] Register each dependent hop; do not leave related models implicit.
+- [ ] Confirm `has_perm` at the Content row and each dependent hop.
+- [ ] Confirm `filter_by_content` accepts an instance and a QuerySet.
+- [ ] Do not implement parent/child ceilings or per-object Python loops.
+
+## Out of scope (unchanged)
+
+- Parent/child Trust permission ceilings
+- Explicit deny / Windows ACL ordering
+- Delegation
+- `.permitted()` on non-Content dependent models (they have no `trust` FK)
+- Example-app UI (core fixtures are sufficient)
+
 
 
