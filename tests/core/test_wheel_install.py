@@ -2,9 +2,7 @@
 
 import importlib
 import importlib.util
-import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from django.test import SimpleTestCase
 
@@ -25,31 +23,15 @@ class WheelInstallAbsenceCheckTest(SimpleTestCase):
         that file in the wheel. find_spec must still report it as shipped.
         """
         verifier = _load_verifier()
-        with TemporaryDirectory() as tmp:
-            pkg = Path(tmp) / 'leakedpkg'
-            pkg.mkdir()
-            (pkg / '__init__.py').write_text('')
-            # Same failure mode as a leaked trusts.tests importing
-            # tests.models outside the checkout. Raise it directly so this
-            # check does not depend on the top-level tests package.
-            (pkg / 'tests.py').write_text(
-                "raise ImportError(\"No module named 'tests.models'\")\n"
-            )
-            sys.path.insert(0, tmp)
-            try:
-                with self.assertRaises(ImportError):
-                    importlib.import_module('leakedpkg.tests')
-                self.assertEqual(
-                    verifier.find_shipped_modules([
-                        'leakedpkg.tests',
-                        'leakedpkg.missing',
-                    ]),
-                    ['leakedpkg.tests'],
-                )
-            finally:
-                sys.path.remove(tmp)
-                sys.modules.pop('leakedpkg.tests', None)
-                sys.modules.pop('leakedpkg', None)
+        with self.assertRaises(ImportError):
+            importlib.import_module('tests.core.importerror_body')
+        self.assertEqual(
+            verifier.find_shipped_modules([
+                'tests.core.importerror_body',
+                'tests.core.missing',
+            ]),
+            ['tests.core.importerror_body'],
+        )
 
     def test_uninstalled_trusts_test_modules_have_no_spec(self):
         verifier = _load_verifier()
