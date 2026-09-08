@@ -16,10 +16,12 @@ to each trust's local grants). Membership changes therefore require
 administrative ``change`` on every trust that uses the group.
 """
 
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Model
 
-from trusts import get_entity_model, get_group_model
+from trusts import supported_entity_contract, supported_group_contract
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.models import Trust
 
@@ -78,6 +80,8 @@ def can_administer_trust(user, trust, via_content=None):
 
 
 def trusts_using_group(group):
+    if not supported_group_contract():
+        return Trust.objects.none()
     return Trust.objects.filter(groups=group).distinct()
 
 
@@ -128,11 +132,29 @@ def _configured_or_pk(obj, model, queryset=None):
     return resolve_entity_id(model, obj, queryset=queryset)
 
 
+def _require_entity_contract():
+    if not supported_entity_contract():
+        raise AuthorizationDenied(
+            'TRUSTS_ENTITY_MODEL must be AUTH_USER_MODEL; '
+            'silencing trusts.E003 does not enable a non-user entity.'
+        )
+    return get_user_model()
+
+
+def _require_group_contract():
+    if not supported_group_contract():
+        raise AuthorizationDenied(
+            'TRUSTS_GROUP_MODEL must be auth.Group; '
+            'silencing trusts.E004 does not enable a non-auth group model.'
+        )
+    return Group
+
+
 def grant_trustee(actor, content, user, perm):
     """Grant a TrustUserPermission on ``content.trust``. Requires ``change``."""
     _require(can_administer_content(actor, content),
              'change permission is required to grant collaborators.')
-    user = _configured_or_pk(user, get_entity_model())
+    user = _configured_or_pk(user, _require_entity_contract())
     content.grant(perm, user)
     return user
 
@@ -141,7 +163,7 @@ def revoke_trustee(actor, content, user, perm=None):
     """Revoke trustee rows on ``content.trust`` only. Requires ``change``."""
     _require(can_administer_content(actor, content),
              'change permission is required to revoke collaborators.')
-    Entity = get_entity_model()
+    Entity = _require_entity_contract()
     scope = Entity._default_manager.filter(
         trustpermissions__trust=content.trust
     ).distinct()
@@ -157,7 +179,7 @@ def revoke_trustee(actor, content, user, perm=None):
 
 
 def _resolve_group(group, queryset=None):
-    return _configured_or_pk(group, get_group_model(), queryset=queryset)
+    return _configured_or_pk(group, _require_group_contract(), queryset=queryset)
 
 
 def _resolve_content_perm(content, perm):
@@ -195,7 +217,7 @@ def disassociate_group_from_trust(actor, content, group):
     """Detach ``group`` from ``content.trust`` only. Requires ``change``."""
     _require(can_administer_content(actor, content),
              'change permission is required to remove a team.')
-    Group = get_group_model()
+    Group = _require_group_contract()
     scope = content.trust.groups.all()
     if isinstance(group, Group):
         if not scope.filter(pk=group.pk).exists():
@@ -257,26 +279,26 @@ def refuse_group_permission_write():
 
 def add_group_member(actor, group, user, via_content=None):
     """Add ``user`` to ``group``. Requires admin on every trust using the group."""
-    group = _configured_or_pk(group, get_group_model())
+    group = _configured_or_pk(group, _require_group_contract())
     _require(
         can_manage_group_membership(actor, group, via_content=via_content),
         'Administrative change on every trust using this group is required '
         'to add members. Membership or read alone is not enough.',
     )
-    user = _configured_or_pk(user, get_entity_model())
+    user = _configured_or_pk(user, _require_entity_contract())
     group.user_set.add(user)
     return user
 
 
 def remove_group_member(actor, group, user, via_content=None):
     """Remove ``user`` from ``group``. Same authority as ``add_group_member``."""
-    group = _configured_or_pk(group, get_group_model())
+    group = _configured_or_pk(group, _require_group_contract())
     _require(
         can_manage_group_membership(actor, group, via_content=via_content),
         'Administrative change on every trust using this group is required '
         'to remove members. Membership or read alone is not enough.',
     )
-    Entity = get_entity_model()
+    Entity = _require_entity_contract()
     scope = group.user_set.all()
     if isinstance(user, Entity):
         if not scope.filter(pk=user.pk).exists():
@@ -298,7 +320,7 @@ def create_team(actor, trust, name, via_content=None):
         can_administer_trust(actor, trust, via_content=via_content),
         'change permission is required to create a team on this trust.',
     )
-    Group = get_group_model()
+    Group = _require_group_contract()
     group = Group.objects.create(name=name)
     trust.groups.add(group)
     group.user_set.add(actor)

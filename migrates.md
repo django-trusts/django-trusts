@@ -857,10 +857,14 @@ Verified contract:
 - Support custom `AUTH_USER_MODEL`.
 - `TRUSTS_ENTITY_MODEL`, while it exists, must resolve to
   `AUTH_USER_MODEL` (`trusts.E003`). A separate non-user model is not a
-  Django permission principal.
+  Django permission principal. Silencing `trusts.E003` does not authorize
+  that path: grants raise and `has_perm` / `.permitted()` deny.
 - Use standard `auth.Group` and `auth.Permission`. Values other than
-  those models are `trusts.E004` / `trusts.E005`. django-trusts does not
-  maintain a private parallel swappability contract for Group/Permission.
+  those models are `trusts.E004` / `trusts.E005`. Silencing those IDs
+  does not route grants or queries through another model. django-trusts
+  does not maintain a private parallel swappability contract for
+  Group/Permission. Deprecation/removal of the unused settings remains
+  [#33](https://github.com/django-trusts/django-trusts/issues/33).
 
 An experiment that treated `TRUSTS_GROUP_MODEL` /
 `TRUSTS_PERMISSION_MODEL` as swappable replacements (convention-shaped
@@ -886,10 +890,10 @@ Trust-scoped Role/Group assignment semantics are
 | | |
 | --- | --- |
 | Previous | RST advertised three model settings. Role schema in `0001_initial` hardcoded `auth.Group` / `auth.Permission` while `models.py` used the settings. There was no fresh-install proof. |
-| New | Isolated suite `python -m tests.runtests_custom` migrates with custom `AUTH_USER_MODEL` / matching `TRUSTS_ENTITY_MODEL` selected before migrate. Settlor and trustee FKs target the custom user table. Group, Permission, Role, and TrustGroup stay `auth.Group` / `auth.Permission`. System checks `trusts.E003`–`E005` report a non-user entity or a non-auth group/permission model. Mismatched model instances fail closed (`ValidationError` / `AuthorizationDenied`); PKs are not taken from the wrong class. |
+| New | Isolated suite `python -m tests.runtests_custom` migrates with custom `AUTH_USER_MODEL` / matching `TRUSTS_ENTITY_MODEL` selected before migrate. Settlor and trustee FKs target the custom user table. Group, Permission, Role, and TrustGroup stay `auth.Group` / `auth.Permission`. System checks `trusts.E003`–`E005` report a non-user entity or a non-auth group/permission model (lookup failures keep their own IDs). Runtime grants and authorization queries fail closed even when those IDs are silenced. Mismatched model instances fail closed (`ValidationError` / `AuthorizationDenied`); PKs are not taken from the wrong class. |
 | Replacement | Set `AUTH_USER_MODEL` and `TRUSTS_ENTITY_MODEL` to the same custom user **before** the first migrate. Leave `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` unset. |
-| Affected | Projects that set `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` to something other than `auth.Group` / `auth.Permission` now fail `manage.py check`. That combination was never a coherent Django swap. |
-| Authorization | Object-level paths use `AUTH_USER_MODEL` for the principal and `auth.Group` / `auth.Permission` for group ceiling and Role. No fallback to a parallel group/permission table. |
+| Affected | Projects that set `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` to something other than `auth.Group` / `auth.Permission` now fail `manage.py check`. Runtime still refuses the discarded path if the check is skipped or silenced. That combination was never a coherent Django swap. |
+| Authorization | Object-level paths use `AUTH_USER_MODEL` for the principal and `auth.Group` / `auth.Permission` for group ceiling and Role. No fallback to a parallel group/permission table. Silencing `trusts.E003`–`E005` does not enable those settings. |
 
 Migration-bot checklist:
 
@@ -897,6 +901,7 @@ Migration-bot checklist:
 - [ ] Leave `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` as `auth.Group` / `auth.Permission` (or unset).
 - [ ] Do not apply or expect `trusts.0003_role_configured_models`. Historical `0001_initial` is unchanged (no extra configured-app graph dependencies; Role stays `auth.*`).
 - [ ] Do not pass a non-user instance into trustee APIs, or a non-`auth.Group` / non-`auth.Permission` instance into TrustGroup/Role APIs.
+- [ ] Do not treat `SILENCED_SYSTEM_CHECKS = ['trusts.E003']` (or E004/E005) as enabling a discarded model; runtime still refuses grants and queries.
 - [ ] Run `python -m tests.runtests` (default models) and `python -m tests.runtests_custom` (fresh custom user).
 - [ ] Run `python scripts/verify-legacy-upgrade.py`.
 - [ ] Run `python -m django check`.

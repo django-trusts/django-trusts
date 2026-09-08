@@ -430,19 +430,25 @@ Initial Options
   **Must be the same model as** ``AUTH_USER_MODEL`` (default:
   ``settings.AUTH_USER_MODEL``). A custom user is the supported entity
   swap. A separate non-user model is not a Django permission principal
-  (``has_perm``, ``is_active``, ``is_anonymous``) and is a system-check
-  error (``trusts.E003``).
+  (``has_perm``, ``is_active``, ``is_anonymous``). ``trusts.E003`` is the
+  deployment diagnostic; silencing it does not authorize a non-user entity.
+  Runtime grants and authorization queries fail closed independently of the
+  check.
 * TRUSTS_GROUP_MODEL -- Must remain ``auth.Group`` (default:
   ``auth.Group``). Django does **not** swap ``auth.Group`` (ticket
   `#29748 <https://code.djangoproject.com/ticket/29748>`_ closed
   ``wontfix``). django-trusts does not maintain a private parallel group
-  model. A value other than ``auth.Group`` is ``trusts.E004``. Removal of
-  this setting is a separate follow-up.
+  model. A value other than ``auth.Group`` is ``trusts.E004``. Silencing
+  that ID does not route grants or ``group__user`` queries through another
+  model. Removal of this setting is issue `#33
+  <https://github.com/django-trusts/django-trusts/issues/33>`_.
 * TRUSTS_PERMISSION_MODEL -- Must remain ``auth.Permission`` (default:
   ``auth.Permission``). Django does **not** swap ``auth.Permission``.
   ``User.has_perm`` without an object uses Django's ``ModelBackend`` /
   ``auth.Permission``. A value other than ``auth.Permission`` is
-  ``trusts.E005``. Removal of this setting is a separate follow-up.
+  ``trusts.E005``. Silencing that ID does not resolve or grant through
+  another model. Removal of this setting is issue `#33
+  <https://github.com/django-trusts/django-trusts/issues/33>`_.
 * TRUSTS_CREATE_ROOT -- A boolean set to True indicates root Trust model object to be created during the initial migration. (default: True)
 * TRUSTS_ROOT_PK -- The `pk` of the root trust model object. (default: 1)
 * TRUSTS_ROOT_SETTLOR -- The `pk` of settlor of the root trust object. (default: None)

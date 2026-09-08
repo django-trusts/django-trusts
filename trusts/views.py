@@ -17,7 +17,9 @@ from django.http import HttpResponseForbidden
 from django.shortcuts import redirect
 from django.views.generic import CreateView, DetailView
 
-from trusts import get_entity_model, get_group_model
+from django.contrib.auth import get_user_model
+
+from trusts import get_group_model, supported_entity_contract
 from trusts.authorization import (
     AuthorizationDenied,
     add_group_member,
@@ -29,7 +31,9 @@ from trusts.models import Trust
 
 
 def _entity_queryset():
-    Entity = get_entity_model()
+    Entity = get_user_model()
+    if not supported_entity_contract():
+        return Entity._default_manager.none()
     qs = Entity._default_manager.all()
     if hasattr(Entity, 'is_active'):
         qs = qs.filter(is_active=True)

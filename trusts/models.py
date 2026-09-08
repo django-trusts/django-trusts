@@ -7,7 +7,9 @@ from django.utils.translation import gettext_lazy as _
 
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
-                    get_entity_model, get_group_model, get_permission_model, utils
+                    get_permission_model, utils, \
+                    supported_entity_contract, supported_group_contract, \
+                    supported_permission_contract
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
@@ -145,6 +147,12 @@ def resolve_content_permission(model, perm):
     strip a leftover ``:condition`` when resolving a grant/revoke target;
     it must not be used alone to filter lists.
     """
+    if not supported_permission_contract():
+        raise ValidationError(
+            'TRUSTS_PERMISSION_MODEL must be auth.Permission. '
+            'Silencing trusts.E005 does not enable a non-auth permission model.',
+            code='unsupported_permission_model',
+        )
     Permission = get_permission_model()
     if isinstance(perm, Permission):
         return perm
@@ -196,6 +204,8 @@ class ContentQuerySet(models.QuerySet):
         if permission_has_condition(perm):
             condition_q = compile_registered_condition_q(self.model, perm, user)
         if not is_active_principal(user):
+            return self.none()
+        if not supported_permission_contract():
             return self.none()
         permission = resolve_content_permission(self.model, perm)
         granted = trust_grant_q(user, permission, trust_fk='trust')
@@ -266,7 +276,17 @@ class TrustManager(ContentManager):
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
 
-        return self.filter(Q(groups__user=user) | Q(trustees__entity=user), **kwargs)
+        parts = []
+        if supported_entity_contract():
+            parts.append(Q(trustees__entity=user))
+        if supported_group_contract():
+            parts.append(Q(groups__user=user))
+        if not parts:
+            return self.none()
+        grant_q = parts[0]
+        for part in parts[1:]:
+            grant_q |= part
+        return self.filter(grant_q, **kwargs)
 
     def filter_by_user_content_perm(self, user, content, perm_name, exclude_root=True, **kwargs):
         """Return Trusts under which ``user`` may exercise ``perm_name``.
@@ -300,6 +320,8 @@ class TrustManager(ContentManager):
             perm_name, 'Trust.objects.filter_by_user_content_perm'
         )
         if not is_active_principal(user):
+            return self.none()
+        if not supported_permission_contract():
             return self.none()
 
         if not isinstance(content, type):
@@ -706,6 +728,8 @@ class Trust(Content):
 
     def revoke_group_permission(self, group, permission):
         """Remove a local TrustGroup grant. Association is left in place."""
+        group = _require_configured_group(group)
+        permission = _resolve_configured_permission(permission)
         try:
             tg = TrustGroup.objects.get(trust=self, group=group)
         except TrustGroup.DoesNotExist:
@@ -774,18 +798,50 @@ class TrustUserPermission(models.Model):
         unique_together = ('trust', 'entity', 'permission')
 
 
+def _require_supported_entity_contract():
+    if not supported_entity_contract():
+        raise ValidationError(
+            'TRUSTS_ENTITY_MODEL must be AUTH_USER_MODEL. '
+            'Silencing trusts.E003 does not enable a non-user entity.',
+            code='unsupported_entity_model',
+        )
+
+
+def _require_supported_group_contract():
+    if not supported_group_contract():
+        raise ValidationError(
+            'TRUSTS_GROUP_MODEL must be auth.Group. '
+            'Silencing trusts.E004 does not enable a non-auth group model.',
+            code='unsupported_group_model',
+        )
+
+
+def _require_supported_permission_contract():
+    if not supported_permission_contract():
+        raise ValidationError(
+            'TRUSTS_PERMISSION_MODEL must be auth.Permission. '
+            'Silencing trusts.E005 does not enable a non-auth permission model.',
+            code='unsupported_permission_model',
+        )
+
+
 def _require_configured_entity(entity):
-    Entity = get_entity_model()
-    if isinstance(entity, Entity):
+    from django.contrib.auth import get_user_model
+
+    _require_supported_entity_contract()
+    User = get_user_model()
+    if isinstance(entity, User):
         return entity
     raise ValidationError(
-        'Trustee grants require a %s instance.' % Entity.__name__,
+        'Trustee grants require a %s instance.' % User.__name__,
         code='mismatched_entity_model',
     )
 
 
 def _require_configured_group(group):
-    Group = get_group_model()
+    from django.contrib.auth.models import Group
+
+    _require_supported_group_contract()
     if isinstance(group, Group):
         return group
     raise ValidationError(
@@ -800,8 +856,10 @@ def get_group_global_ceiling(group):
     Role assignments are global ceiling only. They are not per-Trust grants.
     Uses Django ``auth.Group`` / ``auth.Permission``.
     """
+    from django.contrib.auth.models import Permission
+
     group = _require_configured_group(group)
-    Permission = get_permission_model()
+    _require_supported_permission_contract()
     return Permission.objects.filter(
         Q(group=group) | Q(roles__groups=group)
     ).distinct()
@@ -833,9 +891,12 @@ def _resolve_configured_permission(permission):
     """Accept ``auth.Permission`` or an integer PK.
 
     Other model instances fail closed. Primary keys are not taken from a
-    mismatched instance.
+    mismatched instance. A silenced ``trusts.E005`` does not authorize a
+    non-``auth.Permission`` setting.
     """
-    Permission = get_permission_model()
+    from django.contrib.auth.models import Permission
+
+    _require_supported_permission_contract()
     if isinstance(permission, Permission):
         return permission
     if isinstance(permission, models.Model):

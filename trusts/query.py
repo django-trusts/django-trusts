@@ -38,6 +38,18 @@ def _trust_lookup(trusts):
     return {'trust__in': trusts}
 
 
+def _never_exists():
+    from trusts.models import TrustGroup
+
+    return Exists(TrustGroup.objects.none())
+
+
+def _group_permission_queries_allowed():
+    from trusts import supported_group_contract, supported_permission_contract
+
+    return supported_group_contract() and supported_permission_contract()
+
+
 def group_local_grant_exists(user, permission, trust_id_outerref):
     """Exists: same TrustGroup, member, local grant, and global ceiling.
 
@@ -45,6 +57,9 @@ def group_local_grant_exists(user, permission, trust_id_outerref):
     Trust, ``trust_id`` on Content).
     """
     from trusts.models import TrustGroup
+
+    if not _group_permission_queries_allowed():
+        return _never_exists()
 
     return Exists(
         TrustGroup.objects.filter(
@@ -66,6 +81,9 @@ def permission_granted_via_group_exists(user, trusts):
     """
     from trusts.models import TrustGroup
 
+    if not _group_permission_queries_allowed():
+        return _never_exists()
+
     return Exists(
         TrustGroup.objects.filter(
             group__user=user,
@@ -85,12 +103,21 @@ def trust_grant_q(user, permission, trust_fk=''):
     - ``''`` filters ``Trust`` rows themselves (create-under-trust).
     - ``'trust'`` filters Content rows via ``Content.trust``.
     """
+    from trusts import supported_entity_contract, supported_permission_contract
+
     prefix = ('%s__' % trust_fk) if trust_fk else ''
     trust_id_ref = 'pk' if not trust_fk else '%s_id' % trust_fk
-    return (
-        Q(**{
+    parts = []
+    if supported_entity_contract() and supported_permission_contract():
+        parts.append(Q(**{
             '%strustees__entity' % prefix: user,
             '%strustees__permission' % prefix: permission,
-        }) |
-        group_local_grant_exists(user, permission, trust_id_ref)
-    )
+        }))
+    if _group_permission_queries_allowed():
+        parts.append(group_local_grant_exists(user, permission, trust_id_ref))
+    if not parts:
+        return Q(pk__in=[])
+    grant_q = parts[0]
+    for part in parts[1:]:
+        grant_q |= part
+    return grant_q
