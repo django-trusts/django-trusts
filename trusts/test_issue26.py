@@ -3,6 +3,7 @@
 from django.contrib.auth.models import Group, Permission, User
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.fields.related_lookups import get_normalized_value
 from django.test import TestCase
 from django.test.utils import isolate_apps
 
@@ -198,12 +199,12 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
 
             other = OtherPrincipal(pk=self.user.pk, name='collide')
             field = WrongModelUserGroup._meta.get_field('user')
-            self.assertEqual(field.get_prep_value(self.user), self.user.pk)
+            lhs = type('Lhs', (), {'output_field': field})()
             self.assertEqual(
-                field.get_prep_value(self.user),
-                field.get_prep_value(other),
-                'Django FK prep uses .pk; a same-pk User must not be treated '
-                'as membership of an OtherPrincipal relation.',
+                get_normalized_value(self.user, lhs),
+                get_normalized_value(other, lhs),
+                'Related filters coerce any model instance via pk/attname; a '
+                'same-pk User must not be treated as OtherPrincipal membership.',
             )
             self.assertIn(CHECK_ID_GROUP_USER, self._ids(WrongModelUserGroup))
             self.assertFalse(
