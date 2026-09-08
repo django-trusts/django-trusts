@@ -116,7 +116,10 @@ def main() -> int:
             raise SystemExit('Expected only trusts.0001_initial to be recorded after the seed.')
 
         pending_before = _trusts_plan(connection)
-        expected_pending = [('trusts', '0002_trustgroup', False)]
+        expected_pending = [
+            ('trusts', '0002_trustgroup', False),
+            ('trusts', '0003_role_configured_models', False),
+        ]
         if pending_before != expected_pending:
             raise SystemExit(
                 'Expected pending Trusts migration %s before upgrade, got %s'
@@ -150,7 +153,7 @@ def main() -> int:
 
         # 5. Modern migrate: must not reapply or fake Trusts 0001.
         call_command('migrate', verbosity=1, interactive=False)
-        if _applied_trusts(connection) != {'0001_initial', '0002_trustgroup'}:
+        if _applied_trusts(connection) != {'0001_initial', '0002_trustgroup', '0003_role_configured_models'}:
             raise SystemExit('Trusts migration set changed during upgrade: %s' % _applied_trusts(connection))
         pending_after = _trusts_plan(connection)
         if pending_after:

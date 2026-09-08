@@ -113,13 +113,16 @@ class Command(BaseCommand):
 
         if 'apps' in options:
             apps = options['apps']
-            Permission = apps.get_model('auth', 'Permission')
+            from trusts import PERMISSION_MODEL_NAME
+            app_label, model_name = PERMISSION_MODEL_NAME.split('.', 1)
+            Permission = apps.get_model(app_label, model_name)
             Role = apps.get_model('trusts', 'role')
             RolePermission = apps.get_model('trusts', 'rolepermission')
             app_config = options['apps']
         else:
             from trusts.models import Role, RolePermission
-            from django.contrib.auth.models import Permission
+            from trusts import get_permission_model
             from django.apps import apps as app_config
+            Permission = get_permission_model()
 
         update_roles_permissions(Role, Permission, RolePermission, app_config, **options)

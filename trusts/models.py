@@ -7,7 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
-                    get_permission_model, utils
+                    get_entity_model, get_group_model, get_permission_model, utils
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
@@ -362,6 +362,7 @@ class Content(ReadonlyFieldsMixin, models.Model):
 
     def grant(self, perm, user):
         """Create a TrustUserPermission on this content's authorizing trust."""
+        user = _require_configured_entity(user)
         permission = type(self).objects.get_permission(perm)
         TrustUserPermission.objects.get_or_create(
             trust=self.trust, entity=user, permission=permission
@@ -372,6 +373,7 @@ class Content(ReadonlyFieldsMixin, models.Model):
 
         ``perm=None`` removes every trustee grant for ``user`` on this trust.
         """
+        user = _require_configured_entity(user)
         qs = TrustUserPermission.objects.filter(trust=self.trust, entity=user)
         if perm is not None:
             qs = qs.filter(permission=type(self).objects.get_permission(perm))
@@ -772,6 +774,26 @@ class TrustUserPermission(models.Model):
         unique_together = ('trust', 'entity', 'permission')
 
 
+def _require_configured_entity(entity):
+    Entity = get_entity_model()
+    if isinstance(entity, Entity):
+        return entity
+    raise ValidationError(
+        'Trustee grants require a %s instance.' % Entity.__name__,
+        code='mismatched_entity_model',
+    )
+
+
+def _require_configured_group(group):
+    Group = get_group_model()
+    if isinstance(group, Group):
+        return group
+    raise ValidationError(
+        'TrustGroup operations require a %s instance.' % Group.__name__,
+        code='mismatched_group_model',
+    )
+
+
 def get_group_global_ceiling(group):
     """Permissions the group may exercise anywhere: Group.permissions ∪ roles.
 
@@ -780,6 +802,7 @@ def get_group_global_ceiling(group):
     ``TRUSTS_PERMISSION_MODEL`` and a ``user`` related-query name for
     membership (the same conventions as ``auth.Group``).
     """
+    group = _require_configured_group(group)
     Permission = get_permission_model()
     return Permission.objects.filter(
         Q(group=group) | Q(roles__groups=group)
@@ -809,22 +832,34 @@ def require_permissions_in_global_ceiling(group, permissions):
 
 
 def _resolve_configured_permission(permission):
+    """Accept the configured permission model or an integer PK.
+
+    Other model instances fail closed. Primary keys are not taken from a
+    mismatched instance (an ``auth.Permission`` pk must not select a row
+    on ``TRUSTS_PERMISSION_MODEL``).
+    """
     Permission = get_permission_model()
     if isinstance(permission, Permission):
         return permission
-    if isinstance(permission, int) or getattr(permission, 'pk', None) is not None \
-            and not isinstance(permission, (str, bytes)):
+    if isinstance(permission, models.Model):
+        raise ValidationError(
+            'Local TrustGroup grants require a %s instance.' % Permission.__name__,
+            code='mismatched_permission_model',
+        )
+    if isinstance(permission, int) and not isinstance(permission, bool):
         try:
-            return Permission.objects.get(pk=getattr(permission, 'pk', permission))
+            return Permission.objects.get(pk=permission)
         except (Permission.DoesNotExist, TypeError, ValueError):
             pass
     raise ValidationError(
-        'Local TrustGroup grants require a %s instance.' % Permission.__name__
+        'Local TrustGroup grants require a %s instance.' % Permission.__name__,
+        code='mismatched_permission_model',
     )
 
 
 class TrustGroupManager(models.Manager):
     def associate(self, trust, group):
+        group = _require_configured_group(group)
         obj, _created = self.get_or_create(trust=trust, group=group)
         return obj
 

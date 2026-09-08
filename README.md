@@ -50,13 +50,15 @@ Test
 python -m pip install "Django>=6.1,<6.2" coverage
 python -m pip install -e .
 python -m tests.runtests
+python -m tests.runtests_custom
 python -m django check --settings=tests.settings
+python -m django check --settings=tests.custom_settings
 python scripts/verify-legacy-upgrade.py
 ```
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
-fresh migrate, ``manage.py check``, and the legacy-upgrade script on Python
-3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel
+fresh migrate, ``manage.py check``, the isolated custom-model suite, and the
+legacy-upgrade script on Python 3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel
 and imports it from a temporary directory so the source tree cannot satisfy
 the import. Job names: `tests (Python 3.12)`, `tests (Python 3.13)`,
 `tests (Python 3.14)`, `package`. Do not treat a removed Travis check as a

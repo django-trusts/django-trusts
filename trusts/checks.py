@@ -12,15 +12,25 @@ Silencing an ID does not make the policy executable: ``has_perm`` and
 under ``manage.py check``.
 """
 
+from django.contrib.auth import get_user_model
 from django.core import checks as django_checks
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
+from django.db.models import ManyToManyField
 
+from trusts import get_entity_model, get_group_model, get_permission_model
 from trusts.conditions import PermissionConditionError, validate_expression
 from trusts.models import Content, legacy_permission_callbacks_allowed
+from trusts.utils import has_related_query_name
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
+CHECK_ID_ENTITY_NOT_USER = 'trusts.E003'
+CHECK_ID_GROUP_PERMISSIONS = 'trusts.E004'
+CHECK_ID_GROUP_USER = 'trusts.E005'
+CHECK_ID_PERMISSION_SHAPE = 'trusts.E006'
+CHECK_ID_AUTH_GROUP_CUSTOM_PERMISSION = 'trusts.E007'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -96,4 +106,132 @@ def check_permission_conditions(app_configs, **kwargs):
             messages.extend(_messages_for_expr(model, cond_code, record.expr))
         elif record.func is not None:
             messages.extend(_messages_for_callable(model, cond_code))
+    return messages
+
+
+def _model_label_safe(model):
+    try:
+        return model._meta.label
+    except Exception:
+        return repr(model)
+
+
+@django_checks.register(django_checks.Tags.models)
+def check_configured_auth_models(app_configs, **kwargs):
+    """Report whether the advertised TRUSTS_*_MODEL settings are coherent.
+
+    Django does not swap ``auth.Group`` or ``auth.Permission``. Trusts can
+    still FK to custom models when they follow the conventions object-level
+    authorization actually queries. ``app_configs`` is ignored so
+    ``manage.py check trusts`` still reports project settings.
+    """
+    messages = []
+    try:
+        Entity = get_entity_model()
+        Group = get_group_model()
+        Permission = get_permission_model()
+        User = get_user_model()
+    except ImproperlyConfigured as exc:
+        return [django_checks.Error(
+            str(exc),
+            obj=None,
+            id=CHECK_ID_ENTITY_NOT_USER,
+        )]
+
+    if Entity is not User:
+        messages.append(django_checks.Error(
+            'TRUSTS_ENTITY_MODEL (%s) must be AUTH_USER_MODEL (%s). '
+            'Settlor and trustee rows are the same principal '
+            'User.has_perm uses. A separate non-user model is not a '
+            'Django permission principal.' % (
+                _model_label_safe(Entity), _model_label_safe(User),
+            ),
+            hint=(
+                'Set TRUSTS_ENTITY_MODEL to the same app_label.Model as '
+                'AUTH_USER_MODEL (a custom user is the supported entity swap).'
+            ),
+            obj=Entity,
+            id=CHECK_ID_ENTITY_NOT_USER,
+        ))
+
+    try:
+        perm_field = Group._meta.get_field('permissions')
+    except FieldDoesNotExist:
+        perm_field = None
+    if perm_field is None or not isinstance(perm_field, ManyToManyField):
+        messages.append(django_checks.Error(
+            'TRUSTS_GROUP_MODEL (%s) must expose a permissions ManyToManyField '
+            'to TRUSTS_PERMISSION_MODEL (the same convention as auth.Group).' % (
+                _model_label_safe(Group),
+            ),
+            obj=Group,
+            id=CHECK_ID_GROUP_PERMISSIONS,
+        ))
+    elif perm_field.remote_field.model is not Permission:
+        messages.append(django_checks.Error(
+            'TRUSTS_GROUP_MODEL.permissions must target TRUSTS_PERMISSION_MODEL '
+            '(%s); %s.permissions targets %s.' % (
+                _model_label_safe(Permission),
+                _model_label_safe(Group),
+                _model_label_safe(perm_field.remote_field.model),
+            ),
+            hint=(
+                'auth.Group.permissions is not swappable. Changing '
+                'TRUSTS_PERMISSION_MODEL requires a group model whose '
+                'permissions M2M points at that same permission model.'
+            ),
+            obj=Group,
+            id=CHECK_ID_GROUP_PERMISSIONS,
+        ))
+
+    if not has_related_query_name(Group, 'user'):
+        messages.append(django_checks.Error(
+            'TRUSTS_GROUP_MODEL (%s) must support membership lookups '
+            'via the related query name "user" (Group.objects.filter(user=...) '
+            'and group.user_set), matching auth.Group.' % (
+                _model_label_safe(Group),
+            ),
+            hint=(
+                'Django User.groups remains auth.Group. For a custom Trusts '
+                'group, add an M2M from AUTH_USER_MODEL with '
+                'related_name="user_set" and related_query_name="user".'
+            ),
+            obj=Group,
+            id=CHECK_ID_GROUP_USER,
+        ))
+
+    missing_perm_fields = []
+    for name in ('codename', 'content_type', 'name'):
+        try:
+            Permission._meta.get_field(name)
+        except FieldDoesNotExist:
+            missing_perm_fields.append(name)
+    if missing_perm_fields:
+        messages.append(django_checks.Error(
+            'TRUSTS_PERMISSION_MODEL (%s) must provide the Django permission '
+            'shape fields %s (plus get_by_natural_key or equivalent).' % (
+                _model_label_safe(Permission),
+                ', '.join(missing_perm_fields),
+            ),
+            obj=Permission,
+            id=CHECK_ID_PERMISSION_SHAPE,
+        ))
+
+    from django.contrib.auth.models import Group as AuthGroup
+    from django.contrib.auth.models import Permission as AuthPermission
+    if Group is AuthGroup and Permission is not AuthPermission:
+        messages.append(django_checks.Error(
+            'TRUSTS_PERMISSION_MODEL (%s) cannot be used with auth.Group. '
+            'auth.Group.permissions is hardcoded to auth.Permission, so a '
+            'custom permission model cannot serve as the group ceiling.' % (
+                _model_label_safe(Permission),
+            ),
+            hint=(
+                'Keep TRUSTS_PERMISSION_MODEL = auth.Permission, or swap '
+                'TRUSTS_GROUP_MODEL to a group whose permissions M2M targets '
+                'the custom permission model.'
+            ),
+            obj=Permission,
+            id=CHECK_ID_AUTH_GROUP_CUSTOM_PERMISSION,
+        ))
     return messages

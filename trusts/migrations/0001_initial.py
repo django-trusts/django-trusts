@@ -19,8 +19,15 @@ def backward(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
+    # Graph-only: Trust.groups / TrustUserPermission already use the
+    # TRUSTS_*_MODEL settings. Role field *targets* in this file stay
+    # auth.Group / auth.Permission; 0003_role_configured_models aligns Role.
+
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
+        migrations.swappable_dependency(ENTITY_MODEL_NAME),
+        migrations.swappable_dependency(GROUP_MODEL_NAME),
+        migrations.swappable_dependency(PERMISSION_MODEL_NAME),
         ('auth', '0006_require_contenttypes_0002'),
     ]
 

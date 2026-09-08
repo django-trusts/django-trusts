@@ -8,7 +8,10 @@ from trusts import get_permission_model, utils
 
 
 class TrustModelBackendMixin(object):
-    perm_model = get_permission_model()
+    @property
+    def perm_model(self):
+        """Configured permission model (``TRUSTS_PERMISSION_MODEL``)."""
+        return get_permission_model()
 
     @staticmethod
     def _get_perm_code(perm):

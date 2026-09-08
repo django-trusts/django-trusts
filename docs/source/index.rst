@@ -422,13 +422,50 @@ Initial Options
 
 .. warning::
 
-   Set ``TRUSTS_ENTITY_MODEL``, ``TRUSTS_GROUP_MODEL``, ``TRUSTS_PERMISSION_MODEL``, ``TRUSTS_ALLOW_NULL_SETTLOR``, and ``TRUSTS_DEFAULT_SETTLOR`` before creating migrations or running ``manage.py migrate`` for the first time. These settings affect model fields and relationships. Changing them after tables exist is not handled automatically by ``makemigrations`` and requires an explicit schema and data migration.
+   Set ``TRUSTS_ENTITY_MODEL``, ``TRUSTS_GROUP_MODEL``, ``TRUSTS_PERMISSION_MODEL``, ``TRUSTS_ALLOW_NULL_SETTLOR``, and ``TRUSTS_DEFAULT_SETTLOR`` before creating migrations or running ``manage.py migrate`` for the first time. These settings affect model fields and relationships. Changing them after tables exist is not handled automatically by ``makemigrations`` and requires an explicit schema and data migration. ``trusts.0001_initial`` historically hardcoded ``auth.Group`` / ``auth.Permission`` on Role only; ``0003_role_configured_models`` aligns Role without rewriting ``0001``. See the verified support boundary below.
 
    The root settings control initial root creation. Changing ``TRUSTS_CREATE_ROOT``, ``TRUSTS_ROOT_PK``, ``TRUSTS_ROOT_SETTLOR``, or ``TRUSTS_ROOT_TITLE`` after the root exists does not update that row automatically. In particular, changing ``TRUSTS_ROOT_PK`` can invalidate existing references and defaults and requires a deliberate data migration.
 
-* TRUSTS_ENTITY_MODEL -- The model name for `settlors` and `trustees` field. Must be specified in contenttypes format, ie, 'app_label.model_name'. (default: `settings.AUTH_USER_MODEL`.)
-* TRUSTS_GROUP_MODEL -- The model name for `groups` field. (default: `auth.Group`)
-* TRUSTS_PERMISSION_MODEL -- The model name for `Permission`. (default: `auth.Permission`)
+* TRUSTS_ENTITY_MODEL -- Settlor and trustee model, in ``app_label.Model`` form.
+  **Must be the same model as** ``AUTH_USER_MODEL`` (default:
+  ``settings.AUTH_USER_MODEL``). A custom user is the supported entity
+  swap. A separate non-user model is not a Django permission principal
+  (``has_perm``, ``is_active``, ``is_anonymous``) and is a system-check
+  error (``trusts.E003``).
+* TRUSTS_GROUP_MODEL -- Trust association / ceiling group model (default:
+  ``auth.Group``). Django does **not** swap ``auth.Group``;
+  ``User.groups`` remains ``auth.Group``. A custom group must provide
+  ``auth.Group`` query conventions: a ``permissions`` M2M to
+  ``TRUSTS_PERMISSION_MODEL`` (related query name ``group``) and
+  membership via related query name ``user`` / reverse ``user_set``
+  (``trusts.E004``, ``trusts.E005``). Trusts object-level membership uses
+  that ``user`` relation, not ``User.groups``.
+* TRUSTS_PERMISSION_MODEL -- Permission model used by trustee rows,
+  TrustGroup local grants, and Role (default: ``auth.Permission``).
+  Django does **not** swap ``auth.Permission``. ``User.has_perm``
+  without an object still uses Django's ``ModelBackend`` /
+  ``auth.Permission``. A custom permission model must provide
+  ``name``, ``content_type``, ``codename`` (and ``get_by_natural_key``
+  or equivalent). Django only auto-creates ``auth.Permission`` rows; a
+  separate table must be populated (``trusts.utils.sync_configured_permissions``
+  copies the Django shape). ``auth.Group.permissions`` is hardcoded to
+  ``auth.Permission``, so ``TRUSTS_PERMISSION_MODEL`` cannot change
+  unless ``TRUSTS_GROUP_MODEL`` also provides a ``permissions`` M2M to
+  that model (``trusts.E007``).
+
+Object-level Trusts paths (``has_perm(obj)``, ``ContentQuerySet.permitted()``,
+trustee grants, TrustGroup association/local grant/set/revoke, Role as
+ceiling, ``update_roles_permissions``, authorization helpers) use the
+configured models. Mismatched model instances fail closed; a foreign
+instance's primary key is not used to select a row on the configured
+table. The isolated suite ``python -m tests.runtests_custom`` migrates a
+fresh database with all three settings selected **before** migrations.
+
+Changing these settings after tables exist is not handled automatically
+by ``makemigrations`` and requires an explicit schema and data
+migration. Role historically pointed at ``auth.Group`` /
+``auth.Permission`` in ``0001_initial``; ``0003_role_configured_models``
+aligns Role with the same settings without rewriting ``0001``.
 * TRUSTS_CREATE_ROOT -- A boolean set to True indicates root Trust model object to be created during the initial migration. (default: True)
 * TRUSTS_ROOT_PK -- The `pk` of the root trust model object. (default: 1)
 * TRUSTS_ROOT_SETTLOR -- The `pk` of settlor of the root trust object. (default: None)
