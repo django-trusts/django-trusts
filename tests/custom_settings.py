@@ -8,11 +8,10 @@ LOGIN_URL = '/accounts/login/'
 STATIC_URL = '/static/'
 ALLOWED_HOSTS = ['beedesk.com', 'testserver', 'localhost']
 
-# Selected before migrations. custom_auth does not import trusts.models.
+# Custom AUTH_USER_MODEL selected before migrations. Entity must match.
+# Group and Permission stay Django's auth models (issue #26).
 AUTH_USER_MODEL = 'custom_auth.CustomUser'
 TRUSTS_ENTITY_MODEL = 'custom_auth.CustomUser'
-TRUSTS_GROUP_MODEL = 'custom_auth.CustomGroup'
-TRUSTS_PERMISSION_MODEL = 'custom_auth.CustomPermission'
 
 INSTALLED_APPS = (
     'django.contrib.admin',

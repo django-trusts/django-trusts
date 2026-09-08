@@ -134,7 +134,7 @@ def compile_registered_condition_q(model, perm, user):
 
 
 def resolve_content_permission(model, perm):
-    """Resolve ``perm`` via ``TRUSTS_PERMISSION_MODEL``, not hardcoded auth.Permission.
+    """Resolve ``perm`` on ``auth.Permission``.
 
     Accepts a permission instance, a codename (``read_category``), a bare
     action (``read`` → ``read_<model>``), or a dotted code
@@ -798,9 +798,7 @@ def get_group_global_ceiling(group):
     """Permissions the group may exercise anywhere: Group.permissions ∪ roles.
 
     Role assignments are global ceiling only. They are not per-Trust grants.
-    Custom group models must expose a ``permissions`` M2M to
-    ``TRUSTS_PERMISSION_MODEL`` and a ``user`` related-query name for
-    membership (the same conventions as ``auth.Group``).
+    Uses Django ``auth.Group`` / ``auth.Permission``.
     """
     group = _require_configured_group(group)
     Permission = get_permission_model()
@@ -832,11 +830,10 @@ def require_permissions_in_global_ceiling(group, permissions):
 
 
 def _resolve_configured_permission(permission):
-    """Accept the configured permission model or an integer PK.
+    """Accept ``auth.Permission`` or an integer PK.
 
     Other model instances fail closed. Primary keys are not taken from a
-    mismatched instance (an ``auth.Permission`` pk must not select a row
-    on ``TRUSTS_PERMISSION_MODEL``).
+    mismatched instance.
     """
     Permission = get_permission_model()
     if isinstance(permission, Permission):

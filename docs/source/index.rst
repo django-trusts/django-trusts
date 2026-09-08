@@ -422,7 +422,7 @@ Initial Options
 
 .. warning::
 
-   Set ``TRUSTS_ENTITY_MODEL``, ``TRUSTS_GROUP_MODEL``, ``TRUSTS_PERMISSION_MODEL``, ``TRUSTS_ALLOW_NULL_SETTLOR``, and ``TRUSTS_DEFAULT_SETTLOR`` before creating migrations or running ``manage.py migrate`` for the first time. These settings affect model fields and relationships. Changing them after tables exist is not handled automatically by ``makemigrations`` and requires an explicit schema and data migration. ``trusts.0001_initial`` historically hardcoded ``auth.Group`` / ``auth.Permission`` on Role only; ``0003_role_configured_models`` aligns Role without rewriting ``0001``. See the verified support boundary below.
+   Set ``TRUSTS_ENTITY_MODEL``, ``TRUSTS_ALLOW_NULL_SETTLOR``, and ``TRUSTS_DEFAULT_SETTLOR`` before creating migrations or running ``manage.py migrate`` for the first time. These settings affect model fields and relationships. Changing them after tables exist is not handled automatically by ``makemigrations`` and requires an explicit schema and data migration.
 
    The root settings control initial root creation. Changing ``TRUSTS_CREATE_ROOT``, ``TRUSTS_ROOT_PK``, ``TRUSTS_ROOT_SETTLOR``, or ``TRUSTS_ROOT_TITLE`` after the root exists does not update that row automatically. In particular, changing ``TRUSTS_ROOT_PK`` can invalidate existing references and defaults and requires a deliberate data migration.
 
@@ -432,49 +432,17 @@ Initial Options
   swap. A separate non-user model is not a Django permission principal
   (``has_perm``, ``is_active``, ``is_anonymous``) and is a system-check
   error (``trusts.E003``).
-* TRUSTS_GROUP_MODEL -- Trust association / ceiling group model (default:
-  ``auth.Group``). Django does **not** swap ``auth.Group``;
-  ``User.groups`` remains ``auth.Group``. A custom group must provide
-  ``auth.Group`` query conventions: a ``permissions`` M2M to
-  ``TRUSTS_PERMISSION_MODEL`` whose reverse query name is ``group``
-  (``get_group_global_ceiling()`` filters ``Permission.objects.filter(group=...)``)
-  and membership via a **relation** named ``user`` whose related model is
-  ``AUTH_USER_MODEL`` / ``TRUSTS_ENTITY_MODEL``, plus reverse ``user_set``
-  (``trusts.E004``, ``trusts.E005``). A scalar ``user`` field or a relation
-  to another model is not membership. Trusts object-level membership uses
-  that ``user`` relation, not ``User.groups``.
-* TRUSTS_PERMISSION_MODEL -- Permission model used by trustee rows,
-  TrustGroup local grants, and Role (default: ``auth.Permission``).
-  Django does **not** swap ``auth.Permission``. ``User.has_perm``
-  without an object still uses Django's ``ModelBackend`` /
-  ``auth.Permission``. A custom permission model must provide
-  ``name``, ``content_type`` (a relation to ``ContentType``, not a
-  similarly named scalar), ``codename`` (and ``get_by_natural_key``
-  or equivalent). Django only auto-creates ``auth.Permission`` rows; a
-  separate table must be populated (``trusts.utils.sync_configured_permissions``
-  copies the Django shape). ``auth.Group.permissions`` is hardcoded to
-  ``auth.Permission``, so ``TRUSTS_PERMISSION_MODEL`` cannot change
-  unless ``TRUSTS_GROUP_MODEL`` also provides a ``permissions`` M2M to
-  that model (``trusts.E007``).
-
-Object-level Trusts paths (``has_perm(obj)``, ``ContentQuerySet.permitted()``,
-trustee grants, TrustGroup association/local grant/set/revoke, Role as
-ceiling, ``update_roles_permissions``, authorization helpers) use the
-configured models. Mismatched model instances fail closed; a foreign
-instance's primary key is not used to select a row on the configured
-table. The isolated suite ``python -m tests.runtests_custom`` migrates a
-fresh database with all three settings selected **before** migrations.
-
-Changing these settings after tables exist is not handled automatically
-by ``makemigrations`` and requires an explicit schema and data
-migration. Role historically pointed at ``auth.Group`` /
-``auth.Permission`` in ``0001_initial``; ``0003_role_configured_models``
-aligns Role with the same settings without rewriting ``0001``. When the
-settings name models other than ``auth.Group`` / ``auth.Permission``,
-``0003`` deletes existing Role group/permission joins before retargeting
-so an ``auth`` primary key cannot silently become a grant on an unrelated
-custom row with the same id. Rebuild Role assignments after that
-upgrade.
+* TRUSTS_GROUP_MODEL -- Must remain ``auth.Group`` (default:
+  ``auth.Group``). Django does **not** swap ``auth.Group`` (ticket
+  `#29748 <https://code.djangoproject.com/ticket/29748>`_ closed
+  ``wontfix``). django-trusts does not maintain a private parallel group
+  model. A value other than ``auth.Group`` is ``trusts.E004``. Removal of
+  this setting is a separate follow-up.
+* TRUSTS_PERMISSION_MODEL -- Must remain ``auth.Permission`` (default:
+  ``auth.Permission``). Django does **not** swap ``auth.Permission``.
+  ``User.has_perm`` without an object uses Django's ``ModelBackend`` /
+  ``auth.Permission``. A value other than ``auth.Permission`` is
+  ``trusts.E005``. Removal of this setting is a separate follow-up.
 * TRUSTS_CREATE_ROOT -- A boolean set to True indicates root Trust model object to be created during the initial migration. (default: True)
 * TRUSTS_ROOT_PK -- The `pk` of the root trust model object. (default: 1)
 * TRUSTS_ROOT_SETTLOR -- The `pk` of settlor of the root trust object. (default: None)
@@ -482,6 +450,18 @@ upgrade.
 * TRUSTS_DEFAULT_SETTLOR -- The default value for `settlor` field on Trust model. (default: None)
 * TRUSTS_ROOT_TITLE -- The title of the root trust object. (default: "In Trust We Trust")
 * TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS -- Opt-in for registered callable permission conditions on ``has_perm`` (default: False). See the migration record.
+
+An experiment that treated ``TRUSTS_GROUP_MODEL`` / ``TRUSTS_PERMISSION_MODEL``
+as swappable Django Group/Permission replacements was attempted and
+rejected: Django's permission framework is not swappable there, and a
+private parallel contract would silently diverge from ``User.groups`` /
+``ModelBackend``. That is a negative architectural result, not supported
+behavior. The isolated suite ``python -m tests.runtests_custom`` migrates
+a fresh database with a custom ``AUTH_USER_MODEL`` (and matching
+``TRUSTS_ENTITY_MODEL``) selected **before** migrations. Group and
+Permission remain ``auth.Group`` / ``auth.Permission``. Mismatched model
+instances fail closed; a foreign instance's primary key is not used to
+select a row on the expected table.
 
 
 Further Documentation

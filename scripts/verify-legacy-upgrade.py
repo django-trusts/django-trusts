@@ -116,10 +116,7 @@ def main() -> int:
             raise SystemExit('Expected only trusts.0001_initial to be recorded after the seed.')
 
         pending_before = _trusts_plan(connection)
-        expected_pending = [
-            ('trusts', '0002_trustgroup', False),
-            ('trusts', '0003_role_configured_models', False),
-        ]
+        expected_pending = [('trusts', '0002_trustgroup', False)]
         if pending_before != expected_pending:
             raise SystemExit(
                 'Expected pending Trusts migration %s before upgrade, got %s'
@@ -129,14 +126,7 @@ def main() -> int:
         # 4. Seed organizations after Django can see the historical tables.
         from django.contrib.auth.models import Group, Permission, User
         from django.contrib.contenttypes.models import ContentType
-        from trusts.models import (
-            Role,
-            RolePermission,
-            Trust,
-            TrustGroup,
-            TrustGroupPermission,
-            TrustUserPermission,
-        )
+        from trusts.models import Trust, TrustGroup, TrustGroupPermission, TrustUserPermission
 
         user_a = User.objects.create_user('org_a_user', 'a@example.com', 'pass')
         user_b = User.objects.create_user('org_b_user', 'b@example.com', 'pass')
@@ -158,30 +148,13 @@ def main() -> int:
         legacy_group.user_set.add(user_a)
         org_a.groups.add(legacy_group)
 
-        preserved_perm = Permission.objects.order_by('pk').first()
-        if preserved_perm is None:
-            raise SystemExit('Expected auth.Permission rows before Role seed.')
-        preserved_role = Role.objects.create(name='preserved-default-role')
-        preserved_role.groups.add(legacy_group)
-        RolePermission.objects.create(
-            role=preserved_role, permission=preserved_perm, managed=False,
-        )
-
         # 5. Modern migrate: must not reapply or fake Trusts 0001.
         call_command('migrate', verbosity=1, interactive=False)
-        if _applied_trusts(connection) != {'0001_initial', '0002_trustgroup', '0003_role_configured_models'}:
+        if _applied_trusts(connection) != {'0001_initial', '0002_trustgroup'}:
             raise SystemExit('Trusts migration set changed during upgrade: %s' % _applied_trusts(connection))
         pending_after = _trusts_plan(connection)
         if pending_after:
             raise SystemExit('Trusts migrations still pending after upgrade: %s' % pending_after)
-
-        preserved_role = Role.objects.get(name='preserved-default-role')
-        if not preserved_role.groups.filter(pk=legacy_group.pk).exists():
-            raise SystemExit('0003 cleared default-model Role.groups unexpectedly.')
-        if not RolePermission.objects.filter(
-            role=preserved_role, permission=preserved_perm,
-        ).exists():
-            raise SystemExit('0003 cleared default-model RolePermission unexpectedly.')
 
         # post_migrate creates Trust content types / default permissions.
         change = Permission.objects.get(
@@ -263,7 +236,6 @@ def main() -> int:
         print('root', root.pk, root.title)
         print('isolation allow/deny passed')
         print('trustgroup association preserved; group-derived access fail-closed until grandfather')
-        print('default-model Role joins preserved across 0003')
     return 0
 
 

@@ -210,15 +210,15 @@ Migration-bot checklist:
 | | |
 | --- | --- |
 | Previous | #9 hardcoded `from django.contrib.auth.models import Permission`. |
-| New | Resolves via `get_permission_model()` / `TRUSTS_PERMISSION_MODEL`. Accepts a permission instance, codename, bare action (`read` → `read_<model>`), or dotted code. May strip a leftover `:condition` when resolving a grant/revoke target. Queryset callers must reject conditions first (`permitted` / `filter_by_user_content_perm` do). |
+| New | Resolves via `get_permission_model()` (`auth.Permission`; see issue #26). Accepts a permission instance, codename, bare action (`read` → `read_<model>`), or dotted code. May strip a leftover `:condition` when resolving a grant/revoke target. Queryset callers must reject conditions first (`permitted` / `filter_by_user_content_perm` do). |
 | Replacement | `Model.objects.get_permission('read')` or `get_permission('read_model')`. |
-| Affected | `grant` / `revoke`. List APIs do not use this helper alone. Custom permission models must provide `get_by_natural_key` or `codename` + content type fields. |
+| Affected | `grant` / `revoke`. List APIs do not use this helper alone. |
 | Authorization | Lookup only; does not grant. Not a list filter. |
 
 Migration-bot checklist:
 
-- [ ] Stop importing `auth.Permission` in project grant helpers if `TRUSTS_PERMISSION_MODEL` is set.
-- [ ] Re-run permission resolution tests after swapping the permission model.
+- [ ] Resolve grants through `get_permission()` / `auth.Permission`.
+- [ ] Re-run permission resolution tests after changing `AUTH_USER_MODEL`.
 
 ### 8. `Content.grant(perm, user)` / `Content.revoke(perm, user)` (new)
 
@@ -463,7 +463,7 @@ Migration-bot checklist:
 - Forward migration `trusts.0002_trustgroup` only. **Do not edit `0001_initial`.**
 - `SeparateDatabaseAndState` reuses `trusts_trust_groups` as `TrustGroup` (`unique_together` `(trust, group)`).
 - New table `trusts_trustgrouppermission` for local tuples. Empty after migrate.
-- `TRUSTS_GROUP_MODEL` and `TRUSTS_PERMISSION_MODEL` are respected (same settings as `0001`). Custom group models must keep Django's `auth.Group` query conventions: a `permissions` M2M to the configured permission model and a `user` related-query name for membership. `Role.groups` / `Role.permissions` historically hardcoded `auth.Group` / `auth.Permission` in `0001_initial`; `0003_role_configured_models` aligns those relations (see the issue #26 section). Swapping these settings after tables exist still requires an explicit project migration (same warning as `0001`).
+- `TRUSTS_GROUP_MODEL` and `TRUSTS_PERMISSION_MODEL` must remain `auth.Group` / `auth.Permission` (see the issue #26 section). Custom group/permission models are not supported. Swapping these settings after tables exist is not a supported upgrade.
 
 ### Fresh database
 
@@ -471,8 +471,7 @@ Migration-bot checklist:
 python -m django migrate --settings=tests.settings
 ```
 
-Applies `0001_initial` then `0002_trustgroup` then
-`0003_role_configured_models` and creates the root trust when
+Applies `0001_initial` then `0002_trustgroup` and creates the root trust when
 `TRUSTS_CREATE_ROOT` is true.
 
 ### Upgrade of a representative legacy database
@@ -841,36 +840,36 @@ Migration-bot checklist:
 
 This record covers the end-to-end verification of `TRUSTS_ENTITY_MODEL`,
 `TRUSTS_GROUP_MODEL`, and `TRUSTS_PERMISSION_MODEL`. Version remains
-**1.0.0.dev0**. `trusts.0001_initial` Role fields are **not** rewritten.
-Isolated core tests were sufficient; no example-app change.
+**1.0.0.dev0**. Isolated core tests were sufficient; no example-app change.
+Historical `0001_initial` is not rewritten.
 
 ## Decision
 
-Django does not swap `auth.Group` or `auth.Permission`. Trusts still
-honors the three settings for **object-level** relations when the
-configured models follow the conventions authorization actually queries.
-Decorative / mixed settings fail at `manage.py check` rather than
-silently using `auth.*` on one path.
+Django does not swap `auth.Group` or `auth.Permission`. Ticket
+[#29748](https://code.djangoproject.com/ticket/29748) (`AUTH_GROUP_MODEL`)
+reached an implementation PR and was closed `wontfix` in April 2024.
+The [Django Internals discussion](https://forum.djangoproject.com/t/custom-group-model/30070)
+concluded that Group swappability adds disproportionate migration and
+ecosystem complexity. There is no active official `AUTH_PERMISSION_MODEL`.
 
 Verified contract:
 
-- `TRUSTS_ENTITY_MODEL` must be `AUTH_USER_MODEL` (a custom user is the
-  supported entity swap). A separate non-user model is not a Django
-  permission principal (`trusts.E003`).
-- `TRUSTS_GROUP_MODEL` may be a custom model with a `permissions` M2M to
-  `TRUSTS_PERMISSION_MODEL` whose reverse query name is `group` (the
-  lookup `get_group_global_ceiling()` hardcodes) and membership via a
-  **relation** named `user` whose related model is `AUTH_USER_MODEL` /
-  `TRUSTS_ENTITY_MODEL`, plus reverse `user_set`. A scalar `user` field
-  or a relation to another model is `trusts.E005`. `User.groups` remains
-  `auth.Group`.
-- `TRUSTS_PERMISSION_MODEL` may be a custom model with the Django
-  permission shape (`name`, `content_type` as a relation to
-  `ContentType`, `codename`, `get_by_natural_key`). `has_perm` without
-  `obj` still uses `ModelBackend` / `auth.Permission`. Django only
-  auto-creates `auth.Permission` rows; `trusts.utils.sync_configured_permissions`
-  copies that shape into a separate table. `auth.Group` cannot be paired
-  with a custom permission model (`trusts.E007`).
+- Support custom `AUTH_USER_MODEL`.
+- `TRUSTS_ENTITY_MODEL`, while it exists, must resolve to
+  `AUTH_USER_MODEL` (`trusts.E003`). A separate non-user model is not a
+  Django permission principal.
+- Use standard `auth.Group` and `auth.Permission`. Values other than
+  those models are `trusts.E004` / `trusts.E005`. django-trusts does not
+  maintain a private parallel swappability contract for Group/Permission.
+
+An experiment that treated `TRUSTS_GROUP_MODEL` /
+`TRUSTS_PERMISSION_MODEL` as swappable replacements (convention-shaped
+custom group/permission models, Role `AlterField` retarget, permission
+row copy) is a **negative architectural result**, not supported behavior.
+That work is not shipped. Deprecation/removal of the unused settings is
+[#33](https://github.com/django-trusts/django-trusts/issues/33).
+Trust-scoped Role/Group assignment semantics are
+[#34](https://github.com/django-trusts/django-trusts/issues/34).
 
 ## No change to these public call sites
 
@@ -882,37 +881,26 @@ Verified contract:
 
 ## Changes
 
-### 29. `0003_role_configured_models` aligns Role with the settings
+### 29. Custom user is the supported entity swap; Group/Permission stay auth
 
 | | |
 | --- | --- |
-| Previous | `0001_initial` created `Role.groups` / `Role.permissions` / `RolePermission.permission` against `auth.Group` / `auth.Permission` even when the settings named other models. `models.py` already used the settings, so Role was a silent mismatch. `update_roles_permissions` imported `auth.Permission`. `_resolve_configured_permission` coerced mismatched instances by primary key. |
-| New | Forward migration `0003_role_configured_models` `AlterField`s Role to `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL`. **When those settings are not `auth.Group` / `auth.Permission`, a `RunPython` deletes `trusts_role_groups` and/or `trusts_rolepermission` before the `AlterField`.** Default-model installs keep `auth.*` FKs and keep existing Role joins (no delete). Fresh custom-model installs end with every Trusts relation on the configured tables and empty Role joins that must be rebuilt. `update_roles_permissions` uses `get_permission_model()`. Mismatched model instances fail closed (`ValidationError` / `AuthorizationDenied`); PKs are not taken from the wrong class. System checks `trusts.E003`–`E007` report incoherent settings, including scalar/`wrong-model` `user` lookups (`E005`), `permissions` reverse query name other than `group` (`E004`), and a `content_type` field that is not a relation to `ContentType` (`E006`). |
-| Replacement | Set the three settings **before** the first migrate. After `0003`, Role is the same configured models as Trust / TrustGroup. On an upgrade whose settings retarget Role away from `auth.*`, Role group/permission assignments are cleared; rebuild with `update_roles_permissions` and explicit `Role.groups` assignments. Do not map auth primary keys onto custom tables. |
-| Affected | Projects that set `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` before this migration had Role pointing at `auth.*` in the database. `0003` alters those FKs on upgrade **after clearing the affected joins**. Default-model databases keep Role data. |
-| Authorization | Role-derived ceiling uses the configured permission/group models. No fallback to `auth.Group` / `auth.Permission` on object-level paths. Reinterpreting `auth.Group(pk=N)` as a custom group with `pk=N` is a silent authorization change and is not allowed. |
+| Previous | RST advertised three model settings. Role schema in `0001_initial` hardcoded `auth.Group` / `auth.Permission` while `models.py` used the settings. There was no fresh-install proof. |
+| New | Isolated suite `python -m tests.runtests_custom` migrates with custom `AUTH_USER_MODEL` / matching `TRUSTS_ENTITY_MODEL` selected before migrate. Settlor and trustee FKs target the custom user table. Group, Permission, Role, and TrustGroup stay `auth.Group` / `auth.Permission`. System checks `trusts.E003`–`E005` report a non-user entity or a non-auth group/permission model. Mismatched model instances fail closed (`ValidationError` / `AuthorizationDenied`); PKs are not taken from the wrong class. |
+| Replacement | Set `AUTH_USER_MODEL` and `TRUSTS_ENTITY_MODEL` to the same custom user **before** the first migrate. Leave `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` unset. |
+| Affected | Projects that set `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` to something other than `auth.Group` / `auth.Permission` now fail `manage.py check`. That combination was never a coherent Django swap. |
+| Authorization | Object-level paths use `AUTH_USER_MODEL` for the principal and `auth.Group` / `auth.Permission` for group ceiling and Role. No fallback to a parallel group/permission table. |
 
 Migration-bot checklist:
 
-- [ ] Apply `trusts.0003_role_configured_models`. Do not edit or fake `0001_initial` Role fields.
 - [ ] Keep `TRUSTS_ENTITY_MODEL` equal to `AUTH_USER_MODEL`.
-- [ ] If swapping group/permission models, provide Group query conventions and populate the permission table (`sync_configured_permissions` or equivalent).
-- [ ] After a custom-model upgrade, rebuild Role joins (`update_roles_permissions` plus explicit `Role.groups`). `0003` deletes `trusts_role_groups` / `trusts_rolepermission` when retargeting away from `auth.*` so colliding auth/custom primary keys cannot grant.
-- [ ] Do not pass `auth.Permission` / `auth.Group` instances into Trusts APIs when those settings name other models.
-- [ ] Run `python -m tests.runtests` (default models) and `python -m tests.runtests_custom` (fresh custom install).
-- [ ] Run `python scripts/verify-legacy-upgrade.py` and `python scripts/verify-custom-role-upgrade.py`.
+- [ ] Leave `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` as `auth.Group` / `auth.Permission` (or unset).
+- [ ] Do not apply or expect `trusts.0003_role_configured_models`. Historical `0001_initial` is unchanged (no extra configured-app graph dependencies; Role stays `auth.*`).
+- [ ] Do not pass a non-user instance into trustee APIs, or a non-`auth.Group` / non-`auth.Permission` instance into TrustGroup/Role APIs.
+- [ ] Run `python -m tests.runtests` (default models) and `python -m tests.runtests_custom` (fresh custom user).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
 - [ ] Run `python -m django check`.
 - [ ] Leave package version at `1.0.0.dev0`.
-
-### 30. `0001_initial` dependencies include the configured apps
-
-| | |
-| --- | --- |
-| Previous | `0001` depended on `AUTH_USER_MODEL` and `auth` only, while `Trust.groups` / `TrustUserPermission.permission` already used `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL`. |
-| New | `0001` also lists `swappable_dependency` for `TRUSTS_ENTITY_MODEL`, `TRUSTS_GROUP_MODEL`, and `TRUSTS_PERMISSION_MODEL`. Graph-only; Role field targets in `0001` stay `auth.*` for already-applied default databases. |
-| Replacement | Same migrate command. Custom-model apps must migrate before `trusts.0001`. |
-| Affected | Fresh installs whose group/permission models live outside `auth`. |
-| Authorization | None by itself; makes the existing `0001` FKs safe to create. |
 
 ## Fresh database
 
@@ -921,33 +909,24 @@ python -m django migrate --settings=tests.settings
 python -m django migrate --settings=tests.custom_settings
 ```
 
-Default settings apply `0001`–`0003` against `auth.User` / `auth.Group` /
-`auth.Permission`. Custom settings select the three models **before**
-migrate; `0003` retargets Role from the historical `0001` auth FKs onto
-the configured models after deleting any Role group/permission joins so
-auth primary keys cannot be reinterpreted as custom-model rows.
+Default settings apply `0001`–`0002` against `auth.User` / `auth.Group` /
+`auth.Permission`. Custom settings select `AUTH_USER_MODEL` /
+`TRUSTS_ENTITY_MODEL` **before** migrate; Group and Permission remain
+`auth.*`. `0001` already depends on `AUTH_USER_MODEL`, so the custom
+user app migrates first.
 
 ## Upgrade of a representative legacy database
 
-`scripts/verify-legacy-upgrade.py` now expects pending
-`0002_trustgroup` and `0003_role_configured_models` after recording
-`0001_initial`, then `{0001_initial, 0002_trustgroup, 0003_role_configured_models}`
-after migrate. Default-model Role FKs stay on `auth.*`. A Role group /
-RolePermission join seeded before `0003` is **preserved** (no delete when
-settings still name `auth.*`).
-
-`scripts/verify-custom-role-upgrade.py` migrates a custom-settings
-database through `0002`, seeds Role joins against `auth.Group` /
-`auth.Permission` that collide with custom-model primary keys, then
-applies `0003`. Those joins must be empty afterward; the colliding
-custom rows must not become Role assignments.
+`scripts/verify-legacy-upgrade.py` expects pending `0002_trustgroup`
+after recording `0001_initial`, then `{0001_initial, 0002_trustgroup}`
+after migrate. Role FKs stay on `auth.*`. No Role retarget migration.
 
 ## Out of scope (unchanged)
 
 - Making Django `auth.Group` / `auth.Permission` swappable
 - Using `TRUSTS_ENTITY_MODEL` as a non-user principal
-- Auto-creating rows on a custom permission table from `post_migrate`
+- Deprecating `TRUSTS_GROUP_MODEL` / `TRUSTS_PERMISSION_MODEL` (#33)
+- Trust-scoped Role/Group assignment semantics (#34)
 - Example-app UI
-- Changing the historical `0001_initial` Role field targets (graph-only
-  configured-app dependencies vs narrowing to custom `AUTH_USER_MODEL`
-  only remains a product-contract choice)
+- Rewriting historical `0001_initial` field targets or adding a Role
+  retarget migration

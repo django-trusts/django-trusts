@@ -10,7 +10,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('trusts', '0003_role_configured_models'),
+        ('trusts', '0002_trustgroup'),
     ]
 
     operations = [

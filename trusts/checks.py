@@ -13,30 +13,22 @@ under ``manage.py check``.
 """
 
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
+from django.contrib.auth.models import Group as AuthGroup
+from django.contrib.auth.models import Permission as AuthPermission
 from django.core import checks as django_checks
-from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
-from django.db.models import ManyToManyField
+from django.core.exceptions import ImproperlyConfigured
 
 from trusts import get_entity_model, get_group_model, get_permission_model
 from trusts.conditions import PermissionConditionError, validate_expression
 from trusts.models import Content, legacy_permission_callbacks_allowed
-from trusts.utils import (
-    group_user_set_related_model,
-    lookup_relation,
-    related_model_of,
-    same_concrete_model,
-)
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
 CHECK_ID_ENTITY_NOT_USER = 'trusts.E003'
-CHECK_ID_GROUP_PERMISSIONS = 'trusts.E004'
-CHECK_ID_GROUP_USER = 'trusts.E005'
-CHECK_ID_PERMISSION_SHAPE = 'trusts.E006'
-CHECK_ID_AUTH_GROUP_CUSTOM_PERMISSION = 'trusts.E007'
+CHECK_ID_GROUP_NOT_AUTH = 'trusts.E004'
+CHECK_ID_PERMISSION_NOT_AUTH = 'trusts.E005'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -115,187 +107,12 @@ def check_permission_conditions(app_configs, **kwargs):
     return messages
 
 
-def _model_label_safe(model):
-    try:
-        return model._meta.label
-    except Exception:
-        return repr(model)
-
-
-def configured_auth_model_messages(Entity, Group, Permission):
-    """Return check messages for a candidate entity/group/permission triple.
-
-    Inspects the relational shape object-level queries actually use:
-    ``group__user``, ``group.user_set``, ``Permission.objects.filter(group=...)``,
-    and ``permission.content_type``. Tests pass ephemeral models here.
-    """
-    messages = []
-    try:
-        perm_field = Group._meta.get_field('permissions')
-    except FieldDoesNotExist:
-        perm_field = None
-    if perm_field is None or not isinstance(perm_field, ManyToManyField):
-        messages.append(django_checks.Error(
-            'TRUSTS_GROUP_MODEL (%s) must expose a permissions ManyToManyField '
-            'to TRUSTS_PERMISSION_MODEL (the same convention as auth.Group).' % (
-                _model_label_safe(Group),
-            ),
-            obj=Group,
-            id=CHECK_ID_GROUP_PERMISSIONS,
-        ))
-    elif not same_concrete_model(related_model_of(perm_field), Permission):
-        messages.append(django_checks.Error(
-            'TRUSTS_GROUP_MODEL.permissions must target TRUSTS_PERMISSION_MODEL '
-            '(%s); %s.permissions targets %s.' % (
-                _model_label_safe(Permission),
-                _model_label_safe(Group),
-                _model_label_safe(related_model_of(perm_field)),
-            ),
-            hint=(
-                'auth.Group.permissions is not swappable. Changing '
-                'TRUSTS_PERMISSION_MODEL requires a group model whose '
-                'permissions M2M points at that same permission model.'
-            ),
-            obj=Group,
-            id=CHECK_ID_GROUP_PERMISSIONS,
-        ))
-    elif perm_field.related_query_name() != 'group':
-        messages.append(django_checks.Error(
-            'TRUSTS_GROUP_MODEL.permissions must use related_query_name '
-            '"group" so Permission.objects.filter(group=...) matches '
-            'get_group_global_ceiling(); %s.permissions uses %r.' % (
-                _model_label_safe(Group),
-                perm_field.related_query_name(),
-            ),
-            obj=Group,
-            id=CHECK_ID_GROUP_PERMISSIONS,
-        ))
-
-    user_rel = lookup_relation(Group, 'user')
-    user_related = related_model_of(user_rel)
-    user_set_related = group_user_set_related_model(Group)
-    if user_rel is None or not same_concrete_model(user_related, Entity):
-        try:
-            named = Group._meta.get_field('user')
-        except FieldDoesNotExist:
-            named = None
-        if named is not None and not getattr(named, 'is_relation', False):
-            detail = (
-                'lookup "user" is a non-relation field %s, not a relation '
-                'to %s. Django may coerce a principal to a pk/string '
-                'through that field.' % (
-                    named.__class__.__name__, _model_label_safe(Entity),
-                )
-            )
-        elif user_rel is not None:
-            detail = (
-                'lookup "user" relates to %s, not %s.' % (
-                    _model_label_safe(user_related), _model_label_safe(Entity),
-                )
-            )
-        else:
-            detail = (
-                'missing membership lookup "user" relating to %s.' % (
-                    _model_label_safe(Entity),
-                )
-            )
-        messages.append(django_checks.Error(
-            'TRUSTS_GROUP_MODEL (%s) membership must be a relation to '
-            'AUTH_USER_MODEL / TRUSTS_ENTITY_MODEL: %s Authorization '
-            'hardcodes group__user=principal and group.user_set.' % (
-                _model_label_safe(Group), detail,
-            ),
-            hint=(
-                'Django User.groups remains auth.Group. For a custom Trusts '
-                'group, add an M2M from AUTH_USER_MODEL with '
-                'related_name="user_set" and related_query_name="user".'
-            ),
-            obj=Group,
-            id=CHECK_ID_GROUP_USER,
-        ))
-    elif user_set_related is None or not same_concrete_model(user_set_related, Entity):
-        messages.append(django_checks.Error(
-            'TRUSTS_GROUP_MODEL (%s) must expose reverse accessor '
-            'user_set relating to %s (authorization add/remove/create_team).' % (
-                _model_label_safe(Group), _model_label_safe(Entity),
-            ),
-            hint=(
-                'Use related_name="user_set" on the membership M2M, matching '
-                'auth.Group.'
-            ),
-            obj=Group,
-            id=CHECK_ID_GROUP_USER,
-        ))
-
-    missing_perm_fields = []
-    for name in ('codename', 'name'):
-        try:
-            Permission._meta.get_field(name)
-        except FieldDoesNotExist:
-            missing_perm_fields.append(name)
-    try:
-        ct_field = Permission._meta.get_field('content_type')
-    except FieldDoesNotExist:
-        ct_field = None
-        missing_perm_fields.append('content_type')
-    if missing_perm_fields:
-        messages.append(django_checks.Error(
-            'TRUSTS_PERMISSION_MODEL (%s) must provide the Django permission '
-            'shape fields %s (plus get_by_natural_key or equivalent).' % (
-                _model_label_safe(Permission),
-                ', '.join(missing_perm_fields),
-            ),
-            obj=Permission,
-            id=CHECK_ID_PERMISSION_SHAPE,
-        ))
-    elif not getattr(ct_field, 'is_relation', False):
-        messages.append(django_checks.Error(
-            'TRUSTS_PERMISSION_MODEL (%s).content_type must be a relation '
-            'to ContentType, not a non-relation %s.' % (
-                _model_label_safe(Permission),
-                ct_field.__class__.__name__,
-            ),
-            obj=Permission,
-            id=CHECK_ID_PERMISSION_SHAPE,
-        ))
-    elif not same_concrete_model(related_model_of(ct_field), ContentType):
-        messages.append(django_checks.Error(
-            'TRUSTS_PERMISSION_MODEL (%s).content_type must be a relation '
-            'to ContentType, not %s.' % (
-                _model_label_safe(Permission),
-                _model_label_safe(related_model_of(ct_field)),
-            ),
-            obj=Permission,
-            id=CHECK_ID_PERMISSION_SHAPE,
-        ))
-
-    from django.contrib.auth.models import Group as AuthGroup
-    from django.contrib.auth.models import Permission as AuthPermission
-    if Group is AuthGroup and Permission is not AuthPermission:
-        messages.append(django_checks.Error(
-            'TRUSTS_PERMISSION_MODEL (%s) cannot be used with auth.Group. '
-            'auth.Group.permissions is hardcoded to auth.Permission, so a '
-            'custom permission model cannot serve as the group ceiling.' % (
-                _model_label_safe(Permission),
-            ),
-            hint=(
-                'Keep TRUSTS_PERMISSION_MODEL = auth.Permission, or swap '
-                'TRUSTS_GROUP_MODEL to a group whose permissions M2M targets '
-                'the custom permission model.'
-            ),
-            obj=Permission,
-            id=CHECK_ID_AUTH_GROUP_CUSTOM_PERMISSION,
-        ))
-    return messages
-
-
 @django_checks.register(django_checks.Tags.models)
 def check_configured_auth_models(app_configs, **kwargs):
-    """Report whether the advertised TRUSTS_*_MODEL settings are coherent.
+    """Report the verified AUTH_USER_MODEL-only contract (issue #26).
 
-    Django does not swap ``auth.Group`` or ``auth.Permission``. Trusts can
-    still FK to custom models when they follow the conventions object-level
-    authorization actually queries. ``app_configs`` is ignored so
+    Django does not swap ``auth.Group`` or ``auth.Permission``. A custom
+    user is the supported entity swap. ``app_configs`` is ignored so
     ``manage.py check trusts`` still reports project settings.
     """
     try:
@@ -317,7 +134,7 @@ def check_configured_auth_models(app_configs, **kwargs):
             'Settlor and trustee rows are the same principal '
             'User.has_perm uses. A separate non-user model is not a '
             'Django permission principal.' % (
-                _model_label_safe(Entity), _model_label_safe(User),
+                _model_label(Entity), _model_label(User),
             ),
             hint=(
                 'Set TRUSTS_ENTITY_MODEL to the same app_label.Model as '
@@ -326,5 +143,28 @@ def check_configured_auth_models(app_configs, **kwargs):
             obj=Entity,
             id=CHECK_ID_ENTITY_NOT_USER,
         ))
-    messages.extend(configured_auth_model_messages(Entity, Group, Permission))
+    if Group is not AuthGroup:
+        messages.append(django_checks.Error(
+            'TRUSTS_GROUP_MODEL (%s) must be auth.Group. Django does not '
+            'swap Group; django-trusts does not maintain a private '
+            'parallel group model.' % _model_label(Group),
+            hint=(
+                'Leave TRUSTS_GROUP_MODEL unset (default auth.Group). '
+                'Removal of the setting is tracked separately.'
+            ),
+            obj=Group,
+            id=CHECK_ID_GROUP_NOT_AUTH,
+        ))
+    if Permission is not AuthPermission:
+        messages.append(django_checks.Error(
+            'TRUSTS_PERMISSION_MODEL (%s) must be auth.Permission. Django '
+            'does not swap Permission; django-trusts does not maintain a '
+            'private parallel permission model.' % _model_label(Permission),
+            hint=(
+                'Leave TRUSTS_PERMISSION_MODEL unset (default auth.Permission). '
+                'Removal of the setting is tracked separately.'
+            ),
+            obj=Permission,
+            id=CHECK_ID_PERMISSION_NOT_AUTH,
+        ))
     return messages
