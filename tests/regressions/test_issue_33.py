@@ -39,7 +39,7 @@ from trusts.models import (
     TrustGroupPermission,
     TrustUserPermission,
 )
-from trusts.test_issue8 import Issue8FixtureMixin
+from tests.regressions.test_issue_8 import Issue8FixtureMixin
 
 
 def _run_manage_py_check():

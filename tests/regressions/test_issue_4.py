@@ -33,7 +33,7 @@ from trusts.models import (
     Trust,
     TrustUserPermission,
 )
-from trusts.tests import (
+from tests.support import (
     create_test_users,
     get_or_create_root_user,
     reload_test_users,

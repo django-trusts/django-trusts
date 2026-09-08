@@ -9,6 +9,7 @@ the installed distribution, not the source tree.
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
 
@@ -74,6 +75,26 @@ def main() -> int:
     if 'site-packages' not in str(trusts_file) and 'dist-packages' not in str(trusts_file):
         raise SystemExit('trusts.__file__ is not a site-packages install: %s' % trusts_file)
 
+    absent = [
+        'trusts.tests',
+        'trusts.test_issue4',
+        'trusts.test_issue8',
+        'trusts.test_issue23',
+        'trusts.test_issue25',
+        'trusts.test_issue26',
+        'trusts.test_issue29',
+        'trusts.test_issue33',
+    ]
+    leaked_tests = []
+    for name in absent:
+        try:
+            imported = importlib.import_module(name)
+        except ImportError:
+            continue
+        leaked_tests.append('%s from %s' % (name, getattr(imported, '__file__', imported)))
+    if leaked_tests:
+        raise SystemExit('Test modules must not ship in the wheel: %s' % leaked_tests)
+
     print('wheel import ok')
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
@@ -81,6 +102,7 @@ def main() -> int:
     print('TrustModelBackend', TrustModelBackend)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
+    print('absent test modules', ' '.join(absent))
     return 0
 
 

@@ -34,8 +34,8 @@ from trusts.models import (
     TrustUserPermission,
     legacy_permission_callbacks_allowed,
 )
-from trusts.test_issue4 import _CallLog
-from trusts.tests import (
+from tests.regressions.test_issue_4 import _CallLog
+from tests.support import (
     create_test_users,
     get_or_create_root_user,
     reload_test_users,

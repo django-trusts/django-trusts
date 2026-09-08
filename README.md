@@ -56,6 +56,11 @@ python -m django check --settings=tests.custom_settings
 python scripts/verify-legacy-upgrade.py
 ```
 
+The executable suite lives under `tests/` (`tests/core/`,
+`tests/regressions/`, and the isolated `tests/custom_content/` app).
+Shared fixtures are in `tests/support.py`. Those modules are not part of
+the installable `trusts` package.
+
 CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
 fresh migrate, ``manage.py check``, the isolated custom-user suite, and the
 legacy-upgrade script on Python 3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel

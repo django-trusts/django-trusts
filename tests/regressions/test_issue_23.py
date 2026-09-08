@@ -23,8 +23,8 @@ from trusts.models import (
     TrustGroupPermission,
     TrustUserPermission,
 )
-from trusts.test_issue8 import Issue8FixtureMixin
-from trusts.tests import enable_local_group_grant, reload_test_users
+from tests.regressions.test_issue_8 import Issue8FixtureMixin
+from tests.support import enable_local_group_grant, reload_test_users
 from tests.models import Category
 
 
