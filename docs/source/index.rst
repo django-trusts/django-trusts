@@ -54,8 +54,11 @@ It records a ``settlor`` (the entity under whose trust the content is held)
 and grants access to specific users (``trustees``) or to Django groups
 through a ``TrustGroup`` association. django-trusts does not require the
 settlor to be the content's creator and does not automatically grant the
-settlor permissions. Content is either a ``Content`` subclass (it carries a
-``trust`` foreign key) or an existing model reached through a ``Junction``.
+settlor permissions. Content is a ``Content`` subclass (it carries a
+``trust`` foreign key), an existing model reached through a ``Junction``,
+or a registered dependent model that reuses a related ``Content``
+object's Trust without its own ``trust`` field or Junction (see
+Dependent content).
 
 .. admonition:: Verified — the Trust-scoped group invariant
 
@@ -159,6 +162,7 @@ already an abstract ``Model``; you do not also inherit ``models.Model``.
 
    # app/models.py
 
+   from django.conf import settings
    from django.db import models
    from trusts.models import Content
 
@@ -166,7 +170,7 @@ already an abstract ``Model``; you do not also inherit ``models.Model``.
    class Receipt(Content):
        title = models.CharField(max_length=40)
        owner = models.ForeignKey(
-           'auth.User',
+           settings.AUTH_USER_MODEL,
            null=True,
            on_delete=models.CASCADE,
            related_name='receipts',
@@ -208,6 +212,12 @@ unchecked model methods: ``Content.grant`` / ``Content.revoke``,
 ``Trust.groups.add`` / ``Trust.associate_group``,
 ``Trust.grant_group_permission`` / ``revoke_group_permission`` /
 ``set_group_permissions``. Those methods do **not** check the actor.
+``Trust.grant_group_permission`` accepts an ``auth.Permission`` instance
+or integer PK, not an action or codename string. Resolve the permission
+through the content manager first
+(``Receipt.objects.get_permission('read')``). The actor-gated helper
+``grant_trust_group_permission`` *does* accept that content-relative
+string.
 
 **Request-driven writes** (views, forms) must go through
 ``trusts.authorization``. Those helpers require administrative ``change``
@@ -226,10 +236,12 @@ Trusted setup (no actor check):
 
 .. code-block:: python
 
-   from django.contrib.auth.models import Group, User
+   from django.contrib.auth import get_user_model
+   from django.contrib.auth.models import Group
    from trusts.models import Trust
    from app.models import Receipt
 
+   User = get_user_model()
    settlor = User.objects.get(username='alice')
    trustee = User.objects.get(username='bob')
    accountants = Group.objects.get(name='accountants')
@@ -242,7 +254,9 @@ Trusted setup (no actor check):
    receipt.grant('read', trustee)
 
    trust.groups.add(accountants)
-   trust.grant_group_permission(accountants, 'read')
+   trust.grant_group_permission(
+       accountants, Receipt.objects.get_permission('read'),
+   )
 
    settlor.has_perm('app.change_receipt', receipt)
    trustee.has_perm('app.read_receipt', receipt)
@@ -335,7 +349,9 @@ Trusted setup: assign the role, associate, then enable a local subset.
    accountants.roles.add(Role.objects.get(name='accounting'))
 
    trust.groups.add(accountants)
-   trust.grant_group_permission(accountants, 'change')
+   trust.grant_group_permission(
+       accountants, Receipt.objects.get_permission('change'),
+   )
 
    receipt = Receipt(trust=trust, title='Q3 close')
    receipt.save()
@@ -562,18 +578,22 @@ probed.
 
 .. code-block:: python
 
+   from django.conf import settings
    from django.db import models
-   from django.contrib.auth.models import User
    from trusts.conditions import condition_refs
    from trusts.models import Content
 
 
    class Organization(models.Model):
-       manager = models.ForeignKey(User, on_delete=models.CASCADE)
+       manager = models.ForeignKey(
+           settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+       )
 
 
    class Receipt(Content):
-       owner = models.ForeignKey(User, on_delete=models.CASCADE)
+       owner = models.ForeignKey(
+           settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+       )
        organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
        status = models.CharField(max_length=20)
 
