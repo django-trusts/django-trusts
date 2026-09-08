@@ -12,17 +12,20 @@ from django.conf import settings
 
 
 # Explicit module labels so core and regression tests run without relying on
-# unittest's test*.py filename pattern. The isolated custom-user suite stays
-# on tests.runtests_custom (tests.custom_content) and is not included here.
+# unittest's test*.py filename pattern. Order matches the former trusts/
+# discovery order (issue 23/25/26/29/33, then 4/8, then core) so modules
+# that register leftover permission conditions stay after manage.py check
+# tests. The isolated custom-user suite stays on tests.runtests_custom
+# (tests.custom_content) and is not included here.
 NORMAL_SUITE = [
-    'tests.core.test_core',
-    'tests.regressions.test_issue_4',
-    'tests.regressions.test_issue_8',
     'tests.regressions.test_issue_23',
     'tests.regressions.test_issue_25',
     'tests.regressions.test_issue_26',
     'tests.regressions.test_issue_29',
     'tests.regressions.test_issue_33',
+    'tests.regressions.test_issue_4',
+    'tests.regressions.test_issue_8',
+    'tests.core.test_core',
 ]
 
 
