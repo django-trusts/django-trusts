@@ -254,7 +254,11 @@ class DependentContentTrustTest(TestCase):
     def test_resolution_is_orm_path_not_python_loop(self):
         qs = Trust.objects.filter_by_content(self.meta_a)
         sql = self._sql(qs)
-        self.assertIn(RECEIPT_LOOKUP, sql)
+        upper = sql.upper()
+        self.assertIn('JOIN', upper)
+        self.assertIn('trusts_tests_receipt', sql)
+        self.assertIn('trusts_tests_receiptimage', sql)
+        self.assertIn('trusts_tests_receiptimagemeta', sql)
         field_names = {f.name for f in Trust._meta.get_fields()}
         self.assertIn(RECEIPT_LOOKUP, field_names)
         # Two hops stay in the lookup string consumed by one QuerySet.filter.
