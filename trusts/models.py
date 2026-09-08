@@ -205,7 +205,7 @@ class ContentQuerySet(models.QuerySet):
             condition_q = compile_registered_condition_q(self.model, perm, user)
         if not is_active_principal(user):
             return self.none()
-        if not supported_permission_contract():
+        if not supported_entity_contract() or not supported_permission_contract():
             return self.none()
         permission = resolve_content_permission(self.model, perm)
         granted = trust_grant_q(user, permission, trust_fk='trust')
@@ -276,13 +276,11 @@ class TrustManager(ContentManager):
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
 
-        parts = []
-        if supported_entity_contract():
-            parts.append(Q(trustees__entity=user))
+        if not supported_entity_contract():
+            return self.none()
+        parts = [Q(trustees__entity=user)]
         if supported_group_contract():
             parts.append(Q(groups__user=user))
-        if not parts:
-            return self.none()
         grant_q = parts[0]
         for part in parts[1:]:
             grant_q |= part
@@ -321,7 +319,7 @@ class TrustManager(ContentManager):
         )
         if not is_active_principal(user):
             return self.none()
-        if not supported_permission_contract():
+        if not supported_entity_contract() or not supported_permission_contract():
             return self.none()
 
         if not isinstance(content, type):

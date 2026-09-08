@@ -68,7 +68,7 @@ class TrustModelBackendMixin(object):
         if user_obj.is_anonymous or obj is None:
             return super(TrustModelBackendMixin, self).get_all_permissions(user_obj, obj)
 
-        if not supported_permission_contract():
+        if not supported_entity_contract() or not supported_permission_contract():
             return []
 
         if not hasattr(user_obj, '_trust_perm_cache'):
@@ -144,7 +144,11 @@ class TrustModelBackendMixin(object):
 
 
 def _group_permission_queries_allowed():
-    return supported_group_contract() and supported_permission_contract()
+    return (
+        supported_entity_contract()
+        and supported_group_contract()
+        and supported_permission_contract()
+    )
 
 
 def _trust_permission_grant_q(user_obj, trust):

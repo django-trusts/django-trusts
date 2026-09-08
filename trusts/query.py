@@ -45,9 +45,17 @@ def _never_exists():
 
 
 def _group_permission_queries_allowed():
-    from trusts import supported_group_contract, supported_permission_contract
+    from trusts import (
+        supported_entity_contract,
+        supported_group_contract,
+        supported_permission_contract,
+    )
 
-    return supported_group_contract() and supported_permission_contract()
+    return (
+        supported_entity_contract()
+        and supported_group_contract()
+        and supported_permission_contract()
+    )
 
 
 def group_local_grant_exists(user, permission, trust_id_outerref):

@@ -178,6 +178,31 @@ class DefaultConfiguredModelContractTest(Issue8FixtureMixin, TestCase):
                 Category.objects.permitted('read', self.user).exists()
             )
 
+    def test_silenced_e003_does_not_leave_group_authorization_live(self):
+        self.group.permissions.add(self.perm_read)
+        self.group.user_set.add(self.user)
+        enable_local_group_grant(self.org, self.group, self.perm_read)
+        reload_test_users(self)
+        self.assertTrue(
+            self.user.has_perm(self.get_perm_code(self.perm_read), self.content)
+        )
+        self.assertTrue(
+            Category.objects.permitted('read', self.user).filter(pk=self.content.pk).exists()
+        )
+
+        with override_settings(
+            TRUSTS_ENTITY_MODEL='trusts_tests.Organization',
+            SILENCED_SYSTEM_CHECKS=_SILENCE_E003,
+        ):
+            _run_manage_py_check()
+            reload_test_users(self)
+            self.assertFalse(
+                self.user.has_perm(self.get_perm_code(self.perm_read), self.content)
+            )
+            self.assertFalse(
+                Category.objects.permitted('read', self.user).exists()
+            )
+
     def test_silenced_e004_wrong_group_cannot_grant_or_query(self):
         self.group.permissions.add(self.perm_read)
         self.group.user_set.add(self.user)

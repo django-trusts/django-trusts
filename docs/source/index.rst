@@ -433,7 +433,7 @@ Initial Options
   (``has_perm``, ``is_active``, ``is_anonymous``). ``trusts.E003`` is the
   deployment diagnostic; silencing it does not authorize a non-user entity.
   Runtime grants and authorization queries fail closed independently of the
-  check.
+  check, including group-derived object-level evaluation.
 * TRUSTS_GROUP_MODEL -- Must remain ``auth.Group`` (default:
   ``auth.Group``). Django does **not** swap ``auth.Group`` (ticket
   `#29748 <https://code.djangoproject.com/ticket/29748>`_ closed

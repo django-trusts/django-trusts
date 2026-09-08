@@ -858,7 +858,8 @@ Verified contract:
 - `TRUSTS_ENTITY_MODEL`, while it exists, must resolve to
   `AUTH_USER_MODEL` (`trusts.E003`). A separate non-user model is not a
   Django permission principal. Silencing `trusts.E003` does not authorize
-  that path: grants raise and `has_perm` / `.permitted()` deny.
+  that path: grants raise and `has_perm` / `.permitted()` deny, including
+  group-derived object-level evaluation.
 - Use standard `auth.Group` and `auth.Permission`. Values other than
   those models are `trusts.E004` / `trusts.E005`. Silencing those IDs
   does not route grants or queries through another model. django-trusts
