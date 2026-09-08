@@ -24,6 +24,9 @@ declares one matrix and tests it in CI.
 | --- | --- | --- |
 | Python | 3.12, 3.13, 3.14 (`requires-python >=3.12`) | Intersection of currently supported CPython and Django 6.1's official matrix. 3.10/3.11 remain in CPython security support but are not in Django 6.1's matrix. 3.15 is not a stable release yet. |
 | Django | `>=6.1,<6.2` (tested against 6.1.1) | Latest stable Django at implementation time, per #15. |
+| Principal | Custom `AUTH_USER_MODEL` (and matching `TRUSTS_ENTITY_MODEL`) | Verified by `#26` / PR `#32`. Isolated suite `python -m tests.runtests_custom`. |
+| Group | `auth.Group` only | Django does not swap Group (ticket #29748 `wontfix`). `TRUSTS_GROUP_MODEL` is deprecated in 1.0 and removed in **1.1.0**. |
+| Permission | `auth.Permission` only | Django does not swap Permission. `TRUSTS_PERMISSION_MODEL` is deprecated in 1.0 and removed in **1.1.0**. |
 
 CI (`.github/workflows/ci.yml`) runs authorization tests, a fresh migrate,
 and `scripts/verify-legacy-upgrade.py` on **each** declared Python version

@@ -6,9 +6,6 @@ from django.core.exceptions import ImproperlyConfigured
 ENTITY_MODEL_NAME = getattr(settings, 'TRUSTS_ENTITY_MODEL',
         getattr(settings, 'AUTH_USER_MODEL', 'auth.User')
     )
-GROUP_MODEL_NAME = getattr(settings, 'TRUSTS_GROUP_MODEL', 'auth.Group')
-
-PERMISSION_MODEL_NAME = getattr(settings, 'TRUSTS_PERMISSION_MODEL', 'auth.Permission')
 
 DEFAULT_SETTLOR = getattr(settings, 'TRUSTS_DEFAULT_SETTLOR', None)
 
@@ -18,6 +15,12 @@ ROOT_PK = getattr(settings, 'TRUSTS_ROOT_PK', 1)
 
 AUTH_GROUP_MODEL = 'auth.Group'
 AUTH_PERMISSION_MODEL = 'auth.Permission'
+
+# Historical 0001_initial / 0002_trustgroup import these names. They are
+# pinned to Django's auth models. TRUSTS_GROUP_MODEL / TRUSTS_PERMISSION_MODEL
+# no longer select a field target (deprecated in 1.0; removed in 1.1.0).
+GROUP_MODEL_NAME = AUTH_GROUP_MODEL
+PERMISSION_MODEL_NAME = AUTH_PERMISSION_MODEL
 
 
 def _live_entity_model_name():
@@ -29,11 +32,31 @@ def _live_entity_model_name():
 
 
 def _live_group_model_name():
+    """Live ``TRUSTS_GROUP_MODEL`` if present, else ``auth.Group``.
+
+    Diagnostics and fail-closed only. Field targets stay on
+    ``GROUP_MODEL_NAME`` (``auth.Group``).
+    """
     return getattr(settings, 'TRUSTS_GROUP_MODEL', AUTH_GROUP_MODEL)
 
 
 def _live_permission_model_name():
+    """Live ``TRUSTS_PERMISSION_MODEL`` if present, else ``auth.Permission``.
+
+    Diagnostics and fail-closed only. Field targets stay on
+    ``PERMISSION_MODEL_NAME`` (``auth.Permission``).
+    """
     return getattr(settings, 'TRUSTS_PERMISSION_MODEL', AUTH_PERMISSION_MODEL)
+
+
+def group_model_setting_overridden():
+    """True when ``TRUSTS_GROUP_MODEL`` is explicitly configured."""
+    return settings.is_overridden('TRUSTS_GROUP_MODEL')
+
+
+def permission_model_setting_overridden():
+    """True when ``TRUSTS_PERMISSION_MODEL`` is explicitly configured."""
+    return settings.is_overridden('TRUSTS_PERMISSION_MODEL')
 
 
 def _get_configured_model(name, value_error, lookup_error):
@@ -62,10 +85,31 @@ def get_entity_model():
 
 
 def get_group_model():
-    """Return the model named by live ``TRUSTS_GROUP_MODEL``.
+    """Return Django ``auth.Group``.
 
-    Runtime must not grant or query through this model unless
-    ``supported_group_contract()`` is true (``auth.Group``).
+    ``TRUSTS_GROUP_MODEL`` is deprecated and does not select a model.
+    Runtime still fail-closes when that setting names anything else.
+    """
+    from django.contrib.auth.models import Group
+
+    return Group
+
+
+def get_permission_model():
+    """Return Django ``auth.Permission``.
+
+    ``TRUSTS_PERMISSION_MODEL`` is deprecated and does not select a model.
+    Runtime still fail-closes when that setting names anything else.
+    """
+    from django.contrib.auth.models import Permission
+
+    return Permission
+
+
+def lookup_group_model_setting():
+    """Resolve the live ``TRUSTS_GROUP_MODEL`` string for diagnostics.
+
+    Does not change runtime Group resolution. Used by ``trusts.E004``.
     """
     name = _live_group_model_name()
     return _get_configured_model(
@@ -75,11 +119,10 @@ def get_group_model():
     )
 
 
-def get_permission_model():
-    """Return the model named by live ``TRUSTS_PERMISSION_MODEL``.
+def lookup_permission_model_setting():
+    """Resolve the live ``TRUSTS_PERMISSION_MODEL`` string for diagnostics.
 
-    Runtime must not grant or query through this model unless
-    ``supported_permission_contract()`` is true (``auth.Permission``).
+    Does not change runtime Permission resolution. Used by ``trusts.E005``.
     """
     name = _live_permission_model_name()
     return _get_configured_model(
@@ -107,30 +150,24 @@ def supported_entity_contract():
 
 
 def supported_group_contract():
-    """True when group settings and the field graph are ``auth.Group``.
+    """True when no unsupported ``TRUSTS_GROUP_MODEL`` is configured.
 
-    Silenced ``trusts.E004`` must not run ``group__user`` against another model.
+    Field targets and ``get_group_model()`` are always ``auth.Group``.
+    A leftover non-``auth.Group`` setting still fail-closes so a silenced
+    ``trusts.E004`` cannot enable the discarded swap.
     """
-    from django.contrib.auth.models import Group
-
     if GROUP_MODEL_NAME != AUTH_GROUP_MODEL:
         return False
-    try:
-        return get_group_model() is Group
-    except ImproperlyConfigured:
-        return False
+    return _live_group_model_name() == AUTH_GROUP_MODEL
 
 
 def supported_permission_contract():
-    """True when permission settings and the field graph are ``auth.Permission``.
+    """True when no unsupported ``TRUSTS_PERMISSION_MODEL`` is configured.
 
-    Silenced ``trusts.E005`` must not resolve or grant through another model.
+    Field targets and ``get_permission_model()`` are always ``auth.Permission``.
+    A leftover non-``auth.Permission`` setting still fail-closes so a
+    silenced ``trusts.E005`` cannot enable the discarded swap.
     """
-    from django.contrib.auth.models import Permission
-
     if PERMISSION_MODEL_NAME != AUTH_PERMISSION_MODEL:
         return False
-    try:
-        return get_permission_model() is Permission
-    except ImproperlyConfigured:
-        return False
+    return _live_permission_model_name() == AUTH_PERMISSION_MODEL

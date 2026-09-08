@@ -18,8 +18,9 @@ from django.shortcuts import redirect
 from django.views.generic import CreateView, DetailView
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 
-from trusts import get_group_model, supported_entity_contract
+from trusts import supported_entity_contract
 from trusts.authorization import (
     AuthorizationDenied,
     add_group_member,
@@ -48,7 +49,7 @@ class NewTeamForm(forms.ModelForm):
     trust = forms.ModelChoiceField(queryset=Trust.objects.none())
 
     class Meta:
-        model = get_group_model()
+        model = Group
         fields = ('name',)
 
     def __init__(self, user=None, *args, **kwargs):
@@ -64,7 +65,7 @@ class NewTeamView(CreateView):
     """Create a team attached to a trust the actor administers."""
     form_class = NewTeamForm
     template_name = 'auth/group_form.html'
-    model = get_group_model()
+    model = Group
 
     def get_form_kwargs(self):
         kwargs = super(NewTeamView, self).get_form_kwargs()
@@ -88,7 +89,7 @@ newteam = login_required(NewTeamView.as_view())
 
 class TeamView(DetailView):
     """Team People page: view members; add only with administrative change."""
-    model = get_group_model()
+    model = Group
     template_name = 'auth/group_detail.html'
 
     def get_context_data(self, **kwargs):

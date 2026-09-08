@@ -27,7 +27,9 @@ what is road, what is fence, and what is still a sketch:
   `#25 <https://github.com/django-trusts/django-trusts/issues/25>`_ /
   `PR #31 <https://github.com/django-trusts/django-trusts/pull/31>`_,
   `#26 <https://github.com/django-trusts/django-trusts/issues/26>`_ /
-  `PR #32 <https://github.com/django-trusts/django-trusts/pull/32>`_).
+  `PR #32 <https://github.com/django-trusts/django-trusts/pull/32>`_,
+  `#33 <https://github.com/django-trusts/django-trusts/issues/33>`_ /
+  `PR #36 <https://github.com/django-trusts/django-trusts/pull/36>`_).
 * **Bounded / legacy** — a deliberately limited facility, an opt-in
   escape hatch, or a setting that exists but is not a swap point.
 * **Future** — direction that remains aspirational. Do not implement
@@ -701,6 +703,11 @@ Customization
    handled automatically by ``makemigrations`` and requires an explicit
    schema and data migration.
 
+   Do **not** set ``TRUSTS_GROUP_MODEL`` or ``TRUSTS_PERMISSION_MODEL``.
+   Those settings are deprecated in 1.0 and removed in 1.1.0. They do not
+   change field targets. Runtime Group and Permission stay
+   ``auth.Group`` / ``auth.Permission``.
+
    The root settings control initial root creation. Changing
    ``TRUSTS_CREATE_ROOT``, ``TRUSTS_ROOT_PK``, ``TRUSTS_ROOT_SETTLOR``, or
    ``TRUSTS_ROOT_TITLE`` after the root exists does not update that row
@@ -717,21 +724,20 @@ Customization
   entity. Runtime grants and authorization queries fail closed
   independently of the check, including group-derived object-level
   evaluation (membership + TrustGroup + local grant + ceiling).
-* TRUSTS_GROUP_MODEL -- Must remain ``auth.Group`` (default:
-  ``auth.Group``). Django does **not** swap ``auth.Group`` (ticket
+* TRUSTS_GROUP_MODEL -- **Deprecated in 1.0; removed in 1.1.0.** Leave
+  this setting unset. Runtime Group is always ``auth.Group``. Django does
+  **not** swap ``auth.Group`` (ticket
   `#29748 <https://code.djangoproject.com/ticket/29748>`_ closed
-  ``wontfix``). django-trusts does not maintain a private parallel group
-  model. A value other than ``auth.Group`` is ``trusts.E004``. Silencing
-  that ID does not route grants or ``group__user`` queries through another
-  model. Deprecation and removal of this setting is issue
-  `#33 <https://github.com/django-trusts/django-trusts/issues/33>`_.
-* TRUSTS_PERMISSION_MODEL -- Must remain ``auth.Permission`` (default:
-  ``auth.Permission``). Django does **not** swap ``auth.Permission``.
+  ``wontfix``). An explicit value of ``auth.Group`` is ``trusts.W002``.
+  Any other value is ``trusts.E004``. Silencing those IDs does not route
+  grants or ``group__user`` queries through another model.
+* TRUSTS_PERMISSION_MODEL -- **Deprecated in 1.0; removed in 1.1.0.**
+  Leave this setting unset. Runtime Permission is always
+  ``auth.Permission``. Django does **not** swap ``auth.Permission``.
   ``User.has_perm`` without an object uses Django's ``ModelBackend`` /
-  ``auth.Permission``. A value other than ``auth.Permission`` is
-  ``trusts.E005``. Silencing that ID does not resolve or grant through
-  another model. Removal of this setting is issue `#33
-  <https://github.com/django-trusts/django-trusts/issues/33>`_.
+  ``auth.Permission``. An explicit value of ``auth.Permission`` is
+  ``trusts.W003``. Any other value is ``trusts.E005``. Silencing those
+  IDs does not resolve or grant through another model.
 * TRUSTS_CREATE_ROOT -- A boolean set to True indicates root Trust model
   object to be created during the initial migration. (default: True)
 * TRUSTS_ROOT_PK -- The `pk` of the root trust model object. (default: 1)
@@ -750,14 +756,18 @@ Customization
 
 .. admonition:: Verified — custom user; not custom Group or Permission
 
-   An experiment that treated ``TRUSTS_GROUP_MODEL`` /
-   ``TRUSTS_PERMISSION_MODEL`` as swappable Django Group/Permission
-   replacements was attempted and **rejected**. Django's permission
-   framework is not swappable there. A private parallel contract would
-   silently diverge from ``User.groups`` / ``ModelBackend``. That is a
-   negative architectural result, not supported behavior, and not a
-   future feature. Do not claim complete custom Group/Permission
-   swappability.
+   ``AUTH_USER_MODEL`` is the only supported principal swap. Group and
+   Permission stay ``auth.Group`` / ``auth.Permission``.
+   ``TRUSTS_GROUP_MODEL`` and ``TRUSTS_PERMISSION_MODEL`` are deprecated
+   in ``1.0`` and will be removed in ``1.1.0``. They do not select a
+   model. Leave them unset.
+
+   An experiment that treated those settings as swappable Django
+   Group/Permission replacements was attempted and **rejected**. Django's
+   permission framework is not swappable there. A private parallel
+   contract would silently diverge from ``User.groups`` /
+   ``ModelBackend``. That is a negative architectural result, not
+   supported behavior, and not a future feature.
 
    The isolated suite ``python -m tests.runtests_custom`` migrates a
    fresh database with a custom ``AUTH_USER_MODEL`` (and matching
@@ -767,6 +777,13 @@ Customization
    used to select a row on the expected table. Ordinary Django
    ``ModelBackend`` behavior without an object remains a separate backend
    path.
+
+   Example — custom user, standard Group and Permission (no group or
+   permission settings)::
+
+      AUTH_USER_MODEL = 'accounts.User'
+      TRUSTS_ENTITY_MODEL = 'accounts.User'
+      # Do not set TRUSTS_GROUP_MODEL or TRUSTS_PERMISSION_MODEL.
 
 What remains a map, not a road
 ------------------------------
@@ -779,6 +796,8 @@ These ideas stay on the sketch and are not 1.0 behavior:
 * Trust-scoped Role assignment (`#34 <https://github.com/django-trusts/django-trusts/issues/34>`_)
 * Closing `#4 <https://github.com/django-trusts/django-trusts/issues/4>`_
   for arbitrary callbacks, serialization, or a policy service
+* Removal of the deprecated ``TRUSTS_GROUP_MODEL`` /
+  ``TRUSTS_PERMISSION_MODEL`` settings (scheduled for ``1.1.0``)
 * Measured throughput claims for the database-side design
 * A published PyPI ``1.0.0`` (the package version stays ``1.0.0.dev0``)
 
