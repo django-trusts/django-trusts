@@ -94,3 +94,70 @@ class Ticket(Content):
 
     def __str__(self):
         return self.title
+
+
+class Receipt(Content):
+    """Content model whose Trust is reused by dependent image/meta rows."""
+
+    title = models.CharField(max_length=40, null=False, blank=False)
+
+    class Meta:
+        default_permissions = ('add', 'read', 'change', 'delete')
+
+    def __str__(self):
+        return self.title
+
+
+class ReceiptImage(models.Model):
+    """One-hop dependent content: no Trust of its own."""
+
+    receipt = models.ForeignKey(
+        Receipt, related_name='image', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    caption = models.CharField(max_length=80, null=False, blank=False, default='')
+
+    class Meta:
+        default_permissions = ('add', 'read', 'change', 'delete')
+
+    def __str__(self):
+        return self.caption
+
+
+class ReceiptImageMeta(models.Model):
+    """Two-hop dependent content: no Trust of its own."""
+
+    image = models.ForeignKey(
+        ReceiptImage, related_name='meta', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    note = models.CharField(max_length=80, null=False, blank=False, default='')
+
+    class Meta:
+        default_permissions = ('add', 'read', 'change', 'delete')
+
+    def __str__(self):
+        return self.note
+
+
+class UnregisteredReceiptNote(models.Model):
+    """Dependent row that must stay unregistered so missing lookup denies."""
+
+    receipt = models.ForeignKey(
+        Receipt, related_name='notes', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    text = models.CharField(max_length=80, null=False, blank=False, default='')
+
+    class Meta:
+        default_permissions = ('add', 'read', 'change', 'delete')
+
+
+Content.register_content(
+    ReceiptImage,
+    Content.compose_content_fieldlookup(Receipt, 'image'),
+)
+Content.register_content(
+    ReceiptImageMeta,
+    Content.compose_content_fieldlookup(ReceiptImage, 'meta'),
+)

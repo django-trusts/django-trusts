@@ -137,17 +137,67 @@ Example::
 
        # request.user.has_perm('auth.change_group', group) ==> True
 
-Inheritance
-~~~~~~~~~~~
+Dependent content
+~~~~~~~~~~~~~~~~~
 
-Dependent model can inherit Trust from a related model. Such class need to be registered manually
-with ``fieldlookup`` specified.
+A model that does not subclass ``Content`` (and does not have its own
+``trust`` field) can still be checked against the Trust of a related
+``Content`` object. Register each dependent hop with the ORM path from
+``Trust`` to that model.
 
-Consider ReceiptImage as a dependent model of Receipt, and ReceiptImageMeta as a dependent
-model of ReceiptImage. The following code makes both model available for permission checking::
+``Content.get_content_fieldlookup(klass)`` returns that path as a string
+for a registered model, or ``None`` if the model is not registered. A
+direct ``Content`` subclass resolves to the reverse of ``Content.trust``
+(``app_label_model_content``), never ``None``. Compose the next hop with
+``Content.compose_content_fieldlookup(parent, related_name)`` so a missing
+parent cannot become ``None__image``.
 
-   Content.register_content(ReceiptImage, '%s__image' % Content.get_content_fieldlookup('app.Receipt'))
-   Content.register_content(ReceiptImageMeta, '%s__image' % Content.get_content_fieldlookup(ReceiptImage))
+``related_name`` is the reverse query name on the parent model (one hop
+per call). This reuses one Trust through related rows. It does not
+implement parent/child permission ceilings, explicit deny, or ACL
+inheritance. Each model still needs its own granted permission codename.
+
+Example: ``Receipt`` is ``Content``; ``ReceiptImage`` and
+``ReceiptImageMeta`` are ordinary models::
+
+   class Receipt(Content):
+       title = models.CharField(max_length=40)
+
+   class ReceiptImage(models.Model):
+       receipt = models.ForeignKey(Receipt, related_name='image', on_delete=models.CASCADE)
+
+   class ReceiptImageMeta(models.Model):
+       image = models.ForeignKey(ReceiptImage, related_name='meta', on_delete=models.CASCADE)
+
+   Content.register_content(
+       ReceiptImage,
+       Content.compose_content_fieldlookup(Receipt, 'image'),
+   )
+   Content.register_content(
+       ReceiptImageMeta,
+       Content.compose_content_fieldlookup(ReceiptImage, 'meta'),
+   )
+
+   # Equivalent interpolation, only because get_content_fieldlookup(Receipt)
+   # returns the resolved path (for example 'app_receipt_content'):
+   # Content.register_content(
+   #     ReceiptImage,
+   #     '%s__image' % Content.get_content_fieldlookup(Receipt),
+   # )
+
+An unregistered dependent model is not Trust content: ``has_perm`` denies
+and ``Trust.objects.filter_by_content`` is empty. Registering a lookup
+composed from ``None`` (or an empty path) raises ``InvalidContentFieldlookup``.
+``compose_content_fieldlookup`` raises ``AttributeError`` if the parent
+is not registered, and ``InvalidContentFieldlookup`` if ``related_name``
+is a scalar field (for example ``Receipt.title``) rather than a relation.
+The registered path must be a Trust-origin relation chain whose terminal
+model is the registered class. If reverse relations cannot be checked
+during model import, validation is deferred until the app registry is
+ready; ``filter_by_content`` / ``has_perm`` still raise on an invalid
+registration rather than querying it. A lookup that does not resolve, or
+that would compare a scalar field to the dependent instance, never
+grants access.
 
 Role
 ~~~~
