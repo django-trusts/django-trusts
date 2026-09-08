@@ -28,7 +28,8 @@ what is road, what is fence, and what is still a sketch:
   `PR #31 <https://github.com/django-trusts/django-trusts/pull/31>`_,
   `#26 <https://github.com/django-trusts/django-trusts/issues/26>`_ /
   `PR #32 <https://github.com/django-trusts/django-trusts/pull/32>`_,
-  `#33 <https://github.com/django-trusts/django-trusts/issues/33>`_).
+  `#33 <https://github.com/django-trusts/django-trusts/issues/33>`_ /
+  `PR #36 <https://github.com/django-trusts/django-trusts/pull/36>`_).
 * **Bounded / legacy** — a deliberately limited facility, an opt-in
   escape hatch, or a setting that exists but is not a swap point.
 * **Future** — direction that remains aspirational. Do not implement

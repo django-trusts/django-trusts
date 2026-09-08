@@ -1,5 +1,6 @@
 """Deprecation of TRUSTS_GROUP_MODEL / TRUSTS_PERMISSION_MODEL (issue #33)."""
 
+import importlib
 from io import StringIO
 
 from django.contrib.auth.models import Group, Permission
@@ -173,8 +174,10 @@ class DeprecatedGroupPermissionSettingsTest(Issue8FixtureMixin, TestCase):
         )
 
     def test_historical_migrations_import_pinned_auth_names(self):
-        from trusts.migrations.0001_initial import Migration as Initial
-        from trusts.migrations.0002_trustgroup import Migration as TrustGroupMigration
+        Initial = importlib.import_module('trusts.migrations.0001_initial').Migration
+        TrustGroupMigration = importlib.import_module(
+            'trusts.migrations.0002_trustgroup'
+        ).Migration
 
         self.assertEqual(GROUP_MODEL_NAME, 'auth.Group')
         self.assertEqual(PERMISSION_MODEL_NAME, 'auth.Permission')
