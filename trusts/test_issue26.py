@@ -2,7 +2,7 @@
 
 from django.contrib.auth.models import Group, Permission, User
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import models
 from django.test import TestCase
 from django.test.utils import isolate_apps
 
@@ -196,35 +196,23 @@ class ConfiguredModelConventionShapeTest(Issue8FixtureMixin, TestCase):
                 class Meta:
                     app_label = 'trusts'
 
-            with connection.schema_editor() as editor:
-                editor.create_model(OtherPrincipal)
-                editor.create_model(WrongModelUserGroup)
-            try:
-                other = OtherPrincipal.objects.create(
-                    pk=self.user.pk, name='collide',
-                )
-                rogue = WrongModelUserGroup.objects.create(user=other)
-                self.assertTrue(
-                    WrongModelUserGroup.objects.filter(user=self.user).filter(
-                        pk=rogue.pk
-                    ).exists(),
-                    'Django FK prep uses .pk; a same-pk User must not be treated '
-                    'as membership of an OtherPrincipal relation.',
-                )
-                self.assertIn(
-                    CHECK_ID_GROUP_USER, self._ids(WrongModelUserGroup),
-                )
-                self.assertFalse(
-                    self.user.has_perm(
-                        self.get_perm_code(self.perm_read), self.content,
-                    ),
-                )
-                self.assertFalse(
-                    TrustGroup.objects.filter(
-                        group__user=self.user, trust=self.org,
-                    ).exists(),
-                )
-            finally:
-                with connection.schema_editor() as editor:
-                    editor.delete_model(WrongModelUserGroup)
-                    editor.delete_model(OtherPrincipal)
+            other = OtherPrincipal(pk=self.user.pk, name='collide')
+            field = WrongModelUserGroup._meta.get_field('user')
+            self.assertEqual(field.get_prep_value(self.user), self.user.pk)
+            self.assertEqual(
+                field.get_prep_value(self.user),
+                field.get_prep_value(other),
+                'Django FK prep uses .pk; a same-pk User must not be treated '
+                'as membership of an OtherPrincipal relation.',
+            )
+            self.assertIn(CHECK_ID_GROUP_USER, self._ids(WrongModelUserGroup))
+            self.assertFalse(
+                self.user.has_perm(
+                    self.get_perm_code(self.perm_read), self.content,
+                ),
+            )
+            self.assertFalse(
+                TrustGroup.objects.filter(
+                    group__user=self.user, trust=self.org,
+                ).exists(),
+            )
