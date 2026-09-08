@@ -8,17 +8,27 @@ Silencing an ID does not make the policy executable: ``has_perm`` and
 ``.permitted()`` still validate and fail closed.
 
 ``DeprecationWarning`` is commonly filtered; this module uses
-``django.core.checks.Warning`` so the legacy-callback opt-in stays visible
-under ``manage.py check``.
+``django.core.checks.Warning`` so the legacy-callback opt-in and the
+deprecated ``TRUSTS_GROUP_MODEL`` / ``TRUSTS_PERMISSION_MODEL`` settings
+stay visible under ``manage.py check``.
 """
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group as AuthGroup
 from django.contrib.auth.models import Permission as AuthPermission
 from django.core import checks as django_checks
 from django.core.exceptions import ImproperlyConfigured
 
-from trusts import get_entity_model, get_group_model, get_permission_model
+from trusts import (
+    AUTH_GROUP_MODEL,
+    AUTH_PERMISSION_MODEL,
+    get_entity_model,
+    group_model_setting_overridden,
+    lookup_group_model_setting,
+    lookup_permission_model_setting,
+    permission_model_setting_overridden,
+)
 from trusts.conditions import PermissionConditionError, validate_expression
 from trusts.models import Content, legacy_permission_callbacks_allowed
 
@@ -29,6 +39,10 @@ CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
 CHECK_ID_ENTITY_NOT_USER = 'trusts.E003'
 CHECK_ID_GROUP_NOT_AUTH = 'trusts.E004'
 CHECK_ID_PERMISSION_NOT_AUTH = 'trusts.E005'
+CHECK_ID_GROUP_SETTING_DEPRECATED = 'trusts.W002'
+CHECK_ID_PERMISSION_SETTING_DEPRECATED = 'trusts.W003'
+
+REMOVAL_RELEASE = '1.1.0'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -111,22 +125,31 @@ _SILENCE_DOES_NOT_AUTHORIZE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
     'Runtime grants and authorization queries still fail closed on the '
     'supported AUTH_USER_MODEL / auth.Group / auth.Permission contract. '
-    'Deprecation and removal of TRUSTS_GROUP_MODEL / TRUSTS_PERMISSION_MODEL '
-    'are tracked separately (issue #33).'
+    'TRUSTS_GROUP_MODEL and TRUSTS_PERMISSION_MODEL are deprecated in 1.0 '
+    'and will be removed in %s. Leave them unset.' % REMOVAL_RELEASE
+)
+
+_UNSET_DEPRECATED_SETTING_HINT = (
+    'Leave the setting unset. Runtime Group and Permission are always '
+    'auth.Group / auth.Permission. AUTH_USER_MODEL remains the only '
+    'supported principal swap. Removal is scheduled for %s.' % REMOVAL_RELEASE
 )
 
 
 @django_checks.register(django_checks.Tags.models)
 def check_configured_auth_models(app_configs, **kwargs):
-    """Report the verified AUTH_USER_MODEL-only contract (issue #26).
+    """Report the verified AUTH_USER_MODEL-only contract (issues #26 / #33).
 
     Django does not swap ``auth.Group`` or ``auth.Permission``. A custom
-    user is the supported entity swap. ``app_configs`` is ignored so
-    ``manage.py check trusts`` still reports project settings.
+    user is the supported entity swap. ``TRUSTS_GROUP_MODEL`` and
+    ``TRUSTS_PERMISSION_MODEL`` are deprecated in 1.0 and removed in
+    ``1.1.0``. ``app_configs`` is ignored so ``manage.py check trusts``
+    still reports project settings.
 
-    Each getter is resolved independently so an invalid Group or
-    Permission reference is ``trusts.E004`` / ``trusts.E005``, not
-    ``trusts.E003``. These IDs are deployment diagnostics; runtime
+    An invalid leftover Group or Permission reference is ``trusts.E004`` /
+    ``trusts.E005``, not ``trusts.E003``. An explicit setting that already
+    names ``auth.Group`` / ``auth.Permission`` is ``trusts.W002`` /
+    ``trusts.W003``. These IDs are deployment diagnostics; runtime
     enforcement does not depend on them remaining unsilenced.
     """
     messages = []
@@ -159,51 +182,73 @@ def check_configured_auth_models(app_configs, **kwargs):
                 id=CHECK_ID_ENTITY_NOT_USER,
             ))
 
-    try:
-        Group = get_group_model()
-    except ImproperlyConfigured as exc:
-        messages.append(django_checks.Error(
-            str(exc),
-            hint=_SILENCE_DOES_NOT_AUTHORIZE_HINT,
-            obj=None,
-            id=CHECK_ID_GROUP_NOT_AUTH,
-        ))
-    else:
-        if Group is not AuthGroup:
+    if group_model_setting_overridden():
+        try:
+            Group = lookup_group_model_setting()
+        except ImproperlyConfigured as exc:
             messages.append(django_checks.Error(
-                'TRUSTS_GROUP_MODEL (%s) must be auth.Group. Django does not '
-                'swap Group; django-trusts does not maintain a private '
-                'parallel group model.' % _model_label(Group),
-                hint=(
-                    'Leave TRUSTS_GROUP_MODEL unset (default auth.Group). '
-                    'Removal of the setting is issue #33. '
-                    + _SILENCE_DOES_NOT_AUTHORIZE_HINT
-                ),
-                obj=Group,
+                str(exc),
+                hint=_UNSET_DEPRECATED_SETTING_HINT + ' ' + _SILENCE_DOES_NOT_AUTHORIZE_HINT,
+                obj=None,
                 id=CHECK_ID_GROUP_NOT_AUTH,
             ))
+        else:
+            configured = getattr(settings, 'TRUSTS_GROUP_MODEL', AUTH_GROUP_MODEL)
+            if configured != AUTH_GROUP_MODEL or Group is not AuthGroup:
+                messages.append(django_checks.Error(
+                    'TRUSTS_GROUP_MODEL (%s) is deprecated in 1.0 and will be '
+                    'removed in %s. It must be auth.Group; django-trusts does '
+                    'not swap Group or maintain a private parallel group model. '
+                    'Runtime always uses auth.Group and still fail-closes when '
+                    'this setting names anything else.' % (
+                        _model_label(Group), REMOVAL_RELEASE,
+                    ),
+                    hint=_UNSET_DEPRECATED_SETTING_HINT + ' ' + _SILENCE_DOES_NOT_AUTHORIZE_HINT,
+                    obj=Group,
+                    id=CHECK_ID_GROUP_NOT_AUTH,
+                ))
+            else:
+                messages.append(django_checks.Warning(
+                    'TRUSTS_GROUP_MODEL is deprecated in 1.0 and will be '
+                    'removed in %s. django-trusts always uses auth.Group. '
+                    'Leave this setting unset.' % REMOVAL_RELEASE,
+                    hint=_UNSET_DEPRECATED_SETTING_HINT,
+                    obj=None,
+                    id=CHECK_ID_GROUP_SETTING_DEPRECATED,
+                ))
 
-    try:
-        Permission = get_permission_model()
-    except ImproperlyConfigured as exc:
-        messages.append(django_checks.Error(
-            str(exc),
-            hint=_SILENCE_DOES_NOT_AUTHORIZE_HINT,
-            obj=None,
-            id=CHECK_ID_PERMISSION_NOT_AUTH,
-        ))
-    else:
-        if Permission is not AuthPermission:
+    if permission_model_setting_overridden():
+        try:
+            Permission = lookup_permission_model_setting()
+        except ImproperlyConfigured as exc:
             messages.append(django_checks.Error(
-                'TRUSTS_PERMISSION_MODEL (%s) must be auth.Permission. Django '
-                'does not swap Permission; django-trusts does not maintain a '
-                'private parallel permission model.' % _model_label(Permission),
-                hint=(
-                    'Leave TRUSTS_PERMISSION_MODEL unset (default auth.Permission). '
-                    'Removal of the setting is issue #33. '
-                    + _SILENCE_DOES_NOT_AUTHORIZE_HINT
-                ),
-                obj=Permission,
+                str(exc),
+                hint=_UNSET_DEPRECATED_SETTING_HINT + ' ' + _SILENCE_DOES_NOT_AUTHORIZE_HINT,
+                obj=None,
                 id=CHECK_ID_PERMISSION_NOT_AUTH,
             ))
+        else:
+            configured = getattr(settings, 'TRUSTS_PERMISSION_MODEL', AUTH_PERMISSION_MODEL)
+            if configured != AUTH_PERMISSION_MODEL or Permission is not AuthPermission:
+                messages.append(django_checks.Error(
+                    'TRUSTS_PERMISSION_MODEL (%s) is deprecated in 1.0 and will '
+                    'be removed in %s. It must be auth.Permission; django-trusts '
+                    'does not swap Permission or maintain a private parallel '
+                    'permission model. Runtime always uses auth.Permission and '
+                    'still fail-closes when this setting names anything else.' % (
+                        _model_label(Permission), REMOVAL_RELEASE,
+                    ),
+                    hint=_UNSET_DEPRECATED_SETTING_HINT + ' ' + _SILENCE_DOES_NOT_AUTHORIZE_HINT,
+                    obj=Permission,
+                    id=CHECK_ID_PERMISSION_NOT_AUTH,
+                ))
+            else:
+                messages.append(django_checks.Warning(
+                    'TRUSTS_PERMISSION_MODEL is deprecated in 1.0 and will be '
+                    'removed in %s. django-trusts always uses auth.Permission. '
+                    'Leave this setting unset.' % REMOVAL_RELEASE,
+                    hint=_UNSET_DEPRECATED_SETTING_HINT,
+                    obj=None,
+                    id=CHECK_ID_PERMISSION_SETTING_DEPRECATED,
+                ))
     return messages

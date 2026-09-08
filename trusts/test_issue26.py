@@ -8,12 +8,20 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 
 from tests.models import Category, Organization
-from trusts import get_entity_model, get_group_model, get_permission_model
+from trusts import (
+    get_entity_model,
+    get_group_model,
+    get_permission_model,
+    supported_group_contract,
+    supported_permission_contract,
+)
 from trusts.authorization import AuthorizationDenied, grant_trustee
 from trusts.checks import (
     CHECK_ID_ENTITY_NOT_USER,
     CHECK_ID_GROUP_NOT_AUTH,
+    CHECK_ID_GROUP_SETTING_DEPRECATED,
     CHECK_ID_PERMISSION_NOT_AUTH,
+    CHECK_ID_PERMISSION_SETTING_DEPRECATED,
     check_configured_auth_models,
 )
 from trusts.models import (
@@ -81,6 +89,8 @@ class DefaultConfiguredModelContractTest(Issue8FixtureMixin, TestCase):
                 CHECK_ID_ENTITY_NOT_USER,
                 CHECK_ID_GROUP_NOT_AUTH,
                 CHECK_ID_PERMISSION_NOT_AUTH,
+                CHECK_ID_GROUP_SETTING_DEPRECATED,
+                CHECK_ID_PERMISSION_SETTING_DEPRECATED,
             }
         )
 
@@ -216,7 +226,8 @@ class DefaultConfiguredModelContractTest(Issue8FixtureMixin, TestCase):
             TRUSTS_GROUP_MODEL='trusts_tests.Organization',
             SILENCED_SYSTEM_CHECKS=_SILENCE_E004,
         ):
-            self.assertIs(get_group_model(), Organization)
+            self.assertFalse(supported_group_contract())
+            self.assertIs(get_group_model(), Group)
             _run_manage_py_check()
             with self.assertRaises(ValidationError) as ctx:
                 self.org.associate_group(self.group)
@@ -240,7 +251,8 @@ class DefaultConfiguredModelContractTest(Issue8FixtureMixin, TestCase):
             TRUSTS_PERMISSION_MODEL='trusts_tests.Organization',
             SILENCED_SYSTEM_CHECKS=_SILENCE_E005,
         ):
-            self.assertIs(get_permission_model(), Organization)
+            self.assertFalse(supported_permission_contract())
+            self.assertIs(get_permission_model(), Permission)
             _run_manage_py_check()
             with self.assertRaises(ValidationError) as ctx:
                 self.content.grant('change', self.user)

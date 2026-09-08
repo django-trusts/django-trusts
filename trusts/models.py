@@ -7,7 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
-                    get_permission_model, utils, \
+                    utils, \
                     supported_entity_contract, supported_group_contract, \
                     supported_permission_contract
 from trusts.query import is_active_principal, trust_grant_q
@@ -153,7 +153,7 @@ def resolve_content_permission(model, perm):
             'Silencing trusts.E005 does not enable a non-auth permission model.',
             code='unsupported_permission_model',
         )
-    Permission = get_permission_model()
+    from django.contrib.auth.models import Permission
     if isinstance(perm, Permission):
         return perm
 
@@ -173,13 +173,8 @@ def resolve_content_permission(model, perm):
     if not perm.endswith('_' + model_name) and '_' not in perm:
         perm = '%s_%s' % (perm, model_name)
 
-    manager = Permission.objects
-    if hasattr(manager, 'get_by_natural_key'):
-        return manager.get_by_natural_key(perm, app_label.lower(), model_name)
-    return manager.get(
-        codename=perm,
-        content_type__app_label=app_label.lower(),
-        content_type__model=model_name,
+    return Permission.objects.get_by_natural_key(
+        perm, app_label.lower(), model_name,
     )
 
 

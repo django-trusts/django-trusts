@@ -14,7 +14,22 @@ from django.test import TestCase
 
 from tests.custom_auth.models import CustomUser
 from tests.custom_content.models import Item
-from trusts import get_entity_model, get_group_model, get_permission_model
+from trusts import (
+    get_entity_model,
+    get_group_model,
+    get_permission_model,
+    group_model_setting_overridden,
+    permission_model_setting_overridden,
+    supported_group_contract,
+    supported_permission_contract,
+)
+from trusts.checks import (
+    CHECK_ID_GROUP_NOT_AUTH,
+    CHECK_ID_GROUP_SETTING_DEPRECATED,
+    CHECK_ID_PERMISSION_NOT_AUTH,
+    CHECK_ID_PERMISSION_SETTING_DEPRECATED,
+    check_configured_auth_models,
+)
 from trusts.authorization import (
     AuthorizationDenied,
     associate_group_with_trust,
@@ -100,6 +115,19 @@ class CustomUserInstallTest(TestCase):
         self.assertIs(
             RolePermission._meta.get_field('permission').remote_field.model,
             Permission,
+        )
+        self.assertFalse(group_model_setting_overridden())
+        self.assertFalse(permission_model_setting_overridden())
+        self.assertTrue(supported_group_contract())
+        self.assertTrue(supported_permission_contract())
+        ids = {m.id for m in check_configured_auth_models(None)}
+        self.assertFalse(
+            ids & {
+                CHECK_ID_GROUP_NOT_AUTH,
+                CHECK_ID_PERMISSION_NOT_AUTH,
+                CHECK_ID_GROUP_SETTING_DEPRECATED,
+                CHECK_ID_PERMISSION_SETTING_DEPRECATED,
+            }
         )
 
     def test_fresh_schema_fks_target_custom_user_and_auth_tables(self):
