@@ -1438,3 +1438,172 @@ migration. No Role or TrustGroup rewrite.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #40 from this PR.
 
+# Issue #43 Step 1: composed AuthorizationPath IR and GH proof (1.0.0.dev0)
+
+This record covers the first additive AuthorizationPath slice. Version
+remains **1.0.0.dev0**. **No Trusts schema migration is required.** Test
+fixtures add a private `tests.gh_vocab` application only
+(`gh_vocab.0001_initial`). This PR does **not** close
+[#43](https://github.com/django-trusts/django-trusts/issues/43); review
+owns that. Concrete relocation to `django-trusts-zero` is a later step.
+Recursive traversal and ordered remaining-bits helpers are reserved
+slots only.
+
+## Decision
+
+The reusable join is: given a resource model and an operation, freeze
+the Context and Trustee maps and compile one authorization decision
+from those frozen path records. That contract lives in `trusts.path`
+and must not name `Trust`, `Content`, `Junction`, `Group`, `Role`,
+`Team`, or `User`.
+
+```python
+from trusts.path import AuthorizationPath, compose, filter_granted, row_is_granted
+
+path = compose(ResourceModel, operation, context=context, trustee=trustee)
+row_is_granted(obj, requester, operation, context=context, trustee=trustee)
+filter_granted(ResourceModel.objects.all(), requester, operation,
+               context=context, trustee=trustee)
+```
+
+Internally that is today's
+
+```text
+Trustee.grant_q(requester, operation,
+                scope_from_row=Context.scope_path(resource_model))
+```
+
+plus fail-closed terminal matching. Isolated tests construct
+`ContextRegistry()` / `TrusteeRegistry()` and pass them in.
+Process-wide `Context` / `Trustee` remain the default instances.
+
+This slice is **additive/internal**. Existing Trust / Role / Group /
+ceiling / backend evaluation still consumes its current path
+(`trust_grant_q` / `TrustModelBackend`). Those call sites are
+intentionally not rewired here.
+
+A private GH-shaped vocabulary proves the kernel without django-trusts
+nouns. Public relations used to authorize are `account.teams`,
+`team.permission_bundles`, and `repository.policy`.
+`organization.teams` is owner containment and is not the requester
+path. Kernel APIs only: not `User.has_perm`.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` signatures
+- `ContentQuerySet.permitted(perm, user)` signature
+- `Trust.objects.filter_by_user_content_perm` / `filter_by_user_perm`
+- `from trusts.context import Context` / `from trusts.trustee import Trustee`
+- `from trusts.models import Trust, Content, Junction, Role`
+- `AUTHENTICATION_BACKENDS = ('trusts.backends.TrustModelBackend',)`
+- `Role` / `RolePermission` / `TrustGroup` / `TrustGroupPermission` tables
+- Package version `1.0.0.dev0`
+- Historical `0001_initial` / `0002_trustgroup` file contents
+
+Authorization **behavior** for current User / Group / Role-ceiling /
+Content paths is **unchanged**. This slice does not rewire
+`TrustModelBackend` or `ContentQuerySet.permitted`. Those surfaces stay
+behavior-compatible: same signatures, same allow/deny results, same
+Zero policy registration (`direct` / `group`, Role-as-ceiling).
+
+## Changes
+
+### 35. `trusts.path.AuthorizationPath` compose seam (new)
+
+| | |
+| --- | --- |
+| Previous | The Context / Trustee join was implicit: `Trustee.grant_q(..., scope_from_row=Context.scope_path(model))` inside Zero list/`has_perm` helpers. |
+| New | Named IR `AuthorizationPath` with `compose` / `row_is_granted` / `filter_granted`. Shared terminals are scalars. Adapter-specific fields are a scalar when one grant adapter is enabled and a tuple when several OR-compose. Unregistered resources, empty grant sets, and mismatched scope/operation terminals fail closed (`AuthorizationPathError`). `RecursiveEdge` / `OrderedContribution` / resource-row `condition=` are reserved and reject construction/use. |
+| Replacement | New kernel callers use `from trusts.path import compose, row_is_granted, filter_granted`. Existing `has_perm` / `.permitted()` keep working on the current Zero path. |
+| Affected | New registrations and the private GH proof. Current Content / Trust / Group callers are unchanged. |
+| Authorization | Same allow/deny for current User and Group paths. GH `Account` / `Team` graphs use kernel APIs. No schema change. |
+
+Migration-bot checklist:
+
+- [ ] Prefer `compose` / `row_is_granted` / `filter_granted` for new
+      noun-independent callers. Pass isolated registries in tests.
+- [ ] Keep using `User.has_perm` / `.permitted()` for current Content.
+- [ ] Do not treat `RecursiveEdge` / `OrderedContribution` /
+      `condition=` as implemented.
+- [ ] Do not relocate models, migrations, commands, or the backend to
+      `django-trusts-zero` in this slice.
+- [ ] Do not add a Trusts schema migration. Do not edit `0001_initial`
+      or `0002_trustgroup`.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_path`
+      and `tests.core.test_gh_vocab`).
+- [ ] Run `python -m tests.runtests_custom`.
+- [ ] Run `python -m django check` (default and custom settings).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
+- [ ] Run the packaging / wheel-import check.
+- [ ] Confirm `account.teams` membership grants and organization
+      containment without membership denies.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #43 from this PR.
+
+### 36. Private GH-shaped proof application (tests only)
+
+| | |
+| --- | --- |
+| Previous | Isolated Context / Trustee models used kernel nouns (`TrusteeRequester`, `TrusteeScope`). Process-wide extra adapter `TrusteeTeam` still FKs `trusts.Trust`. |
+| New | Private `tests.gh_vocab` models: `Account`, `Organization`, `Team`, `PermissionBundle`, `Policy`, `Repository` (plus `Operation` / `TeamPolicyGrant`). `account.teams` is the membership M2M reverse. `organization.teams` is containment only. No required public `.trusts` / `.trustees` / `.contexts` / `.roles` / `.groups` / `.member_teams`. |
+| Replacement | Proof-only. Not an installable package. Terminology is GH, not the full external service name. |
+| Affected | Isolated tests. Process-wide Context / Trustee maps do not register these models. |
+| Authorization | Membership + grant + bundle ceiling allow. Containment without membership, wrong operation, and missing bundle ceiling deny. Exists ≡ list, one query. |
+
+Migration-bot checklist:
+
+- [ ] Do not import `tests.gh_vocab` from production code.
+- [ ] Do not add GH models to the installable `trusts` package.
+- [ ] Do not register GH adapters on the process-wide Trustee map
+      (requester/scope/operation terminals would mismatch Zero).
+- [ ] Leave package version at `1.0.0.dev0`.
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m django migrate --settings=tests.custom_settings
+```
+
+Trusts still applies `0001`–`0002` only. The isolated test app applies
+`gh_vocab.0001_initial` for GH proof models. That is not a Trusts
+schema change. Custom-user settings do not install `gh_vocab`.
+
+## Upgrade of a representative legacy database
+
+`scripts/verify-legacy-upgrade.py` is unchanged: pending
+`0002_trustgroup` after recording `0001_initial`, then
+`{0001_initial, 0002_trustgroup}` after migrate. No new Trusts
+migration.
+
+## Out of scope (unchanged)
+
+- Rewiring `TrustModelBackend` / `ContentQuerySet.permitted` onto
+  compose (Step 2)
+- Relocating concrete models/migrations to `django-trusts-zero`
+  (Step 3)
+- Recursive hierarchy / bounded ancestor walk
+- Ordered remaining-bits / Windows ACE semantics
+- Compiling resource-row V1 `Expr` on the IR (`condition=` reserved)
+- Implementing complete GH authorization semantics
+- A separate `django-trusts-core` distribution
+
+## Migration-bot summary (issue #43 Step 1)
+
+- [ ] Adopt `from trusts.path import compose, row_is_granted,
+      filter_granted` for new kernel callers.
+- [ ] Keep current `has_perm` / `.permitted()` / backend call sites;
+      they are behavior-compatible and still consume the Zero path.
+- [ ] Do not relocate packages or migrations.
+- [ ] Do not add a Trusts schema migration.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_path`
+      and `tests.core.test_gh_vocab`).
+- [ ] Run `python -m tests.runtests_custom`.
+- [ ] Run `python -m django check` (default and custom settings).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
+- [ ] Run the packaging / wheel-import check.
+- [ ] Confirm exact one-query list/exists AuthorizationPath evaluation
+      and the GH membership vs containment proof.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #43 from this PR.
+

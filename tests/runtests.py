@@ -28,6 +28,8 @@ NORMAL_SUITE = [
     'tests.core.test_core',
     'tests.core.test_context',
     'tests.core.test_trustee',
+    'tests.core.test_path',
+    'tests.core.test_gh_vocab',
     'tests.core.test_wheel_install',
 ]
 

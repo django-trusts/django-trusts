@@ -33,7 +33,9 @@ what is road, what is fence, and what is still a sketch:
   `#39 <https://github.com/django-trusts/django-trusts/issues/39>`_
   first Context-extraction slice — the issue stays open for review,
   `#40 <https://github.com/django-trusts/django-trusts/issues/40>`_
-  first Trustee-extraction slice — the issue stays open for review).
+  first Trustee-extraction slice — the issue stays open for review,
+  `#43 <https://github.com/django-trusts/django-trusts/issues/43>`_
+  first AuthorizationPath / GH-proof slice — the issue stays open for review).
 * **Bounded / legacy** — a deliberately limited facility, an opt-in
   escape hatch, or a setting that exists but is not a swap point.
 * **Future** — direction that remains aspirational. Do not implement
@@ -271,6 +273,65 @@ is ``trusts.trustee.Trustee``. It does not require the concrete names
    ``#40`` stays open until review. There is no ``TrustRolePermission``,
    ``Team``, or ``TrustGroupRole`` in this slice, and no separate core
    distribution yet.
+
+AuthorizationPath compose seam
+------------------------------
+
+The reusable question is: given a resource model and an operation, what
+frozen Context plus Trustee records compile into one authorization
+decision? That contract is ``trusts.path.AuthorizationPath``. It does
+not require the concrete names ``Trust``, ``Content``, ``Junction``,
+``Group``, ``Role``, ``Team``, or ``User``.
+
+.. admonition:: Verified — first AuthorizationPath slice (``#43`` Step 1)
+
+   ``compose`` freezes both maps and joins ``Context.scope_path`` with
+   the enabled Trustee grant adapters. Direct exists-checks and list
+   filters share that predicate and stay one SQL query each.
+   Unregistered resources, empty grant sets, and mismatched terminals
+   fail closed. Recursive traversal and ordered remaining-bits helpers
+   are reserved slots only.
+
+   .. code-block:: python
+
+      from trusts.context import ContextRegistry
+      from trusts.path import compose, filter_granted, row_is_granted
+      from trusts.trustee import TrusteeRegistry
+
+      context = ContextRegistry()
+      context.register_direct(Repository, scope_field='policy')
+      trustee = TrusteeRegistry(
+          requester_model=Account,
+          scope_model=Policy,
+          operation_model=Operation,
+      )
+      trustee.register(
+          name='team',
+          trustee_model=Team,
+          grant_model=TeamPolicyGrant,
+          trustee_path='team',
+          scope_path='policy',
+          operation_path='operation',
+          membership_path='members',
+          constraint_paths=('team__permission_bundles__operations',),
+      )
+      path = compose(Repository, operation, context=context, trustee=trustee)
+      row_is_granted(repo, account, operation, context=context, trustee=trustee)
+      filter_granted(Repository.objects.all(), account, operation,
+                     context=context, trustee=trustee)
+
+   A private GH-shaped vocabulary (``Account`` / ``Organization`` /
+   ``Team`` / ``PermissionBundle`` / ``Policy`` / ``Repository``)
+   authorizes through ``account.teams``, ``team.permission_bundles``,
+   and ``repository.policy``. Organization containment
+   (``organization.teams``) is not the requester path. These models do
+   not inherit ``Content`` and do not register on the process-wide
+   maps.
+
+   Existing ``User.has_perm`` / ``.permitted()`` / ``TrustModelBackend``
+   behavior is unchanged and still consumes the current Zero path.
+   ``#43`` stays open until review. Concrete relocation to
+   ``django-trusts-zero`` is not part of this slice.
 
 Content and Junction
 --------------------
