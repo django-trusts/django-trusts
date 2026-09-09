@@ -2513,3 +2513,191 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #47 from this PR.
 
+# Issue #47 S5: generic configuration checks cleanup (1.0.0.dev0)
+
+This record covers the fifth kernel execution slice. Version remains
+**1.0.0.dev0**. This PR does **not** close
+[#47](https://github.com/django-trusts/django-trusts/issues/47); review
+owns that. S5 may complete #47 only after its reviewed merge. It
+implements accepted **framework-execution-r1+r2+r3** kernel S5 only.
+It does **not** modify `django-trusts-zero`, start
+gh-permissions#1, resume #17, or extend S4.
+
+## Decision
+
+```text
+trusts.checks:
+  trusts.E006   # Context adapter re-walk (unchanged semantics)
+  trusts.E007   # Trustee adapter re-walk (unchanged semantics)
+  trusts.E008   # Trustee terminal / string-operation completeness
+```
+
+Kernel `trusts.checks` no longer imports `trusts.zero.models.Content`
+and no longer walks unresolved leftover Content registrations. That
+compatibility diagnostic stays on `Content.iter_unresolved_content_registrations()`
+/ `Content.compatibility_context_error()` in Zero.
+`trusts.zero.checks.check_context_registry` still implements the leftover
+walk; it is registered only as the no-kernel fallback. When KernelConfig
+is present, `manage.py check` does **not** emit leftover Content `E006`
+until a Zero companion registers a leftover-only check. Kernel must not
+reintroduce the import to close that gap.
+
+`trusts.E006` / `trusts.E007` remain noun-independent adapter re-walks.
+They stay no-query and fail-closed. Silencing them still does not
+enable stale paths at query time.
+
+`trusts.E008` reports a **partially configured / used** Trustee
+authorization setup before request handling:
+
+- A pristine registry (no requester / scope / operation terminal, no
+  `operation_lookup`, no adapters) is valid.
+- Missing requester, scope, or operation terminals on a declared map
+  are `trusts.E008`.
+- `operation_lookup` without `operation_model` is incomplete
+  string-operation configuration (`trusts.E008`).
+- Completeness is metadata / registry attribute presence only. The
+  check does not re-walk adapter paths (that is E006 / E007), does not
+  execute getters / properties / callbacks, does not run authorization
+  queries, and does not import `trusts.zero`.
+- Silencing `trusts.E008` suppresses only the early diagnostic. S1
+  runtime still raises `AuthorizationConfigError` for
+  malformed / incomplete configuration.
+
+S4 shipped admin add as fail-closed with no generic create-under-scope
+helper. E008 is **not** attached to `add_operation` / `scope_field` /
+`parent_field`. Those superseded r2 proposals stay out.
+
+## No change to these public call sites
+
+- S1 `trusts.runtime` / `trusts.query` / `compose` / `compose_scope`
+- S2 `ObjectAuthorizationBackend` / `ObjectAuthorizationModelBackend`
+- S3 `trusts.decorators.require_authorized` / `P` / `K` / `G` / `O`
+- S4 `AuthorizedModelAdmin` / CBV mixins / stub templates
+- Kernel `trusts.E006` / `trusts.E007` IDs, hints, and re-walk behavior
+- Zero `E001`–`E005` / `W001`–`W003`, leftover Content walker function,
+  `TrustModelBackend`, `ContentQuerySet.permitted`, historical
+  migrations, app label `trusts`
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 50. Kernel leftover Content import removed
+
+| | |
+| --- | --- |
+| Previous | Kernel `check_context_registry` optionally imported `trusts.zero.models.Content` and walked `iter_unresolved_content_registrations()` as extra `trusts.E006` rows. |
+| New | Kernel adapter re-walk only. No `trusts.zero` import, even optional. Leftover Content diagnostics stay in Zero. |
+| Replacement | Keep using Zero `Content.register_content` / `prepare_context_registry`. Do not expect kernel `manage.py check` to emit leftover Content `E006` when KernelConfig is installed. |
+| Affected | Kernel-only installs lose a Zero-shaped import probe they should never have had. Kernel+Zero leftover `manage.py check` coverage waits on a Zero companion leftover-only registration. |
+| Authorization | Unresolved leftovers stay fail-closed at `Context.scope_path` / `Content.require_valid_content_fieldlookup`. Silencing kernel `E006` still does not enable stale *adapters*. |
+
+### 51. `trusts.E008` incomplete runtime/terminal configuration (new)
+
+| | |
+| --- | --- |
+| Previous | Incomplete `Trustee.configure` / missing terminals were visible only when a direct S1 API raised `AuthorizationConfigError`. |
+| New | `check_trustee_configuration` reports `trusts.E008` for a declared-but-incomplete Trustee map (missing requester / scope / operation, or `operation_lookup` without `operation_model`). Isolated tests may pass `registry=`. |
+| Replacement | Declare all three terminals before request handling. Configure `operation_lookup` only together with `operation_model`. A kernel install that has not called `configure` / `register` stays check-clean. |
+| Affected | New kernel consumers. Zero's process-wide map is complete after its finalizers and does not emit `E008`. |
+| Authorization | Direct APIs still raise `AuthorizationConfigError` when terminals / string-operation configuration are incomplete, including when `trusts.E008` is silenced. Backend / decorator / admin still catch that as deny / 403. |
+
+## Final #47 kernel move / remain (S1–S5)
+
+This is the kernel-surface report only. It does **not** claim Zero,
+GH, or Windows acceptance is complete.
+
+### Moved into django-trusts (S1–S5)
+
+| Slice | Surface |
+| --- | --- |
+| S1 | `trusts.runtime`, `AuthorizedQuerySet` / `AuthorizedManager`, `Context.register_identity`, Trustee `operation_lookup` / `alignment_paths`, `compose_scope` |
+| S2 | `ObjectAuthorizationBackend` (`BaseBackend`, object-only); optional `ObjectAuthorizationModelBackend` |
+| S3 | `trusts.decorators.require_authorized`, `request_passes_test`, inert `P` / `K` / `G` / `O` |
+| S4 | `AuthorizedModelAdmin`, `AuthorizedQuerySetMixin` / `AuthorizedObjectMixin`, `trusts/` stub templates |
+| S5 | Kernel leftover Content import removed; `trusts.E008` completeness |
+
+### Remains in django-trusts-zero
+
+- Trust / Content / Junction / Role / grant tables, historical
+  migrations, app label `trusts`, content types, permissions
+- `TRUSTS_*` settings and auth-model contracts (`E001`–`E005`,
+  `W001`–`W003`)
+- Built-in `direct` / `group` adapters, Role ceiling,
+  Group.permissions ∩ TrustGroup
+- Trust-as-Content parent hop, create-under-trust, settlor, root
+- `Content.register_content` / Junction conveniences and leftover
+  Content walker
+- `TrustModelBackend` Permission strings, `Content.is_content`, cache,
+  `:condition`, legacy callbacks
+- `ContentQuerySet.permitted` argument order (wrappers onto S1 are
+  **not** shipped)
+- Zero `permission_required` / Django-permission `P`
+- Team People UI, product ModelAdmins, `auto_modeladmin`, management
+  commands
+
+### Not claimed complete
+
+- django-trusts-zero execution wrappers (pin bump later)
+- [gh-permissions#1](https://github.com/django-trusts/django-trusts-gh-permissions/issues/1)
+  consumer package
+- #17 Windows SID / inheritance
+- Generic create-under-scope admin/CBV helper (S4 deferred; add stays
+  fail-closed)
+- Generic `register_row_condition`, `RecursiveEdge`,
+  `OrderedContribution`
+
+## Updated GH consumer glue budget
+
+In-tree `tests/gh_vocab` is still a kernel proof, not the GH package.
+After S1–S5 the consumer should depend on `django-trusts` only:
+
+| Category | Expected | Why consumer-owned |
+| --- | ---: | --- |
+| Domain models | 180–260 lines | Account, Organization, Team, Repository, PermissionBundle, Operation, TeamRepoGrant, optional AccountRepoGrant |
+| Policy registrations | 25–45 lines | `register_identity` + `configure(..., operation_lookup='code')` + 1–2 `register` adapters + `alignment_paths` |
+| Policy-specific overrides | 0–20 lines | org-cap as model/DB constraints; admin `verbose_name`; not query / backend / decorator / admin copies |
+| Framework glue copied locally | **0** | S1–S4 own exists/list, object backend, native decorator, authorized admin/CBVs/stubs. E008 is the check. Any generic helper found while building GH is a #47 follow-up. |
+| Tests / fixtures / docs | 400–700 lines | acceptance matrix, unsupported-behavior list, code-budget README table |
+| Org-boundary schema | GH #1 | denormalized grant org + portable composite integrity *if/when* available; otherwise fixture discipline. No Python predicate in `grant_q`. |
+
+Create-under-scope listings use S1 `filter_authorized_scope`. There is
+no framework add form / `scope_field` helper. GH must not import Zero.
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m tests.runtests
+```
+
+No Trusts schema migration. S5 uses the existing isolated S1 test models.
+
+## Upgrade of a representative legacy database
+
+Unchanged. `scripts/verify-legacy-upgrade.py` still expects
+`{0001_initial, 0002_trustgroup}` on label `trusts`.
+
+## Out of scope (unchanged)
+
+- django-trusts-zero leftover-only check registration or wrappers
+- Framework URL patterns / FK form helper / create-under-scope UI
+- Generic `register_row_condition`
+- `RecursiveEdge` / `OrderedContribution`
+- gh-permissions#1
+- Closing #17 or #47
+
+## Migration-bot summary (issue #47 S5)
+
+- [ ] Expect kernel `trusts.checks` to import no `trusts.zero` / `Content`.
+- [ ] Treat leftover Content `E006` as a Zero diagnostic, not a kernel one.
+- [ ] Run `python -m django check`; a pristine kernel install stays valid.
+- [ ] Declare requester, scope, and operation terminals before request handling (`trusts.E008`).
+- [ ] Configure `operation_lookup` only with `operation_model`.
+- [ ] Do not silence `trusts.E008` expecting runtime to accept incomplete config.
+- [ ] Keep using `trusts.E006` / `trusts.E007` for stale adapters only.
+- [ ] Do not expect an admin `add_operation` / `scope_field` / `parent_field` check.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_s5_checks`).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #47 from this PR.
+- [ ] Do not treat Zero / GH / Windows acceptance as complete because the kernel surface exists.
+

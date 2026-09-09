@@ -584,11 +584,16 @@ class ContextSystemCheckTest(TestCase):
             any(m.id == CHECK_ID_INVALID_CONTEXT for m in restored)
         )
 
-    def test_invalid_pending_content_lookup_emits_trusts_e006(self):
+    def test_invalid_pending_content_lookup_stays_fail_closed(self):
         # End-to-end compatibility pipeline: a Trust-origin lookup left in
         # Content._contents (as if deferred while models were loading)
-        # must not abort prepare, must emit trusts.E006, and must stay
-        # fail-closed at authorization time.
+        # must not abort prepare. Kernel E006 no longer walks leftovers;
+        # Zero's check_context_registry function still owns that
+        # diagnostic. Authorization stays fail-closed.
+        from trusts.zero.checks import (
+            check_context_registry as zero_check_context,
+        )
+
         short = get_short_model_name(UnregisteredReceiptNote)
         invalid = '%s__title' % Content.get_content_fieldlookup(Receipt)
         self.assertFalse(Context.is_registered(UnregisteredReceiptNote))
@@ -601,9 +606,17 @@ class ContextSystemCheckTest(TestCase):
             self.assertFalse(Context.is_registered(UnregisteredReceiptNote))
             self.assertEqual(Content._contents[short], invalid)
 
-            messages = check_context_registry(None)
+            kernel_messages = check_context_registry(None)
+            kernel_leftover = [
+                m for m in kernel_messages
+                if m.id == CHECK_ID_INVALID_CONTEXT
+                and m.obj is UnregisteredReceiptNote
+            ]
+            self.assertEqual(kernel_leftover, [])
+
+            zero_messages = zero_check_context(None)
             e006 = [
-                m for m in messages
+                m for m in zero_messages
                 if m.id == CHECK_ID_INVALID_CONTEXT
                 and m.obj is UnregisteredReceiptNote
             ]
@@ -611,7 +624,6 @@ class ContextSystemCheckTest(TestCase):
             self.assertEqual(e006[0].id, 'trusts.E006')
             self.assertIsInstance(e006[0], Error)
             self.assertIs(e006[0].obj, UnregisteredReceiptNote)
-            self.assertEqual(e006[0].hint, _SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT)
             self.assertIn('fail-closed', e006[0].hint)
 
             with self.assertRaises(ContextNotRegistered):
