@@ -1,10 +1,10 @@
 # Authoritative django-trusts-zero pairing. This kernel repository must not
 # publish Zero metadata. Override with DJANGO_TRUSTS_ZERO_REPO,
 # DJANGO_TRUSTS_ZERO_REF, or DJANGO_TRUSTS_ZERO_SRC (already-cloned tree).
-# `ref` must be a stable 40-char commit on django-trusts-zero `main`
-# (merge of https://github.com/django-trusts/django-trusts-zero/pull/1),
-# not an ephemeral PR branch.
+# Coordinated S5 leftover-check companion (40-char SHA, not a branch name).
+# Replace with the Zero `main` merge SHA after that companion lands.
+# https://github.com/django-trusts/django-trusts-zero/pull/2
 repo=https://github.com/django-trusts/django-trusts-zero.git
-ref=19b0775e6a477ebcf8a2f1accef5df39491a4793
+ref=3c8fb43f74dfbc89f1c0f73bb9a2604be6ea1ec1
 expected_version=2.0.0.dev0
 required_dist=django-trusts

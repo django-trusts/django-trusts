@@ -64,8 +64,35 @@ _SILENCE_DOES_NOT_ENABLE_TRUSTEE_HINT = (
 )
 
 
+def _prepare_trustee_registry_for_checks(registry):
+    """Run declared Trustee finalizers / freeze without raising.
+
+    Django registers checks in a set, so E007 and E008 may run in
+    either order. Both call this helper so a pending finalizer that
+    completes a valid map is visible to completeness, and a failing
+    freeze becomes a check result instead of an uncaught exception.
+    Only the registry's declared finalizers run. No SQL.
+    """
+    try:
+        registry.ensure_frozen()
+    except TrusteeRegistrationError as exc:
+        return exc
+    except Exception as exc:
+        return exc
+    return None
+
+
+def _trustee_finalization_message(exc):
+    return django_checks.Error(
+        'Trustee registry finalization failed: %s' % exc,
+        hint=_SILENCE_DOES_NOT_ENABLE_TRUSTEE_HINT,
+        obj=None,
+        id=CHECK_ID_INVALID_TRUSTEE,
+    )
+
+
 @django_checks.register(django_checks.Tags.models)
-def check_trustee_registry(app_configs, **kwargs):
+def check_trustee_registry(app_configs, registry=None, **kwargs):
     """Re-validate the frozen Trustee registry after models are loaded.
 
     Duplicate, incomplete, scalar, callable, wrong-terminal, ambiguous,
@@ -73,14 +100,21 @@ def check_trustee_registry(app_configs, **kwargs):
     This check re-walks every installed adapter so ``manage.py check``
     reports ``trusts.E007`` if the map is stale. ``app_configs`` is
     ignored so ``manage.py check trusts_kernel`` still sees the full
-    registry. No getters, properties, or callbacks are executed. No
-    database queries.
+    registry. Isolated tests may pass ``registry=``. No getters,
+    properties, or callbacks are executed beyond declared finalizers.
+    No database queries.
     """
-    Trustee.ensure_frozen()
+    if registry is None:
+        registry = Trustee.registry
+    freeze_error = _prepare_trustee_registry_for_checks(registry)
     messages = []
-    for adapter in Trustee.adapters():
+    if freeze_error is not None and not isinstance(
+        freeze_error, TrusteeRegistrationError,
+    ):
+        messages.append(_trustee_finalization_message(freeze_error))
+    for adapter in registry.adapters():
         try:
-            Trustee.registry.revalidate(adapter)
+            registry.revalidate(adapter)
         except TrusteeRegistrationError as exc:
             messages.append(django_checks.Error(
                 'Trustee %s registration %r is invalid: %s' % (
@@ -140,11 +174,11 @@ def _format_missing_terminals(missing):
 
 
 def _incomplete_configuration_messages(registry):
-    """E008 completeness messages for one Trustee registry.
+    """E008 completeness messages for one prepared Trustee registry.
 
     Does not re-walk adapter paths (E006 / E007). Does not call
     ``requester_model()`` / ``scope_model()`` / ``operation_model()``.
-    Does not freeze the registry. No queries.
+    No queries.
     """
     if not _trustee_registry_is_declared(registry):
         return []
@@ -182,10 +216,12 @@ def check_trustee_configuration(app_configs, registry=None, **kwargs):
     configuration is valid. A partial ``configure()`` / leftover
     adapter map is ``trusts.E008``. ``app_configs`` is ignored so
     ``manage.py check trusts_kernel`` still sees the process-wide map.
-    Isolated tests may pass ``registry=``. This check does not re-walk
-    adapter paths, does not execute getters / properties / callbacks,
-    and issues no database queries.
+    Isolated tests may pass ``registry=``. Finalizers run through the
+    same prepare helper as E007 so check order cannot hide a complete
+    map or turn a failed freeze into an uncaught exception. This check
+    does not re-walk adapter paths and issues no database queries.
     """
     if registry is None:
         registry = Trustee.registry
+    _prepare_trustee_registry_for_checks(registry)
     return _incomplete_configuration_messages(registry)

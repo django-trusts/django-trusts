@@ -38,9 +38,10 @@ installable `trusts/` package:
   SQL filter; object≡list; 404 vs 403; config error → 403; superuser
   does not bypass; template override; bounded query counts)
 - `tests/core/test_s5_checks.py` — issue #47 S5 generic configuration
-  checks (`trusts.E008` completeness; kernel drops Zero Content leftover
-  import; E006/E007 re-walks stay distinct; zero-query; silence does
-  not enable runtime)
+  checks (`trusts.E008` completeness; order-independent Trustee
+  finalization; kernel drops Zero Content leftover import; kernel+Zero
+  leftover `E006` exactly once; E006/E007 re-walks stay distinct;
+  zero-query; silence does not enable runtime)
 - `tests/core/test_zero_path.py` — issue #43 Step 2 Zero consumer of compose
   (`ContentQuerySet.permitted` / `TrustModelBackend`; same-PK fail-closed)
 - `tests/core/test_kernel_split.py` — issue #43 Step 3 kernel/Zero AppConfig,
@@ -69,7 +70,9 @@ installable `trusts/` package:
   **companion** django-trusts-zero checkout (not a synthetic in-tree
   Zero); wheel RECORD, uninstall/reinstall, editable+editable,
   AppConfig, migration identity. Pin: `scripts/zero-companion.pin`
-  (stable django-trusts-zero `main` merge SHA, not a PR branch).
+  (coordinated S5 leftover-check companion SHA
+  `3c8fb43f74dfbc89f1c0f73bb9a2604be6ea1ec1`; replace with the Zero
+  `main` merge SHA after that companion lands).
 
 ## Tests that must keep passing
 

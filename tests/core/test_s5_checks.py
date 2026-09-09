@@ -1,9 +1,9 @@
 """Isolated kernel tests for #47 S5 (generic configuration checks).
 
-Covers noun-independent ``trusts.E008`` completeness, preserved
-``E006`` / ``E007`` re-walks, and the removal of the kernel
-``trusts.zero`` Content leftover probe. Isolated registries for
-partial states. Does not close #47. Does not modify Zero.
+Covers noun-independent ``trusts.E008`` completeness, order-independent
+Trustee finalization, preserved ``E006`` / ``E007`` re-walks, and
+kernel+Zero leftover Content ``E006`` ownership. Isolated registries
+for partial states. Does not close #47.
 """
 
 import inspect
@@ -226,6 +226,85 @@ class S5SilenceAndFailClosedTest(TestCase):
             )
 
 
+class S5TrusteeCheckOrderTest(TestCase):
+    def test_completeness_before_rewalk_runs_completing_finalizer(self):
+        registry = TrusteeRegistry()
+        registry.configure(requester_model=S1Account)
+
+        def complete():
+            registry.configure(
+                scope_model=S1Repository,
+                operation_model=S1Operation,
+            )
+
+        registry.add_finalizer(complete)
+        with self.assertNumQueries(0):
+            config_messages = check_trustee_configuration(
+                None, registry=registry,
+            )
+            rewalk_messages = check_trustee_registry(None, registry=registry)
+        self.assertEqual(_e008(config_messages), [])
+        self.assertFalse(
+            any(m.id == CHECK_ID_INVALID_TRUSTEE for m in rewalk_messages)
+        )
+        self.assertIs(registry.requester_model(), S1Account)
+        self.assertIs(registry.scope_model(), S1Repository)
+        self.assertIs(registry.operation_model(), S1Operation)
+
+    def test_completeness_before_rewalk_failed_finalizer_is_deterministic(self):
+        registry = TrusteeRegistry()
+        registry.configure(requester_model=S1Account)
+
+        def fail():
+            raise TrusteeRegistrationError('finalizer refused to complete')
+
+        registry.add_finalizer(fail)
+        with self.assertNumQueries(0):
+            config_messages = check_trustee_configuration(
+                None, registry=registry,
+            )
+            rewalk_messages = check_trustee_registry(None, registry=registry)
+        _assert_one_e008(self, config_messages, 'scope', 'operation')
+        self.assertFalse(
+            any(m.id == CHECK_ID_INVALID_TRUSTEE for m in rewalk_messages)
+        )
+        self.assertFalse(registry.is_frozen())
+
+    def test_lookup_freeze_failure_is_e008_not_an_exception(self):
+        registry = TrusteeRegistry()
+        registry.configure(operation_lookup='code')
+        with self.assertNumQueries(0):
+            config_messages = check_trustee_configuration(
+                None, registry=registry,
+            )
+            rewalk_messages = check_trustee_registry(None, registry=registry)
+        _assert_one_e008(
+            self, config_messages,
+            "operation_lookup 'code' is set without operation_model",
+        )
+        self.assertFalse(
+            any(m.id == CHECK_ID_INVALID_TRUSTEE for m in rewalk_messages)
+        )
+
+    def test_non_registration_finalizer_failure_is_e007(self):
+        registry = TrusteeRegistry()
+        registry.configure(requester_model=S1Account)
+
+        def boom():
+            raise RuntimeError('finalizer crashed')
+
+        registry.add_finalizer(boom)
+        with self.assertNumQueries(0):
+            config_messages = check_trustee_configuration(
+                None, registry=registry,
+            )
+            rewalk_messages = check_trustee_registry(None, registry=registry)
+        _assert_one_e008(self, config_messages, 'scope', 'operation')
+        e007 = [m for m in rewalk_messages if m.id == CHECK_ID_INVALID_TRUSTEE]
+        self.assertEqual(len(e007), 1)
+        self.assertIn('finalizer crashed', e007[0].msg)
+
+
 class S5NoDuplicateDiagnosticsTest(TestCase):
     def test_e008_does_not_revalidate_stale_adapters(self):
         _context, trustee = _s1_maps()
@@ -269,61 +348,81 @@ class S5NoDuplicateDiagnosticsTest(TestCase):
 
 
 class S5ZeroLeftoverOwnershipTest(TestCase):
-    """Companion Zero still owns leftover Content diagnostics.
+    """Companion Zero owns and registers leftover Content E006 exactly once."""
 
-    Kernel ``check_context_registry`` must not emit them. Zero's
-    ``check_context_registry`` function still walks leftovers. When
-    KernelConfig is present, Zero does **not** register that function
-    (no-kernel fallback only). This test does not modify Zero.
-    """
-
-    def test_kernel_check_does_not_walk_content_leftovers(self):
+    def test_kernel_plus_zero_emits_exactly_one_leftover_e006(self):
+        from django.core.checks.registry import registry as check_registry
         from trusts.utils import get_short_model_name
+        from trusts.zero.checks import (
+            _kernel_owns_adapter_rewalks,
+            check_context_registry as zero_combined_context,
+            check_trustee_registry as zero_combined_trustee,
+            check_unresolved_content_registrations,
+        )
         from trusts.zero.models import Content, prepare_context_registry
-        from tests.models import Receipt, UnregisteredReceiptNote
+        from tests.models import Receipt, Ticket, UnregisteredReceiptNote
+        from trusts.context import ContextAdapter, KIND_DIRECT
+
+        self.assertTrue(_kernel_owns_adapter_rewalks())
+        registered = check_registry.registered_checks
+        self.assertIn(check_unresolved_content_registrations, registered)
+        self.assertNotIn(zero_combined_context, registered)
+        self.assertNotIn(zero_combined_trustee, registered)
 
         short = get_short_model_name(UnregisteredReceiptNote)
         invalid = '%s__title' % Content.get_content_fieldlookup(Receipt)
         self.assertNotIn(short, Content._contents)
         Content._contents[short] = invalid
         Context.registry._frozen = False
+        prepare_context_registry()
+        key = Ticket._meta.concrete_model
+        saved = Context.registry._adapters[key]
+        Context.registry._adapters[key] = ContextAdapter(
+            KIND_DIRECT, Ticket, 'title', Context.registry,
+        )
         try:
-            prepare_context_registry()
             with self.assertNumQueries(0):
                 kernel_messages = check_context_registry(None)
-            leftover = [
+                leftover_only = check_unresolved_content_registrations(None)
+                all_messages = run_checks()
+
+            kernel_leftover = [
                 m for m in kernel_messages
                 if m.id == CHECK_ID_INVALID_CONTEXT
                 and m.obj is UnregisteredReceiptNote
             ]
-            self.assertEqual(leftover, [])
+            self.assertEqual(kernel_leftover, [])
 
-            from trusts.zero.checks import (
-                check_context_registry as zero_check_context,
-            )
-            with self.assertNumQueries(0):
-                zero_messages = zero_check_context(None)
+            adapter_e006 = [
+                m for m in kernel_messages
+                if m.id == CHECK_ID_INVALID_CONTEXT and m.obj is Ticket
+            ]
+            self.assertEqual(len(adapter_e006), 1)
+
             zero_leftover = [
-                m for m in zero_messages
+                m for m in leftover_only
                 if m.id == CHECK_ID_INVALID_CONTEXT
                 and m.obj is UnregisteredReceiptNote
             ]
             self.assertEqual(len(zero_leftover), 1)
-            self.assertEqual(zero_leftover[0].id, 'trusts.E006')
 
-            from trusts.zero.checks import _kernel_owns_adapter_rewalks
-            self.assertTrue(_kernel_owns_adapter_rewalks())
-            registered = run_checks()
             registered_leftover = [
-                m for m in registered
+                m for m in all_messages
                 if m.id == CHECK_ID_INVALID_CONTEXT
                 and m.obj is UnregisteredReceiptNote
             ]
-            self.assertEqual(
-                registered_leftover, [],
-                'Zero leftover E006 is not registered when KernelConfig '
-                'is present; kernel must not reintroduce it.',
+            self.assertEqual(len(registered_leftover), 1)
+
+            registered_ticket = [
+                m for m in all_messages
+                if m.id == CHECK_ID_INVALID_CONTEXT and m.obj is Ticket
+            ]
+            self.assertEqual(len(registered_ticket), 1)
+
+            self.assertFalse(
+                any(m.id == CHECK_ID_INCOMPLETE_CONFIG for m in leftover_only)
             )
         finally:
+            Context.registry._adapters[key] = saved
             Content._contents.pop(short, None)
             Context.registry.freeze()

@@ -2519,9 +2519,10 @@ This record covers the fifth kernel execution slice. Version remains
 **1.0.0.dev0**. This PR does **not** close
 [#47](https://github.com/django-trusts/django-trusts/issues/47); review
 owns that. S5 may complete #47 only after its reviewed merge. It
-implements accepted **framework-execution-r1+r2+r3** kernel S5 only.
-It does **not** modify `django-trusts-zero`, start
-gh-permissions#1, resume #17, or extend S4.
+implements accepted **framework-execution-r1+r2+r3** kernel S5 plus the
+narrow leftover-check companion in `django-trusts-zero`. It does **not**
+start gh-permissions#1, resume #17, migrate Zero execution wrappers,
+or extend S4.
 
 ## Decision
 
@@ -2536,11 +2537,13 @@ Kernel `trusts.checks` no longer imports `trusts.zero.models.Content`
 and no longer walks unresolved leftover Content registrations. That
 compatibility diagnostic stays on `Content.iter_unresolved_content_registrations()`
 / `Content.compatibility_context_error()` in Zero.
-`trusts.zero.checks.check_context_registry` still implements the leftover
-walk; it is registered only as the no-kernel fallback. When KernelConfig
-is present, `manage.py check` does **not** emit leftover Content `E006`
-until a Zero companion registers a leftover-only check. Kernel must not
-reintroduce the import to close that gap.
+When KernelConfig is present, Zero registers leftover-only
+`check_unresolved_content_registrations` (`trusts.E006`) exactly once
+and does not re-register generic adapter re-walks. The combined
+`check_context_registry` / `check_trustee_registry` remain the
+no-kernel fallback. A normal kernel+Zero `manage.py check` therefore
+**preserves** leftover Content `E006`. Generic adapter `E006` / `E007`
+stay kernel-owned (no duplicate rows).
 
 `trusts.E006` / `trusts.E007` remain noun-independent adapter re-walks.
 They stay no-query and fail-closed. Silencing them still does not
@@ -2559,6 +2562,10 @@ authorization setup before request handling:
   check does not re-walk adapter paths (that is E006 / E007), does not
   execute getters / properties / callbacks, does not run authorization
   queries, and does not import `trusts.zero`.
+- E007 and E008 share `_prepare_trustee_registry_for_checks` so
+  Django's unordered check set cannot hide a finalizer-completed map
+  or turn a failed freeze into an uncaught exception. Only declared
+  Trustee finalizers run. Zero SQL.
 - Silencing `trusts.E008` suppresses only the early diagnostic. S1
   runtime still raises `AuthorizationConfigError` for
   malformed / incomplete configuration.
@@ -2574,7 +2581,8 @@ helper. E008 is **not** attached to `add_operation` / `scope_field` /
 - S3 `trusts.decorators.require_authorized` / `P` / `K` / `G` / `O`
 - S4 `AuthorizedModelAdmin` / CBV mixins / stub templates
 - Kernel `trusts.E006` / `trusts.E007` IDs, hints, and re-walk behavior
-- Zero `E001`–`E005` / `W001`–`W003`, leftover Content walker function,
+- Zero `E001`–`E005` / `W001`–`W003`, leftover Content walker (now
+  also registered as leftover-only when KernelConfig is present),
   `TrustModelBackend`, `ContentQuerySet.permitted`, historical
   migrations, app label `trusts`
 - Package version `1.0.0.dev0`
@@ -2587,8 +2595,8 @@ helper. E008 is **not** attached to `add_operation` / `scope_field` /
 | --- | --- |
 | Previous | Kernel `check_context_registry` optionally imported `trusts.zero.models.Content` and walked `iter_unresolved_content_registrations()` as extra `trusts.E006` rows. |
 | New | Kernel adapter re-walk only. No `trusts.zero` import, even optional. Leftover Content diagnostics stay in Zero. |
-| Replacement | Keep using Zero `Content.register_content` / `prepare_context_registry`. Do not expect kernel `manage.py check` to emit leftover Content `E006` when KernelConfig is installed. |
-| Affected | Kernel-only installs lose a Zero-shaped import probe they should never have had. Kernel+Zero leftover `manage.py check` coverage waits on a Zero companion leftover-only registration. |
+| Replacement | Keep using Zero `Content.register_content` / `prepare_context_registry`. On kernel+Zero, leftover Content `E006` comes from Zero's leftover-only check, not from the kernel. |
+| Affected | Kernel-only installs lose a Zero-shaped import probe they should never have had. Kernel+Zero `manage.py check` still emits leftover Content `E006` exactly once. |
 | Authorization | Unresolved leftovers stay fail-closed at `Context.scope_path` / `Content.require_valid_content_fieldlookup`. Silencing kernel `E006` still does not enable stale *adapters*. |
 
 ### 51. `trusts.E008` incomplete runtime/terminal configuration (new)
@@ -2596,7 +2604,7 @@ helper. E008 is **not** attached to `add_operation` / `scope_field` /
 | | |
 | --- | --- |
 | Previous | Incomplete `Trustee.configure` / missing terminals were visible only when a direct S1 API raised `AuthorizationConfigError`. |
-| New | `check_trustee_configuration` reports `trusts.E008` for a declared-but-incomplete Trustee map (missing requester / scope / operation, or `operation_lookup` without `operation_model`). Isolated tests may pass `registry=`. |
+| New | `check_trustee_configuration` reports `trusts.E008` for a declared-but-incomplete Trustee map (missing requester / scope / operation, or `operation_lookup` without `operation_model`). Isolated tests may pass `registry=`. E007/E008 both prepare the registry first so check order cannot matter. |
 | Replacement | Declare all three terminals before request handling. Configure `operation_lookup` only together with `operation_model`. A kernel install that has not called `configure` / `register` stays check-clean. |
 | Affected | New kernel consumers. Zero's process-wide map is complete after its finalizers and does not emit `E008`. |
 | Authorization | Direct APIs still raise `AuthorizationConfigError` when terminals / string-operation configuration are incomplete, including when `trusts.E008` is silenced. Backend / decorator / admin still catch that as deny / 403. |
@@ -2679,7 +2687,7 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 
 ## Out of scope (unchanged)
 
-- django-trusts-zero leftover-only check registration or wrappers
+- Zero execution-wrapper migration / pin bump beyond this leftover-check companion
 - Framework URL patterns / FK form helper / create-under-scope UI
 - Generic `register_row_condition`
 - `RecursiveEdge` / `OrderedContribution`
@@ -2689,7 +2697,7 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 ## Migration-bot summary (issue #47 S5)
 
 - [ ] Expect kernel `trusts.checks` to import no `trusts.zero` / `Content`.
-- [ ] Treat leftover Content `E006` as a Zero diagnostic, not a kernel one.
+- [ ] Expect leftover Content `E006` from Zero's leftover-only check on kernel+Zero (`manage.py check` preserves it exactly once).
 - [ ] Run `python -m django check`; a pristine kernel install stays valid.
 - [ ] Declare requester, scope, and operation terminals before request handling (`trusts.E008`).
 - [ ] Configure `operation_lookup` only with `operation_model`.
@@ -2697,6 +2705,7 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Keep using `trusts.E006` / `trusts.E007` for stale adapters only.
 - [ ] Do not expect an admin `add_operation` / `scope_field` / `parent_field` check.
 - [ ] Run `python -m tests.runtests` (includes `tests.core.test_s5_checks`).
+- [ ] Pair with the Zero leftover-check companion; update `scripts/zero-companion.pin` to that SHA.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #47 from this PR.
 - [ ] Do not treat Zero / GH / Windows acceptance as complete because the kernel surface exists.
