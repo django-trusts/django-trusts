@@ -3,16 +3,23 @@
 ``AuthorizedModelAdmin`` is configured by operation data. List
 querysets use S1 ``filter_authorized`` as ``ChangeList.root_queryset``,
 so Django paginates the authorized set. Object gates use S1
-``is_authorized`` and must agree with that queryset when the
-operations match.
+``is_authorized`` on the action-specific hook and must agree with the
+list queryset when that hook's operation matches ``list_operation``.
 
 Django hooks covered:
 
 * ``list_operation`` → ``get_queryset``
 * ``view_operation`` (fallback: ``list_operation``) →
-  ``has_view_permission`` / ``get_object``
+  ``has_view_permission``
 * ``change_operation`` → ``has_change_permission``
 * ``delete_operation`` → ``has_delete_permission``
+
+``get_object`` retrieves a **singular identity** from the unauthorized
+consumer-scoped base (``get_identity_base_queryset``). It does **not**
+apply ``view_operation``. Django's change/delete views then call
+``has_change_permission`` / ``has_delete_permission`` /
+``has_view_or_change_permission``, so a change-only or delete-only
+grant is not blocked by an undocumented view ceiling.
 
 Add is fail-closed (``has_add_permission`` is False). An FK/form
 queryset helper is not shipped; S4 tests did not demonstrate a generic
@@ -34,7 +41,7 @@ from trusts.runtime import (
     is_authorized,
     principal_is_usable,
 )
-from trusts.views import resolve_authorized_object
+from trusts.views import require_singular_identity
 
 
 class AuthorizedModelAdmin(admin.ModelAdmin):
@@ -112,14 +119,26 @@ class AuthorizedModelAdmin(admin.ModelAdmin):
         except AuthorizationConfigError:
             raise PermissionDenied
 
-    def get_object(self, request, object_id, from_field=None):
-        """Identity lookup, then view/change gate.
+    def get_identity_base_queryset(self, request):
+        """Unauthorized consumer-scoped base for admin object identity.
 
-        Missing rows stay ``None`` (admin 404). Existing unauthorized
-        rows raise ``PermissionDenied`` (403). The list queryset is not
-        used here so an unauthorized row cannot be hidden as missing.
+        Default is the model's default manager. Does **not** use
+        ``get_queryset()`` (that applies ``list_operation``). Override
+        to add tenant / soft-delete filters. Application scoping
+        belongs here, not in the authorization-filtered list.
         """
-        queryset = self.model._default_manager.get_queryset()
+        return self.model._default_manager.get_queryset()
+
+    def get_object(self, request, object_id, from_field=None):
+        """Singular identity lookup. No view/change/delete ceiling.
+
+        Missing rows stay ``None`` (admin 404). Ambiguous identity
+        (2+ candidates) raises ``PermissionDenied``. Existing rows are
+        returned so Django's action hook can apply
+        ``view_operation`` / ``change_operation`` / ``delete_operation``
+        independently.
+        """
+        queryset = self.get_identity_base_queryset(request)
         field = (
             self.model._meta.pk if from_field is None
             else self.model._meta.get_field(from_field)
@@ -130,12 +149,7 @@ class AuthorizedModelAdmin(admin.ModelAdmin):
         except (ValidationError, ValueError):
             return None
         try:
-            return resolve_authorized_object(
-                identity,
-                self._principal(request),
-                self.get_view_operation(),
-                **self.get_authorization_runtime()
-            )
+            return require_singular_identity(identity)
         except Http404:
             return None
         except AuthorizationConfigError:

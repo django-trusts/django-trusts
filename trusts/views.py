@@ -5,6 +5,15 @@
 resolves a declared URL identity through the same predicate: missing
 rows are 404, existing unauthorized rows are 403.
 
+Source identity is established **before** authorization and must be
+singular. ``resolve_authorized_object`` never uses ``.first()`` to pick
+an authorized row from an ambiguous candidate set.
+
+Application scoping (tenant, soft-delete, an explicit CBV
+``queryset``) belongs on ``queryset`` or
+``get_identity_base_queryset()``. That hook is unauthorized. It does
+not call ``get_queryset()``, which the list mixin already filtered.
+
 Operations and the resource model are declarative data (class
 attributes / CBV ``model``). There are no getter, resolver, or policy
 callbacks, and no second authorization walker. Isolated tests pass
@@ -30,6 +39,7 @@ from django.http import Http404
 from trusts.runtime import (
     AuthorizationConfigError,
     filter_authorized,
+    is_authorized,
     principal_is_usable,
 )
 
@@ -42,7 +52,8 @@ class AuthorizedQuerySetMixin(object):
     * ``list_operation`` — operation instance or ``operation_lookup``
       string. ``operation`` is accepted as a fallback.
     * ``model`` / ``queryset`` — from the CBV; never inferred from a
-      Django permission string.
+      Django permission string. ``queryset`` is also the default
+      application scope for ``AuthorizedObjectMixin``.
     * ``context`` / ``trustee`` / ``names`` — isolated registries.
 
     Default ``template_name`` is ``trusts/authorized_list.html``.
@@ -95,10 +106,18 @@ class AuthorizedObjectMixin(object):
 
     * ``object_operation`` — operation instance or lookup string.
       ``view_operation`` then ``operation`` are fallbacks.
-    * ``pk_url_kwarg`` / ``slug_url_kwarg`` / ``slug_field`` — Django
-      CBV identity keys, not resolver callbacks.
-    * ``model`` — explicit CBV model.
+    * ``pk_url_kwarg`` / ``slug_url_kwarg`` / ``slug_field`` /
+      ``query_pk_and_slug`` — Django CBV identity keys, not resolver
+      callbacks. When ``query_pk_and_slug`` is True and both values
+      are present, both constrain the row.
+    * ``model`` / ``queryset`` — explicit CBV model and optional
+      application scope.
     * ``context`` / ``trustee`` / ``names`` — isolated registries.
+
+    Application filters belong on ``queryset`` or
+    ``get_identity_base_queryset()``. Do not put them only in an
+    override of ``get_queryset()`` after the list mixin has already
+    applied ``list_operation``.
 
     Default ``template_name`` is ``trusts/authorized_detail.html``.
     Update-style views should set ``template_name`` to
@@ -133,27 +152,41 @@ class AuthorizedObjectMixin(object):
             )
         return operation
 
-    def get_identity_queryset(self):
-        """Unfiltered identity queryset from declared URL keys.
+    def get_identity_base_queryset(self):
+        """Unauthorized consumer-scoped base for object identity.
 
-        Uses the CBV ``model`` default manager so a list mixin cannot
-        hide an existing unauthorized row as ``DoesNotExist``.
+        Uses the declared CBV ``queryset`` when set, otherwise the
+        model's default manager. Does **not** call ``get_queryset()``:
+        the list mixin filters that with ``list_operation``, which
+        would hide unauthorized-but-in-scope rows as 404.
         """
+        declared = getattr(self, 'queryset', None)
+        if declared is not None:
+            return declared.all()
         model = getattr(self, 'model', None)
         if model is None:
             raise AuthorizationConfigError(
-                'AuthorizedObjectMixin requires an explicit model.'
+                'AuthorizedObjectMixin requires an explicit model or queryset.'
             )
-        queryset = model._default_manager.all()
+        return model._default_manager.all()
+
+    def get_identity_queryset(self, queryset=None):
+        """Apply declared pk/slug identity to the consumer-scoped base."""
+        if queryset is None:
+            queryset = self.get_identity_base_queryset()
+        model = queryset.model
         pk_url_kwarg = getattr(self, 'pk_url_kwarg', 'pk')
         slug_url_kwarg = getattr(self, 'slug_url_kwarg', 'slug')
         slug_field = getattr(self, 'slug_field', 'slug')
+        query_pk_and_slug = getattr(self, 'query_pk_and_slug', False)
         kwargs = getattr(self, 'kwargs', None) or {}
         pk = kwargs.get(pk_url_kwarg, None)
-        if pk is not None and pk != '':
-            return queryset.filter(pk=pk)
         slug = kwargs.get(slug_url_kwarg, None)
-        if slug is not None and slug != '':
+        has_pk = pk is not None and pk != ''
+        has_slug = slug is not None and slug != ''
+        if has_pk:
+            queryset = queryset.filter(pk=pk)
+        if has_slug and (not has_pk or query_pk_and_slug):
             try:
                 model._meta.get_field(slug_field)
             except FieldDoesNotExist:
@@ -162,8 +195,10 @@ class AuthorizedObjectMixin(object):
                         slug_field, model._meta.label,
                     )
                 )
-            return queryset.filter(**{slug_field: slug})
-        raise Http404
+            queryset = queryset.filter(**{slug_field: slug})
+        if not has_pk and not has_slug:
+            raise Http404
+        return queryset
 
     def get_context_data(self, **kwargs):
         context = super(AuthorizedObjectMixin, self).get_context_data(**kwargs)
@@ -173,7 +208,7 @@ class AuthorizedObjectMixin(object):
 
     def get_object(self, queryset=None):
         try:
-            identity = self.get_identity_queryset()
+            identity = self.get_identity_queryset(queryset)
             return resolve_authorized_object(
                 identity,
                 getattr(self.request, 'user', None),
@@ -186,35 +221,49 @@ class AuthorizedObjectMixin(object):
             raise Http404
 
 
+def require_singular_identity(queryset):
+    """Return the only row in ``queryset``, or fail closed.
+
+    Source identity is checked **before** authorization. ``.first()``
+    is not used.
+
+    * 0 rows → ``Http404`` (1 SQL ``[:2]``).
+    * 2+ rows → ``PermissionDenied`` (1 SQL ``[:2]``). Ambiguous
+      identity is never resolved by order or by which row is granted.
+    * 1 row → that instance.
+    """
+    matched = list(queryset[:2])
+    if len(matched) > 1:
+        raise PermissionDenied
+    if not matched:
+        raise Http404
+    return matched[0]
+
+
 def resolve_authorized_object(queryset, principal, operation, **runtime):
-    """Return the authorized row from an identity-filtered queryset.
+    """Authorize the singular row from a consumer-scoped identity queryset.
 
-    ``queryset`` must already identify the candidate row(s) (typically
-    ``pk=``). Authorization is S1 ``filter_authorized``.
+    ``queryset`` is the candidate set **after** application scope and
+    declared identity filters, **before** Trusts authorization. It must
+    already be singular.
 
-    * Unique authorized match → the instance (one SQL when identity is
-      unique).
-    * Unusable principal + existing row → ``PermissionDenied`` (one
-      existence query, no auth ``Exists``).
-    * Existing unauthorized / unknown operation data →
-      ``PermissionDenied`` (combined miss + existence).
-    * Missing row → ``Http404``.
+    * 0 candidates → ``Http404``.
+    * 2+ candidates → ``PermissionDenied`` (not an existential grant).
+    * 1 candidate, unusable principal → ``PermissionDenied`` (the
+      identity query already ran; no auth ``Exists``).
+    * 1 candidate, granted → the instance (identity ``[:2]`` plus
+      ``is_authorized``).
+    * 1 candidate, denied / unknown operation data →
+      ``PermissionDenied``.
     * ``AuthorizationConfigError`` → ``PermissionDenied``.
     """
     try:
+        obj = require_singular_identity(queryset)
         if not principal_is_usable(principal):
-            if queryset.exists():
-                raise PermissionDenied
-            raise Http404
-        authorized = filter_authorized(
-            queryset, principal, operation, **runtime
-        )
-        obj = authorized.first()
-        if obj is not None:
-            return obj
-        if queryset.exists():
             raise PermissionDenied
-        raise Http404
+        if is_authorized(principal, operation, obj, **runtime):
+            return obj
+        raise PermissionDenied
     except AuthorizationConfigError:
         raise PermissionDenied
 
@@ -222,5 +271,6 @@ def resolve_authorized_object(queryset, principal, operation, **runtime):
 __all__ = [
     'AuthorizedObjectMixin',
     'AuthorizedQuerySetMixin',
+    'require_singular_identity',
     'resolve_authorized_object',
 ]

@@ -26,6 +26,7 @@ from trusts.trustee import TrusteeRegistry
 from trusts.views import (
     AuthorizedObjectMixin,
     AuthorizedQuerySetMixin,
+    require_singular_identity,
     resolve_authorized_object,
 )
 from tests.core.test_s1_kernel import _s1_maps
@@ -105,6 +106,12 @@ class S4FixtureMixin(object):
         )
         self.context, self.trustee = _s1_maps()
         self.runtime = dict(context=self.context, trustee=self.trustee)
+
+    def _grant_write(self, repository):
+        self.team.bundles.get().operations.add(self.write)
+        S1TeamGrant.objects.create(
+            team=self.team, repository=repository, operation=self.write,
+        )
 
 
 class S4RepositoryAdmin(AuthorizedModelAdmin):
@@ -195,22 +202,50 @@ class S4AdminObjectGateTest(S4FixtureMixin, TestCase):
                 is_authorized(self.member, 'read', repo, **self.runtime),
             )
 
-    def test_get_object_granted_is_one_combined_query(self):
+    def test_get_object_is_identity_only_one_sql(self):
         model_admin = self._admin()
         request = self._request(self.member)
         with self.assertNumQueries(1):
             obj = model_admin.get_object(request, str(self.repo_a.pk))
         self.assertEqual(obj.pk, self.repo_a.pk)
-
-    def test_get_object_unauthorized_is_403_not_404(self):
-        model_admin = self._admin()
-        request = self._request(self.member)
-        with self.assertNumQueries(2):
-            with self.assertRaises(PermissionDenied):
-                model_admin.get_object(request, str(self.repo_b.pk))
+        with self.assertNumQueries(1):
+            denied = model_admin.get_object(request, str(self.repo_b.pk))
+        self.assertEqual(denied.pk, self.repo_b.pk)
+        self.assertFalse(model_admin.has_view_permission(request, denied))
         missing_pk = self.repo_a.pk + self.repo_b.pk + self.repo_c.pk + 1000
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             self.assertIsNone(model_admin.get_object(request, str(missing_pk)))
+
+    def test_change_only_grant_reaches_change_not_view(self):
+        self._grant_write(self.repo_b)
+        model_admin = self._admin(
+            view_operation='read',
+            change_operation='write',
+            delete_operation='read',
+        )
+        request = self._request(self.member)
+        with self.assertNumQueries(1):
+            obj = model_admin.get_object(request, str(self.repo_b.pk))
+        self.assertEqual(obj.pk, self.repo_b.pk)
+        self.assertFalse(model_admin.has_view_permission(request, obj))
+        self.assertTrue(model_admin.has_change_permission(request, obj))
+        self.assertFalse(model_admin.has_delete_permission(request, obj))
+        self.assertTrue(model_admin.has_view_or_change_permission(request, obj))
+
+    def test_delete_only_grant_reaches_delete_not_view(self):
+        self._grant_write(self.repo_b)
+        model_admin = self._admin(
+            view_operation='read',
+            change_operation='read',
+            delete_operation='write',
+        )
+        request = self._request(self.member)
+        obj = model_admin.get_object(request, str(self.repo_b.pk))
+        self.assertEqual(obj.pk, self.repo_b.pk)
+        self.assertFalse(model_admin.has_view_permission(request, obj))
+        self.assertFalse(model_admin.has_change_permission(request, obj))
+        self.assertTrue(model_admin.has_delete_permission(request, obj))
+        self.assertFalse(model_admin.has_view_or_change_permission(request, obj))
 
     def test_change_and_delete_require_write(self):
         model_admin = self._admin()
@@ -268,8 +303,9 @@ class S4AdminConfigAndSuperuserTest(S4FixtureMixin, TestCase):
             )
         with self.assertRaises(PermissionDenied):
             list(model_admin.get_queryset(request))
-        with self.assertRaises(PermissionDenied):
-            model_admin.get_object(request, str(note.pk))
+        self.assertEqual(
+            model_admin.get_object(request, str(note.pk)).pk, note.pk,
+        )
         self.assertFalse(model_admin.has_view_permission(request, note))
 
     def test_missing_list_operation_is_403(self):
@@ -323,8 +359,9 @@ class S4AdminConfigAndSuperuserTest(S4FixtureMixin, TestCase):
             model_admin.get_object(request, str(self.repo_a.pk)).pk,
             self.repo_a.pk,
         )
-        with self.assertRaises(PermissionDenied):
-            model_admin.get_object(request, str(self.repo_b.pk))
+        repo_b = model_admin.get_object(request, str(self.repo_b.pk))
+        self.assertEqual(repo_b.pk, self.repo_b.pk)
+        self.assertFalse(model_admin.has_view_permission(request, repo_b))
         superuser = User.objects.create_superuser(
             'root', 'root@example.com', 'secret',
         )
@@ -416,10 +453,11 @@ class S4CBVObjectTest(S4FixtureMixin, TestCase):
         request.user = user
         return request
 
-    def test_detail_granted_is_one_combined_query(self):
+    def test_detail_granted_is_identity_then_auth(self):
         view = self._detail()
         request = self._get(self.member)
-        with self.assertNumQueries(1):
+        # Singular identity ``[:2]`` plus ``is_authorized``.
+        with self.assertNumQueries(2):
             response = view(request, pk=self.repo_a.pk)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context_data['object'].pk, self.repo_a.pk)
@@ -435,7 +473,7 @@ class S4CBVObjectTest(S4FixtureMixin, TestCase):
             with self.assertRaises(PermissionDenied):
                 view(request, pk=self.repo_b.pk)
         missing_pk = self.repo_a.pk + self.repo_b.pk + self.repo_c.pk + 1000
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(1):
             with self.assertRaises(Http404):
                 view(request, pk=missing_pk)
 
@@ -475,7 +513,7 @@ class S4CBVObjectTest(S4FixtureMixin, TestCase):
             team=self.team, repository=self.repo_a, operation=self.write,
         )
         self.team.bundles.get().operations.add(self.write)
-        with self.assertNumQueries(1):
+        with self.assertNumQueries(2):
             response = view(request, pk=self.repo_a.pk)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response.render(), 'csrf')
@@ -539,6 +577,114 @@ class S4CBVObjectTest(S4FixtureMixin, TestCase):
         with self.assertNumQueries(2):
             with self.assertRaises(PermissionDenied):
                 view(request, pk=self.repo_a.pk)
+
+    def test_consumer_queryset_excludes_authorized_row(self):
+        scoped = S1Repository.objects.filter(pk=self.repo_b.pk)
+        self.assertTrue(
+            is_authorized(self.member, 'read', self.repo_a, **self.runtime)
+        )
+        list_view = type(
+            'ScopedList', (AuthorizedQuerySetMixin, ListView), dict(
+                queryset=scoped,
+                list_operation='read',
+                context=self.context,
+                trustee=self.trustee,
+                paginate_by=None,
+                ordering=('pk',),
+            ),
+        ).as_view()
+        detail_view = type(
+            'ScopedDetail', (AuthorizedObjectMixin, DetailView), dict(
+                queryset=scoped,
+                model=S1Repository,
+                object_operation='read',
+                context=self.context,
+                trustee=self.trustee,
+            ),
+        ).as_view()
+        request = self._get(self.member)
+        listed = list(list_view(request).context_data['object_list'])
+        self.assertEqual(listed, [])
+        with self.assertRaises(Http404):
+            detail_view(request, pk=self.repo_a.pk)
+        with self.assertRaises(PermissionDenied):
+            detail_view(request, pk=self.repo_b.pk)
+
+    def test_duplicate_slug_one_authorized_fails_closed(self):
+        self.repo_a.title = 'shared'
+        self.repo_a.save(update_fields=['title'])
+        self.repo_b.title = 'shared'
+        self.repo_b.save(update_fields=['title'])
+        view = self._detail(slug_field='title', slug_url_kwarg='slug')
+        request = self._get(self.member)
+        with self.assertNumQueries(1):
+            with self.assertRaises(PermissionDenied):
+                view(request, slug='shared')
+        with self.assertRaises(PermissionDenied):
+            resolve_authorized_object(
+                S1Repository.objects.filter(title='shared'),
+                self.member, 'read', **self.runtime,
+            )
+
+    def test_duplicate_slug_both_authorized_fails_closed(self):
+        self.repo_a.title = 'shared'
+        self.repo_a.save(update_fields=['title'])
+        self.repo_b.title = 'shared'
+        self.repo_b.save(update_fields=['title'])
+        self._grant_write(self.repo_b)
+        S1TeamGrant.objects.create(
+            team=self.team, repository=self.repo_b, operation=self.read,
+        )
+        self.assertTrue(
+            is_authorized(self.member, 'read', self.repo_b, **self.runtime)
+        )
+        view = self._detail(slug_field='title', slug_url_kwarg='slug')
+        request = self._get(self.member)
+        with self.assertNumQueries(1):
+            with self.assertRaises(PermissionDenied):
+                view(request, slug='shared')
+
+    def test_query_pk_and_slug_both_constrain_identity(self):
+        view = self._detail(
+            slug_field='title',
+            slug_url_kwarg='slug',
+            query_pk_and_slug=True,
+        )
+        request = self._get(self.member)
+        with self.assertNumQueries(2):
+            response = view(
+                request, pk=self.repo_a.pk, slug=self.repo_a.title,
+            )
+        self.assertEqual(response.context_data['object'].pk, self.repo_a.pk)
+        with self.assertNumQueries(1):
+            with self.assertRaises(Http404):
+                view(request, pk=self.repo_a.pk, slug=self.repo_b.title)
+        with self.assertNumQueries(1):
+            with self.assertRaises(Http404):
+                view(request, pk=self.repo_b.pk, slug=self.repo_a.title)
+
+    def test_require_singular_identity_rejects_ambiguous_candidates(self):
+        self.repo_a.title = 'shared'
+        self.repo_a.save(update_fields=['title'])
+        self.repo_b.title = 'shared'
+        self.repo_b.save(update_fields=['title'])
+        with self.assertNumQueries(1):
+            with self.assertRaises(PermissionDenied):
+                require_singular_identity(
+                    S1Repository.objects.filter(title='shared'),
+                )
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                require_singular_identity(
+                    S1Repository.objects.filter(pk=self.repo_a.pk),
+                ).pk,
+                self.repo_a.pk,
+            )
+        with self.assertNumQueries(1):
+            with self.assertRaises(Http404):
+                require_singular_identity(
+                    S1Repository.objects.filter(pk=self.repo_a.pk + 10000),
+                )
 
 
 class S4TemplateOverrideTest(S4FixtureMixin, TestCase):
