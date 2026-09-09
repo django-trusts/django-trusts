@@ -2565,7 +2565,10 @@ authorization setup before request handling:
 - E007 and E008 share `_prepare_trustee_registry_for_checks` so
   Django's unordered check set cannot hide a finalizer-completed map
   or turn a failed freeze into an uncaught exception. Only declared
-  Trustee finalizers run. Zero SQL.
+  Trustee finalizers run. Zero SQL. A `TrusteeRegistrationError` from
+  ordinary terminal / string-operation incompleteness stays E008-only.
+  A complete map whose declared finalizer fails to freeze is
+  deterministic `trusts.E007`, in either check order.
 - Silencing `trusts.E008` suppresses only the early diagnostic. S1
   runtime still raises `AuthorizationConfigError` for
   malformed / incomplete configuration.
@@ -2604,7 +2607,7 @@ helper. E008 is **not** attached to `add_operation` / `scope_field` /
 | | |
 | --- | --- |
 | Previous | Incomplete `Trustee.configure` / missing terminals were visible only when a direct S1 API raised `AuthorizationConfigError`. |
-| New | `check_trustee_configuration` reports `trusts.E008` for a declared-but-incomplete Trustee map (missing requester / scope / operation, or `operation_lookup` without `operation_model`). Isolated tests may pass `registry=`. E007/E008 both prepare the registry first so check order cannot matter. |
+| New | `check_trustee_configuration` reports `trusts.E008` for a declared-but-incomplete Trustee map (missing requester / scope / operation, or `operation_lookup` without `operation_model`). Isolated tests may pass `registry=`. E007/E008 both prepare the registry first so check order cannot matter. A complete map whose declared finalizer raises `TrusteeRegistrationError` is deterministic `trusts.E007`, not a silent gap. |
 | Replacement | Declare all three terminals before request handling. Configure `operation_lookup` only together with `operation_model`. A kernel install that has not called `configure` / `register` stays check-clean. |
 | Affected | New kernel consumers. Zero's process-wide map is complete after its finalizers and does not emit `E008`. |
 | Authorization | Direct APIs still raise `AuthorizationConfigError` when terminals / string-operation configuration are incomplete, including when `trusts.E008` is silenced. Backend / decorator / admin still catch that as deny / 403. |

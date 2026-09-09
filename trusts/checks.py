@@ -91,6 +91,19 @@ def _trustee_finalization_message(exc):
     )
 
 
+def _freeze_error_is_incomplete_config(registry, freeze_error):
+    """True when a freeze ``TrusteeRegistrationError`` is already E008.
+
+    Ordinary terminal / string-operation incompleteness stays E008-only.
+    A complete map whose declared finalizer (or other freeze step)
+    raises ``TrusteeRegistrationError`` is not incomplete and must
+    become deterministic ``trusts.E007``.
+    """
+    if not isinstance(freeze_error, TrusteeRegistrationError):
+        return False
+    return bool(_incomplete_configuration_messages(registry))
+
+
 @django_checks.register(django_checks.Tags.models)
 def check_trustee_registry(app_configs, registry=None, **kwargs):
     """Re-validate the frozen Trustee registry after models are loaded.
@@ -98,18 +111,21 @@ def check_trustee_registry(app_configs, registry=None, **kwargs):
     Duplicate, incomplete, scalar, callable, wrong-terminal, ambiguous,
     and many-valued grant-identity paths are rejected at ``register``.
     This check re-walks every installed adapter so ``manage.py check``
-    reports ``trusts.E007`` if the map is stale. ``app_configs`` is
-    ignored so ``manage.py check trusts_kernel`` still sees the full
-    registry. Isolated tests may pass ``registry=``. No getters,
-    properties, or callbacks are executed beyond declared finalizers.
-    No database queries.
+    reports ``trusts.E007`` if the map is stale. A complete map whose
+    declared finalizer fails to freeze is also ``trusts.E007``. A
+    ``TrusteeRegistrationError`` that is already incomplete
+    configuration is left to E008. ``app_configs`` is ignored so
+    ``manage.py check trusts_kernel`` still sees the full registry.
+    Isolated tests may pass ``registry=``. No getters, properties, or
+    callbacks are executed beyond declared finalizers. No database
+    queries.
     """
     if registry is None:
         registry = Trustee.registry
     freeze_error = _prepare_trustee_registry_for_checks(registry)
     messages = []
-    if freeze_error is not None and not isinstance(
-        freeze_error, TrusteeRegistrationError,
+    if freeze_error is not None and not _freeze_error_is_incomplete_config(
+        registry, freeze_error,
     ):
         messages.append(_trustee_finalization_message(freeze_error))
     for adapter in registry.adapters():

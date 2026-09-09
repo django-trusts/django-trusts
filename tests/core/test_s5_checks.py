@@ -304,6 +304,55 @@ class S5TrusteeCheckOrderTest(TestCase):
         self.assertEqual(len(e007), 1)
         self.assertIn('finalizer crashed', e007[0].msg)
 
+    def test_complete_map_finalizer_tre_is_e007_completeness_first(self):
+        registry = TrusteeRegistry(
+            requester_model=S1Account,
+            scope_model=S1Repository,
+            operation_model=S1Operation,
+        )
+
+        def fail():
+            raise TrusteeRegistrationError('finalizer refused a complete map')
+
+        registry.add_finalizer(fail)
+        with self.assertNumQueries(0):
+            config_messages = check_trustee_configuration(
+                None, registry=registry,
+            )
+            rewalk_messages = check_trustee_registry(None, registry=registry)
+        self.assertEqual(_e008(config_messages), [])
+        self.assertFalse(
+            any(m.id == CHECK_ID_INVALID_TRUSTEE for m in config_messages)
+        )
+        e007 = [m for m in rewalk_messages if m.id == CHECK_ID_INVALID_TRUSTEE]
+        self.assertEqual(len(e007), 1)
+        self.assertIn('finalizer refused a complete map', e007[0].msg)
+        self.assertEqual(_e008(rewalk_messages), [])
+        self.assertFalse(registry.is_frozen())
+
+    def test_complete_map_finalizer_tre_is_e007_rewalk_first(self):
+        registry = TrusteeRegistry(
+            requester_model=S1Account,
+            scope_model=S1Repository,
+            operation_model=S1Operation,
+        )
+
+        def fail():
+            raise TrusteeRegistrationError('finalizer refused a complete map')
+
+        registry.add_finalizer(fail)
+        with self.assertNumQueries(0):
+            rewalk_messages = check_trustee_registry(None, registry=registry)
+            config_messages = check_trustee_configuration(
+                None, registry=registry,
+            )
+        self.assertEqual(_e008(config_messages), [])
+        e007 = [m for m in rewalk_messages if m.id == CHECK_ID_INVALID_TRUSTEE]
+        self.assertEqual(len(e007), 1)
+        self.assertIn('finalizer refused a complete map', e007[0].msg)
+        self.assertEqual(_e008(rewalk_messages), [])
+        self.assertFalse(registry.is_frozen())
+
 
 class S5NoDuplicateDiagnosticsTest(TestCase):
     def test_e008_does_not_revalidate_stale_adapters(self):

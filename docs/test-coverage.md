@@ -39,7 +39,8 @@ installable `trusts/` package:
   does not bypass; template override; bounded query counts)
 - `tests/core/test_s5_checks.py` — issue #47 S5 generic configuration
   checks (`trusts.E008` completeness; order-independent Trustee
-  finalization; kernel drops Zero Content leftover import; kernel+Zero
+  finalization; complete-map finalizer `TrusteeRegistrationError` is
+  E007; kernel drops Zero Content leftover import; kernel+Zero
   leftover `E006` exactly once; E006/E007 re-walks stay distinct;
   zero-query; silence does not enable runtime)
 - `tests/core/test_zero_path.py` — issue #43 Step 2 Zero consumer of compose
