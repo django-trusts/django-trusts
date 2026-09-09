@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  DJANGO_TRUSTS_ZERO_SRC: ${{ github.workspace }}/.companion/django-trusts-zero
+
 jobs:
   tests:
     name: tests (Python ${{ matrix.python-version }})
@@ -17,54 +20,75 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install package and Django 6.1
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "Django>=6.1,<6.2" coverage
-          python -m pip install -e .
-      - name: Authorization tests
-        run: |
-          coverage run -m tests.runtests
-          coverage report
-      - name: Custom-user fresh install
-        run: |
-          python -m tests.runtests_custom
-          python -m django migrate --noinput --settings=tests.custom_settings
-          python -m django check --settings=tests.custom_settings
-      - name: Fresh migrate
-        run: python -m django migrate --noinput --settings=tests.settings
-      - name: System checks
-        run: python -m django check --settings=tests.settings
-      - name: Legacy database upgrade
-        run: python scripts/verify-legacy-upgrade.py
-      - name: Migration identity after Zero relocation
-        run: python scripts/verify-migration-split.py
+    - uses: actions/checkout@v4
+    - name: Checkout companion django-trusts-zero
+      uses: actions/checkout@v4
+      with:
+        repository: django-trusts/django-trusts-zero
+        ref: cursor/zero-package-relocation-0031
+        path: .companion/django-trusts-zero
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Guard against in-tree Zero
+      run: |
+        test ! -e trusts/zero
+        test ! -e packaging/django-trusts-zero
+    - name: Install kernel, companion Zero, Django 6.1
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "Django>=6.1,<6.2" coverage
+        python -m pip install -e .
+        python -m pip install --no-deps -e "$DJANGO_TRUSTS_ZERO_SRC" --config-settings editable_mode=compat
+    - name: Authorization tests
+      run: |
+        coverage run -m tests.runtests
+        coverage report
+    - name: Custom-user fresh install
+      run: |
+        python -m tests.runtests_custom
+        python -m django migrate --noinput --settings=tests.custom_settings
+        python -m django check --settings=tests.custom_settings
+    - name: Fresh migrate
+      run: python -m django migrate --noinput --settings=tests.settings
+    - name: System checks
+      run: python -m django check --settings=tests.settings
+    - name: Legacy database upgrade
+      run: python scripts/verify-legacy-upgrade.py
+    - name: Migration identity after Zero relocation
+      run: python scripts/verify-migration-split.py
 
   package:
     name: package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Build sdist and wheel
-        run: |
-          python -m pip install --upgrade pip build twine
-          python -m build
-          twine check dist/*
-      - name: Install kernel wheel and import from outside the checkout
-        env:
-          PYTHONPATH: ""
-        run: |
-          python -m pip install "Django>=6.1,<6.2"
-          python -m pip install dist/django_trusts-*.whl
-          WORK="$(mktemp -d)"
-          cd "$WORK"
-          python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
-      - name: Namespace wheel+wheel and editable isolation
-        run: python scripts/verify-namespace-install.py
+    - uses: actions/checkout@v4
+    - name: Checkout companion django-trusts-zero
+      uses: actions/checkout@v4
+      with:
+        repository: django-trusts/django-trusts-zero
+        ref: cursor/zero-package-relocation-0031
+        path: .companion/django-trusts-zero
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Guard against in-tree Zero
+      run: |
+        test ! -e trusts/zero
+        test ! -e packaging/django-trusts-zero
+    - name: Build sdist and wheel
+      run: |
+        python -m pip install --upgrade pip build twine
+        python -m build
+        twine check dist/*
+    - name: Install kernel wheel and import from outside the checkout
+      env:
+        PYTHONPATH: ""
+      run: |
+        python -m pip install "Django>=6.1,<6.2"
+        python -m pip install dist/django_trusts-*.whl
+        WORK="$(mktemp -d)"
+        cd "$WORK"
+        python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
+    - name: Paired kernel + companion Zero artifacts
+      run: python scripts/verify-namespace-install.py

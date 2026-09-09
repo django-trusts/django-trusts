@@ -1,0 +1,7 @@
+# Authoritative django-trusts-zero pairing. This kernel repository must not
+# publish Zero metadata. Override with DJANGO_TRUSTS_ZERO_REPO,
+# DJANGO_TRUSTS_ZERO_REF, or DJANGO_TRUSTS_ZERO_SRC (already-cloned tree).
+repo=https://github.com/django-trusts/django-trusts-zero.git
+ref=cursor/zero-package-relocation-0031
+expected_version=2.0.0.dev0
+required_dist=django-trusts

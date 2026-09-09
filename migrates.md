@@ -1787,9 +1787,10 @@ import migration; stored schema and authorization rows stay compatible.
 This PR does **not** close
 [#43](https://github.com/django-trusts/django-trusts/issues/43); review
 owns that. Recursive/ordered helpers and a broader GH proof are out of
-scope. Concrete code stays in this tree under `trusts/zero/` so the
+scope. Concrete models live only in
 [`django-trusts-zero`](https://github.com/django-trusts/django-trusts-zero)
-companion can copy it. The kernel **wheel** does not ship `trusts.zero`.
+as ``trusts.zero``. This kernel package does **not** ship ``trusts/zero``.
+The kernel **wheel** never included that tree.
 
 ## Decision
 
@@ -1868,7 +1869,8 @@ Field `to=`, `through=`, `db_table`, `unique_together`, and
 
 Migration-bot checklist:
 
-- [ ] Install `django-trusts` (kernel) and `django-trusts-zero` (concrete). In this Draft the Zero tree is still in-tree; the companion repo publishes it.
+- [ ] Install `django-trusts` (kernel) and `django-trusts-zero` (concrete). Concrete sources are not in this repository.
+- [ ] Confirm wheel+wheel / editable+editable / Zero uninstall isolation against the **companion checkout** (`scripts/verify-namespace-install.py`). Do not validate a synthetic Zero wheel from this tree. Editable Zero next to the kernel needs setuptools `editable_mode=compat` so kernel `trusts/__init__.py` stays the package owner.
 - [ ] Replace `'trusts'` in `INSTALLED_APPS` with the two explicit class paths. Do not use bare `'trusts'` or `'trusts.zero'`.
 - [ ] Replace `from trusts.models import …` with `from trusts.zero.models import …`.
 - [ ] Replace `trusts.backends.TrustModelBackend` with `trusts.zero.backends.TrustModelBackend`.
@@ -1879,7 +1881,6 @@ Migration-bot checklist:
 - [ ] Confirm applied set stays `{0001_initial, 0002_trustgroup}`; row counts unchanged; content-type natural keys stay `trusts | trust` (and siblings).
 - [ ] Confirm `makemigrations trusts --check` is quiet.
 - [ ] Confirm `python scripts/verify-legacy-upgrade.py` still applies only pending `0002` when `0001` is already recorded.
-- [ ] Confirm wheel+wheel / editable+editable / Zero uninstall isolation (`scripts/verify-namespace-install.py`). Editable Zero next to the kernel needs setuptools `editable_mode=compat` so kernel `trusts/__init__.py` stays the package owner.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #43 from this PR.
 

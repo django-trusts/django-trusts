@@ -31,11 +31,13 @@ built from this tree.
 ```
 python -m pip install "Django>=6.1,<6.2"
 python -m pip install .
+python -m pip install django-trusts-zero
 ```
 
 Add explicit AppConfig paths (do **not** use bare ``'trusts'``). Concrete
-Trust/Content models currently live in-tree as ``trusts.zero`` and will be
-published by ``django-trusts-zero``:
+Trust/Content models live in the companion
+[`django-trusts-zero`](https://github.com/django-trusts/django-trusts-zero)
+distribution as ``trusts.zero``:
 
 ```
 INSTALLED_APPS = [
@@ -48,7 +50,8 @@ AUTHENTICATION_BACKENDS = (
 ```
 
 Import concrete models from ``trusts.zero.models``. Kernel APIs stay
-``trusts.context``, ``trusts.trustee``, and ``trusts.path``.
+``trusts.context``, ``trusts.trustee``, and ``trusts.path``. This
+package does not ship ``trusts/zero``.
 
 API and compatibility notes for this modernization are in [migrates.md](migrates.md).
 
@@ -58,6 +61,7 @@ Test
 ```
 python -m pip install "Django>=6.1,<6.2" coverage
 python -m pip install -e .
+python -m pip install --no-deps -e ../django-trusts-zero --config-settings editable_mode=compat
 python -m tests.runtests
 python -m tests.runtests_custom
 python -m django check --settings=tests.settings
@@ -67,20 +71,25 @@ python scripts/verify-migration-split.py
 python scripts/verify-namespace-install.py
 ```
 
+Authorization tests import ``trusts.zero`` from the companion checkout,
+not from this tree. CI clones
+[`django-trusts-zero`](https://github.com/django-trusts/django-trusts-zero)
+(see ``scripts/zero-companion.pin``).
+
 The executable suite lives under `tests/` (`tests/core/`,
 `tests/regressions/`, and the isolated `tests/custom_content/` app).
 Shared fixtures are in `tests/support.py`. Those modules are not part of
 the installable `trusts` package.
 
-CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
-fresh migrate, ``manage.py check``, the isolated custom-user suite, the
-legacy-upgrade script, and migration-identity after Zero relocation on
-Python 3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12
-only) builds an sdist/wheel, imports the kernel wheel from a temporary
-directory so the source tree cannot satisfy the import, and runs the
-namespace wheel+wheel / uninstall / editable proof. Job names:
-`tests (Python 3.12)`, `tests (Python 3.13)`, `tests (Python 3.14)`,
-`package`. Do not treat a removed Travis check as a stand-in green status.
+CI is GitHub Actions (`.github/workflows/ci.yml`): checks out companion
+``django-trusts-zero``, then runs authorization tests, a fresh migrate,
+``manage.py check``, the isolated custom-user suite, the legacy-upgrade
+script, and migration-identity on Python 3.12, 3.13, and 3.14 with Django
+6.1. The `package` job (Python 3.12 only) builds an sdist/wheel, imports
+the kernel wheel from a temporary directory, and pairs it with a wheel
+built from the companion checkout. Job names: `tests (Python 3.12)`,
+`tests (Python 3.13)`, `tests (Python 3.14)`, `package`. Do not treat a
+removed Travis check as a stand-in green status.
 
 Development version
 -------------------

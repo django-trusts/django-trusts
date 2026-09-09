@@ -39,8 +39,10 @@ installable `trusts/` package:
   ship `trusts.zero`
 - `scripts/verify-migration-split.py` — fresh 0001+0002, sqlmigrate
   snapshots, empty plan, content-type keys, quiet makemigrations
-- `scripts/verify-namespace-install.py` — kernel/Zero wheel RECORD,
-  uninstall/reinstall, editable+editable (`editable_mode=compat`)
+- `scripts/verify-namespace-install.py` — builds this kernel and the
+  **companion** django-trusts-zero checkout (not a synthetic in-tree
+  Zero); wheel RECORD, uninstall/reinstall, editable+editable,
+  AppConfig, migration identity. Pin: `scripts/zero-companion.pin`
 
 ## Tests that must keep passing
 

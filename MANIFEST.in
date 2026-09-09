@@ -5,6 +5,5 @@ include migrates.md
 include pyproject.toml
 include django_trusts.py
 recursive-include trusts *
-prune trusts/zero
 global-exclude __pycache__
 global-exclude *.py[cod]

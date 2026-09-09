@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Prove kernel + Zero namespace packaging from this checkout.
+"""Prove this kernel revision against the *real* django-trusts-zero checkout.
 
-Builds a kernel wheel (no ``trusts.zero``) and a Zero wheel (only
-``trusts/zero/**``) from the in-tree source, then proves:
+Does not build a synthetic Zero wheel from in-tree sources. The companion
+repository is authoritative for Zero version and Requires-Dist.
 
-1. wheel+wheel RECORD ownership in a real venv
-2. Zero uninstall/reinstall isolation (``pip uninstall`` / reinstall)
-3. editable+editable isolation (stripped kernel copy + Zero-only tree)
+Proves:
 
-Uses ``venv`` when ``ensurepip`` is available (CI) and ``virtualenv``
-otherwise. ``pip install --target`` is not used: ``--upgrade`` into a
-shared ``--target`` directory replaces the whole ``trusts/`` tree and
-cannot prove namespace merge. Companion django-trusts-zero should
-publish the same ``trusts/zero`` tree using
-``packaging/django-trusts-zero/pyproject.toml``.
+1. kernel tree has no ``trusts/zero`` and no packaging mirror
+2. companion ``pyproject.toml`` / wheel METADATA (version ``2.0.0.dev0``,
+   ``django-trusts`` Requires-Dist)
+3. wheel+wheel RECORD ownership
+4. Zero uninstall/reinstall isolation
+5. editable+editable isolation (this kernel checkout + companion tree)
+6. AppConfig labels, import paths, and trusts migration identity
 """
 
 from __future__ import annotations
@@ -26,9 +25,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ZERO_PYPROJECT = ROOT / 'packaging' / 'django-trusts-zero' / 'pyproject.toml'
-ZERO_MANIFEST = ROOT / 'packaging' / 'django-trusts-zero' / 'MANIFEST.in'
-ZERO_README = ROOT / 'packaging' / 'django-trusts-zero' / 'README.md'
+sys.path.insert(0, str(ROOT / 'scripts'))
+import zero_companion  # noqa: E402
 
 KERNEL_OWNED_RECORD_PARTS = (
     'trusts/__init__.py',
@@ -73,36 +71,6 @@ def _run(cmd, cwd=None, env=None, check=True):
     if check and result.returncode != 0:
         raise SystemExit(result.returncode)
     return result
-
-
-def _stage_zero_src(dest: Path) -> Path:
-    dest.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ZERO_PYPROJECT, dest / 'pyproject.toml')
-    shutil.copy2(ZERO_MANIFEST, dest / 'MANIFEST.in')
-    shutil.copy2(ZERO_README, dest / 'README.md')
-    shutil.copytree(
-        ROOT / 'trusts' / 'zero',
-        dest / 'trusts' / 'zero',
-        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'),
-    )
-    if (dest / 'trusts' / '__init__.py').exists():
-        raise SystemExit('Zero staging must not include trusts/__init__.py')
-    return dest
-
-
-def _stage_kernel_src(dest: Path) -> Path:
-    shutil.copytree(
-        ROOT,
-        dest,
-        ignore=shutil.ignore_patterns(
-            '.git', '__pycache__', '*.pyc', 'dist', 'build',
-            '*.egg-info', '.venv', 'packaging',
-        ),
-    )
-    zero = dest / 'trusts' / 'zero'
-    if zero.exists():
-        shutil.rmtree(zero)
-    return dest
 
 
 def _wheel_record(site_packages: Path, dist_name: str) -> list[str]:
@@ -166,9 +134,6 @@ def _site_packages(py: Path) -> Path:
 
 
 def _python(py: Path, code: str, cwd: Path):
-    """Run ``code`` with cwd outside the checkout so ``''`` on sys.path
-    cannot shadow the installed distributions.
-    """
     env = os.environ.copy()
     env.pop('PYTHONPATH', None)
     env['PYTHONNOUSERSITE'] = '1'
@@ -180,16 +145,20 @@ def _pip(py: Path, *args):
 
 
 def main() -> int:
-    if not ZERO_PYPROJECT.is_file():
-        raise SystemExit('Missing %s' % ZERO_PYPROJECT)
-
+    zero_companion.assert_kernel_has_no_zero_tree(ROOT)
     py = sys.executable
+    pin = zero_companion.read_pin()
     with tempfile.TemporaryDirectory(prefix='django-trusts-namespace-') as tmp:
         tmp_path = Path(tmp)
+        zero_src = zero_companion.resolve_companion_src(tmp_path / 'zero-src')
+        zero_sha = zero_companion.companion_sha(zero_src)
+        project = zero_companion.assert_companion_metadata(zero_src)
+        print('companion_src', zero_src)
+        print('companion_sha', zero_sha)
+        print('companion_version', project['version'])
+
         dist_dir = tmp_path / 'dist'
         dist_dir.mkdir()
-        zero_src = _stage_zero_src(tmp_path / 'zero-src')
-
         _run([py, '-m', 'pip', 'install', 'build'])
         _run([py, '-m', 'build', '--wheel', '--outdir', str(dist_dir)], cwd=ROOT)
         _run([py, '-m', 'build', '--wheel', '--outdir', str(dist_dir)], cwd=zero_src)
@@ -204,12 +173,12 @@ def main() -> int:
                 'expected one kernel wheel and one zero wheel, got %s' % wheels
             )
         kernel_wheel, zero_wheel = kernel_wheels[0], zero_wheels[0]
-
-        # --- wheel + wheel ---
-        ww_py = _make_venv(tmp_path / 'ww-venv')
-        _pip(
-            ww_py, 'Django>=6.1,<6.2', str(kernel_wheel), str(zero_wheel),
+        zero_companion.assert_wheel_requires_dist(
+            zero_wheel, pin.get('required_dist', 'django-trusts'),
         )
+
+        ww_py = _make_venv(tmp_path / 'ww-venv')
+        _pip(ww_py, str(kernel_wheel), str(zero_wheel))
         ww_site = _site_packages(ww_py)
         kernel_record = _wheel_record(ww_site, 'django_trusts')
         zero_record = _wheel_record(ww_site, 'django_trusts_zero')
@@ -243,13 +212,27 @@ def main() -> int:
             'from trusts.zero.models import Trust; '
             'from trusts.apps import KernelConfig; '
             'from trusts.zero.apps import ZeroConfig; '
+            'from django.db import connection; '
+            'from django.db.migrations.loader import MigrationLoader; '
+            'from django.db.migrations.executor import MigrationExecutor; '
+            'from django.db.migrations.recorder import MigrationRecorder; '
+            'from django.core.management import call_command; '
             'assert KernelConfig.label == "trusts_kernel"; '
             'assert ZeroConfig.label == "trusts"; '
             'tf, zf = trusts.__file__, trusts.zero.__file__; '
             'assert "site-packages" in tf, tf; '
             'assert "site-packages" in zf, zf; '
-            'assert "/zero/" not in tf.replace("\\\\", "/"); '
-            'print("wheel+wheel ok", tf, zf, Trust)'
+            'loader = MigrationLoader(connection); '
+            'assert ("trusts", "0001_initial") in loader.disk_migrations; '
+            'assert loader.disk_migrations[("trusts", "0001_initial")].__module__ '
+            '== "trusts.zero.migrations.0001_initial"; '
+            'call_command("migrate", verbosity=0); '
+            'applied = {name for app, name in MigrationRecorder(connection).applied_migrations() if app == "trusts"}; '
+            'assert applied == {"0001_initial", "0002_trustgroup"}, applied; '
+            'ex = MigrationExecutor(connection); '
+            'plan = [(m.app_label, m.name) for m, _b in ex.migration_plan(ex.loader.graph.leaf_nodes()) if m.app_label == "trusts"]; '
+            'assert plan == [], plan; '
+            'print("wheel+wheel ok", tf, zf, Trust, sorted(applied))'
         ), cwd=isolated)
 
         _run([str(ww_py), '-m', 'pip', 'uninstall', '-y', 'django-trusts-zero'])
@@ -263,7 +246,7 @@ def main() -> int:
             'importlib.util.find_spec("trusts.zero"); '
             'print("uninstall zero ok", trusts.__file__)'
         ), cwd=isolated)
-        _pip(ww_py, '--no-deps', str(zero_wheel))
+        _pip(ww_py, str(zero_wheel))
         _python(ww_py, (
             _DJANGO_SETUP_BOTH +
             'import trusts, trusts.zero; from trusts.zero.models import Trust; '
@@ -273,29 +256,34 @@ def main() -> int:
             'print("reinstall zero ok", Trust, KernelConfig.label)'
         ), cwd=isolated)
 
-        # --- editable + editable ---
-        kernel_src = _stage_kernel_src(tmp_path / 'kernel-src')
         ee_py = _make_venv(tmp_path / 'ee-venv')
-        _pip(ee_py, 'Django>=6.1,<6.2')
-        _pip(ee_py, '-e', str(kernel_src), '--config-settings', 'editable_mode=compat')
-        _pip(ee_py, '--no-deps', '-e', str(zero_src), '--config-settings', 'editable_mode=compat')
-        _python(ee_py, (
+        _pip(ee_py, '-e', str(ROOT), '--config-settings', 'editable_mode=compat')
+        _pip(
+            ee_py, '--no-deps', '-e', str(zero_src),
+            '--config-settings', 'editable_mode=compat',
+        )
+        kernel_marker = str(ROOT.resolve())
+        zero_marker = str(zero_src.resolve())
+        ee_code = (
             _DJANGO_SETUP_BOTH +
             'import trusts, trusts.zero, pathlib; '
             'from trusts.zero.models import Trust; '
             'from trusts.apps import KernelConfig; '
-            'assert trusts.__file__, "kernel must own trusts/__init__.py, got namespace %r" % (getattr(trusts, "__path__", None),); '
+            'assert trusts.__file__, "kernel must own trusts/__init__.py"; '
             'tf = pathlib.Path(trusts.__file__).resolve(); '
             'zf = pathlib.Path(trusts.zero.__file__).resolve(); '
-            'assert "kernel-src" in str(tf), tf; '
-            'assert "zero-src" in str(zf), zf; '
+            'assert ' + repr(kernel_marker) + ' in str(tf), tf; '
+            'assert ' + repr(zero_marker) + ' in str(zf), zf; '
+            'assert not (tf.parent / "zero").exists(), tf.parent; '
             'assert KernelConfig.label == "trusts_kernel"; '
             'print("editable+editable ok", tf, zf, Trust)'
-        ), cwd=isolated)
+        )
+        _python(ee_py, ee_code, cwd=isolated)
 
         print('namespace install ok')
         print('kernel_wheel', kernel_wheel.name)
         print('zero_wheel', zero_wheel.name)
+        print('companion_sha', zero_sha)
         return 0
 
 

@@ -44,9 +44,13 @@ class KernelZeroSplitTest(TestCase):
         self.assertIn('extend_path', source)
         self.assertNotIn('ENTITY_MODEL_NAME', source)
 
-    def test_kernel_owns_no_migrations(self):
+    def test_kernel_checkout_has_no_zero_tree(self):
         kernel_dir = Path(inspect.getfile(trusts)).resolve().parent
+        self.assertFalse((kernel_dir / 'zero').exists())
         self.assertFalse((kernel_dir / 'migrations').exists())
+        repo_root = Path(__file__).resolve().parents[2]
+        self.assertFalse((repo_root / 'trusts' / 'zero').exists())
+        self.assertFalse((repo_root / 'packaging' / 'django-trusts-zero').exists())
         zero_migrations = Path(inspect.getfile(Trust)).resolve().parent / 'migrations'
         names = sorted(
             path.name for path in zero_migrations.glob('*.py')
