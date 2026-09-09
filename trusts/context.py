@@ -24,7 +24,7 @@ classes.
 
 from django.apps import apps
 from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
-from django.db.models import Q
+from django.db.models import Q, UniqueConstraint
 
 
 KIND_DIRECT = 'direct'
@@ -104,12 +104,56 @@ def _forward_field(field):
     return getattr(field, 'remote_field', None)
 
 
+def _usable_reverse_lookup(name):
+    """True when ``name`` can appear in a composable ORM lookup.
+
+    ``related_name='+'`` (and ``+suffix``) disables the reverse accessor.
+    Those names are not invertible and must not become ``resource_path``.
+    """
+    if not isinstance(name, str) or not name:
+        return False
+    if name == '+' or name.startswith('+'):
+        return False
+    if name[0].isdigit():
+        return False
+    return all(ch.isalnum() or ch == '_' for ch in name)
+
+
+def _assert_forward_invertible(field, path, model):
+    if not getattr(field, 'concrete', False):
+        return
+    reverse = field.related_query_name()
+    if not _usable_reverse_lookup(reverse):
+        raise ContextRegistrationError(
+            'Path %r: %r on %s has no invertible reverse lookup (%r).' % (
+                path, field.name, _model_label(model), reverse,
+            )
+        )
+
+
+def _unconditional_single_field_unique(constraint, field_name):
+    """True when ``constraint`` unconditionally unique-indexes ``field_name``.
+
+    A ``condition=`` (partial unique) is not single-valued: excluded
+    rows may still share the same parent. Other options such as
+    ``deferrable`` / ``include`` / ``opclasses`` do not add extra rows.
+    """
+    if not isinstance(constraint, UniqueConstraint):
+        return False
+    fields = getattr(constraint, 'fields', None)
+    if fields is None or tuple(fields) != (field_name,):
+        return False
+    if getattr(constraint, 'condition', None) is not None:
+        return False
+    return True
+
+
 def _reverse_is_unique(field):
     """True when a reverse relation is constrained to one row.
 
     ``ForeignKey(unique=True)`` and a single-field ``unique_together`` /
-    ``UniqueConstraint`` are single-valued even when Django still exposes
-    the reverse as ``one_to_many``.
+    unconditional ``UniqueConstraint`` are single-valued even when
+    Django still exposes the reverse as ``one_to_many``.
     """
     fwd = _forward_field(field)
     if fwd is None:
@@ -124,8 +168,7 @@ def _reverse_is_unique(field):
         if tuple(unique) == (name,):
             return True
     for constraint in getattr(concrete._meta, 'constraints', ()):
-        fields = getattr(constraint, 'fields', None)
-        if fields is not None and tuple(fields) == (name,):
+        if _unconditional_single_field_unique(constraint, name):
             return True
     return False
 
@@ -190,13 +233,14 @@ def _invert_hop(model, name, path):
     """Return ``(related_model, reverse_lookup_name)`` for one hop on ``model``."""
     field = _get_field(model, name, path)
     _assert_single_valued_relation(field, path, model, name)
+    _assert_forward_invertible(field, path, model)
     target = _resolve_related_model(field)
     if field.concrete:
         reverse = field.related_query_name()
-        if not reverse:
+        if not _usable_reverse_lookup(reverse):
             raise ContextRegistrationError(
-                'Path %r: %r on %s has no reverse query name.' % (
-                    path, name, _model_label(model),
+                'Path %r: %r on %s has no invertible reverse lookup (%r).' % (
+                    path, name, _model_label(model), reverse,
                 )
             )
         return target, reverse
@@ -226,6 +270,7 @@ def _walk(model, path, seen=None):
     for name in parts:
         field = _get_field(current, name, path)
         _assert_single_valued_relation(field, path, current, name)
+        _assert_forward_invertible(field, path, current)
         target = _resolve_related_model(field)
         key = _model_key(target)
         if key in seen:
@@ -379,7 +424,7 @@ class ContextRegistry(object):
         model = obj.__class__
         return model.objects.filter(pk=obj.pk).filter(self.scope_q(model, scope)).exists()
 
-    def register_direct(self, model, scope_field, allow_late=False):
+    def register_direct(self, model, scope_field):
         """Register a resource that owns a single-valued scope relation."""
         parts = _split_path(scope_field, 'scope_field')
         if len(parts) != 1:
@@ -388,11 +433,12 @@ class ContextRegistry(object):
             )
         field = _get_field(model, scope_field, scope_field)
         _assert_single_valued_relation(field, scope_field, model, scope_field)
+        _assert_forward_invertible(field, scope_field, model)
         _resolve_related_model(field)
         adapter = ContextAdapter(KIND_DIRECT, model, scope_field, self)
-        return self._commit(adapter, allow_late=allow_late)
+        return self._commit(adapter)
 
-    def register_related(self, model, through, allow_late=False):
+    def register_related(self, model, through):
         """Register a resource that reaches an already registered resource."""
         terminal, _hops = _walk(model, through)
         if not self.is_registered(terminal):
@@ -403,9 +449,9 @@ class ContextRegistry(object):
                 )
             )
         adapter = ContextAdapter(KIND_RELATED, model, through, self)
-        return self._commit(adapter, allow_late=allow_late)
+        return self._commit(adapter)
 
-    def _commit(self, adapter, allow_late=False):
+    def _commit(self, adapter):
         key = _model_key(adapter.model)
         existing = self._adapters.get(key)
         if existing is not None:
@@ -418,7 +464,7 @@ class ContextRegistry(object):
                     adapter.kind, adapter.decl,
                 )
             )
-        if self._frozen and not allow_late:
+        if self._frozen:
             raise ContextRegistryFrozen(
                 'Context registry is frozen; cannot register %s.' % (
                     _model_label(adapter.model),
@@ -439,6 +485,7 @@ class ContextRegistry(object):
             _assert_single_valued_relation(
                 field, adapter.decl, adapter.model, adapter.decl,
             )
+            _assert_forward_invertible(field, adapter.decl, adapter.model)
             _resolve_related_model(field)
             adapter.scope_path()
             adapter.resource_path()
@@ -472,6 +519,7 @@ def check_registration(model, kind, path, registry=None):
                 )
             field = _get_field(model, path, path)
             _assert_single_valued_relation(field, path, model, path)
+            _assert_forward_invertible(field, path, model)
             _resolve_related_model(field)
         elif kind == KIND_RELATED:
             terminal, _hops = _walk(model, path)

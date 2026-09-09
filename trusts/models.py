@@ -10,18 +10,7 @@ from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     utils, \
                     supported_entity_contract, supported_group_contract, \
                     supported_permission_contract
-from trusts.context import Context, ContextRegistrationError
-
-
-def prepare_context_registry():
-    """Mirror deferred Content conveniences, then freeze before queries.
-
-    ``trusts.AppConfig.ready`` runs before later ``INSTALLED_APPS`` have
-    registered. Authorization queries and ``manage.py check`` call this
-    so the map is complete and static.
-    """
-    Content.sync_pending_context_registrations()
-    Context.ensure_frozen()
+from trusts.context import Context, ContextRegistrationError, ContextRegistryFrozen
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
@@ -30,6 +19,20 @@ from trusts.conditions import (
     compile_expression_q,
     is_predicate,
 )
+
+
+def prepare_context_registry():
+    """Mirror deferred Content conveniences, then freeze before queries.
+
+    ``trusts.AppConfig.ready`` runs before later ``INSTALLED_APPS`` have
+    registered. Authorization queries and ``manage.py check`` call this
+    so the map is complete and static. After freeze, public registration
+    is idempotent-only or rejected.
+    """
+    if Context.is_frozen():
+        return
+    Content.sync_pending_context_registrations()
+    Context.freeze()
 
 
 options.DEFAULT_NAMES += ('roles', 'permission_conditions',
@@ -678,9 +681,9 @@ class Content(ReadonlyFieldsMixin, models.Model):
         )
         if fieldlookup == Content.direct_content_fieldlookup(klass):
             try:
-                Context.registry.register_direct(
-                    klass, scope_field='trust', allow_late=True,
-                )
+                Context.register_direct(klass, scope_field='trust')
+            except ContextRegistryFrozen:
+                raise
             except ContextRegistrationError as exc:
                 raise InvalidContentFieldlookup(str(exc)) from exc
         else:
@@ -688,9 +691,9 @@ class Content(ReadonlyFieldsMixin, models.Model):
                 related_through = Content._through_from_trust_origin_lookup(
                     klass, fieldlookup,
                 )
-                Context.registry.register_related(
-                    klass, through=related_through, allow_late=True,
-                )
+                Context.register_related(klass, through=related_through)
+            except ContextRegistryFrozen:
+                raise
             except (ContentLookupNotReady, AppRegistryNotReady):
                 if not defer:
                     raise InvalidContentFieldlookup(
@@ -717,14 +720,14 @@ class Content(ReadonlyFieldsMixin, models.Model):
         freeze. Does not invent new public content; it only mirrors
         ``_contents`` and deferred Junction related hops.
         """
+        if Context.is_frozen():
+            return
         pending = list(Content._pending_related)
         Content._pending_related = []
         for model, through in pending:
             if Context.is_registered(model):
                 continue
-            Context.registry.register_related(
-                model, through=through, allow_late=True,
-            )
+            Context.register_related(model, through=through)
             Content._contents[utils.get_short_model_name(model)] = (
                 Context.resource_path(model)
             )
@@ -740,16 +743,12 @@ class Content(ReadonlyFieldsMixin, models.Model):
                     fieldlookup is None
                     or fieldlookup == Content.direct_content_fieldlookup(model)
                 ):
-                    Context.registry.register_direct(
-                        model, scope_field='trust', allow_late=True,
-                    )
+                    Context.register_direct(model, scope_field='trust')
                 else:
                     through = Content._through_from_trust_origin_lookup(
                         model, fieldlookup,
                     )
-                    Context.registry.register_related(
-                        model, through=through, allow_late=True,
-                    )
+                    Context.register_related(model, through=through)
             except (ContextRegistrationError, ContentLookupNotReady, AppRegistryNotReady):
                 continue
             Content._contents[short_name] = Context.resource_path(model)
@@ -1183,10 +1182,19 @@ class Junction(ReadonlyFieldsMixin, models.Model):
             Content.register_content(content, klass.get_fieldlookup())
             Junction._register_junction_conditions(klass)
             return
-        try:
-            Context.registry.register_direct(
-                klass, scope_field='trust', allow_late=True,
+        if Context.is_registered(klass) and Context.is_registered(content):
+            Junction._register_junction_conditions(klass)
+            return
+        if Context.is_frozen():
+            raise ContextRegistryFrozen(
+                'Context registry is frozen; cannot register %s.' % (
+                    klass._meta.label,
+                )
             )
+        try:
+            Context.register_direct(klass, scope_field='trust')
+        except ContextRegistryFrozen:
+            raise
         except ContextRegistrationError as exc:
             raise InvalidContentFieldlookup(str(exc)) from exc
         # Reverse accessors on the wrapped model are not visible during
@@ -1222,6 +1230,19 @@ def register_content_junction(sender, **kwargs):
     # Proxy subclasses share the concrete table and must not overwrite the
     # content/junction fieldlookup registered for that table.
     if sender._meta.proxy or sender._meta.abstract:
+        return
+    if Context.is_frozen():
+        # Late class_prepared must not mutate the frozen map. Permission
+        # conditions still register so Meta on ephemeral models remains
+        # checkable. Explicit register_content / register_junction raise.
+        if issubclass(sender, Junction):
+            Junction._register_junction_conditions(sender)
+        elif issubclass(sender, Content):
+            if hasattr(sender._meta, 'permission_conditions'):
+                for permcond, condition in sender._meta.permission_conditions:
+                    Content.register_permission_condition(
+                        sender, permcond, condition,
+                    )
         return
     if issubclass(sender, Junction):
         Junction.register_junction(sender)

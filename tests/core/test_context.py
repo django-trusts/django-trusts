@@ -11,13 +11,20 @@ from pathlib import Path
 
 from django.contrib.auth.models import Group
 from django.core.checks import Error, run_checks
+from django.db import models
+from django.db.models import Q, UniqueConstraint
 from django.test import TestCase, TransactionTestCase
 
-from trusts.checks import CHECK_ID_INVALID_CONTEXT, check_context_registry
+from trusts.checks import (
+    CHECK_ID_INVALID_CONTEXT,
+    _SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT,
+    check_context_registry,
+)
 from trusts.context import (
     KIND_DIRECT,
     KIND_RELATED,
     Context,
+    ContextAdapter,
     ContextNotRegistered,
     ContextRegistrationError,
     ContextRegistry,
@@ -119,6 +126,77 @@ class ContextRegistryContractTest(TestCase):
             )
         self.assertFalse(Context.is_registered(UnregisteredReceiptNote))
 
+    def test_public_register_content_cannot_mutate_frozen_registry(self):
+        # Exact reproduction from the PR review: after prepare_context_registry()
+        # freezes Context, Content.register_content() must not add an adapter
+        # while leaving is_frozen() True.
+        prepare_context_registry()
+        self.assertTrue(Context.is_frozen())
+        self.assertFalse(Context.is_registered(UnregisteredReceiptNote))
+        self.assertFalse(Content.is_content_model(UnregisteredReceiptNote))
+
+        lookup = Content.compose_content_fieldlookup(Receipt, 'notes')
+        with self.assertRaises(ContextRegistryFrozen):
+            Content.register_content(UnregisteredReceiptNote, lookup)
+
+        self.assertTrue(Context.is_frozen())
+        self.assertFalse(Context.is_registered(UnregisteredReceiptNote))
+        self.assertFalse(Content.is_content_model(UnregisteredReceiptNote))
+
+    def test_late_content_subclass_does_not_mutate_frozen_registry(self):
+        prepare_context_registry()
+        self.assertTrue(Context.is_frozen())
+        self.assertFalse(Context.is_registered(UnregisteredReceiptNote))
+
+        class LateReceiptNote(Content):
+            receipt = models.ForeignKey(
+                Receipt, related_name='late_notes', on_delete=models.CASCADE,
+            )
+            notes = models.TextField()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                managed = False
+
+        self.assertTrue(Context.is_frozen())
+        self.assertFalse(Context.is_registered(LateReceiptNote))
+        self.assertFalse(Context.is_registered(UnregisteredReceiptNote))
+        self.assertFalse(Content.is_content_model(LateReceiptNote))
+
+    def test_public_junction_registration_is_idempotent_after_freeze(self):
+        prepare_context_registry()
+        self.assertTrue(Context.is_frozen())
+        self.assertTrue(Context.is_registered(TestGroupJunction))
+        Junction.register_junction(TestGroupJunction)
+        Content.register_content(Receipt)
+        self.assertTrue(Context.is_registered(TestGroupJunction))
+        self.assertTrue(Context.is_registered(Group))
+        self.assertTrue(Context.is_registered(Receipt))
+
+    def test_public_junction_registration_rejects_new_adapter_after_freeze(self):
+        prepare_context_registry()
+        self.assertTrue(Context.is_frozen())
+
+        class LateGroup(models.Model):
+            name = models.CharField(max_length=32)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                managed = False
+
+        class LateGroupJunction(Junction):
+            content = models.OneToOneField(LateGroup, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                managed = False
+
+        with self.assertRaises(ContextRegistryFrozen):
+            Junction.register_junction(LateGroupJunction)
+        self.assertTrue(Context.is_frozen())
+        self.assertFalse(Context.is_registered(LateGroupJunction))
+        self.assertFalse(Context.is_registered(LateGroup))
+
     def test_private_registry_freeze_and_order(self):
         registry = ContextRegistry()
         registry.register_direct(ContextTrap, scope_field='scope')
@@ -194,6 +272,106 @@ class ContextValidationTest(TestCase):
             registry.register_direct(Ticket, scope_field='owner')
         self.assertIn('already registered', str(ctx.exception))
 
+    def test_plus_related_name_is_rejected_as_non_invertible(self):
+        class HiddenRelatedNameScope(models.Model):
+            parent = models.ForeignKey(
+                ContextScope,
+                related_name='+',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                managed = False
+
+        registry = ContextRegistry()
+        with self.assertRaises(ContextRegistrationError) as raised:
+            registry.register_direct(HiddenRelatedNameScope, scope_field='parent')
+        self.assertIn('invertible', str(raised.exception))
+        self.assertIn("'+'", str(raised.exception))
+
+        err = check_registration(
+            HiddenRelatedNameScope, KIND_DIRECT, 'parent',
+        )
+        self.assertIsInstance(err, ContextRegistrationError)
+        self.assertIn('invertible', str(err))
+
+        prepare_context_registry()
+        key = HiddenRelatedNameScope._meta.concrete_model
+        Context.registry._adapters[key] = ContextAdapter(
+            KIND_DIRECT, HiddenRelatedNameScope, 'parent', Context.registry,
+        )
+        try:
+            messages = check_context_registry(None)
+            e006 = [
+                m for m in messages
+                if m.id == CHECK_ID_INVALID_CONTEXT
+                and m.obj is HiddenRelatedNameScope
+            ]
+            self.assertEqual(len(e006), 1)
+            self.assertEqual(e006[0].id, 'trusts.E006')
+            self.assertEqual(e006[0].hint, _SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT)
+            self.assertIn('invertible', e006[0].msg)
+        finally:
+            Context.registry._adapters.pop(key, None)
+
+    def test_partial_unique_constraint_is_not_single_valued(self):
+        class PartialUniqueChild(models.Model):
+            parent = models.ForeignKey(
+                ContextScope,
+                related_name='partial_unique_children',
+                on_delete=models.CASCADE,
+            )
+            active = models.BooleanField(default=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                managed = False
+                constraints = [
+                    UniqueConstraint(
+                        fields=['parent'],
+                        condition=Q(active=True),
+                        name='partial_unique_active_parent',
+                    ),
+                ]
+
+        registry = ContextRegistry()
+        registry.register_direct(PartialUniqueChild, scope_field='parent')
+        with self.assertRaises(ContextRegistrationError) as raised:
+            registry.register_related(
+                ContextScope, through='partial_unique_children',
+            )
+        self.assertIn('many-valued', str(raised.exception))
+
+        err = check_registration(
+            ContextScope, KIND_DIRECT, 'partial_unique_children',
+        )
+        self.assertIsInstance(err, ContextRegistrationError)
+        self.assertIn('many-valued', str(err))
+
+        prepare_context_registry()
+        key = ContextScope._meta.concrete_model
+        saved = Context.registry._adapters.get(key)
+        Context.registry._adapters[key] = ContextAdapter(
+            KIND_DIRECT, ContextScope, 'partial_unique_children',
+            Context.registry,
+        )
+        try:
+            messages = check_context_registry(None)
+            e006 = [
+                m for m in messages
+                if m.id == CHECK_ID_INVALID_CONTEXT and m.obj is ContextScope
+            ]
+            self.assertEqual(len(e006), 1)
+            self.assertEqual(e006[0].id, 'trusts.E006')
+            self.assertIn('many-valued', e006[0].msg)
+            self.assertEqual(e006[0].hint, _SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT)
+        finally:
+            if saved is None:
+                Context.registry._adapters.pop(key, None)
+            else:
+                Context.registry._adapters[key] = saved
+
 
 class ContextSystemCheckTest(TestCase):
     def test_installed_registry_has_no_e006(self):
@@ -207,11 +385,31 @@ class ContextSystemCheckTest(TestCase):
             any(m.id == CHECK_ID_INVALID_CONTEXT for m in all_messages)
         )
 
-    def test_proposed_invalid_paths_are_e006_shaped(self):
-        err = check_registration(ContextDocument, KIND_DIRECT, 'title')
-        self.assertIsInstance(err, ContextRegistrationError)
-        messages = check_context_registry(None)
-        self.assertTrue(all(isinstance(m, Error) or True for m in messages))
+    def test_installed_invalid_declaration_emits_trusts_e006(self):
+        prepare_context_registry()
+        registry = Context.registry
+        key = ContextDocument._meta.concrete_model
+        saved = registry._adapters[key]
+        registry._adapters[key] = ContextAdapter(
+            KIND_DIRECT, ContextDocument, 'title', registry,
+        )
+        try:
+            messages = check_context_registry(None)
+            e006 = [m for m in messages if m.id == CHECK_ID_INVALID_CONTEXT]
+            self.assertEqual(len(e006), 1)
+            self.assertEqual(e006[0].id, 'trusts.E006')
+            self.assertIsInstance(e006[0], Error)
+            self.assertIs(e006[0].obj, ContextDocument)
+            self.assertEqual(e006[0].hint, _SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT)
+            self.assertIn('scalar', e006[0].msg)
+            self.assertIn('fail-closed', e006[0].hint)
+        finally:
+            registry._adapters[key] = saved
+
+        restored = check_context_registry(None)
+        self.assertFalse(
+            any(m.id == CHECK_ID_INVALID_CONTEXT for m in restored)
+        )
 
 
 class ContextNoCallbackTest(TestCase):
