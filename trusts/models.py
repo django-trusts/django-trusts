@@ -360,9 +360,14 @@ class TrustManager(ContentManager):
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
 
+        from trusts.query import require_configured_requester
+
         reject_queryable_condition(
             perm_name, 'Trust.objects.filter_by_user_content_perm'
         )
+        if user is None or getattr(user, 'is_anonymous', False):
+            return self.none()
+        require_configured_requester(user)
         if not is_active_principal(user):
             return self.none()
         if not supported_entity_contract() or not supported_permission_contract():

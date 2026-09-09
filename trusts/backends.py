@@ -48,9 +48,18 @@ class TrustModelBackendMixin(object):
         from ``AuthorizationPath.resource_to_scope``, not a Trust-origin
         reverse lookup.
         """
+        from trusts.path import AuthorizationPathError
+
         if not Content.is_content(obj):
             return Trust.objects.none()
-        path = compose_zero_path(self._get_class(obj), None)
+        klass = self._get_class(obj)
+        fieldlookup = Content.get_content_fieldlookup(klass)
+        if fieldlookup:
+            Content.require_valid_content_fieldlookup(klass, fieldlookup)
+        try:
+            path = compose_zero_path(klass, None)
+        except AuthorizationPathError:
+            return Trust.objects.none()
         if path is None:
             return Trust.objects.none()
         pks = scope_pks_from_resource(obj, path)
@@ -150,6 +159,10 @@ class TrustModelBackendMixin(object):
 
     def _object_perm_granted(self, user_obj, perm, obj):
         """Object-level grant via compose, not ``get_all_permissions``."""
+        from django.core.exceptions import ValidationError
+        from trusts.context import Context
+        from trusts.path import AuthorizationPathError
+
         if not supported_entity_contract() or not supported_permission_contract():
             return False
         if not is_active_principal(user_obj):
@@ -157,10 +170,23 @@ class TrustModelBackendMixin(object):
         if not Content.is_content(obj):
             return False
         klass = self._get_class(obj)
-        permission = resolve_content_permission(klass, perm)
-        if isinstance(obj, QuerySet):
-            return queryset_is_zero_granted(obj, user_obj, permission)
-        return row_is_zero_granted(obj, user_obj, permission)
+        fieldlookup = Content.get_content_fieldlookup(klass)
+        if fieldlookup:
+            Content.require_valid_content_fieldlookup(klass, fieldlookup)
+        if not Context.is_registered(klass):
+            return False
+        try:
+            permission = resolve_content_permission(klass, perm)
+        except (Permission.DoesNotExist, ValidationError, ValueError):
+            return False
+        try:
+            if isinstance(obj, QuerySet):
+                return queryset_is_zero_granted(obj, user_obj, permission)
+            return row_is_zero_granted(obj, user_obj, permission)
+        except AuthorizationPathError as exc:
+            if 'not a registered' in str(exc):
+                return False
+            raise
 
     def has_perm(self, user_obj, permext, obj=None):
         applabel, modelname, action, cond = utils.parse_perm_code(permext)

@@ -137,9 +137,9 @@ class ZeroComposeConsumerTest(ContentModelMixin, TestCase):
             )
         self.assertEqual(pks, [self.content.pk])
 
-    def test_has_perm_instance_is_one_exists_query_after_permission_resolve(self):
+    def test_has_perm_instance_is_fixed_query_after_permission_resolve(self):
         Category.objects.get_permission('read')
-        with self.assertNumQueries(2):
+        with self.assertNumQueries(3):
             granted = self.user.has_perm(
                 self.get_perm_code(self.perm_read), self.content,
             )
