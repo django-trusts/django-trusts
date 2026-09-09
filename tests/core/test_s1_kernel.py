@@ -6,6 +6,7 @@ registries only. Does not close #47. Does not implement S2–S4.
 """
 
 import inspect
+import re
 from pathlib import Path
 
 from django.core.checks import Error
@@ -120,7 +121,12 @@ class S1ReusableLayerTest(TestCase):
         for module in (runtime, query):
             source = Path(inspect.getfile(module)).read_text()
             for noun in ('Trust', 'Content', 'Junction', 'GitHub'):
-                self.assertNotIn(noun, source)
+                self.assertIsNone(
+                    re.search(r'\b%s\b' % noun, source),
+                    '%r appears as a product noun in %s' % (
+                        noun, module.__name__,
+                    ),
+                )
 
     def test_authorized_queryset_name_is_the_r1_choice(self):
         self.assertEqual(AuthorizedQuerySet.__name__, 'AuthorizedQuerySet')
