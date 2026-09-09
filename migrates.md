@@ -2084,3 +2084,108 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #47 from this PR.
 
+# Issue #47 S2: object-only authorization backend (1.0.0.dev0)
+
+This record covers the second kernel execution slice. Version remains
+**1.0.0.dev0**. This PR does **not** close
+[#47](https://github.com/django-trusts/django-trusts/issues/47); review
+owns that. It implements accepted **framework-execution-r1+r2+r3**
+kernel S2 only. It does **not** modify `django-trusts-zero`, start
+gh-permissions#1, resume #17, or implement S3 decorators / S4
+admin/CBVs/templates.
+
+## Decision
+
+```text
+trusts.backends:
+  ObjectAuthorizationBackend          # advertised default; BaseBackend
+  ObjectAuthorizationModelBackend     # optional ModelBackend compose
+```
+
+`ObjectAuthorizationBackend` is object-only:
+
+- `authenticate()` abstains (`None`).
+- `obj is None` returns `False` (no global or model permissions).
+- A supplied object routes through S1 `is_authorized` / the shared
+  `grant_q` path. `perm` is an operation instance or
+  `operation_lookup` string. There is no `app.action_model` parser.
+- `AuthorizationConfigError` becomes denial (`False`) at this security
+  boundary. Direct runtime APIs still raise.
+- Ordinary denials (anonymous / inactive / unauthenticated principals,
+  unknown operation data) stay denials.
+- The generic backend does not assume Django User or `auth.Permission`
+  models and does not grant object access because `is_superuser`.
+
+`ObjectAuthorizationModelBackend` is a separately named convenience:
+`obj is None` uses Django `ModelBackend` model permissions; object
+checks stay on `ObjectAuthorizationBackend`. It is not required for GH
+and is not the advertised default. Zero keeps
+`trusts.zero.backends.TrustModelBackend` and its Permission / Content /
+cache / `:condition` policy.
+
+## No change to these public call sites
+
+- S1 `trusts.runtime` / `trusts.query` / `compose` / `compose_scope`
+- `Context.register_identity` / Trustee `operation_lookup` /
+  `alignment_paths`
+- Zero `TrustModelBackend`, `ContentQuerySet.permitted`, decorators,
+  admin, views, historical migrations, app label `trusts`
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 44. `trusts.backends.ObjectAuthorizationBackend` (new)
+
+| | |
+| --- | --- |
+| Previous | Consumers wired Django `User.has_perm` themselves, or used Zero `TrustModelBackend` (Permission strings, `Content.is_content`, `obj is None` → Django model perms). |
+| New | Object-only `BaseBackend`. Isolated tests pass `context=` / `trustee=` to the constructor (process-wide maps remain the no-arg default). |
+| Replacement | Add `trusts.backends.ObjectAuthorizationBackend` to `AUTHENTICATION_BACKENDS` for object checks. Keep Django `ModelBackend` (or Zero) beside it for login and model permissions. |
+| Affected | New kernel consumers. Zero does not subclass this in S2. |
+| Authorization | Object success/denial follow S1 `is_authorized` (one SQL `Exists`). `obj is None` is `False`. Malformed configuration denies rather than raising through `has_perm`. An active superuser is not granted object access by this backend. Django `PermissionsMixin.has_perm` still short-circuits active superusers before backends run. |
+
+### 45. `trusts.backends.ObjectAuthorizationModelBackend` (new, optional)
+
+| | |
+| --- | --- |
+| Previous | No framework `ModelBackend` compose. |
+| New | `ObjectAuthorizationBackend` + `ModelBackend`. `obj is None` → Django model permissions (including ModelBackend's active-superuser global grant). `obj` set → generic object path. `authenticate` / `get_user` follow `ModelBackend`. |
+| Replacement | Use only when one backend should serve both Django model permissions and object checks. Not required for GH. |
+| Affected | Optional convenience. |
+| Authorization | Object/global dispatch is explicit. Object access is not widened by model permissions or `is_superuser`. |
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m tests.runtests
+```
+
+No Trusts schema migration. S2 uses the existing isolated S1 test models.
+
+## Upgrade of a representative legacy database
+
+Unchanged. `scripts/verify-legacy-upgrade.py` still expects
+`{0001_initial, 0002_trustgroup}` on label `trusts`.
+
+## Out of scope (unchanged)
+
+- S3 native decorators / `P`/`K`/`G`/`O`
+- S4 admin / CBV mixins / stub templates
+- Generic `register_row_condition`
+- `RecursiveEdge` / `OrderedContribution`
+- django-trusts-zero wrappers or pin bump
+- gh-permissions#1
+- Closing #17 or #47
+
+## Migration-bot summary (issue #47 S2)
+
+- [ ] Use `ObjectAuthorizationBackend` for object `has_perm`; do not expect global grants from it.
+- [ ] Catch `AuthorizationConfigError` only at security boundaries (this backend already does).
+- [ ] Do not parse `app.action_model` in the generic backend; pass an operation instance or lookup string.
+- [ ] Keep Django `ModelBackend` (or Zero) if you still need login or model permissions.
+- [ ] Treat `ObjectAuthorizationModelBackend` as optional compose, not the default.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_s2_backend`).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #47 from this PR.
+
