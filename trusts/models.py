@@ -18,6 +18,7 @@ from trusts.context import (
     ContextRegistryFrozen,
     check_registration,
 )
+from trusts.trustee import Trustee, TrusteeMixin
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
@@ -26,6 +27,10 @@ from trusts.conditions import (
     compile_expression_q,
     is_predicate,
 )
+
+
+DIRECT_TRUSTEE = 'direct'
+GROUP_TRUSTEE = 'group'
 
 
 def prepare_context_registry():
@@ -39,6 +44,18 @@ def prepare_context_registry():
     rejected.
     """
     Context.ensure_frozen()
+
+
+def prepare_trustee_registry():
+    """Finalize django-trusts Trustee conveniences, then freeze.
+
+    ``trusts.AppConfig.ready`` runs before later ``INSTALLED_APPS`` have
+    registered. Authorization queries and ``manage.py check`` share
+    ``Trustee.ensure_frozen()``, which runs registered finalizers
+    (including ``sync_default_trustee_adapters``) before freeze. After
+    freeze, public registration is idempotent-only or rejected.
+    """
+    Trustee.ensure_frozen()
 
 
 options.DEFAULT_NAMES += ('roles', 'permission_conditions',
@@ -955,7 +972,7 @@ class Trust(Content):
 Content.register_content(Trust)
 
 
-class Role(models.Model):
+class Role(TrusteeMixin, models.Model):
     name = models.CharField(max_length=80, null=False, blank=False, unique=True,
                 help_text=_('The name of the role. Corresponds to the key of model\'s trusts option.'))
     groups = models.ManyToManyField(GROUP_MODEL_NAME, related_name='roles', blank=False,
@@ -1218,6 +1235,41 @@ class TrustGroupPermission(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         super(TrustGroupPermission, self).save(*args, **kwargs)
+
+
+def sync_default_trustee_adapters():
+    """Register the 1.x requester, Group, and Role-ceiling adapters.
+
+    Role inherits ``TrusteeMixin`` as declaration convenience. Its current
+    behavior is the second Group constraint path (global ceiling), not a
+    third OR-composed grant branch. No new grant table is introduced.
+    """
+    Trustee.configure(requester_model=ENTITY_MODEL_NAME)
+    Trustee.register(
+        name=DIRECT_TRUSTEE,
+        trustee_model=ENTITY_MODEL_NAME,
+        grant_model=TrustUserPermission,
+        trustee_path='entity',
+        scope_path='trust',
+        operation_path='permission',
+        membership_path='',
+    )
+    Trustee.register(
+        name=GROUP_TRUSTEE,
+        trustee_model=GROUP_MODEL_NAME,
+        grant_model=TrustGroupPermission,
+        trustee_path='trustgroup__group',
+        scope_path='trustgroup__trust',
+        operation_path='permission',
+        membership_path='user',
+        constraint_paths=(
+            'trustgroup__group__permissions',
+            'trustgroup__group__roles__permissions',
+        ),
+    )
+
+
+Trustee.add_finalizer(sync_default_trustee_adapters)
 
 
 class Junction(ReadonlyFieldsMixin, models.Model):

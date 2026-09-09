@@ -1,11 +1,13 @@
-from django.db.models import Q, QuerySet
+from django.db.models import QuerySet
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Permission
 
 from trusts.models import (
-    Trust, Content, legacy_permission_callbacks_allowed, prepare_context_registry,
+    GROUP_TRUSTEE, Trust, Content, legacy_permission_callbacks_allowed,
+    prepare_context_registry, prepare_trustee_registry,
 )
-from trusts.query import permission_granted_via_group_exists
+from trusts.query import enabled_trustee_adapter_names
+from trusts.trustee import Trustee
 from trusts.conditions import PermissionConditionError, evaluate_registered_expression
 from trusts import (
     supported_entity_contract,
@@ -28,6 +30,7 @@ class TrustModelBackendMixin(object):
             return []
 
         prepare_context_registry()
+        prepare_trustee_registry()
         trusts = Trust.objects.filter_by_content(obj)
         if trusts is None:
             return []
@@ -61,8 +64,9 @@ class TrustModelBackendMixin(object):
             trusts = self._get_trusts(obj)
             if not trusts:
                 return Permission.objects.none()
+            prepare_trustee_registry()
             return Permission.objects.filter(
-                permission_granted_via_group_exists(user_obj, trusts)
+                Trustee.get(GROUP_TRUSTEE).operation_exists_q(user_obj, trusts)
             )
 
         return []
@@ -155,17 +159,11 @@ def _group_permission_queries_allowed():
 
 
 def _trust_permission_grant_q(user_obj, trust):
-    parts = []
-    if supported_entity_contract():
-        parts.append(Q(trustentities__trust=trust, trustentities__entity=user_obj))
-    if _group_permission_queries_allowed():
-        parts.append(permission_granted_via_group_exists(user_obj, trust))
-    if not parts:
+    prepare_trustee_registry()
+    names = enabled_trustee_adapter_names()
+    if not names:
         return None
-    grant_q = parts[0]
-    for part in parts[1:]:
-        grant_q |= part
-    return grant_q
+    return Trustee.operation_grant_q(user_obj, trust, names=names)
 
 
 class TrustModelBackend(TrustModelBackendMixin, ModelBackend):

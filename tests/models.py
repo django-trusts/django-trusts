@@ -4,6 +4,7 @@ from django.contrib.auth.models import Group, User
 from trusts.conditions import condition_refs
 from trusts.context import Context
 from trusts.models import Content, Junction
+from trusts.trustee import TrusteeMixin
 
 _u, _p, _o = condition_refs()
 
@@ -232,3 +233,175 @@ Context.register_direct(ContextDocument, scope_field='scope')
 Context.register_related(ContextAttachment, through='document')
 Context.register_related(ContextAnnotation, through='attachment')
 Context.register_direct(ContextTrap, scope_field='scope')
+
+
+class TrusteeRequester(models.Model):
+    """Kernel requester. Not AUTH_USER_MODEL."""
+
+    name = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.name
+
+
+class TrusteeScope(models.Model):
+    """Kernel policy scope. Not a Trusts convenience."""
+
+    title = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.title
+
+
+class TrusteeOperation(models.Model):
+    """Kernel operation. Not auth.Permission."""
+
+    code = models.CharField(max_length=40, null=False, blank=False, unique=True)
+
+    def __str__(self):
+        return self.code
+
+
+class TrusteeResource(models.Model):
+    """Kernel resource that points at a scope."""
+
+    scope = models.ForeignKey(
+        TrusteeScope, related_name='resources', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    title = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.title
+
+
+class TrusteeCollective(models.Model):
+    """External collective trustee registered without inheritance."""
+
+    name = models.CharField(max_length=40, null=False, blank=False)
+    members = models.ManyToManyField(
+        TrusteeRequester, related_name='collectives', blank=True,
+    )
+    operations = models.ManyToManyField(
+        TrusteeOperation, related_name='ceiling_collectives', blank=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class TrusteeBundle(TrusteeMixin, models.Model):
+    """Mixin inheritance without schema side effects. Ceiling only."""
+
+    name = models.CharField(max_length=40, null=False, blank=False, unique=True)
+    collectives = models.ManyToManyField(
+        TrusteeCollective, related_name='bundles', blank=True,
+    )
+    operations = models.ManyToManyField(
+        TrusteeOperation, related_name='bundles', blank=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class TrusteeDirectGrant(models.Model):
+    """Direct requester grant on a scope."""
+
+    scope = models.ForeignKey(
+        TrusteeScope, related_name='direct_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    requester = models.ForeignKey(
+        TrusteeRequester, related_name='direct_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    operation = models.ForeignKey(
+        TrusteeOperation, related_name='direct_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    class Meta:
+        unique_together = ('scope', 'requester', 'operation')
+
+
+class TrusteeCollectiveGrant(models.Model):
+    """Collective grant on a scope. Constraints never create authorization."""
+
+    scope = models.ForeignKey(
+        TrusteeScope, related_name='collective_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    collective = models.ForeignKey(
+        TrusteeCollective, related_name='grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    operation = models.ForeignKey(
+        TrusteeOperation, related_name='collective_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    class Meta:
+        unique_together = ('scope', 'collective', 'operation')
+
+
+class TrusteeDesk(models.Model):
+    """Multi-hop membership origin: desk → collective → requester."""
+
+    title = models.CharField(max_length=40, null=False, blank=False)
+    collective = models.ForeignKey(
+        TrusteeCollective, related_name='desks', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.title
+
+
+class TrusteeDeskGrant(models.Model):
+    scope = models.ForeignKey(
+        TrusteeScope, related_name='desk_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    desk = models.ForeignKey(
+        TrusteeDesk, related_name='grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    operation = models.ForeignKey(
+        TrusteeOperation, related_name='desk_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+
+class TrusteeTrapGrant(models.Model):
+    """Grant whose Python getters must never run during resolution."""
+
+    scope = models.ForeignKey(
+        TrusteeScope, related_name='trap_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    requester = models.ForeignKey(
+        TrusteeRequester, related_name='trap_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    operation = models.ForeignKey(
+        TrusteeOperation, related_name='trap_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    @property
+    def forbidden(self):
+        raise AssertionError('Trustee must not execute properties')
+
+    def get_requester(self):
+        raise AssertionError('Trustee must not execute getters')
+
+
+class UnregisteredTrusteeNote(models.Model):
+    """Must stay unregistered so late registration can be rejected."""
+
+    scope = models.ForeignKey(
+        TrusteeScope, related_name='notes', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    text = models.CharField(max_length=80, null=False, blank=False, default='')
