@@ -386,12 +386,14 @@ class ContextSystemCheckTest(TestCase):
         )
 
     def test_installed_invalid_declaration_emits_trusts_e006(self):
+        # Ticket is a leaf adapter: a stale scalar path must produce
+        # exactly one trusts.E006 without also invalidating dependents.
         prepare_context_registry()
         registry = Context.registry
-        key = ContextDocument._meta.concrete_model
+        key = Ticket._meta.concrete_model
         saved = registry._adapters[key]
         registry._adapters[key] = ContextAdapter(
-            KIND_DIRECT, ContextDocument, 'title', registry,
+            KIND_DIRECT, Ticket, 'title', registry,
         )
         try:
             messages = check_context_registry(None)
@@ -399,7 +401,7 @@ class ContextSystemCheckTest(TestCase):
             self.assertEqual(len(e006), 1)
             self.assertEqual(e006[0].id, 'trusts.E006')
             self.assertIsInstance(e006[0], Error)
-            self.assertIs(e006[0].obj, ContextDocument)
+            self.assertIs(e006[0].obj, Ticket)
             self.assertEqual(e006[0].hint, _SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT)
             self.assertIn('scalar', e006[0].msg)
             self.assertIn('fail-closed', e006[0].hint)
