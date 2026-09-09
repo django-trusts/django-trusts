@@ -32,6 +32,11 @@ installable `trusts/` package:
   `require_authorized` / `P` / `K` / `G` / `O` (URL/GET/POST binding;
   404 vs 403; login redirect; config error → 403; superuser does not
   bypass; bounded query counts)
+- `tests/core/test_s4_admin_views.py` — issue #47 S4
+  `AuthorizedModelAdmin` / `AuthorizedQuerySetMixin` /
+  `AuthorizedObjectMixin` / `trusts/` stub templates (pre-pagination
+  SQL filter; object≡list; 404 vs 403; config error → 403; superuser
+  does not bypass; template override; bounded query counts)
 - `tests/core/test_zero_path.py` — issue #43 Step 2 Zero consumer of compose
   (`ContentQuerySet.permitted` / `TrustModelBackend`; same-PK fail-closed)
 - `tests/core/test_kernel_split.py` — issue #43 Step 3 kernel/Zero AppConfig,
@@ -43,6 +48,7 @@ installable `trusts/` package:
   `tests.core.test_gh_vocab`, `tests.core.test_s1_kernel`,
   `tests.core.test_s2_backend`,
   `tests.core.test_s3_decorators`,
+  `tests.core.test_s4_admin_views`,
   `tests.core.test_zero_path`,
   `tests.core.test_kernel_split`, `tests.core.test_wheel_install`,
   `tests.regressions.test_issue_*`)

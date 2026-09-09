@@ -1,0 +1,17 @@
+{# Framework stub. Override with template_name or an earlier trusts/authorized_confirm_delete.html. #}
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Confirm delete</title>
+</head>
+<body>
+  <h1>Confirm delete</h1>
+  {% if object %}
+  <p>{{ object }}</p>
+  {% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit">Confirm</button>
+  </form>
+</body>
+</html>

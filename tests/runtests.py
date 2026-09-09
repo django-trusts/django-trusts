@@ -33,6 +33,7 @@ NORMAL_SUITE = [
     'tests.core.test_s1_kernel',
     'tests.core.test_s2_backend',
     'tests.core.test_s3_decorators',
+    'tests.core.test_s4_admin_views',
     'tests.core.test_zero_path',
     'tests.core.test_kernel_split',
     'tests.core.test_wheel_install',

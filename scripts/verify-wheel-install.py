@@ -101,6 +101,8 @@ def main() -> int:
     from trusts.path import AuthorizationPath, AuthorizationBranch, compose
     from trusts.backends import ObjectAuthorizationBackend
     from trusts.decorators import require_authorized
+    from trusts.admin import AuthorizedModelAdmin
+    from trusts.views import AuthorizedObjectMixin, AuthorizedQuerySetMixin
     from django_trusts import TQ, condition_refs
 
     trusts_file = Path(trusts.__file__).resolve()
@@ -136,6 +138,9 @@ def main() -> int:
     print('compose', compose)
     print('ObjectAuthorizationBackend', ObjectAuthorizationBackend)
     print('require_authorized', require_authorized)
+    print('AuthorizedModelAdmin', AuthorizedModelAdmin)
+    print('AuthorizedQuerySetMixin', AuthorizedQuerySetMixin)
+    print('AuthorizedObjectMixin', AuthorizedObjectMixin)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
     print('absent test modules', ' '.join(ABSENT_TEST_MODULES))

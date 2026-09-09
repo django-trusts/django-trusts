@@ -1,0 +1,15 @@
+{# Framework stub. Override with template_name or an earlier trusts/authorized_form.html. #}
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorized form</title>
+</head>
+<body>
+  <h1>Authorized form</h1>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save</button>
+  </form>
+</body>
+</html>
