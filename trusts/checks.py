@@ -138,8 +138,10 @@ def check_context_registry(app_configs, **kwargs):
     Missing, cyclic, ambiguous, scalar, many-valued, and wrong-terminal
     paths are rejected at ``register_direct`` / ``register_related``.
     This check re-walks every installed adapter so ``manage.py check``
-    reports ``trusts.E006`` if the map is stale. ``app_configs`` is
-    ignored so ``manage.py check trusts`` still sees the full registry.
+    reports ``trusts.E006`` if the map is stale. Deferred Content
+    leftovers that never became adapters are reported the same way.
+    ``app_configs`` is ignored so ``manage.py check trusts`` still sees
+    the full registry.
     No getters, properties, or callbacks are executed. No database
     queries.
     """
@@ -157,6 +159,18 @@ def check_context_registry(app_configs, **kwargs):
                 obj=adapter.model,
                 id=CHECK_ID_INVALID_CONTEXT,
             ))
+    for model, fieldlookup in Content.iter_unresolved_content_registrations():
+        err = Content.compatibility_context_error(model, fieldlookup)
+        if err is None:
+            continue
+        messages.append(django_checks.Error(
+            'Context compatibility registration for %s is invalid: %s' % (
+                model._meta.label, err,
+            ),
+            hint=_SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT,
+            obj=model,
+            id=CHECK_ID_INVALID_CONTEXT,
+        ))
     return messages
 
 

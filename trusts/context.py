@@ -25,6 +25,7 @@ classes.
 from django.apps import apps
 from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
 from django.db.models import Q, UniqueConstraint
+from django.db.models.constants import LOOKUP_SEP
 
 
 KIND_DIRECT = 'direct'
@@ -108,11 +109,15 @@ def _usable_reverse_lookup(name):
     """True when ``name`` can appear in a composable ORM lookup.
 
     ``related_name='+'`` (and ``+suffix``) disables the reverse accessor.
+    Names containing ``LOOKUP_SEP`` (``fields.E309``) or ending with ``_``
+    (``fields.E308``) are ambiguous even if those checks are silenced.
     Those names are not invertible and must not become ``resource_path``.
     """
     if not isinstance(name, str) or not name:
         return False
     if name == '+' or name.startswith('+'):
+        return False
+    if name.endswith('_') or LOOKUP_SEP in name:
         return False
     if name[0].isdigit():
         return False

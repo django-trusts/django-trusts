@@ -10,7 +10,14 @@ from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     utils, \
                     supported_entity_contract, supported_group_contract, \
                     supported_permission_contract
-from trusts.context import Context, ContextRegistrationError, ContextRegistryFrozen
+from trusts.context import (
+    KIND_DIRECT,
+    KIND_RELATED,
+    Context,
+    ContextRegistrationError,
+    ContextRegistryFrozen,
+    check_registration,
+)
 from trusts.query import is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
@@ -713,12 +720,54 @@ class Content(ReadonlyFieldsMixin, models.Model):
                 Content.register_permission_condition(klass, permcond, condition)
 
     @staticmethod
+    def compatibility_context_error(model, fieldlookup):
+        """Return a ``ContextRegistrationError`` if a deferred lookup is invalid.
+
+        Used by sync (so ``prepare_context_registry`` does not abort
+        ``manage.py check``) and by ``trusts.E006``. Does not execute
+        getters or properties.
+        """
+        try:
+            if (
+                fieldlookup is None
+                or fieldlookup == Content.direct_content_fieldlookup(model)
+            ):
+                return check_registration(model, KIND_DIRECT, 'trust')
+            through = Content._through_from_trust_origin_lookup(
+                model, fieldlookup,
+            )
+            return check_registration(model, KIND_RELATED, through)
+        except (
+            InvalidContentFieldlookup,
+            ContentLookupNotReady,
+            AppRegistryNotReady,
+            ContextRegistrationError,
+        ) as exc:
+            if isinstance(exc, ContextRegistrationError):
+                return exc
+            return ContextRegistrationError(str(exc))
+
+    @staticmethod
+    def iter_unresolved_content_registrations():
+        """Yield ``(model, fieldlookup)`` leftovers that have no Context adapter."""
+        for short_name, fieldlookup in Content._contents.items():
+            try:
+                model = apps.get_model(short_name)
+            except (LookupError, ValueError):
+                continue
+            if Context.is_registered(model):
+                continue
+            yield model, fieldlookup
+
+    @staticmethod
     def sync_pending_context_registrations():
         """Register Content conveniences that deferred Context until ready.
 
         Called from ``prepare_context_registry`` immediately before
         freeze. Does not invent new public content; it only mirrors
-        ``_contents`` and deferred Junction related hops.
+        ``_contents`` and deferred Junction related hops. Invalid
+        leftovers stay in ``_contents`` so ``trusts.E006`` can report
+        them; they are not raised out of prepare.
         """
         if Context.is_frozen():
             return
@@ -727,7 +776,14 @@ class Content(ReadonlyFieldsMixin, models.Model):
         for model, through in pending:
             if Context.is_registered(model):
                 continue
-            Context.register_related(model, through=through)
+            try:
+                Context.register_related(model, through=through)
+            except (
+                ContextRegistrationError,
+                ContentLookupNotReady,
+                AppRegistryNotReady,
+            ):
+                continue
             Content._contents[utils.get_short_model_name(model)] = (
                 Context.resource_path(model)
             )
@@ -749,7 +805,12 @@ class Content(ReadonlyFieldsMixin, models.Model):
                         model, fieldlookup,
                     )
                     Context.register_related(model, through=through)
-            except (ContextRegistrationError, ContentLookupNotReady, AppRegistryNotReady):
+            except (
+                ContextRegistrationError,
+                ContentLookupNotReady,
+                AppRegistryNotReady,
+                InvalidContentFieldlookup,
+            ):
                 continue
             Content._contents[short_name] = Context.resource_path(model)
 
@@ -1182,9 +1243,11 @@ class Junction(ReadonlyFieldsMixin, models.Model):
             Content.register_content(content, klass.get_fieldlookup())
             Junction._register_junction_conditions(klass)
             return
-        if Context.is_registered(klass) and Context.is_registered(content):
+        through = content_fields[0].related_query_name()
+        if Junction._junction_identity_matches(klass, content, through):
             Junction._register_junction_conditions(klass)
             return
+        Junction._raise_if_junction_conflicts(klass, content, through)
         if Context.is_frozen():
             raise ContextRegistryFrozen(
                 'Context registry is frozen; cannot register %s.' % (
@@ -1199,13 +1262,48 @@ class Junction(ReadonlyFieldsMixin, models.Model):
             raise InvalidContentFieldlookup(str(exc)) from exc
         # Reverse accessors on the wrapped model are not visible during
         # class_prepared. Defer the related hop until models are ready.
-        Content._pending_related.append(
-            (content, content_fields[0].related_query_name())
-        )
+        Content._pending_related.append((content, through))
         Content._contents[utils.get_short_model_name(content)] = (
             klass.get_fieldlookup()
         )
         Junction._register_junction_conditions(klass)
+
+    @staticmethod
+    def _junction_identity_matches(klass, content, through):
+        """True when both adapters are exactly this junction declaration."""
+        if not Context.is_registered(klass) or not Context.is_registered(content):
+            return False
+        direct = Context.get(klass)
+        related = Context.get(content)
+        return (
+            direct.kind == KIND_DIRECT
+            and direct.decl == 'trust'
+            and related.kind == KIND_RELATED
+            and related.decl == through
+        )
+
+    @staticmethod
+    def _raise_if_junction_conflicts(klass, content, through):
+        """Raise when an existing adapter is not this junction declaration."""
+        if Context.is_registered(klass):
+            existing = Context.get(klass)
+            if existing.kind != KIND_DIRECT or existing.decl != 'trust':
+                raise ContextRegistrationError(
+                    '%s is already registered as %s %r; cannot register '
+                    'as direct %r.' % (
+                        klass._meta.label, existing.kind, existing.decl, 'trust',
+                    )
+                )
+        if Context.is_registered(content):
+            existing = Context.get(content)
+            if existing.kind != KIND_RELATED or existing.decl != through:
+                raise ContextRegistrationError(
+                    '%s is already registered as %s %r; cannot register '
+                    'as related %r via %s.' % (
+                        content._meta.label, existing.kind, existing.decl,
+                        through, klass._meta.label,
+                    )
+                )
 
     @staticmethod
     def _register_junction_conditions(klass):

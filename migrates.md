@@ -1155,7 +1155,7 @@ string; for every current Content subclass that path is still `'trust'`.
 | | |
 | --- | --- |
 | Previous | Content / dependent / Junction registration stored Trust-origin lookups on `Content._contents` only. |
-| New | Abstract/model-free `Context.register_direct` / `Context.register_related`. `Context.adapters()` is the complete deterministic set. `prepare_context_registry()` syncs pending app-loading registrations, then freezes. After freeze, every public path (`Content.register_content`, `Junction.register_junction`, `Context.register_*`) is idempotent-only or rejected. `related_name='+'` and partial `UniqueConstraint(condition=...)` are not single-valued/invertible. `trusts.E006` re-walks the installed map. |
+| New | Abstract/model-free `Context.register_direct` / `Context.register_related`. `Context.adapters()` is the complete deterministic set. `prepare_context_registry()` syncs pending app-loading registrations, then freezes. After freeze, every public path (`Content.register_content`, `Junction.register_junction`, `Context.register_*`) is idempotent-only or rejected; Junction identity must match the existing direct/related adapters. `related_name='+'` / `'bad__path'` / `'bad_'` and partial `UniqueConstraint(condition=...)` are not single-valued/invertible. `trusts.E006` re-walks the installed map and leftover deferred `Content._contents` declarations. |
 | Replacement | New kernel callers use `from trusts.context import Context`. Existing `Content.register_content` / `Junction` keep working. |
 | Affected | New registrations; documentation distinguishes the core contract from django-trusts conveniences. |
 | Authorization | Same Trust rows and the same one-query evaluation. No schema change. |
