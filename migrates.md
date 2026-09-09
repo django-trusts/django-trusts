@@ -2189,3 +2189,132 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #47 from this PR.
 
+# Issue #47 S3: native decorators and request-data binders (1.0.0.dev0)
+
+This record covers the third kernel execution slice. Version remains
+**1.0.0.dev0**. This PR does **not** close
+[#47](https://github.com/django-trusts/django-trusts/issues/47); review
+owns that. It implements accepted **framework-execution-r1+r2+r3**
+kernel S3 only. It does **not** modify `django-trusts-zero`, start
+S4 admin/CBVs/templates, start S5 checks cleanup, gh-permissions#1,
+or resume #17.
+
+## Decision
+
+```text
+trusts.decorators:
+  require_authorized(operation, resource_model=..., resource_kwarg=...)
+  request_passes_test
+  P / K / G / O
+```
+
+`require_authorized` is the native HTTP security boundary:
+
+- Operation is an operation-model instance, an `operation_lookup`
+  string, or a `P` expression of those. There is no
+  `app.action_model` parser and no `ContentType` inference.
+- `resource_model` is required (decorator or each `P` leaf). The
+  framework does not guess a model from a Django permission string.
+- Resource identity is declared request keys only: `resource_kwarg`
+  (URL kwarg → primary key) and inert `K` / `G` / `O` field selectors.
+  Getter/resolver callbacks and other callables are configuration
+  errors.
+- Authorization is S1 `filter_authorized` / the shared `grant_q`. The
+  decorator does not call `request.user.has_perm()` and does not add a
+  second policy walker. Active `is_superuser` does not bypass
+  registered object policy on this path.
+- Missing or unresolvable resource identity → **404**.
+- Existing but unauthorized, unusable principal, or unknown operation
+  data → **403**, or a login redirect when `raise_exception=False`.
+- `AuthorizationConfigError` → **403** at this boundary. Direct
+  runtime APIs still raise. Malformed configuration cannot produce
+  access, and does not become a login redirect.
+
+`P` boolean composition (`&` / `|`) is operation-and-selector data
+over the same decorator machinery. It is **not** Zero's Django-permission
+`P`. Zero's `permission_required` (Permission strings + `ContentType`)
+stays in `trusts.zero.decorators` as later Zero work.
+
+`request_passes_test` is the generic request test / login-redirect
+helper. Wrapped-view metadata is preserved (`functools.wraps`).
+
+Query contract (honest):
+
+| Path | SQL |
+| --- | ---: |
+| Missing request key | 0 |
+| Unusable principal (exists / missing) | 1 existence, no auth `Exists` |
+| Granted (lookup + auth combined) | 1 |
+| Unauthorized or not-found after a combined miss | 2 (combined miss + existence) |
+| `P` composition | one leaf's counts per evaluated leaf |
+
+Isolated tests pass `context=` / `trustee=` to the decorator
+(process-wide maps remain the no-arg default).
+
+## No change to these public call sites
+
+- S1 `trusts.runtime` / `trusts.query` / `compose` / `compose_scope`
+- S2 `ObjectAuthorizationBackend` / `ObjectAuthorizationModelBackend`
+- Zero `trusts.zero.decorators.permission_required`, `P`, `K`, `G`, `O`
+- Zero `TrustModelBackend`, `ContentQuerySet.permitted`, admin, views,
+  historical migrations, app label `trusts`
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 46. `trusts.decorators.require_authorized` (new)
+
+| | |
+| --- | --- |
+| Previous | Consumers called `User.has_perm` in the view, or used Zero `permission_required` (Django permission strings, `ContentType` model inference, `has_perms`). After #43 those Zero names live at `trusts.zero.decorators`. |
+| New | Native `@require_authorized('read', resource_model=Repository, resource_kwarg='pk')` plus `pk=K(...)` / `G` / `O` and optional `P` composition. Isolated registries via `context=` / `trustee=`. |
+| Replacement | New kernel consumers use `trusts.decorators.require_authorized`. Zero compatibility stays `from trusts.zero.decorators import permission_required, P, K, G, O`. Do not treat the new module as a drop-in for the Zero wrapper. |
+| Affected | New kernel consumers. Zero is not re-exported from `trusts.decorators`. |
+| Authorization | Granted views run only after S1 `filter_authorized` matches. 404 vs 403 follows resource existence, not a silent deny. Config errors are 403. Superuser flags are ignored. |
+
+### 47. `trusts.decorators.P` / `K` / `G` / `O` / `request_passes_test` (new)
+
+| | |
+| --- | --- |
+| Previous | Same names existed on Zero's decorator module as Django-permission binders (`P('app.action_model', ...)`, `ContentType` lookup). |
+| New | Framework `P` holds an operation and request-key selectors. `K`/`G`/`O` are inert key sources (URL kwargs / GET / POST). `request_passes_test` redirects to login when the test returns `False`. |
+| Replacement | Import from `trusts.decorators` for native operation data. Keep Zero imports for Django permission strings. The two `P` types are not interchangeable. |
+| Affected | New kernel view decorators. Existing Zero decorator tests still import `trusts.zero.decorators`. |
+| Authorization | `P` composition does not introduce callbacks or Zero `:condition` / Permission semantics. |
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m tests.runtests
+```
+
+No Trusts schema migration. S3 uses the existing isolated S1 test models.
+
+## Upgrade of a representative legacy database
+
+Unchanged. `scripts/verify-legacy-upgrade.py` still expects
+`{0001_initial, 0002_trustgroup}` on label `trusts`.
+
+## Out of scope (unchanged)
+
+- S4 admin / CBV mixins / stub templates
+- S5 `E008` / kernel `Content` leftover import cleanup
+- Generic `register_row_condition`
+- `RecursiveEdge` / `OrderedContribution`
+- django-trusts-zero `permission_required` wrapper or pin bump
+- gh-permissions#1
+- Closing #17 or #47
+
+## Migration-bot summary (issue #47 S3)
+
+- [ ] Import native `@require_authorized` from `trusts.decorators`, not Zero.
+- [ ] Pass an explicit `resource_model`; do not parse `app.action_model`.
+- [ ] Bind identity with `resource_kwarg` or `K`/`G`/`O` only; no getter callbacks.
+- [ ] Expect 404 for missing/unknown resources and 403 for unauthorized ones.
+- [ ] Catch `AuthorizationConfigError` only at security boundaries (this decorator already does).
+- [ ] Keep `from trusts.zero.decorators import permission_required` for Django-permission compatibility; do not expect that wrapper here.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_s3_decorators`).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #47 from this PR.
+
