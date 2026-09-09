@@ -2,9 +2,9 @@
 # publish Zero metadata. Override with DJANGO_TRUSTS_ZERO_REPO,
 # DJANGO_TRUSTS_ZERO_REF, or DJANGO_TRUSTS_ZERO_SRC (already-cloned tree).
 # `ref` must be a stable 40-char commit on django-trusts-zero `main`
-# (merge of https://github.com/django-trusts/django-trusts-zero/pull/1),
+# (merge of https://github.com/django-trusts/django-trusts-zero/pull/2),
 # not an ephemeral PR branch.
 repo=https://github.com/django-trusts/django-trusts-zero.git
-ref=19b0775e6a477ebcf8a2f1accef5df39491a4793
+ref=d694866e7475f20b7bf568c378ed21dcebb56abf
 expected_version=2.0.0.dev0
 required_dist=django-trusts

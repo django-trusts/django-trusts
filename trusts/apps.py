@@ -10,5 +10,5 @@ class KernelConfig(DjangoAppConfig):
     default = False
 
     def ready(self):
-        # Register kernel system checks (E006 adapter re-walk, E007).
+        # Register kernel system checks (E006/E007 adapter re-walks, E008).
         from trusts import checks as _trusts_checks  # noqa: F401

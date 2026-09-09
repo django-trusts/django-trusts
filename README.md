@@ -77,7 +77,7 @@ Authorization tests import ``trusts.zero`` from the companion checkout,
 not from this tree. CI clones
 [`django-trusts-zero`](https://github.com/django-trusts/django-trusts-zero)
 at the **stable ``main`` merge SHA** in ``scripts/zero-companion.pin``
-(django-trusts-zero#1 / ``19b0775e6a477ebcf8a2f1accef5df39491a4793``),
+(django-trusts-zero#2 / ``d694866e7475f20b7bf568c378ed21dcebb56abf``),
 not an ephemeral PR branch.
 
 The executable suite lives under `tests/` (`tests/core/`,
