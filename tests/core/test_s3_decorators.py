@@ -413,6 +413,48 @@ class S3BooleanPTest(S3DecoratorFixtureMixin, TestCase):
             with self.assertRaises(PermissionDenied):
                 view(request, pk=self.repo_a.pk)
 
+    def test_or_unknown_lookup_on_either_side_is_403(self):
+        valid = P('read', resource_model=S1Repository, resource_kwarg='pk')
+        broken = P(
+            'read', resource_model=S1Repository, typo_field=G('id'),
+        )
+        request = self._get(self.member, data={'id': str(self.repo_a.pk)})
+        for expr in (broken | valid, valid | broken):
+            view = require_authorized(
+                expr, context=self.context, trustee=self.trustee,
+            )(_ok_view)
+            with self.assertNumQueries(0):
+                with self.assertRaises(PermissionDenied):
+                    view(request, pk=self.repo_a.pk)
+
+    def test_or_unknown_lookup_missing_key_still_403(self):
+        valid = P('read', resource_model=S1Repository, resource_kwarg='pk')
+        broken = P(
+            'read', resource_model=S1Repository, typo_field=G('missing'),
+        )
+        request = self._get(self.member)
+        for expr in (broken | valid, valid | broken):
+            view = require_authorized(
+                expr, context=self.context, trustee=self.trustee,
+            )(_ok_view)
+            with self.assertNumQueries(0):
+                with self.assertRaises(PermissionDenied):
+                    view(request, pk=self.repo_a.pk)
+
+    def test_and_unknown_lookup_on_either_side_is_403(self):
+        valid = P('read', resource_model=S1Repository, resource_kwarg='pk')
+        broken = P(
+            'read', resource_model=S1Repository, typo_field=K('pk'),
+        )
+        request = self._get(self.member)
+        for expr in (broken & valid, valid & broken):
+            view = require_authorized(
+                expr, context=self.context, trustee=self.trustee,
+            )(_ok_view)
+            with self.assertNumQueries(0):
+                with self.assertRaises(PermissionDenied):
+                    view(request, pk=self.repo_a.pk)
+
     def test_and_does_not_grant_when_separate_rows_satisfy_leaves(self):
         self.repo_a.title = 'shared'
         self.repo_a.save(update_fields=['title'])

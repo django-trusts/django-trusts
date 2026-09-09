@@ -2225,8 +2225,11 @@ trusts.decorators:
   exactly one row matches; two or more matches fail closed (403) and
   are never an existential grant on any authorized subset.
 - Every `P` leaf's configuration is validated before any grant
-  decision. A malformed leaf cannot be hidden by `|` ordering or a
-  valid sibling.
+  decision, including declared lookup names and `resource_kwarg`
+  (``_meta`` only; no request data and no SQL). A malformed leaf
+  (unknown field, unregistered model, missing selector) cannot be
+  hidden by `|` / `&` ordering, a missing request key, or a valid
+  sibling.
 - Authorization is S1 `filter_authorized` / the shared `grant_q`. The
   decorator does not call `request.user.has_perm()` and does not add a
   second policy walker. Active `is_superuser` does not bypass
@@ -2323,6 +2326,7 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Bind identity with `resource_kwarg` or `K`/`G`/`O` only; no getter callbacks.
 - [ ] Treat a non-unique selector that matches more than one row as 403, not a grant.
 - [ ] Treat a malformed `P` leaf as 403 for the whole expression, including `|`.
+- [ ] Unknown declared lookup names fail closed at preflight (403), even if another `|` leaf would grant.
 - [ ] Expect 404 for missing/unknown resources and 403 for unauthorized ones.
 - [ ] Catch `AuthorizationConfigError` only at security boundaries (this decorator already does).
 - [ ] Keep `from trusts.zero.decorators import permission_required` for Django-permission compatibility; do not expect that wrapper here.

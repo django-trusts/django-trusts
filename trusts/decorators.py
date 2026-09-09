@@ -331,6 +331,56 @@ def _trustee_registry(value):
     )
 
 
+def _require_identity_lookup(model, lookup):
+    """``_meta``-only check that ``lookup`` is a single-valued field path."""
+    if lookup == 'pk':
+        return
+    if not isinstance(lookup, str) or not lookup:
+        raise AuthorizationConfigError(
+            'Lookup %r is not a field on %s.' % (lookup, model._meta.label)
+        )
+    parts = lookup.split('__')
+    if any(part == '' for part in parts):
+        raise AuthorizationConfigError(
+            'Lookup %r is not a field on %s.' % (lookup, model._meta.label)
+        )
+    current = model
+    for i, part in enumerate(parts):
+        try:
+            field = current._meta.get_field(part)
+        except FieldDoesNotExist:
+            raise AuthorizationConfigError(
+                'Unknown field %r on %s (from %r).' % (
+                    part, current._meta.label, lookup,
+                )
+            )
+        if i == len(parts) - 1:
+            return
+        remote = getattr(field, 'remote_field', None)
+        if remote is None:
+            raise AuthorizationConfigError(
+                'Lookup %r has a non-relation hop %r.' % (lookup, part)
+            )
+        if getattr(field, 'many_to_many', False) or getattr(field, 'one_to_many', False):
+            raise AuthorizationConfigError(
+                'Lookup %r may not use many-valued hop %r.' % (lookup, part)
+            )
+        current = remote.model
+
+
+def _validate_leaf_lookups(leaf, resource_model):
+    """Validate declared keys without reading the request or running SQL."""
+    if leaf._resource_kwarg is not None:
+        if not isinstance(leaf._resource_kwarg, str) or not leaf._resource_kwarg:
+            raise AuthorizationConfigError(
+                'resource_kwarg must be a non-empty URL kwarg name string, '
+                'not %r.' % (leaf._resource_kwarg,)
+            )
+        _require_identity_lookup(resource_model, 'pk')
+    for field in leaf._fieldlookups:
+        _require_identity_lookup(resource_model, field)
+
+
 def _validate_leaf_config(leaf, runtime):
     """Fail closed on malformed leaf config before any grant decision."""
     resource_model = _require_model(leaf._resource_model)
@@ -339,6 +389,7 @@ def _validate_leaf_config(leaf, runtime):
             'require_authorized needs resource_kwarg or a K/G/O selector '
             'so resource identity comes from declared request keys.'
         )
+    _validate_leaf_lookups(leaf, resource_model)
     try:
         compose(
             resource_model, None,
