@@ -18,7 +18,7 @@ from pathlib import Path
 from django.test import TestCase, TransactionTestCase
 
 from trusts.context import Context, ContextRegistrationError, ContextRegistry
-from trusts.models import (
+from trusts.zero.models import (
     DIRECT_TRUSTEE,
     GROUP_TRUSTEE,
     prepare_context_registry,

@@ -12,7 +12,7 @@ from pathlib import Path
 from django.test import TestCase, TransactionTestCase
 
 from trusts.context import Context, ContextRegistry
-from trusts.models import Trust, prepare_context_registry, prepare_trustee_registry
+from trusts.zero.models import Trust, prepare_context_registry, prepare_trustee_registry
 from trusts.path import (
     AuthorizationBranch,
     AuthorizationPath,

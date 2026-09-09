@@ -34,7 +34,7 @@ from trusts.context import (
     ContextRegistryFrozen,
     check_registration,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     InvalidContentFieldlookup,
     Junction,
@@ -70,7 +70,7 @@ class ContextReusableLayerTest(TestCase):
 
     def test_public_imports(self):
         from trusts.context import Context as Imported
-        from trusts.models import Junction as PublicJunction
+        from trusts.zero.models import Junction as PublicJunction
         self.assertIs(Imported, Context)
         self.assertIs(PublicJunction, Junction)
         self.assertTrue(issubclass(TestGroupJunction, Junction))
@@ -310,7 +310,7 @@ django.setup()
 from django.contrib.auth.models import Group
 from tests.models import ContextDocument
 from trusts.context import Context
-from trusts.models import Content, prepare_context_registry
+from trusts.zero.models import Content, prepare_context_registry
 
 assert not Context.is_frozen()
 assert Content._pending_related
@@ -786,7 +786,7 @@ class ContextAuthQueryParityTest(TestCase):
         from django.contrib.auth.models import Permission
         from django.contrib.contenttypes.models import ContentType
         from django.core.management import call_command
-        from trusts.models import TrustUserPermission
+        from trusts.zero.models import TrustUserPermission
         from tests.support import (
             create_test_users,
             get_or_create_root_user,

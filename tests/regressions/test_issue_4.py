@@ -27,7 +27,7 @@ from trusts.conditions import (
     principal_ref,
     validate_expression,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     PermissionConditionNotQueryable,
     Trust,

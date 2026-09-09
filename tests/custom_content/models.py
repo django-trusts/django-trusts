@@ -1,6 +1,6 @@
 from django.db import models
 
-from trusts.models import Content
+from trusts.zero.models import Content
 
 
 class Item(Content):

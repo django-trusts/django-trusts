@@ -14,7 +14,7 @@ from django.test import TestCase
 
 from tests.custom_auth.models import CustomUser
 from tests.custom_content.models import Item
-from trusts import (
+from trusts.zero import (
     get_entity_model,
     get_group_model,
     get_permission_model,
@@ -23,14 +23,14 @@ from trusts import (
     supported_group_contract,
     supported_permission_contract,
 )
-from trusts.checks import (
+from trusts.zero.checks import (
     CHECK_ID_GROUP_NOT_AUTH,
     CHECK_ID_GROUP_SETTING_DEPRECATED,
     CHECK_ID_PERMISSION_NOT_AUTH,
     CHECK_ID_PERMISSION_SETTING_DEPRECATED,
     check_configured_auth_models,
 )
-from trusts.authorization import (
+from trusts.zero.authorization import (
     AuthorizationDenied,
     associate_group_with_trust,
     grant_trust_group_permission,
@@ -38,7 +38,7 @@ from trusts.authorization import (
     revoke_trust_group_permission,
     set_trust_group_permissions,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Role,
     RolePermission,
     Trust,

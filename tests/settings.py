@@ -17,13 +17,14 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'trusts',
+    'trusts.apps.KernelConfig',
+    'trusts.zero.apps.ZeroConfig',
     'tests.apps.TestsConfig',
     'tests.gh_vocab.apps.GhVocabConfig',
 )
 
 AUTHENTICATION_BACKENDS = (
-    'trusts.backends.TrustModelBackend',
+    'trusts.zero.backends.TrustModelBackend',
 )
 
 MIDDLEWARE = (

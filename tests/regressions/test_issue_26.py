@@ -8,15 +8,15 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 
 from tests.models import Category, Organization
-from trusts import (
+from trusts.zero import (
     get_entity_model,
     get_group_model,
     get_permission_model,
     supported_group_contract,
     supported_permission_contract,
 )
-from trusts.authorization import AuthorizationDenied, grant_trustee
-from trusts.checks import (
+from trusts.zero.authorization import AuthorizationDenied, grant_trustee
+from trusts.zero.checks import (
     CHECK_ID_ENTITY_NOT_USER,
     CHECK_ID_GROUP_NOT_AUTH,
     CHECK_ID_GROUP_SETTING_DEPRECATED,
@@ -24,7 +24,7 @@ from trusts.checks import (
     CHECK_ID_PERMISSION_SETTING_DEPRECATED,
     check_configured_auth_models,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Role,
     RolePermission,
     Trust,

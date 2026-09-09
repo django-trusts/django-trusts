@@ -16,7 +16,7 @@ from django.core.management import call_command
 from django.core.management.base import SystemCheckError
 from django.test import TestCase, override_settings
 
-from trusts.checks import (
+from trusts.zero.checks import (
     CHECK_ID_INVALID_EXPR,
     CHECK_ID_LEGACY_CALLBACK,
     CHECK_ID_LEGACY_CALLBACK_WARNING,
@@ -27,7 +27,7 @@ from trusts.conditions import (
     condition_refs,
     validate_expression,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     PermissionConditionNotQueryable,
     Trust,

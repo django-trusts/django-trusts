@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Import-smoke the installed django-trusts wheel from outside the checkout.
+"""Import-smoke the installed django-trusts *kernel* wheel.
 
-This must not be run with the repository root as cwd or on sys.path. A
-passing result means trusts, Trust, and TrustModelBackend were loaded from
-the installed distribution, not the source tree.
+Must not run with the repository root as cwd or on sys.path. A passing
+result means kernel modules loaded from the installed distribution, the
+wheel does not ship ``trusts.zero``, and historical test modules are
+absent.
 """
 
 from __future__ import annotations
@@ -14,9 +15,6 @@ import sys
 from pathlib import Path
 
 
-# Historical installable-package locations. Presence is checked without
-# executing the module: a leaked trusts.tests imports tests.models, and
-# that ImportError is not proof the file is absent from the wheel.
 ABSENT_TEST_MODULES = [
     'trusts.tests',
     'trusts.test_issue4',
@@ -26,6 +24,12 @@ ABSENT_TEST_MODULES = [
     'trusts.test_issue26',
     'trusts.test_issue29',
     'trusts.test_issue33',
+]
+
+ABSENT_ZERO_MODULES = [
+    'trusts.zero',
+    'trusts.zero.models',
+    'trusts.zero.backends',
 ]
 
 
@@ -68,7 +72,6 @@ def main() -> int:
             resolved = Path(entry).resolve()
         except OSError:
             continue
-        # Only the checkout root can shadow the installed `trusts` package.
         if resolved == checkout:
             leaked.append(entry)
     if leaked:
@@ -83,9 +86,8 @@ def main() -> int:
         INSTALLED_APPS=[
             'django.contrib.contenttypes',
             'django.contrib.auth',
-            'trusts',
+            'trusts.apps.KernelConfig',
         ],
-        AUTHENTICATION_BACKENDS=['trusts.backends.TrustModelBackend'],
         DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}},
     )
 
@@ -93,11 +95,10 @@ def main() -> int:
     django.setup()
 
     import trusts
-    from trusts.models import Trust, Junction
+    from trusts.apps import KernelConfig
     from trusts.context import Context
     from trusts.trustee import Trustee
     from trusts.path import AuthorizationPath, AuthorizationBranch, compose
-    from trusts.backends import TrustModelBackend
     from django_trusts import TQ, condition_refs
 
     trusts_file = Path(trusts.__file__).resolve()
@@ -110,20 +111,31 @@ def main() -> int:
     if leaked_tests:
         raise SystemExit('Test modules must not ship in the wheel: %s' % leaked_tests)
 
+    leaked_zero = find_shipped_modules(ABSENT_ZERO_MODULES)
+    if leaked_zero:
+        raise SystemExit('Kernel wheel must not ship Zero modules: %s' % leaked_zero)
+
+    if hasattr(trusts, 'ENTITY_MODEL_NAME') or hasattr(trusts, 'ROOT_PK'):
+        raise SystemExit('Kernel trusts.__init__ must not export Zero constants')
+
+    if KernelConfig.name != 'trusts' or KernelConfig.label != 'trusts_kernel':
+        raise SystemExit('KernelConfig name/label mismatch: %s %s' % (
+            KernelConfig.name, KernelConfig.label,
+        ))
+
     print('wheel import ok')
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
-    print('Trust', Trust)
-    print('Junction', Junction)
+    print('KernelConfig', KernelConfig)
     print('Context', Context)
     print('Trustee', Trustee)
     print('AuthorizationPath', AuthorizationPath)
     print('AuthorizationBranch', AuthorizationBranch)
     print('compose', compose)
-    print('TrustModelBackend', TrustModelBackend)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
     print('absent test modules', ' '.join(ABSENT_TEST_MODULES))
+    print('absent zero modules', ' '.join(ABSENT_ZERO_MODULES))
     return 0
 
 

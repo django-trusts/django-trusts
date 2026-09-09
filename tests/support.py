@@ -7,7 +7,7 @@ from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 
-from trusts.models import Trust, TrustGroup
+from trusts.zero.models import Trust, TrustGroup
 from tests.models import Category, TestGroupJunction
 
 

@@ -4,7 +4,7 @@ from django.contrib.auth.models import Group, User
 
 from trusts.conditions import condition_refs
 from trusts.context import Context
-from trusts.models import Content, Junction
+from trusts.zero.models import Content, Junction
 from trusts.trustee import Trustee, TrusteeMixin
 
 _u, _p, _o = condition_refs()

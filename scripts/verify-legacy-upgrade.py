@@ -44,9 +44,10 @@ def _configure(db_path: Path) -> None:
             'django.contrib.auth',
             'django.contrib.sessions',
             'django.contrib.admin',
-            'trusts',
+            'trusts.apps.KernelConfig',
+            'trusts.zero.apps.ZeroConfig',
         ],
-        AUTHENTICATION_BACKENDS=['trusts.backends.TrustModelBackend'],
+        AUTHENTICATION_BACKENDS=['trusts.zero.backends.TrustModelBackend'],
         DATABASES={
             'default': {
                 'ENGINE': 'django.db.backends.sqlite3',
@@ -126,7 +127,7 @@ def main() -> int:
         # 4. Seed organizations after Django can see the historical tables.
         from django.contrib.auth.models import Group, Permission, User
         from django.contrib.contenttypes.models import ContentType
-        from trusts.models import Trust, TrustGroup, TrustGroupPermission, TrustUserPermission
+        from trusts.zero.models import Trust, TrustGroup, TrustGroupPermission, TrustUserPermission
 
         user_a = User.objects.create_user('org_a_user', 'a@example.com', 'pass')
         user_b = User.objects.create_user('org_b_user', 'b@example.com', 'pass')

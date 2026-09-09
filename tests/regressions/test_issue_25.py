@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.test import TestCase
 
-from trusts.models import Content, InvalidContentFieldlookup, Trust, TrustUserPermission
+from trusts.zero.models import Content, InvalidContentFieldlookup, Trust, TrustUserPermission
 from tests.support import create_test_users, get_or_create_root_user, reload_test_users
 from trusts.utils import get_short_model_name
 from tests.models import (
