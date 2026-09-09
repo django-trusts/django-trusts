@@ -29,7 +29,9 @@ what is road, what is fence, and what is still a sketch:
   `#26 <https://github.com/django-trusts/django-trusts/issues/26>`_ /
   `PR #32 <https://github.com/django-trusts/django-trusts/pull/32>`_,
   `#33 <https://github.com/django-trusts/django-trusts/issues/33>`_ /
-  `PR #36 <https://github.com/django-trusts/django-trusts/pull/36>`_).
+  `PR #36 <https://github.com/django-trusts/django-trusts/pull/36>`_,
+  `#39 <https://github.com/django-trusts/django-trusts/issues/39>`_
+  first Context-extraction slice — the issue stays open for review).
 * **Bounded / legacy** — a deliberately limited facility, an opt-in
   escape hatch, or a setting that exists but is not a swap point.
 * **Future** — direction that remains aspirational. Do not implement
@@ -150,6 +152,50 @@ Then:
    .. code-block:: console
 
       python manage.py check
+
+Context contract and django-trusts conveniences
+----------------------------------------------
+
+The reusable question is: starting from this resource model, what
+validated relational path resolves its authorization scope? That
+contract is ``trusts.context.Context``. It does not require the
+concrete names ``Trust``, ``Content``, or ``Junction``.
+
+.. admonition:: Verified — first Context-extraction slice (``#39``)
+
+   Two registration forms, frozen before authorization queries,
+   validated through Django ``_meta`` (no getters or callbacks):
+
+   .. code-block:: python
+
+      from trusts.context import Context
+
+      Context.register_direct(Document, scope_field='scope')
+      Context.register_related(Attachment, through='document')
+      Context.register_related(Annotation, through='attachment')
+
+   **Direct** resources own a single-valued relation to the policy
+   scope. **Related** resources reach an already registered resource
+   through single-valued relational hops and therefore resolve the
+   same scope. ``Context.scope_path`` / ``Context.filter_by_scope`` /
+   ``Context.resolves_to_scope`` share that lookup. List and exists
+   checks are one SQL query each.
+
+   django-trusts conveniences are thin implementations of that
+   contract:
+
+   * ``Content`` is the direct convenience (``scope_field='trust'``).
+   * Dependent ``Content.register_content(..., fieldlookup)`` is the
+     related form (Trust-origin lookups are inverted to a
+     resource-origin ``through``).
+   * ``Junction`` is a 1.x compatibility wrapper. Auto-registration
+     goes through the registry; ``from trusts.models import Junction``
+     keeps working. New dependents you own should use
+     ``Context.register_related``. ``Junction`` is not removed in 1.x
+     and does not emit a runtime warning in this slice.
+
+   ``#39`` stays open until review. Trustee extraction is ``#40``.
+   There is no separate core distribution yet.
 
 Content and Junction
 --------------------
@@ -373,8 +419,19 @@ Dependent content
 
 A model that does not subclass ``Content`` (and does not have its own
 ``trust`` field) can still be checked against the Trust of a related
-``Content`` object. Register each dependent hop with the ORM path from
-``Trust`` to that model.
+``Content`` object. The core form registers the resource-origin path:
+
+.. code-block:: python
+
+   from trusts.context import Context
+
+   Context.register_related(ReceiptImage, through='receipt')
+   Context.register_related(ReceiptImageMeta, through='image')
+
+The django-trusts convenience keeps the Trust-origin lookup used by
+``filter_by_content``. Register each dependent hop with the ORM path
+from ``Trust`` to that model, or keep using the equivalent
+``Content.register_content`` form below.
 
 ``Content.get_content_fieldlookup(klass)`` returns that path as a string
 for a registered model, or ``None`` if the model is not registered. A

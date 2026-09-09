@@ -30,7 +30,8 @@ from trusts import (
     permission_model_setting_overridden,
 )
 from trusts.conditions import PermissionConditionError, validate_expression
-from trusts.models import Content, legacy_permission_callbacks_allowed
+from trusts.context import Context, ContextRegistrationError
+from trusts.models import Content, legacy_permission_callbacks_allowed, prepare_context_registry
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
@@ -41,6 +42,7 @@ CHECK_ID_GROUP_NOT_AUTH = 'trusts.E004'
 CHECK_ID_PERMISSION_NOT_AUTH = 'trusts.E005'
 CHECK_ID_GROUP_SETTING_DEPRECATED = 'trusts.W002'
 CHECK_ID_PERMISSION_SETTING_DEPRECATED = 'trusts.W003'
+CHECK_ID_INVALID_CONTEXT = 'trusts.E006'
 
 REMOVAL_RELEASE = '1.1.0'
 
@@ -118,6 +120,43 @@ def check_permission_conditions(app_configs, **kwargs):
             messages.extend(_messages_for_expr(model, cond_code, record.expr))
         elif record.func is not None:
             messages.extend(_messages_for_callable(model, cond_code))
+    return messages
+
+
+_SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT = (
+    'Silencing this check ID suppresses only the early diagnostic. '
+    'Invalid Context paths stay fail-closed at registration and at '
+    'authorization query time; they are never executed as getters or '
+    'callbacks.'
+)
+
+
+@django_checks.register(django_checks.Tags.models)
+def check_context_registry(app_configs, **kwargs):
+    """Re-validate the frozen Context registry after models are loaded.
+
+    Missing, cyclic, ambiguous, scalar, many-valued, and wrong-terminal
+    paths are rejected at ``register_direct`` / ``register_related``.
+    This check re-walks every installed adapter so ``manage.py check``
+    reports ``trusts.E006`` if the map is stale. ``app_configs`` is
+    ignored so ``manage.py check trusts`` still sees the full registry.
+    No getters, properties, or callbacks are executed. No database
+    queries.
+    """
+    prepare_context_registry()
+    messages = []
+    for adapter in Context.adapters():
+        try:
+            Context.registry.revalidate(adapter)
+        except ContextRegistrationError as exc:
+            messages.append(django_checks.Error(
+                'Context %s registration for %s is invalid: %s' % (
+                    adapter.kind, adapter.label, exc,
+                ),
+                hint=_SILENCE_DOES_NOT_ENABLE_CONTEXT_HINT,
+                obj=adapter.model,
+                id=CHECK_ID_INVALID_CONTEXT,
+            ))
     return messages
 
 

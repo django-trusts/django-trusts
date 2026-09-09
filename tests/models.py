@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import Group, User
 
 from trusts.conditions import condition_refs
+from trusts.context import Context
 from trusts.models import Content, Junction
 
 _u, _p, _o = condition_refs()
@@ -161,3 +162,73 @@ Content.register_content(
     ReceiptImageMeta,
     Content.compose_content_fieldlookup(ReceiptImage, 'meta'),
 )
+
+
+class ContextScope(models.Model):
+    """Policy scope for Context contract tests. Not a Trusts convenience."""
+
+    title = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.title
+
+
+class ContextDocument(models.Model):
+    """Direct Context resource: owns a single-valued relation to its scope."""
+
+    scope = models.ForeignKey(
+        ContextScope, related_name='documents', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    title = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.title
+
+
+class ContextAttachment(models.Model):
+    """Related Context resource: one hop to a registered document."""
+
+    document = models.ForeignKey(
+        ContextDocument, related_name='attachments', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    caption = models.CharField(max_length=80, null=False, blank=False, default='')
+
+    def __str__(self):
+        return self.caption
+
+
+class ContextAnnotation(models.Model):
+    """Two-hop related Context resource."""
+
+    attachment = models.ForeignKey(
+        ContextAttachment, related_name='annotations', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    note = models.CharField(max_length=80, null=False, blank=False, default='')
+
+    def __str__(self):
+        return self.note
+
+
+class ContextTrap(models.Model):
+    """Direct resource whose Python getters must never run during resolution."""
+
+    scope = models.ForeignKey(
+        ContextScope, related_name='traps', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    @property
+    def forbidden(self):
+        raise AssertionError('Context must not execute properties')
+
+    def get_scope(self):
+        raise AssertionError('Context must not execute getters')
+
+
+Context.register_direct(ContextDocument, scope_field='scope')
+Context.register_related(ContextAttachment, through='document')
+Context.register_related(ContextAnnotation, through='attachment')
+Context.register_direct(ContextTrap, scope_field='scope')

@@ -93,7 +93,8 @@ def main() -> int:
     django.setup()
 
     import trusts
-    from trusts.models import Trust
+    from trusts.models import Trust, Junction
+    from trusts.context import Context
     from trusts.backends import TrustModelBackend
     from django_trusts import TQ, condition_refs
 
@@ -111,6 +112,8 @@ def main() -> int:
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
     print('Trust', Trust)
+    print('Junction', Junction)
+    print('Context', Context)
     print('TrustModelBackend', TrustModelBackend)
     print('TQ', TQ)
     print('condition_refs', condition_refs)

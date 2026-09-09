@@ -1070,3 +1070,179 @@ Standard Group/Permission rows are unchanged.
 - Example-app UI
 - Removing the settings before the named 1.1.0 release
 
+# Issue #39: registry-driven Context resolution contract (1.0.0.dev0)
+
+This record covers the first additive Context-extraction slice. Version
+remains **1.0.0.dev0**. **No Trusts schema migration is required.** Test
+fixtures add `trusts_tests` models only (`0004_context_contract`). This
+PR does **not** close
+[#39](https://github.com/django-trusts/django-trusts/issues/39); review
+owns that. Trustee extraction is
+[#40](https://github.com/django-trusts/django-trusts/issues/40). A
+separate `django-trusts-core` distribution is not created here.
+
+## Decision
+
+The reusable question is: starting from this resource model, what
+validated relational path resolves its authorization scope? That
+contract lives in `trusts.context` and must not name `Trust`, `Content`,
+or `Junction`.
+
+Two registration forms:
+
+```python
+from trusts.context import Context
+
+Context.register_direct(ResourceModel, scope_field="scope")
+Context.register_related(RelatedModel, through="document")
+```
+
+- **Direct:** the resource owns a single-valued relationship to its
+  policy scope.
+- **Related:** the resource reaches an already registered resource
+  through a validated, single-valued relational path and therefore
+  resolves the same scope. Multi-hop paths are allowed when every hop
+  is relational and single-valued. Many-valued hops are out of this
+  slice (they need an explicit future all/any policy).
+
+Registration is static during Django application loading. The map
+freezes before the first authorization query and before
+`manage.py check`. Validation uses Django `_meta` only: no getters,
+descriptors, properties, or callbacks. Missing, cyclic, ambiguous,
+scalar, many-valued, or wrong-terminal paths fail closed
+(`ContextRegistrationError`) and are reported as `trusts.E006` if a
+stale adapter remains. Direct exists-checks and list filters share the
+same registered lookup (`Context.scope_path` / `Context.filter_by_scope`
+/ `Context.resolves_to_scope`) and stay one SQL query each.
+
+django-trusts conveniences route through that map and keep their
+observable 1.x behavior:
+
+- `Content` is the direct-Context convenience (`scope_field='trust'`).
+- Dependent `Content.register_content(..., fieldlookup)` is the related
+  form (the Trust-origin lookup is inverted to a resource-origin
+  `through`).
+- `Junction` remains a public abstract class
+  (`from trusts.models import Junction`). Auto-registration registers
+  the junction table as a direct Context and the wrapped model as a
+  related Context. The wrapped model stays the public content
+  registration. Existing concrete junction tables and migrations are
+  unchanged.
+
+`Junction` is **not** removed in 1.x and this slice does **not** emit a
+runtime deprecation warning (that would be a behavior/noise change).
+New dependents should use `Context.register_related`. `Junction`
+remains the compatibility wrapper for models you do not own.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` signatures
+- `ContentQuerySet.permitted(perm, user)` signature
+- `Trust.objects.filter_by_content(obj)` signature
+- `Content.register_content(klass, fieldlookup=None)` signature
+- `from trusts.models import Junction` and `Junction` subclassing
+- Package version `1.0.0.dev0`
+- Historical `0001_initial` / `0002_trustgroup` file contents
+
+Authorization **behavior** is unchanged. `Content.objects.permitted`
+now reads `Context.scope_path(model)` instead of a hardcoded `'trust'`
+string; for every current Content subclass that path is still `'trust'`.
+
+## Changes
+
+### 31. `trusts.context.Context` registry (new)
+
+| | |
+| --- | --- |
+| Previous | Content / dependent / Junction registration stored Trust-origin lookups on `Content._contents` only. |
+| New | Abstract/model-free `Context.register_direct` / `Context.register_related`. `Context.adapters()` is the complete deterministic set. Freeze before queries. `trusts.E006` re-walks the installed map. |
+| Replacement | New kernel callers use `from trusts.context import Context`. Existing `Content.register_content` / `Junction` keep working. |
+| Affected | New registrations; documentation distinguishes the core contract from django-trusts conveniences. |
+| Authorization | Same Trust rows and the same one-query evaluation. No schema change. |
+
+Migration-bot checklist:
+
+- [ ] Prefer `Context.register_direct(Model, scope_field=...)` /
+      `Context.register_related(Model, through=...)` for new resources.
+- [ ] Keep using `Content` subclasses when the resource owns a `trust` FK.
+- [ ] Keep `from trusts.models import Junction` for existing junction
+      tables; do not rename or drop those tables.
+- [ ] Do not register many-valued hops (M2M / reverse one-to-many).
+- [ ] Related `through` must terminate at an already registered Context
+      resource. Register parents before dependents.
+- [ ] Run `python -m django check` (`trusts.E006` is fail-closed; silencing
+      it does not make a bad path executable).
+- [ ] Confirm `has_perm` and `.permitted()` still agree for Content.
+- [ ] Confirm `filter_by_content` still matches at each dependent hop
+      and for Junction-wrapped models.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] No Trusts migrate step. Do not edit `0001_initial` or
+      `0002_trustgroup`.
+
+### 32. `Junction` is a 1.x compatibility wrapper
+
+| | |
+| --- | --- |
+| Previous | `Junction.register_junction` called `Content.register_content` on the wrapped model with a Trust-origin lookup. |
+| New | Same public class and auto-registration. Internally: `Context.register_direct(JunctionSubclass, scope_field='trust')` plus `Context.register_related(wrapped, through=content_fk.related_query_name())`. The wrapped model remains `Content.is_content_model`; the junction table does not become public content. |
+| Replacement | Existing `class GroupJunction(Junction): content = ForeignKey(...)` is unchanged. New dependents that you own should use `Context.register_related` instead of adding a junction table. |
+| Affected | Documentation and `migrates.md` only. No warning is emitted. |
+| Authorization | Unchanged. No 1.x removal. |
+
+Migration-bot checklist:
+
+- [ ] Do not delete or rename concrete `Junction` subclasses or their
+      tables in 1.x.
+- [ ] Do not treat `TestGroupJunction`-style rows as `has_perm` targets
+      unless you already did (they stay unregistered as public content).
+- [ ] Inventory new wrap-an-existing-model cases: Junction still works;
+      `Context.register_related` is preferred when you control a
+      single-valued FK to a registered resource.
+- [ ] Leave package version at `1.0.0.dev0`.
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m django migrate --settings=tests.custom_settings
+```
+
+Trusts still applies `0001`–`0002` only. The isolated test app applies
+`trusts_tests.0004_context_contract` for kernel models. That is not a
+Trusts schema change.
+
+## Upgrade of a representative legacy database
+
+`scripts/verify-legacy-upgrade.py` is unchanged: pending
+`0002_trustgroup` after recording `0001_initial`, then
+`{0001_initial, 0002_trustgroup}` after migrate. No new Trusts
+migration. No Junction table rewrite.
+
+## Out of scope (unchanged)
+
+- Removing `Junction` in 1.x
+- Trustee registry (#40)
+- Role / Group / Team semantics
+- Trust hierarchy or recursive inheritance (#17)
+- A universal concrete Context table
+- A separate core distribution
+- Many-valued related paths (all/any policy)
+
+## Migration-bot summary (issue #39)
+
+- [ ] Adopt `Context.register_direct` / `Context.register_related` for
+      new resource registrations.
+- [ ] Keep `Content` / `Junction` / `Content.register_content` call sites;
+      they now route through the registry.
+- [ ] Do not emit or expect a `Junction` `DeprecationWarning` in 1.x.
+- [ ] Do not add a Trusts schema migration.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_context`).
+- [ ] Run `python -m tests.runtests_custom`.
+- [ ] Run `python -m django check` (default and custom settings).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
+- [ ] Run the packaging / wheel-import check.
+- [ ] Confirm exact one-query list/exists Context resolution and
+      `has_perm` / `.permitted()` equivalence.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #39 from this PR.
+
