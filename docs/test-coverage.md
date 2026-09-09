@@ -43,6 +43,7 @@ installable `trusts/` package:
   **companion** django-trusts-zero checkout (not a synthetic in-tree
   Zero); wheel RECORD, uninstall/reinstall, editable+editable,
   AppConfig, migration identity. Pin: `scripts/zero-companion.pin`
+  (stable django-trusts-zero `main` merge SHA, not a PR branch).
 
 ## Tests that must keep passing
 

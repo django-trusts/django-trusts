@@ -50,6 +50,31 @@ def assert_kernel_has_no_zero_tree(root: Path = ROOT) -> None:
         )
 
 
+_SHA40 = re.compile(r'^[0-9a-f]{40}$')
+
+
+def pinned_ref() -> str:
+    ref = os.environ.get('DJANGO_TRUSTS_ZERO_REF', read_pin()['ref'])
+    if ref.startswith('cursor/') or not _SHA40.fullmatch(ref):
+        raise SystemExit(
+            'companion pin ref must be a stable 40-char SHA on Zero main, '
+            'not an ephemeral PR branch (Chat #46 merge-safety): %r' % ref
+        )
+    return ref
+
+
+def assert_companion_revision(src: Path) -> str:
+    expected = pinned_ref()
+    got = companion_sha(src)
+    if got != expected:
+        raise SystemExit(
+            'companion checkout SHA %s does not match stable pin %s' % (
+                got, expected,
+            )
+        )
+    return got
+
+
 def resolve_companion_src(dest: Path) -> Path:
     """Return the companion checkout, cloning it when ``DJANGO_TRUSTS_ZERO_SRC`` is unset."""
     existing = os.environ.get('DJANGO_TRUSTS_ZERO_SRC')
@@ -59,24 +84,32 @@ def resolve_companion_src(dest: Path) -> Path:
             raise SystemExit('DJANGO_TRUSTS_ZERO_SRC has no pyproject.toml: %s' % src)
         if (src / 'trusts' / '__init__.py').exists():
             raise SystemExit('companion must not ship trusts/__init__.py: %s' % src)
+        assert_companion_revision(src)
         return src
 
     pin = read_pin()
     repo = os.environ.get('DJANGO_TRUSTS_ZERO_REPO', pin['repo'])
-    ref = os.environ.get('DJANGO_TRUSTS_ZERO_REF', pin['ref'])
+    ref = pinned_ref()
     dest.mkdir(parents=True, exist_ok=True)
     if dest.exists() and any(dest.iterdir()):
         raise SystemExit('companion dest is not empty: %s' % dest)
 
-    clone = subprocess.run(
-        ['git', 'clone', '--depth', '1', '--branch', ref, repo, str(dest)],
+    # Exact commit on Zero main (not ``git clone --branch`` of a PR branch).
+    subprocess.run(['git', 'init', str(dest)], check=True)
+    subprocess.run(['git', '-C', str(dest), 'remote', 'add', 'origin', repo], check=True)
+    fetched = subprocess.run(
+        ['git', '-C', str(dest), 'fetch', '--depth', '1', 'origin', ref],
         check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
-    if clone.returncode != 0:
-        subprocess.run(['git', 'clone', repo, str(dest)], check=True)
-        subprocess.run(['git', '-C', str(dest), 'checkout', ref], check=True)
+    if fetched.returncode != 0:
+        subprocess.run(['git', '-C', str(dest), 'fetch', 'origin', ref], check=True)
+    subprocess.run(
+        ['git', '-C', str(dest), 'checkout', '--detach', 'FETCH_HEAD'],
+        check=True,
+    )
     if (dest / 'trusts' / '__init__.py').exists():
         raise SystemExit('companion must not ship trusts/__init__.py: %s' % dest)
+    assert_companion_revision(dest)
     return dest
 
 
@@ -147,6 +180,7 @@ def main() -> int:
     assert_kernel_has_no_zero_tree()
     pin = read_pin()
     print('zero companion pin', pin)
+    print('pinned_ref', pinned_ref())
     return 0
 
 

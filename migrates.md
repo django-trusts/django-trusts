@@ -1928,7 +1928,7 @@ Already-applied 0001+0002: `migrate --plan` for `trusts` is empty.
 - Ordered remaining-bits / Windows ACE semantics
 - Compiling resource-row V1 `Expr` on the IR (`condition=` reserved)
 - Implementing complete GH authorization semantics
-- Merging this PR before the django-trusts-zero companion is reviewable
+- Pinning kernel CI to an ephemeral django-trusts-zero PR branch
 - Closing #43
 
 ## Migration-bot summary (issue #43 Step 3)

@@ -51,6 +51,14 @@ class KernelZeroSplitTest(TestCase):
         repo_root = Path(__file__).resolve().parents[2]
         self.assertFalse((repo_root / 'trusts' / 'zero').exists())
         self.assertFalse((repo_root / 'packaging' / 'django-trusts-zero').exists())
+        pin = {}
+        for line in (repo_root / 'scripts' / 'zero-companion.pin').read_text().splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#') and '=' in stripped:
+                key, value = stripped.split('=', 1)
+                pin[key.strip()] = value.strip()
+        self.assertRegex(pin['ref'], r'^[0-9a-f]{40}$')
+        self.assertNotIn('cursor/', pin['ref'])
         zero_migrations = Path(inspect.getfile(Trust)).resolve().parent / 'migrations'
         names = sorted(
             path.name for path in zero_migrations.glob('*.py')

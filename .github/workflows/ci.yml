@@ -21,11 +21,21 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
     - uses: actions/checkout@v4
+    - name: Read stable Zero main pin
+      id: zero_pin
+      run: |
+        set -euo pipefail
+        ref=$(awk -F= '/^ref=/{print $2; exit}' scripts/zero-companion.pin)
+        if ! printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+          echo "scripts/zero-companion.pin ref must be a 40-char SHA on Zero main, got: $ref" >&2
+          exit 1
+        fi
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
     - name: Checkout companion django-trusts-zero
       uses: actions/checkout@v4
       with:
         repository: django-trusts/django-trusts-zero
-        ref: cursor/zero-package-relocation-0031
+        ref: ${{ steps.zero_pin.outputs.ref }}
         path: .companion/django-trusts-zero
     - uses: actions/setup-python@v5
       with:
@@ -63,11 +73,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Read stable Zero main pin
+      id: zero_pin
+      run: |
+        set -euo pipefail
+        ref=$(awk -F= '/^ref=/{print $2; exit}' scripts/zero-companion.pin)
+        if ! printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+          echo "scripts/zero-companion.pin ref must be a 40-char SHA on Zero main, got: $ref" >&2
+          exit 1
+        fi
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
     - name: Checkout companion django-trusts-zero
       uses: actions/checkout@v4
       with:
         repository: django-trusts/django-trusts-zero
-        ref: cursor/zero-package-relocation-0031
+        ref: ${{ steps.zero_pin.outputs.ref }}
         path: .companion/django-trusts-zero
     - uses: actions/setup-python@v5
       with:

@@ -151,7 +151,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix='django-trusts-namespace-') as tmp:
         tmp_path = Path(tmp)
         zero_src = zero_companion.resolve_companion_src(tmp_path / 'zero-src')
-        zero_sha = zero_companion.companion_sha(zero_src)
+        zero_sha = zero_companion.assert_companion_revision(zero_src)
         project = zero_companion.assert_companion_metadata(zero_src)
         print('companion_src', zero_src)
         print('companion_sha', zero_sha)

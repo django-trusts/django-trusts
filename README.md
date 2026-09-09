@@ -74,22 +74,26 @@ python scripts/verify-namespace-install.py
 Authorization tests import ``trusts.zero`` from the companion checkout,
 not from this tree. CI clones
 [`django-trusts-zero`](https://github.com/django-trusts/django-trusts-zero)
-(see ``scripts/zero-companion.pin``).
+at the **stable ``main`` merge SHA** in ``scripts/zero-companion.pin``
+(django-trusts-zero#1 / ``19b0775e6a477ebcf8a2f1accef5df39491a4793``),
+not an ephemeral PR branch.
 
 The executable suite lives under `tests/` (`tests/core/`,
 `tests/regressions/`, and the isolated `tests/custom_content/` app).
 Shared fixtures are in `tests/support.py`. Those modules are not part of
 the installable `trusts` package.
 
-CI is GitHub Actions (`.github/workflows/ci.yml`): checks out companion
-``django-trusts-zero``, then runs authorization tests, a fresh migrate,
-``manage.py check``, the isolated custom-user suite, the legacy-upgrade
-script, and migration-identity on Python 3.12, 3.13, and 3.14 with Django
-6.1. The `package` job (Python 3.12 only) builds an sdist/wheel, imports
-the kernel wheel from a temporary directory, and pairs it with a wheel
-built from the companion checkout. Job names: `tests (Python 3.12)`,
-`tests (Python 3.13)`, `tests (Python 3.14)`, `package`. Do not treat a
-removed Travis check as a stand-in green status.
+CI is GitHub Actions (`.github/workflows/ci.yml`): reads the stable
+Zero ``main`` SHA from ``scripts/zero-companion.pin``, checks out that
+commit of ``django-trusts-zero``, then runs authorization tests, a fresh
+migrate, ``manage.py check``, the isolated custom-user suite, the
+legacy-upgrade script, and migration-identity on Python 3.12, 3.13, and
+3.14 with Django 6.1. The `package` job (Python 3.12 only) builds an
+sdist/wheel, imports the kernel wheel from a temporary directory, and
+pairs it with a wheel built from that pinned companion SHA. Job names:
+`tests (Python 3.12)`, `tests (Python 3.13)`, `tests (Python 3.14)`,
+`package`. Do not treat a removed Travis check as a stand-in green
+status.
 
 Development version
 -------------------
