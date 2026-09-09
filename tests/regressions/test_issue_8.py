@@ -30,7 +30,7 @@ from trusts.models import (
     Trust,
     TrustUserPermission,
 )
-from trusts.tests import (
+from tests.support import (
     ContentModelMixin,
     create_test_users,
     enable_local_group_grant,
@@ -161,7 +161,7 @@ class FilterByUserContentPermTest(Issue8FixtureMixin, TestCase):
     def test_filter_by_user_perm_name_still_discovered(self):
         # The historical PR renamed this test and dropped discovery. Master
         # kept the original name; this asserts it is still a real test.
-        from trusts.tests import TrustTest
+        from tests.core.test_core import TrustTest
         self.assertTrue(callable(TrustTest.test_filter_by_user_perm))
 
     def test_create_under_trust_requires_named_grant(self):

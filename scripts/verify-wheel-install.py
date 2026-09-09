@@ -9,8 +9,37 @@ the installed distribution, not the source tree.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sys
 from pathlib import Path
+
+
+# Historical installable-package locations. Presence is checked without
+# executing the module: a leaked trusts.tests imports tests.models, and
+# that ImportError is not proof the file is absent from the wheel.
+ABSENT_TEST_MODULES = [
+    'trusts.tests',
+    'trusts.test_issue4',
+    'trusts.test_issue8',
+    'trusts.test_issue23',
+    'trusts.test_issue25',
+    'trusts.test_issue26',
+    'trusts.test_issue29',
+    'trusts.test_issue33',
+]
+
+
+def find_shipped_modules(names):
+    """Return names that have a finder/loader. Does not execute the modules."""
+    shipped = []
+    for name in names:
+        try:
+            spec = importlib.util.find_spec(name)
+        except ModuleNotFoundError:
+            continue
+        if spec is not None:
+            shipped.append(name)
+    return shipped
 
 
 def main() -> int:
@@ -74,6 +103,10 @@ def main() -> int:
     if 'site-packages' not in str(trusts_file) and 'dist-packages' not in str(trusts_file):
         raise SystemExit('trusts.__file__ is not a site-packages install: %s' % trusts_file)
 
+    leaked_tests = find_shipped_modules(ABSENT_TEST_MODULES)
+    if leaked_tests:
+        raise SystemExit('Test modules must not ship in the wheel: %s' % leaked_tests)
+
     print('wheel import ok')
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
@@ -81,6 +114,7 @@ def main() -> int:
     print('TrustModelBackend', TrustModelBackend)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
+    print('absent test modules', ' '.join(ABSENT_TEST_MODULES))
     return 0
 
 
