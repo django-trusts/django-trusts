@@ -31,7 +31,11 @@ from trusts import (
 )
 from trusts.conditions import PermissionConditionError, validate_expression
 from trusts.context import Context, ContextRegistrationError
-from trusts.models import Content, legacy_permission_callbacks_allowed, prepare_context_registry
+from trusts.models import (
+    Content, legacy_permission_callbacks_allowed, prepare_context_registry,
+    prepare_trustee_registry,
+)
+from trusts.trustee import Trustee, TrusteeRegistrationError
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
@@ -43,6 +47,7 @@ CHECK_ID_PERMISSION_NOT_AUTH = 'trusts.E005'
 CHECK_ID_GROUP_SETTING_DEPRECATED = 'trusts.W002'
 CHECK_ID_PERMISSION_SETTING_DEPRECATED = 'trusts.W003'
 CHECK_ID_INVALID_CONTEXT = 'trusts.E006'
+CHECK_ID_INVALID_TRUSTEE = 'trusts.E007'
 
 REMOVAL_RELEASE = '1.1.0'
 
@@ -171,6 +176,43 @@ def check_context_registry(app_configs, **kwargs):
             obj=model,
             id=CHECK_ID_INVALID_CONTEXT,
         ))
+    return messages
+
+
+_SILENCE_DOES_NOT_ENABLE_TRUSTEE_HINT = (
+    'Silencing this check ID suppresses only the early diagnostic. '
+    'Invalid Trustee paths stay fail-closed at registration and at '
+    'authorization query time; they are never executed as getters or '
+    'callbacks.'
+)
+
+
+@django_checks.register(django_checks.Tags.models)
+def check_trustee_registry(app_configs, **kwargs):
+    """Re-validate the frozen Trustee registry after models are loaded.
+
+    Duplicate, incomplete, scalar, callable, wrong-terminal, ambiguous,
+    and many-valued grant-identity paths are rejected at ``register``.
+    This check re-walks every installed adapter so ``manage.py check``
+    reports ``trusts.E007`` if the map is stale. ``app_configs`` is
+    ignored so ``manage.py check trusts`` still sees the full registry.
+    No getters, properties, or callbacks are executed. No database
+    queries.
+    """
+    prepare_trustee_registry()
+    messages = []
+    for adapter in Trustee.adapters():
+        try:
+            Trustee.registry.revalidate(adapter)
+        except TrusteeRegistrationError as exc:
+            messages.append(django_checks.Error(
+                'Trustee %s registration %r is invalid: %s' % (
+                    adapter.kind, adapter.name, exc,
+                ),
+                hint=_SILENCE_DOES_NOT_ENABLE_TRUSTEE_HINT,
+                obj=adapter.grant_model,
+                id=CHECK_ID_INVALID_TRUSTEE,
+            ))
     return messages
 
 

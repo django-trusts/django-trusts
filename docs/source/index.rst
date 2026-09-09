@@ -31,7 +31,9 @@ what is road, what is fence, and what is still a sketch:
   `#33 <https://github.com/django-trusts/django-trusts/issues/33>`_ /
   `PR #36 <https://github.com/django-trusts/django-trusts/pull/36>`_,
   `#39 <https://github.com/django-trusts/django-trusts/issues/39>`_
-  first Context-extraction slice — the issue stays open for review).
+  first Context-extraction slice — the issue stays open for review,
+  `#40 <https://github.com/django-trusts/django-trusts/issues/40>`_
+  first Trustee-extraction slice — the issue stays open for review).
 * **Bounded / legacy** — a deliberately limited facility, an opt-in
   escape hatch, or a setting that exists but is not a swap point.
 * **Future** — direction that remains aspirational. Do not implement
@@ -196,6 +198,79 @@ concrete names ``Trust``, ``Content``, or ``Junction``.
 
    ``#39`` stays open until review. Trustee extraction is ``#40``.
    There is no separate core distribution yet.
+
+Trustee contract and django-trusts conveniences
+-----------------------------------------------
+
+The reusable question is: by what validated relational path does a
+requester reach a trustee, and by what concrete relation does that
+trustee participate in a scoped authorization decision? That contract
+is ``trusts.trustee.Trustee``. It does not require the concrete names
+``User``, ``Group``, ``Role``, ``Team``, or ``Trust``.
+
+.. admonition:: Verified — first Trustee-extraction slice (``#40``)
+
+   An explicit adapter registry, frozen before authorization queries,
+   validated through Django ``_meta`` (no getters, callbacks, or
+   ``__subclasses__()`` discovery):
+
+   .. code-block:: python
+
+      from trusts.trustee import Trustee, TrusteeMixin
+
+      class Bundle(TrusteeMixin, models.Model):
+          name = models.CharField(max_length=80, unique=True)
+
+      Trustee.configure(
+          requester_model=Requester,
+          scope_model=Scope,
+          operation_model=Operation,
+      )
+      Trustee.register(
+          name='direct',
+          trustee_model=Requester,
+          grant_model=DirectGrant,
+          trustee_path='requester',
+          scope_path='scope',
+          operation_path='operation',
+      )
+      Trustee.register(
+          name='collective',
+          trustee_model=Collective,
+          grant_model=CollectiveGrant,
+          trustee_path='collective',
+          scope_path='scope',
+          operation_path='operation',
+          membership_path='members',
+          constraint_paths=('collective__operations',),
+      )
+
+   Mixin inheritance is declaration convenience only. The frozen
+   registry is the complete query-building source. Built-in conveniences
+   may be gated by settings; additional installed adapters stay in the
+   compiled ``has_perm`` / ``.permitted()`` predicate. Scope and
+   operation paths must terminate at the configured models so OR-composed
+   adapters cannot authorize by colliding primary keys.
+   ``Trustee.grant_q`` / ``Trustee.filter_granted`` /
+   ``Trustee.row_is_granted`` share one compiled ``Exists`` predicate.
+   List and exists checks are one SQL query each. Constraint paths
+   AND-restrict a completed grant and never create authorization.
+
+   django-trusts conveniences are thin implementations of that
+   contract:
+
+   * Direct ``AUTH_USER_MODEL`` grants register as the ``direct``
+     adapter over ``TrustUserPermission``.
+   * Django ``auth.Group`` registers explicitly as the ``group``
+     adapter over ``TrustGroupPermission`` (no inheritance).
+   * Existing ``Role`` inherits ``TrusteeMixin`` with no new fields
+     and no schema migration. Current Role behavior stays the Group
+     adapter's second constraint path (global ceiling), not a third
+     OR-composed grant branch.
+
+   ``#40`` stays open until review. There is no ``TrustRolePermission``,
+   ``Team``, or ``TrustGroupRole`` in this slice, and no separate core
+   distribution yet.
 
 Content and Junction
 --------------------

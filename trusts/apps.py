@@ -18,7 +18,8 @@ class AppConfig(DjangoAppConfig):
             register_auto_modeladmins()
         # Register system checks. Do not validate conditions here: raising
         # from ready() would block shell, migrations, and recovery.
-        # Context freeze waits until the first authorization query or
-        # manage.py check so every INSTALLED_APPS model can register
-        # during application loading (trusts.ready() runs before later apps).
+        # Context and Trustee freeze wait until the first authorization
+        # query or manage.py check so every INSTALLED_APPS model can
+        # register during application loading (trusts.ready() runs
+        # before later apps).
         from trusts import checks as _trusts_checks  # noqa: F401

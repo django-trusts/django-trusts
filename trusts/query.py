@@ -1,8 +1,9 @@
 """SQL grant filters shared by list APIs and trust-row checks.
 
 These expressions JOIN the same trustee / TrustGroup / ceiling tables
-that ``TrustModelBackend.get_all_permissions`` reads. Callers must apply
-them on a QuerySet (then paginate). They are not Python predicates.
+that ``TrustModelBackend.get_all_permissions`` reads. They are compiled
+from the frozen Trustee adapter set. Callers must apply them on a
+QuerySet (then paginate). They are not Python predicates.
 
 Group-derived access is fail-closed. A group permission matches only when
 the user is a member, a ``TrustGroup`` row exists, the permission is in
@@ -10,7 +11,7 @@ the user is a member, a ``TrustGroup`` row exists, the permission is in
 ceiling (``Group.permissions`` or role-derived). Incomplete rows deny.
 """
 
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, Q
 
 
 def is_active_principal(user):
@@ -28,14 +29,6 @@ def is_active_principal(user):
     if not getattr(user, 'is_active', False):
         return False
     return True
-
-
-def _trust_lookup(trusts):
-    if trusts is None:
-        return {}
-    if hasattr(trusts, 'pk') and not hasattr(trusts, 'model'):
-        return {'trust': trusts}
-    return {'trust__in': trusts}
 
 
 def _never_exists():
@@ -58,26 +51,53 @@ def _group_permission_queries_allowed():
     )
 
 
+def enabled_trustee_adapter_names():
+    """Installed adapter names after settings-based gating of built-ins.
+
+    The frozen registry is the complete query-building source. Built-in
+    ``direct`` / ``group`` adapters are omitted when their auth-model
+    contract fails. Additional installed adapters stay in the set.
+    """
+    from trusts import supported_entity_contract, supported_permission_contract
+    from trusts.models import DIRECT_TRUSTEE, GROUP_TRUSTEE, prepare_trustee_registry
+    from trusts.trustee import Trustee
+
+    prepare_trustee_registry()
+    skip = set()
+    if not (supported_entity_contract() and supported_permission_contract()):
+        skip.add(DIRECT_TRUSTEE)
+    if not _group_permission_queries_allowed():
+        skip.add(GROUP_TRUSTEE)
+    return tuple(
+        adapter.name for adapter in Trustee.adapters()
+        if adapter.name not in skip
+    )
+
+
+def _scope_from_row_for_outerref(trust_id_outerref):
+    if trust_id_outerref == 'pk':
+        return ''
+    if isinstance(trust_id_outerref, str) and trust_id_outerref.endswith('_id'):
+        return trust_id_outerref[:-3]
+    return trust_id_outerref
+
+
 def group_local_grant_exists(user, permission, trust_id_outerref):
     """Exists: same TrustGroup, member, local grant, and global ceiling.
 
     ``trust_id_outerref`` is the outer row's Trust PK column (``pk`` on
-    Trust, ``trust_id`` on Content).
+    Trust, ``trust_id`` on Content). Compiled from the Group Trustee
+    adapter.
     """
-    from trusts.models import TrustGroup
+    from trusts.models import GROUP_TRUSTEE, prepare_trustee_registry
+    from trusts.trustee import Trustee
 
     if not _group_permission_queries_allowed():
         return _never_exists()
 
-    return Exists(
-        TrustGroup.objects.filter(
-            trust_id=OuterRef(trust_id_outerref),
-            group__user=user,
-            permissions=permission,
-        ).filter(
-            Q(group__permissions=permission) |
-            Q(group__roles__permissions=permission)
-        )
+    prepare_trustee_registry()
+    return Trustee.get(GROUP_TRUSTEE).exists_q(
+        user, permission, _scope_from_row_for_outerref(trust_id_outerref),
     )
 
 
@@ -85,23 +105,16 @@ def permission_granted_via_group_exists(user, trusts):
     """Exists against an outer Permission queryset for ``user`` on ``trusts``.
 
     ``trusts`` is a Trust instance, queryset, or id list. Empty ``trust__in``
-    matches nothing.
+    matches nothing. Compiled from the Group Trustee adapter.
     """
-    from trusts.models import TrustGroup
+    from trusts.models import GROUP_TRUSTEE, prepare_trustee_registry
+    from trusts.trustee import Trustee
 
     if not _group_permission_queries_allowed():
         return _never_exists()
 
-    return Exists(
-        TrustGroup.objects.filter(
-            group__user=user,
-            permissions=OuterRef('pk'),
-            **_trust_lookup(trusts)
-        ).filter(
-            Q(group__permissions=OuterRef('pk')) |
-            Q(group__roles__permissions=OuterRef('pk'))
-        )
-    )
+    prepare_trustee_registry()
+    return Trustee.get(GROUP_TRUSTEE).operation_exists_q(user, trusts)
 
 
 def trust_grant_q(user, permission, trust_fk=''):
@@ -110,22 +123,17 @@ def trust_grant_q(user, permission, trust_fk=''):
     ``trust_fk`` is the lookup prefix to the Trust row:
     - ``''`` filters ``Trust`` rows themselves (create-under-trust).
     - ``'trust'`` filters Content rows via ``Content.trust``.
-    """
-    from trusts import supported_entity_contract, supported_permission_contract
 
-    prefix = ('%s__' % trust_fk) if trust_fk else ''
-    trust_id_ref = 'pk' if not trust_fk else '%s_id' % trust_fk
-    parts = []
-    if supported_entity_contract() and supported_permission_contract():
-        parts.append(Q(**{
-            '%strustees__entity' % prefix: user,
-            '%strustees__permission' % prefix: permission,
-        }))
-    if _group_permission_queries_allowed():
-        parts.append(group_local_grant_exists(user, permission, trust_id_ref))
-    if not parts:
+    Direct-object checks and permitted querysets share this compiled
+    predicate.
+    """
+    from trusts.models import prepare_trustee_registry
+    from trusts.trustee import Trustee
+
+    prepare_trustee_registry()
+    names = enabled_trustee_adapter_names()
+    if not names:
         return Q(pk__in=[])
-    grant_q = parts[0]
-    for part in parts[1:]:
-        grant_q |= part
-    return grant_q
+    return Trustee.grant_q(
+        user, permission, scope_from_row=trust_fk, names=names,
+    )

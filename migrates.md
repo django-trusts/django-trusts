@@ -1246,3 +1246,195 @@ migration. No Junction table rewrite.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #39 from this PR.
 
+# Issue #40: registry-driven Trustee resolution contract (1.0.0.dev0)
+
+This record covers the first additive Trustee-extraction slice. Version
+remains **1.0.0.dev0**. **No Trusts schema migration is required.** Test
+fixtures add `trusts_tests` models only (`0005_trustee_contract`,
+`0006_trustee_team`). This
+PR does **not** close
+[#40](https://github.com/django-trusts/django-trusts/issues/40); review
+owns that. A separate `django-trusts-core` distribution is not created
+here.
+
+## Decision
+
+The reusable question is: by what validated relational path does a
+requester reach a trustee, and by what concrete relation does that
+trustee participate in a scoped authorization decision? That contract
+lives in `trusts.trustee` and must not name `User`, `Group`, `Role`,
+`Team`, or `Trust`.
+
+```python
+from trusts.trustee import Trustee, TrusteeMixin
+
+Trustee.configure(
+    requester_model=Requester,
+    scope_model=Scope,
+    operation_model=Operation,
+)
+Trustee.register(
+    name="direct",
+    trustee_model=Requester,
+    grant_model=DirectGrant,
+    trustee_path="requester",
+    scope_path="scope",
+    operation_path="operation",
+)
+Trustee.register(
+    name="collective",
+    trustee_model=Collective,
+    grant_model=CollectiveGrant,
+    trustee_path="collective",
+    scope_path="scope",
+    operation_path="operation",
+    membership_path="members",
+    constraint_paths=("collective__operations",),
+)
+```
+
+- **Direct / identity:** the trustee model is the configured requester.
+  `membership_path` is empty.
+- **Collective:** an external model (no mixin required) reaches the
+  requester through a validated relational membership path. Many-valued
+  membership (M2M) is allowed. Grant identity paths (`trustee_path`,
+  `scope_path`, `operation_path`) stay single-valued.
+- **Constraints:** grant-origin paths to the same operation model.
+  They OR-compose with each other and AND-restrict a completed grant.
+  They never create authorization.
+- **Mixin:** `TrusteeMixin` is abstract declaration convenience and
+  adds no concrete fields. It does not register an adapter.
+  `__subclasses__()` is not a query-building source.
+
+Registration is static during Django application loading. The map
+freezes before the first authorization query and before
+`manage.py check`. Validation uses Django `_meta` only. Duplicate,
+incomplete, scalar, callable, wrong-terminal, ambiguous, many-valued
+grant-identity, and late registrations fail closed
+(`TrusteeRegistrationError`, `TrusteeRegistryFrozen`) and are reported
+as `trusts.E007` if a stale adapter remains. Direct exists-checks and
+list filters share the same compiled `Exists` predicate
+(`Trustee.grant_q` / `Trustee.filter_granted` / `Trustee.row_is_granted`)
+and stay one SQL query each.
+
+django-trusts conveniences route through that map and keep their
+observable 1.x behavior:
+
+- Direct `AUTH_USER_MODEL` grants are the `direct` adapter over
+  `TrustUserPermission`.
+- Django `auth.Group` is the `group` adapter over
+  `TrustGroupPermission` (explicit registration, no inheritance).
+- Existing `Role` inherits `TrusteeMixin` with no new fields. Current
+  Role behavior is the Group adapter's second constraint path
+  (`trustgroup__group__roles__permissions`). It is **not** a third
+  OR-composed grant branch and does not add `TrustRolePermission`.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` signatures
+- `ContentQuerySet.permitted(perm, user)` signature
+- `Trust.objects.filter_by_user_content_perm` / `filter_by_user_perm`
+- `Role` / `RolePermission` / `TrustGroup` / `TrustGroupPermission` tables
+- Package version `1.0.0.dev0`
+- Historical `0001_initial` / `0002_trustgroup` file contents
+
+Authorization **behavior** is unchanged. `trust_grant_q` and
+`TrustModelBackend.get_all_permissions` now compile through the frozen
+Trustee adapters; the enabled 1.x set is still direct User grants OR
+the Group local/global intersection (Role as ceiling only).
+
+## Changes
+
+### 33. `trusts.trustee.Trustee` registry (new)
+
+| | |
+| --- | --- |
+| Previous | `trust_grant_q` and the backend hardcoded `TrustUserPermission` / `TrustGroup` / `Group.permissions` / `group.roles` lookups. |
+| New | Abstract/model-free `Trustee.configure` / `Trustee.register`. `Trustee.adapters()` is the complete deterministic set and the complete query-building source: built-in `direct` / `group` adapters may be gated by the auth-model contract, but additional installed adapters stay in `has_perm` / `.permitted()`. `configure(scope_model=..., operation_model=...)` (or first-adapter inference) rejects mismatched terminals so OR-composed adapters cannot authorize by colliding primary keys. `Trustee.add_finalizer` runs pending integration work once before every freeze. After freeze, public `Trustee.register` is idempotent-only or rejected. `trusts.E007` re-walks the installed map. |
+| Replacement | New kernel callers use `from trusts.trustee import Trustee`. Existing `has_perm` / `.permitted()` keep working. |
+| Affected | New registrations; documentation distinguishes the core contract from django-trusts conveniences. |
+| Authorization | Same allow/deny results for current User and Group paths. No schema change. |
+
+Migration-bot checklist:
+
+- [ ] Prefer `Trustee.register(...)` for new trustee types. Do not
+      discover adapters with `TrusteeMixin.__subclasses__()`.
+- [ ] Keep using `TrustUserPermission` and `TrustGroupPermission` for
+      current User / Group grants.
+- [ ] Keep `Role` as a global ceiling bundle. Do not add
+      `TrustRolePermission`, `Team`, or `TrustGroupRole` in this slice.
+- [ ] Do not flatten or remove `TrustGroup`.
+- [ ] Membership paths must terminate at the configured requester.
+- [ ] Grant identity paths must be single-valued relations.
+- [ ] Constraint paths constrain completed grants; they do not authorize.
+- [ ] Run `python -m django check` (`trusts.E007` is fail-closed;
+      silencing it does not make a bad path executable).
+- [ ] Confirm `has_perm` and `.permitted()` still agree for User and
+      Group paths, including Role-as-ceiling.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] No Trusts migrate step. Do not edit `0001_initial` or
+      `0002_trustgroup`.
+
+### 34. `Role` inherits `TrusteeMixin` (no schema change)
+
+| | |
+| --- | --- |
+| Previous | `class Role(models.Model)` with `name` plus M2M `groups` / `permissions`. |
+| New | `class Role(TrusteeMixin, models.Model)` with the same concrete fields. Mixin is abstract and adds no columns. |
+| Replacement | Existing Role rows and `update_roles_permissions` keep working. |
+| Affected | Declaration only. Role is not auto-registered as a grant adapter. |
+| Authorization | Unchanged. Role remains ceiling-only. |
+
+Migration-bot checklist:
+
+- [ ] Do not generate or apply a Trusts migration for the mixin.
+- [ ] Do not treat Role inheritance as a new authorization path.
+- [ ] Leave package version at `1.0.0.dev0`.
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m django migrate --settings=tests.custom_settings
+```
+
+Trusts still applies `0001`–`0002` only. The isolated test app applies
+`trusts_tests.0005_trustee_contract` and `0006_trustee_team` for kernel
+and extra-adapter models. That is not a Trusts schema change.
+
+## Upgrade of a representative legacy database
+
+`scripts/verify-legacy-upgrade.py` is unchanged: pending
+`0002_trustgroup` after recording `0001_initial`, then
+`{0001_initial, 0002_trustgroup}` after migrate. No new Trusts
+migration. No Role or TrustGroup rewrite.
+
+## Out of scope (unchanged)
+
+- Adopting Grok's `TrustRolePermission` proposal from #34
+- Adding a hard-coded Team model
+- Removing or flattening TrustGroup
+- Removing Role or RolePermission
+- Changing Django `obj=None`, superuser, or third-party backend composition
+- Windows ACL semantics (#17)
+- A separate core distribution
+- Settling Role's long-term fate (trustee vs template vs deprecated)
+
+## Migration-bot summary (issue #40)
+
+- [ ] Adopt `Trustee.configure` / `Trustee.register` for new trustee
+      registrations.
+- [ ] Keep `Role` / `TrustGroup` / `TrustUserPermission` call sites;
+      they now route through the registry.
+- [ ] Do not add `TrustRolePermission` or flatten TrustGroup.
+- [ ] Do not add a Trusts schema migration.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_trustee`).
+- [ ] Run `python -m tests.runtests_custom`.
+- [ ] Run `python -m django check` (default and custom settings).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
+- [ ] Run the packaging / wheel-import check.
+- [ ] Confirm exact one-query list/exists Trustee resolution and
+      `has_perm` / `.permitted()` equivalence for current User/Group paths.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #40 from this PR.
+
