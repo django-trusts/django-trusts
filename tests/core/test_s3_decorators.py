@@ -201,6 +201,26 @@ class S3BindingAndDecisionTest(S3DecoratorFixtureMixin, TestCase):
         with self.assertNumQueries(1):
             self.assertEqual(view(request, pk=self.repo_a.pk).content, b'ok')
 
+    def test_ambiguous_non_pk_selector_does_not_existentially_grant(self):
+        self.repo_a.title = 'shared'
+        self.repo_a.save(update_fields=['title'])
+        S1Repository.objects.create(organization=self.org, title='shared')
+        view = self._wrap(title=G('title'))
+        request = self._get(self.member, data={'title': 'shared'})
+        with self.assertNumQueries(1):
+            with self.assertRaises(PermissionDenied):
+                view(request)
+
+    def test_single_non_pk_match_still_authorizes_that_row(self):
+        view = self._wrap(title=G('title'))
+        request = self._get(self.member, data={'title': self.repo_a.title})
+        with self.assertNumQueries(2):
+            self.assertEqual(view(request).content, b'ok')
+        denied = self._get(self.member, data={'title': self.repo_b.title})
+        with self.assertNumQueries(2):
+            with self.assertRaises(PermissionDenied):
+                view(denied)
+
 
 class S3UnusablePrincipalTest(S3DecoratorFixtureMixin, TestCase):
     def test_anonymous_existing_resource_is_403_one_existence_query(self):
@@ -379,6 +399,37 @@ class S3BooleanPTest(S3DecoratorFixtureMixin, TestCase):
         request = self._get(self.member)
         with self.assertNumQueries(1):
             self.assertEqual(view(request, pk=self.repo_a.pk).content, b'ok')
+
+    def test_or_broken_leaf_on_either_side_is_403(self):
+        broken = P(
+            'read', resource_model=S1UnregisteredNote, resource_kwarg='pk',
+        )
+        valid = P('read', resource_model=S1Repository, resource_kwarg='pk')
+        request = self._get(self.member)
+        for expr in (broken | valid, valid | broken):
+            view = require_authorized(
+                expr, context=self.context, trustee=self.trustee,
+            )(_ok_view)
+            with self.assertRaises(PermissionDenied):
+                view(request, pk=self.repo_a.pk)
+
+    def test_and_does_not_grant_when_separate_rows_satisfy_leaves(self):
+        self.repo_a.title = 'shared'
+        self.repo_a.save(update_fields=['title'])
+        other = S1Repository.objects.create(
+            organization=self.org, title='shared',
+        )
+        S1TeamGrant.objects.create(
+            team=self.team, repository=other, operation=self.write,
+        )
+        self.team.bundles.get().operations.add(self.write)
+        view = self._wrap(
+            P('read', title=G('title')) & P('write', title=G('title')),
+        )
+        request = self._get(self.member, data={'title': 'shared'})
+        with self.assertNumQueries(1):
+            with self.assertRaises(PermissionDenied):
+                view(request)
 
 
 class S3LoginRedirectTest(S3DecoratorFixtureMixin, TestCase):

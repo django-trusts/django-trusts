@@ -24,11 +24,16 @@ Query contract (honest):
 
 * Missing request key → 0 SQL.
 * Unusable principal + existence check → 1 SQL (no auth ``Exists``).
-* Granted path combines lookup + auth in **one** SQL
-  (``filter_authorized`` on the lookup queryset, then ``.first()``).
-* Unauthorized / not-found after a combined miss needs a **second**
-  existence query so 403 and 404 stay distinct.
-* ``P`` composition evaluates each leaf on that same machinery.
+* Unique identity (PK / unique scalar / unconditional unique key):
+  granted lookup + auth combine in **one** SQL.
+* Unauthorized or not-found after a unique-identity combined miss
+  needs a **second** existence query so 403 and 404 stay distinct.
+* Non-unique selectors identify *the* resource only when exactly one
+  row matches. Two or more matches fail closed (**403**, 1 SQL
+  ``[:2]``) and are never an existential grant.
+* A single non-unique match then authorizes that instance (2 SQL).
+* ``P`` composition validates every leaf's configuration first, then
+  evaluates leaves on that same machinery.
 
 Zero's Django-permission compatibility decorator stays in
 ``trusts.zero.decorators``.
@@ -42,18 +47,23 @@ from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME
 from django.contrib.auth.views import redirect_to_login
 from django.core.exceptions import (
+    FieldDoesNotExist,
     FieldError,
     PermissionDenied,
     ValidationError,
 )
+from django.db.models import UniqueConstraint
 from django.http import Http404
 from django.shortcuts import resolve_url
 
+from trusts.path import AuthorizationPathError, compose
 from trusts.runtime import (
     AuthorizationConfigError,
     filter_authorized,
+    is_authorized,
     principal_is_usable,
 )
+from trusts.trustee import Trustee, TrusteeRegistrationError, TrusteeRegistry
 
 
 _MISSING = object()
@@ -271,6 +281,104 @@ def _lookups_usable(resolved):
     return True
 
 
+def _lookups_uniquely_identify(model, lookup_names):
+    """True when the declared fields are a unique identity, not a filter.
+
+    A PK, a ``unique=True`` scalar, or an unconditional unique-together /
+    ``UniqueConstraint`` covering the lookups (or any unique field among
+    them) is enough. Callers still fail closed if a non-unique selector
+    matches more than one row.
+    """
+    names = set(lookup_names)
+    if not names:
+        return False
+    unique_name_sets = []
+    pk = model._meta.pk
+    unique_name_sets.append(frozenset((pk.attname, pk.name, 'pk')))
+    for field in model._meta.fields:
+        if field.primary_key or getattr(field, 'unique', False):
+            unique_name_sets.append(frozenset((field.attname, field.name)))
+    for group in unique_name_sets:
+        if names & group:
+            return True
+    for together in model._meta.unique_together:
+        if names == set(together):
+            return True
+    for constraint in model._meta.constraints:
+        if not isinstance(constraint, UniqueConstraint):
+            continue
+        if getattr(constraint, 'condition', None) is not None:
+            continue
+        if names == set(constraint.fields):
+            return True
+    for name in names:
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        if field.primary_key or getattr(field, 'unique', False):
+            return True
+    return False
+
+
+def _trustee_registry(value):
+    if value is None or value is Trustee:
+        return Trustee.registry
+    if isinstance(value, TrusteeRegistry):
+        return value
+    raise AuthorizationConfigError(
+        'trustee must be a TrusteeRegistry, not %r.' % (value,)
+    )
+
+
+def _validate_leaf_config(leaf, runtime):
+    """Fail closed on malformed leaf config before any grant decision."""
+    resource_model = _require_model(leaf._resource_model)
+    if leaf._resource_kwarg is None and not leaf._fieldlookups:
+        raise AuthorizationConfigError(
+            'require_authorized needs resource_kwarg or a K/G/O selector '
+            'so resource identity comes from declared request keys.'
+        )
+    try:
+        compose(
+            resource_model, None,
+            context=runtime.get('context'),
+            trustee=runtime.get('trustee'),
+            names=runtime.get('names'),
+        )
+    except AuthorizationPathError as exc:
+        raise AuthorizationConfigError(str(exc)) from exc
+    operation = leaf._operation
+    registry = _trustee_registry(runtime.get('trustee'))
+    if isinstance(operation, str):
+        if not registry.operation_lookup():
+            raise AuthorizationConfigError(
+                'String operations require operation_lookup on the '
+                'Trustee registry.'
+            )
+        return
+    if operation is None or operation == '':
+        raise AuthorizationConfigError(
+            'require_authorized needs an operation on each P leaf.'
+        )
+    try:
+        operation_model = registry.operation_model()
+    except TrusteeRegistrationError as exc:
+        raise AuthorizationConfigError(str(exc)) from exc
+    meta = getattr(operation, '_meta', None)
+    if meta is None or meta.concrete_model is not operation_model._meta.concrete_model:
+        raise AuthorizationConfigError(
+            'operation must be a %s instance or lookup string.' % (
+                operation_model._meta.label,
+            )
+        )
+
+
+def _validate_expr_config(expr, runtime):
+    for leaf in expr.get_leaves():
+        _validate_leaf_config(leaf, runtime)
+
+
 def _evaluate_leaf(request, view_kwargs, leaf, runtime):
     try:
         resource_model = _require_model(leaf._resource_model)
@@ -290,6 +398,20 @@ def _evaluate_leaf(request, view_kwargs, leaf, runtime):
                 'require_authorized requires request.user.'
             )
         candidates = resource_model._default_manager.filter(**resolved)
+        unique = _lookups_uniquely_identify(resource_model, resolved.keys())
+        if not unique:
+            matched = list(candidates[:2])
+            if len(matched) == 0:
+                return NOT_FOUND
+            if len(matched) > 1:
+                return DENIED
+            if not principal_is_usable(principal):
+                return DENIED
+            if is_authorized(
+                principal, leaf._operation, matched[0], **runtime,
+            ):
+                return GRANTED
+            return DENIED
         if not principal_is_usable(principal):
             if candidates.exists():
                 return DENIED
@@ -315,21 +437,26 @@ def _evaluate_expr(request, view_kwargs, expr, runtime):
         left = _evaluate_expr(
             request, view_kwargs, expr._left_operand, runtime,
         )
+        if left is CONFIG_ERROR:
+            return CONFIG_ERROR
         if expr._operator is and_:
             if left is not GRANTED:
                 return left
-            return _evaluate_expr(
+            right = _evaluate_expr(
                 request, view_kwargs, expr._right_operand, runtime,
             )
+            if right is CONFIG_ERROR:
+                return CONFIG_ERROR
+            return right
         if left is GRANTED:
             return left
         right = _evaluate_expr(
             request, view_kwargs, expr._right_operand, runtime,
         )
+        if right is CONFIG_ERROR:
+            return CONFIG_ERROR
         if right is GRANTED:
             return GRANTED
-        if left is CONFIG_ERROR or right is CONFIG_ERROR:
-            return CONFIG_ERROR
         if left is DENIED or right is DENIED:
             return DENIED
         return NOT_FOUND
@@ -406,6 +533,10 @@ def require_authorized(
     runtime = dict(context=context, trustee=trustee, names=names)
 
     def _check(request, *args, **kwargs):
+        try:
+            _validate_expr_config(expr, runtime)
+        except AuthorizationConfigError:
+            raise PermissionDenied
         outcome = _evaluate_expr(request, kwargs, expr, runtime)
         if outcome is GRANTED:
             return True

@@ -2219,6 +2219,14 @@ trusts.decorators:
   (URL kwarg → primary key) and inert `K` / `G` / `O` field selectors.
   Getter/resolver callbacks and other callables are configuration
   errors.
+- Selectors identify *the* protected resource. A PK, unique scalar, or
+  unconditional compound unique key may combine lookup + auth in one
+  SQL. A non-unique selector (`title=G('title')`) is allowed only when
+  exactly one row matches; two or more matches fail closed (403) and
+  are never an existential grant on any authorized subset.
+- Every `P` leaf's configuration is validated before any grant
+  decision. A malformed leaf cannot be hidden by `|` ordering or a
+  valid sibling.
 - Authorization is S1 `filter_authorized` / the shared `grant_q`. The
   decorator does not call `request.user.has_perm()` and does not add a
   second policy walker. Active `is_superuser` does not bypass
@@ -2244,9 +2252,11 @@ Query contract (honest):
 | --- | ---: |
 | Missing request key | 0 |
 | Unusable principal (exists / missing) | 1 existence, no auth `Exists` |
-| Granted (lookup + auth combined) | 1 |
-| Unauthorized or not-found after a combined miss | 2 (combined miss + existence) |
-| `P` composition | one leaf's counts per evaluated leaf |
+| Granted unique identity (PK / unique key; lookup + auth combined) | 1 |
+| Unauthorized or not-found after a unique-identity combined miss | 2 (combined miss + existence) |
+| Ambiguous non-unique selector (2+ rows) | 1 (`[:2]`), fail closed 403 |
+| Single non-unique match then authorize that instance | 2 |
+| `P` composition | config walk is 0 SQL; then one leaf's counts per evaluated leaf |
 
 Isolated tests pass `context=` / `trustee=` to the decorator
 (process-wide maps remain the no-arg default).
@@ -2270,7 +2280,7 @@ Isolated tests pass `context=` / `trustee=` to the decorator
 | New | Native `@require_authorized('read', resource_model=Repository, resource_kwarg='pk')` plus `pk=K(...)` / `G` / `O` and optional `P` composition. Isolated registries via `context=` / `trustee=`. |
 | Replacement | New kernel consumers use `trusts.decorators.require_authorized`. Zero compatibility stays `from trusts.zero.decorators import permission_required, P, K, G, O`. Do not treat the new module as a drop-in for the Zero wrapper. |
 | Affected | New kernel consumers. Zero is not re-exported from `trusts.decorators`. |
-| Authorization | Granted views run only after S1 `filter_authorized` matches. 404 vs 403 follows resource existence, not a silent deny. Config errors are 403. Superuser flags are ignored. |
+| Authorization | Granted views run only after the declared keys identify exactly one row and S1 authorizes that row. A non-unique selector that matches two rows (one granted, one denied) is 403, not an existential grant. `P` OR with a malformed leaf is 403 even when the other leaf would grant. 404 vs 403 follows unique-identity existence. Superuser flags are ignored. |
 
 ### 47. `trusts.decorators.P` / `K` / `G` / `O` / `request_passes_test` (new)
 
@@ -2311,6 +2321,8 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Import native `@require_authorized` from `trusts.decorators`, not Zero.
 - [ ] Pass an explicit `resource_model`; do not parse `app.action_model`.
 - [ ] Bind identity with `resource_kwarg` or `K`/`G`/`O` only; no getter callbacks.
+- [ ] Treat a non-unique selector that matches more than one row as 403, not a grant.
+- [ ] Treat a malformed `P` leaf as 403 for the whole expression, including `|`.
 - [ ] Expect 404 for missing/unknown resources and 403 for unauthorized ones.
 - [ ] Catch `AuthorizationConfigError` only at security boundaries (this decorator already does).
 - [ ] Keep `from trusts.zero.decorators import permission_required` for Django-permission compatibility; do not expect that wrapper here.
