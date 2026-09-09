@@ -356,7 +356,11 @@ TQ = Query
 
 def _entity_model():
     from django.contrib.auth import get_user_model
-    from trusts import get_entity_model, supported_entity_contract
+
+    try:
+        from trusts.zero import get_entity_model, supported_entity_contract
+    except ImportError:
+        return get_user_model()
 
     if supported_entity_contract():
         return get_entity_model()

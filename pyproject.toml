@@ -54,7 +54,7 @@ py-modules = ["django_trusts"]
 
 [tool.setuptools.packages.find]
 include = ["trusts*"]
-exclude = ["tests*", "docs*", "scripts*"]
+exclude = ["trusts.zero*", "tests*", "docs*", "scripts*", "packaging*"]
 
 [tool.setuptools.package-data]
 trusts = ["*"]

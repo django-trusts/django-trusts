@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.apps import apps as django_apps
 
-from trusts.models import (
+from trusts.zero.models import (
     Content, Junction, Trust, Role, RolePermission, TrustUserPermission,
     TrustGroup, TrustGroupPermission,
 )

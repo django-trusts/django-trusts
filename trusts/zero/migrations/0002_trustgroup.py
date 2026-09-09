@@ -3,7 +3,7 @@
 # start empty. Do not edit 0001_initial.
 
 from django.db import migrations, models
-from trusts import GROUP_MODEL_NAME, PERMISSION_MODEL_NAME
+from trusts.zero import GROUP_MODEL_NAME, PERMISSION_MODEL_NAME
 
 
 class Migration(migrations.Migration):

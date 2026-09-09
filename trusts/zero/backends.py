@@ -2,11 +2,11 @@ from django.db.models import QuerySet
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Permission
 
-from trusts.models import (
+from trusts.zero.models import (
     GROUP_TRUSTEE, Trust, Content, legacy_permission_callbacks_allowed,
     prepare_trustee_registry, resolve_content_permission,
 )
-from trusts.query import (
+from trusts.zero.query import (
     compose_zero_path,
     enabled_trustee_adapter_names,
     is_active_principal,
@@ -18,10 +18,12 @@ from trusts.query import (
 from trusts.trustee import Trustee
 from trusts.conditions import PermissionConditionError, evaluate_registered_expression
 from trusts import (
+    utils,
+)
+from trusts.zero import (
     supported_entity_contract,
     supported_group_contract,
     supported_permission_contract,
-    utils,
 )
 
 

@@ -25,7 +25,7 @@ from trusts.checks import (
     _SILENCE_DOES_NOT_ENABLE_TRUSTEE_HINT,
     check_trustee_registry,
 )
-from trusts.models import (
+from trusts.zero.models import (
     DIRECT_TRUSTEE,
     GROUP_TRUSTEE,
     Role,
@@ -63,7 +63,7 @@ from tests.models import (
     TrusteeTrapGrant,
     UnregisteredTrusteeNote,
 )
-from trusts.query import enabled_trustee_adapter_names
+from trusts.zero.query import enabled_trustee_adapter_names
 from tests.support import (
     create_test_users,
     enable_local_group_grant,
@@ -125,7 +125,7 @@ class TrusteeReusableLayerTest(TestCase):
 
     def test_public_imports_and_mixin_is_abstract(self):
         from trusts.trustee import Trustee as Imported
-        from trusts.models import Role as PublicRole
+        from trusts.zero.models import Role as PublicRole
         self.assertIs(Imported, Trustee)
         self.assertTrue(issubclass(PublicRole, TrusteeMixin))
         self.assertTrue(TrusteeMixin._meta.abstract)
@@ -359,7 +359,7 @@ class TrusteeFreshProcessFreezeTest(SimpleTestCase):
         script = r'''
 import django
 django.setup()
-from trusts.models import DIRECT_TRUSTEE, GROUP_TRUSTEE, Trust, prepare_trustee_registry
+from trusts.zero.models import DIRECT_TRUSTEE, GROUP_TRUSTEE, Trust, prepare_trustee_registry
 from trusts.trustee import Trustee
 
 assert not Trustee.is_frozen()

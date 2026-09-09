@@ -1,6 +1,6 @@
 from django.db import migrations, models
 import django.db.models.deletion
-import trusts.models
+import trusts.zero.models
 
 
 class Migration(migrations.Migration):
@@ -20,7 +20,7 @@ class Migration(migrations.Migration):
             options={
                 'default_permissions': ('add', 'read', 'change', 'delete'),
             },
-            bases=(trusts.models.ReadonlyFieldsMixin, models.Model),
+            bases=(trusts.zero.models.ReadonlyFieldsMixin, models.Model),
         ),
         migrations.CreateModel(
             name='ReceiptImage',

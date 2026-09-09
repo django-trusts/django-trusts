@@ -10,7 +10,7 @@ from django.db.migrations.loader import MigrationLoader
 from django.test import TestCase, override_settings
 
 from tests.models import Organization
-from trusts import (
+from trusts.zero import (
     AUTH_GROUP_MODEL,
     AUTH_PERMISSION_MODEL,
     GROUP_MODEL_NAME,
@@ -22,7 +22,7 @@ from trusts import (
     supported_group_contract,
     supported_permission_contract,
 )
-from trusts.checks import (
+from trusts.zero.checks import (
     CHECK_ID_ENTITY_NOT_USER,
     CHECK_ID_GROUP_NOT_AUTH,
     CHECK_ID_GROUP_SETTING_DEPRECATED,
@@ -31,7 +31,7 @@ from trusts.checks import (
     REMOVAL_RELEASE,
     check_configured_auth_models,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Role,
     RolePermission,
     Trust,
@@ -174,9 +174,9 @@ class DeprecatedGroupPermissionSettingsTest(Issue8FixtureMixin, TestCase):
         )
 
     def test_historical_migrations_import_pinned_auth_names(self):
-        Initial = importlib.import_module('trusts.migrations.0001_initial').Migration
+        Initial = importlib.import_module('trusts.zero.migrations.0001_initial').Migration
         TrustGroupMigration = importlib.import_module(
-            'trusts.migrations.0002_trustgroup'
+            'trusts.zero.migrations.0002_trustgroup'
         ).Migration
 
         self.assertEqual(GROUP_MODEL_NAME, 'auth.Group')

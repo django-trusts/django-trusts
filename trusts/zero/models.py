@@ -5,11 +5,13 @@ from django.db.models import signals, Q, options
 from django.conf import settings as django_settings
 from django.utils.translation import gettext_lazy as _
 
-from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
-                    DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
-                    utils, \
-                    supported_entity_contract, supported_group_contract, \
-                    supported_permission_contract
+from trusts import utils
+from trusts.zero import (
+    ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME,
+    DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK,
+    supported_entity_contract, supported_group_contract,
+    supported_permission_contract,
+)
 from trusts.context import (
     KIND_DIRECT,
     KIND_RELATED,
@@ -19,7 +21,7 @@ from trusts.context import (
     check_registration,
 )
 from trusts.trustee import Trustee, TrusteeMixin
-from trusts.query import compose_zero_path, is_active_principal, trust_grant_q
+from trusts.zero.query import compose_zero_path, is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
     PermissionConditionError,
@@ -36,12 +38,12 @@ GROUP_TRUSTEE = 'group'
 def prepare_context_registry():
     """Finalize pending Content conveniences, then freeze before queries.
 
-    ``trusts.AppConfig.ready`` runs before later ``INSTALLED_APPS`` have
-    registered. Authorization queries and ``manage.py check`` share
-    ``Context.ensure_frozen()``, which runs registered finalizers
-    (including ``Content.sync_pending_context_registrations``) before
-    freeze. After freeze, public registration is idempotent-only or
-    rejected.
+    ``KernelConfig.ready`` / ``ZeroConfig.ready`` run before later
+    ``INSTALLED_APPS`` have registered. Authorization queries and
+    ``manage.py check`` share ``Context.ensure_frozen()``, which runs
+    registered finalizers (including
+    ``Content.sync_pending_context_registrations``) before freeze. After
+    freeze, public registration is idempotent-only or rejected.
     """
     Context.ensure_frozen()
 
@@ -49,11 +51,12 @@ def prepare_context_registry():
 def prepare_trustee_registry():
     """Finalize django-trusts Trustee conveniences, then freeze.
 
-    ``trusts.AppConfig.ready`` runs before later ``INSTALLED_APPS`` have
-    registered. Authorization queries and ``manage.py check`` share
-    ``Trustee.ensure_frozen()``, which runs registered finalizers
-    (including ``sync_default_trustee_adapters``) before freeze. After
-    freeze, public registration is idempotent-only or rejected.
+    ``KernelConfig.ready`` / ``ZeroConfig.ready`` run before later
+    ``INSTALLED_APPS`` have registered. Authorization queries and
+    ``manage.py check`` share ``Trustee.ensure_frozen()``, which runs
+    registered finalizers (including ``sync_default_trustee_adapters``)
+    before freeze. After freeze, public registration is idempotent-only
+    or rejected.
     """
     Trustee.ensure_frozen()
 
@@ -237,7 +240,7 @@ class ContentQuerySet(models.QuerySet):
         predicate (same seam as object-level ``has_perm``). Anonymous
         principals stay empty; other non-requester values fail closed.
         """
-        from trusts.query import require_configured_requester
+        from trusts.zero.query import require_configured_requester
 
         condition_q = None
         if permission_has_condition(perm):
@@ -360,7 +363,7 @@ class TrustManager(ContentManager):
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
 
-        from trusts.query import require_configured_requester
+        from trusts.zero.query import require_configured_requester
 
         reject_queryable_condition(
             perm_name, 'Trust.objects.filter_by_user_content_perm'
@@ -1308,7 +1311,7 @@ class Junction(ReadonlyFieldsMixin, models.Model):
         The junction table is a direct Context (it owns ``trust``). The
         wrapped model is a related Context that reaches that table. The
         wrapped model remains the public content registration
-        (``from trusts.models import Junction`` keeps working; existing
+        (``from trusts.zero.models import Junction`` keeps working; existing
         concrete junction tables are unchanged).
         """
         content = content_model or klass.get_content_model()

@@ -1,9 +1,12 @@
 from django.db import migrations, models
 from django.conf import settings
 
-from trusts import ENTITY_MODEL_NAME, GROUP_MODEL_NAME, PERMISSION_MODEL_NAME, DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK
-from trusts.management.commands.create_trust_root import create_root_trust
-import trusts.models
+from trusts.zero import (
+    ENTITY_MODEL_NAME, GROUP_MODEL_NAME, PERMISSION_MODEL_NAME,
+    DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK,
+)
+from trusts.zero.management.commands.create_trust_root import create_root_trust
+from trusts.zero.models import ReadonlyFieldsMixin
 
 
 def forward(apps, schema_editor):
@@ -37,7 +40,7 @@ class Migration(migrations.Migration):
             options={
                 'default_permissions': ('add', 'change', 'delete', 'read'),
             },
-            bases=(trusts.models.ReadonlyFieldsMixin, models.Model),
+            bases=(ReadonlyFieldsMixin, models.Model),
         ),
         migrations.CreateModel(
             name='TrustUserPermission',

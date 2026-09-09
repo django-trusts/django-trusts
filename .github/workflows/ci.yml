@@ -41,6 +41,8 @@ jobs:
         run: python -m django check --settings=tests.settings
       - name: Legacy database upgrade
         run: python scripts/verify-legacy-upgrade.py
+      - name: Migration identity after Zero relocation
+        run: python scripts/verify-migration-split.py
 
   package:
     name: package
@@ -55,7 +57,7 @@ jobs:
           python -m pip install --upgrade pip build twine
           python -m build
           twine check dist/*
-      - name: Install wheel and import from outside the checkout
+      - name: Install kernel wheel and import from outside the checkout
         env:
           PYTHONPATH: ""
         run: |
@@ -64,3 +66,5 @@ jobs:
           WORK="$(mktemp -d)"
           cd "$WORK"
           python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
+      - name: Namespace wheel+wheel and editable isolation
+        run: python scripts/verify-namespace-install.py

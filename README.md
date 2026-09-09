@@ -33,13 +33,22 @@ python -m pip install "Django>=6.1,<6.2"
 python -m pip install .
 ```
 
-Add `trusts` to `INSTALLED_APPS` and set:
+Add explicit AppConfig paths (do **not** use bare ``'trusts'``). Concrete
+Trust/Content models currently live in-tree as ``trusts.zero`` and will be
+published by ``django-trusts-zero``:
 
 ```
+INSTALLED_APPS = [
+    'trusts.apps.KernelConfig',
+    'trusts.zero.apps.ZeroConfig',
+]
 AUTHENTICATION_BACKENDS = (
-    'trusts.backends.TrustModelBackend',
+    'trusts.zero.backends.TrustModelBackend',
 )
 ```
+
+Import concrete models from ``trusts.zero.models``. Kernel APIs stay
+``trusts.context``, ``trusts.trustee``, and ``trusts.path``.
 
 API and compatibility notes for this modernization are in [migrates.md](migrates.md).
 
@@ -54,6 +63,8 @@ python -m tests.runtests_custom
 python -m django check --settings=tests.settings
 python -m django check --settings=tests.custom_settings
 python scripts/verify-legacy-upgrade.py
+python scripts/verify-migration-split.py
+python scripts/verify-namespace-install.py
 ```
 
 The executable suite lives under `tests/` (`tests/core/`,
@@ -62,12 +73,14 @@ Shared fixtures are in `tests/support.py`. Those modules are not part of
 the installable `trusts` package.
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
-fresh migrate, ``manage.py check``, the isolated custom-user suite, and the
-legacy-upgrade script on Python 3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel
-and imports it from a temporary directory so the source tree cannot satisfy
-the import. Job names: `tests (Python 3.12)`, `tests (Python 3.13)`,
-`tests (Python 3.14)`, `package`. Do not treat a removed Travis check as a
-stand-in green status.
+fresh migrate, ``manage.py check``, the isolated custom-user suite, the
+legacy-upgrade script, and migration-identity after Zero relocation on
+Python 3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12
+only) builds an sdist/wheel, imports the kernel wheel from a temporary
+directory so the source tree cannot satisfy the import, and runs the
+namespace wheel+wheel / uninstall / editable proof. Job names:
+`tests (Python 3.12)`, `tests (Python 3.13)`, `tests (Python 3.14)`,
+`package`. Do not treat a removed Travis check as a stand-in green status.
 
 Development version
 -------------------

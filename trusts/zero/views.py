@@ -20,15 +20,15 @@ from django.views.generic import CreateView, DetailView
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 
-from trusts import supported_entity_contract
-from trusts.authorization import (
+from trusts.zero import supported_entity_contract
+from trusts.zero.authorization import (
     AuthorizationDenied,
     add_group_member,
     can_administer_trust,
     can_manage_group_membership,
     create_team,
 )
-from trusts.models import Trust
+from trusts.zero.models import Trust
 
 
 def _entity_queryset():

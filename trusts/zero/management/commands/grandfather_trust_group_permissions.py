@@ -10,7 +10,7 @@ Default mode is ``--dry-run`` (report tuples, write nothing). Pass
 
 from django.core.management.base import BaseCommand, CommandError
 
-from trusts.models import TrustGroup, TrustGroupPermission, get_group_global_ceiling
+from trusts.zero.models import TrustGroup, TrustGroupPermission, get_group_global_ceiling
 
 
 def _perm_code(permission):

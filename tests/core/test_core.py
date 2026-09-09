@@ -12,9 +12,9 @@ from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, TransactionTestCase
 from django.http.request import HttpRequest
 
-from trusts.models import Trust, Role, RolePermission, TrustUserPermission
-from trusts.backends import TrustModelBackend
-from trusts.decorators import permission_required, P, K, G, O
+from trusts.zero.models import Trust, Role, RolePermission, TrustUserPermission
+from trusts.zero.backends import TrustModelBackend
+from trusts.zero.decorators import permission_required, P, K, G, O
 from tests.support import (
     ContentModel,
     ContentModelMixin,

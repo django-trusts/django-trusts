@@ -1,6 +1,6 @@
 from django.urls import path
 
-from trusts import views
+from trusts.zero import views
 
 app_name = 'trusts'
 

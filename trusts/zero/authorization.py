@@ -21,9 +21,9 @@ from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Model
 
-from trusts import supported_entity_contract, supported_group_contract
-from trusts.query import is_active_principal, trust_grant_q
-from trusts.models import Trust
+from trusts.zero import supported_entity_contract, supported_group_contract
+from trusts.zero.query import is_active_principal, trust_grant_q
+from trusts.zero.models import Trust
 
 
 class AuthorizationDenied(PermissionDenied):
@@ -57,7 +57,7 @@ def has_trust_row_perm(user, trust, perm):
     ``has_perm`` when the object itself is a ``Trust``. Create-under-trust
     and trust-row administration use this check.
     """
-    from trusts.query import require_configured_requester
+    from trusts.zero.query import require_configured_requester
 
     if user is None or getattr(user, 'is_anonymous', False) or trust is None:
         return False

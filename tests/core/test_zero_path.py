@@ -13,10 +13,10 @@ from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, TransactionTestCase
 
-from trusts.authorization import has_trust_row_perm
-from trusts.backends import TrustModelBackend, TrustModelBackendMixin
+from trusts.zero.authorization import has_trust_row_perm
+from trusts.zero.backends import TrustModelBackend, TrustModelBackendMixin
 from trusts.context import Context
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     ContentQuerySet,
     Trust,
@@ -24,7 +24,7 @@ from trusts.models import (
     prepare_context_registry,
 )
 from trusts.path import AuthorizationPathError
-from trusts.query import (
+from trusts.zero.query import (
     compose_zero_path,
     require_configured_operation,
     require_configured_requester,
@@ -39,7 +39,7 @@ from tests.support import (
 
 
 def _query_source():
-    import trusts.query as query_mod
+    import trusts.zero.query as query_mod
     return Path(inspect.getfile(query_mod)).read_text()
 
 

@@ -118,7 +118,7 @@ class Command(BaseCommand):
             RolePermission = apps.get_model('trusts', 'rolepermission')
             app_config = options['apps']
         else:
-            from trusts.models import Role, RolePermission
+            from trusts.zero.models import Role, RolePermission
             from django.contrib.auth.models import Permission
             from django.apps import apps as app_config
 

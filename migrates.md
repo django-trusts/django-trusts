@@ -1779,3 +1779,169 @@ migration.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #43 from this PR.
 
+# Issue #43 Step 3: kernel AppConfig and in-tree `trusts.zero` (1.0.0.dev0)
+
+This record covers the coordinated package relocation. Version remains
+**1.0.0.dev0**. This package-path change is the 2.0 `INSTALLED_APPS` /
+import migration; stored schema and authorization rows stay compatible.
+This PR does **not** close
+[#43](https://github.com/django-trusts/django-trusts/issues/43); review
+owns that. Recursive/ordered helpers and a broader GH proof are out of
+scope. Concrete code stays in this tree under `trusts/zero/` so the
+[`django-trusts-zero`](https://github.com/django-trusts/django-trusts-zero)
+companion can copy it. The kernel **wheel** does not ship `trusts.zero`.
+
+## Decision
+
+```text
+distribution: django-trusts
+import package: trusts
+AppConfig: trusts.apps.KernelConfig
+  name='trusts'  label='trusts_kernel'  default=False
+  no models, no migrations
+owns: trusts/__init__.py (pkgutil.extend_path), context, trustee,
+      path, conditions, utils, kernel checks (E006 adapters, E007)
+
+distribution: django-trusts-zero
+import package: trusts.zero
+depends on: django-trusts
+AppConfig: trusts.zero.apps.ZeroConfig
+  name='trusts.zero'  label='trusts'
+  default_auto_field=AutoField
+owns: models, managers, backend, admin, views, urls, decorators,
+      authorization, commands, templates, settings constants,
+      Zero checks (E001–E005, W001–W003),
+      migrations 0001_initial / 0002_trustgroup
+```
+
+Bare `'trusts'` or `'trusts.zero'` in `INSTALLED_APPS` is invalid after
+this split. Django would auto-select the kernel config (or an implicit
+`label='trusts'`) and drop or collide with historical migrations.
+
+Zero must never ship `trusts/__init__.py`. Kernel `RECORD` owns kernel
+paths; Zero `RECORD` owns only `trusts/zero/**`.
+
+## Historical migration identity
+
+Move `0001_initial` / `0002_trustgroup` to `trusts.zero.migrations`.
+Django identity stays `('trusts', '0001_initial')` /
+`('trusts', '0002_trustgroup')` because Zero's `label` is `trusts`.
+**Do not squash, rename, fake, or add `0003`.**
+
+Source-only Python-path rewrite (r3):
+
+```python
+# trusts/zero/migrations/0001_initial.py
+from trusts.zero import (
+    ENTITY_MODEL_NAME, GROUP_MODEL_NAME, PERMISSION_MODEL_NAME,
+    DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK,
+)
+from trusts.zero.management.commands.create_trust_root import create_root_trust
+from trusts.zero.models import ReadonlyFieldsMixin
+# bases=(ReadonlyFieldsMixin, models.Model)
+# to=, through=, apps.get_model('trusts', 'trust'), RunPython settings: unchanged
+
+# trusts/zero/migrations/0002_trustgroup.py
+from trusts.zero import GROUP_MODEL_NAME, PERMISSION_MODEL_NAME
+```
+
+Accepted deconstruction deltas (not DDL):
+
+- `CreateModel.bases` serializes `trusts.zero.models.ReadonlyFieldsMixin`
+- `RunPython` callable module is `trusts.zero.management.commands.create_trust_root`
+
+Field `to=`, `through=`, `db_table`, `unique_together`, and
+`SeparateDatabaseAndState.database_operations=[]` stay equivalent.
+`sqlmigrate` snapshots live in `scripts/expected/`.
+
+## Changes
+
+### 38. Explicit `INSTALLED_APPS` and import paths (2.0 package path)
+
+| | |
+| --- | --- |
+| Previous | `INSTALLED_APPS` includes `'trusts'`. Models: `from trusts.models import Trust, Content, Junction, Role`. Backend: `trusts.backends.TrustModelBackend`. URLs: `include('trusts.urls')`. |
+| New | `INSTALLED_APPS` must list `'trusts.apps.KernelConfig'` then `'trusts.zero.apps.ZeroConfig'`. Models: `from trusts.zero.models import Trust, Content, Junction, Role`. Backend: `trusts.zero.backends.TrustModelBackend`. URLs: `include('trusts.zero.urls')`. Settings constants live on `trusts.zero`. Kernel `trusts` exports no Zero constants. |
+| Replacement | Mechanical search-replace of the table below. Tables, content types, and permission natural keys are unchanged (`trusts | trust`). |
+| Affected | Every project that installed django-trusts as the concrete app. |
+| Authorization | Unchanged. No schema migration. |
+
+Migration-bot checklist:
+
+- [ ] Install `django-trusts` (kernel) and `django-trusts-zero` (concrete). In this Draft the Zero tree is still in-tree; the companion repo publishes it.
+- [ ] Replace `'trusts'` in `INSTALLED_APPS` with the two explicit class paths. Do not use bare `'trusts'` or `'trusts.zero'`.
+- [ ] Replace `from trusts.models import …` with `from trusts.zero.models import …`.
+- [ ] Replace `trusts.backends.TrustModelBackend` with `trusts.zero.backends.TrustModelBackend`.
+- [ ] Replace `include('trusts.urls')` with `include('trusts.zero.urls')`.
+- [ ] Replace `from trusts.authorization import …` / `from trusts.decorators import …` / `from trusts.admin import …` with the `trusts.zero.*` paths.
+- [ ] Leave kernel imports (`trusts.context`, `trusts.trustee`, `trusts.path`, `trusts.conditions`, `django_trusts`) unchanged.
+- [ ] Confirm `migrate --plan` for `app_label == 'trusts'` is empty on an already-current database.
+- [ ] Confirm applied set stays `{0001_initial, 0002_trustgroup}`; row counts unchanged; content-type natural keys stay `trusts | trust` (and siblings).
+- [ ] Confirm `makemigrations trusts --check` is quiet.
+- [ ] Confirm `python scripts/verify-legacy-upgrade.py` still applies only pending `0002` when `0001` is already recorded.
+- [ ] Confirm wheel+wheel / editable+editable / Zero uninstall isolation (`scripts/verify-namespace-install.py`). Editable Zero next to the kernel needs setuptools `editable_mode=compat` so kernel `trusts/__init__.py` stays the package owner.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #43 from this PR.
+
+### Mechanical import / settings map
+
+| Previous | New |
+| --- | --- |
+| `'trusts'` in `INSTALLED_APPS` | `'trusts.apps.KernelConfig'`, `'trusts.zero.apps.ZeroConfig'` |
+| `from trusts.models import Trust` | `from trusts.zero.models import Trust` |
+| `from trusts.backends import TrustModelBackend` | `from trusts.zero.backends import TrustModelBackend` |
+| `from trusts.decorators import permission_required, P, K, G, O` | `from trusts.zero.decorators import …` |
+| `from trusts.authorization import …` | `from trusts.zero.authorization import …` |
+| `from trusts.admin import …` | `from trusts.zero.admin import …` |
+| `include('trusts.urls')` | `include('trusts.zero.urls')` |
+| `from trusts import ENTITY_MODEL_NAME, get_entity_model, …` | `from trusts.zero import …` |
+| `from trusts.context import Context` | unchanged |
+| `from trusts.trustee import Trustee` | unchanged |
+| `from trusts.path import compose` | unchanged |
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m django migrate --settings=tests.custom_settings
+python scripts/verify-migration-split.py
+```
+
+Applies `0001_initial` then `0002_trustgroup` under label `trusts`.
+Kernel `trusts_kernel` owns no migrations.
+
+## Upgrade of a representative legacy database
+
+`scripts/verify-legacy-upgrade.py` still:
+
+1. Records `('trusts', '0001_initial')` as applied.
+2. Expects pending `[('trusts', '0002_trustgroup', False)]`.
+3. After migrate, applied set `{0001_initial, 0002_trustgroup}`.
+4. Does not re-run `0001`. Association rows are reused; local grants start empty.
+
+Already-applied 0001+0002: `migrate --plan` for `trusts` is empty.
+
+## Out of scope (unchanged)
+
+- Recursive hierarchy / bounded ancestor walk
+- Ordered remaining-bits / Windows ACE semantics
+- Compiling resource-row V1 `Expr` on the IR (`condition=` reserved)
+- Implementing complete GH authorization semantics
+- Merging this PR before the django-trusts-zero companion is reviewable
+- Closing #43
+
+## Migration-bot summary (issue #43 Step 3)
+
+- [ ] Use explicit `KernelConfig` + `ZeroConfig` in `INSTALLED_APPS`.
+- [ ] Point concrete imports at `trusts.zero.*`.
+- [ ] Keep kernel imports on `trusts.context` / `trustee` / `path`.
+- [ ] Do not edit schema-bearing operations in `0001` / `0002`.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_kernel_split`).
+- [ ] Run `python -m tests.runtests_custom`.
+- [ ] Run `python -m django check` (default and custom settings).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
+- [ ] Run `python scripts/verify-migration-split.py`.
+- [ ] Run `python scripts/verify-namespace-install.py` (or the package CI job).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #43 from this PR.
+

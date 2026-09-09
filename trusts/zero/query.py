@@ -36,7 +36,7 @@ def is_active_principal(user):
 
 
 def _group_permission_queries_allowed():
-    from trusts import (
+    from trusts.zero import (
         supported_entity_contract,
         supported_group_contract,
         supported_permission_contract,
@@ -56,8 +56,8 @@ def enabled_trustee_adapter_names():
     ``direct`` / ``group`` adapters are omitted when their auth-model
     contract fails. Additional installed adapters stay in the set.
     """
-    from trusts import supported_entity_contract, supported_permission_contract
-    from trusts.models import DIRECT_TRUSTEE, GROUP_TRUSTEE, prepare_trustee_registry
+    from trusts.zero import supported_entity_contract, supported_permission_contract
+    from trusts.zero.models import DIRECT_TRUSTEE, GROUP_TRUSTEE, prepare_trustee_registry
     from trusts.trustee import Trustee
 
     prepare_trustee_registry()
@@ -113,7 +113,7 @@ def _require_terminal_instance(value, expected_model, what):
 
 def require_configured_requester(user):
     """Fail closed unless ``user`` is an instance of the configured requester."""
-    from trusts.models import prepare_trustee_registry
+    from trusts.zero.models import prepare_trustee_registry
     from trusts.trustee import Trustee
 
     prepare_trustee_registry()
@@ -124,7 +124,7 @@ def require_configured_requester(user):
 
 def require_configured_operation(operation):
     """Fail closed unless ``operation`` is an instance of the configured operation."""
-    from trusts.models import prepare_trustee_registry
+    from trusts.zero.models import prepare_trustee_registry
     from trusts.trustee import Trustee
 
     prepare_trustee_registry()
@@ -140,7 +140,7 @@ def compose_zero_path(resource_model, operation):
     Unregistered resources and mismatched terminals raise
     ``AuthorizationPathError``.
     """
-    from trusts.models import prepare_context_registry, prepare_trustee_registry
+    from trusts.zero.models import prepare_context_registry, prepare_trustee_registry
 
     prepare_context_registry()
     prepare_trustee_registry()
@@ -219,7 +219,7 @@ def trust_grant_q(user, permission, trust_fk=''):
     terminals; raw PKs and same-PK collisions of the wrong model fail
     closed.
     """
-    from trusts.models import prepare_trustee_registry
+    from trusts.zero.models import prepare_trustee_registry
     from trusts.trustee import Trustee
 
     require_configured_requester(user)
