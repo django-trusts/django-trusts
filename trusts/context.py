@@ -360,16 +360,58 @@ class ContextRegistry(object):
     def __init__(self):
         self._adapters = {}
         self._frozen = False
+        self._finalizers = []
+        self._finalized = False
+        self._finalizing = False
 
     def is_frozen(self):
         return self._frozen
 
+    def add_finalizer(self, func):
+        """Register work that must finish before this registry freezes.
+
+        Query paths call ``ensure_frozen()``, which runs every finalizer
+        once and then freezes. Integration layers register pending
+        synchronization here so this module stays product-agnostic.
+        After a successful finalization, finalizers do not run again.
+        After freeze, new finalizers are rejected.
+        """
+        if self._frozen or self._finalized:
+            raise ContextRegistryFrozen(
+                'Context registry is frozen; cannot add a finalizer.'
+            )
+        if func not in self._finalizers:
+            self._finalizers.append(func)
+
     def freeze(self):
-        self._frozen = True
+        """Run registered finalizers once, then make the adapter map static.
+
+        A finalizer failure restores the adapter snapshot and leaves the
+        registry unfrozen so a partial map is never accepted.
+        """
+        if self._frozen:
+            return
+        if self._finalizing:
+            return
+        self._finalizing = True
+        try:
+            if not self._finalized:
+                snapshot = dict(self._adapters)
+                try:
+                    for func in list(self._finalizers):
+                        func()
+                except Exception:
+                    self._adapters.clear()
+                    self._adapters.update(snapshot)
+                    raise
+                self._finalizers = []
+                self._finalized = True
+            self._frozen = True
+        finally:
+            self._finalizing = False
 
     def ensure_frozen(self):
-        if not self._frozen:
-            self.freeze()
+        self.freeze()
 
     def adapters(self):
         """Complete installed set, ordered by model label."""
@@ -562,6 +604,10 @@ class Context(object):
     @classmethod
     def register_related(cls, model, through):
         return cls.registry.register_related(model, through)
+
+    @classmethod
+    def add_finalizer(cls, func):
+        return cls.registry.add_finalizer(func)
 
     @classmethod
     def freeze(cls):

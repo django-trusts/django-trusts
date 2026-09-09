@@ -7,13 +7,16 @@ Does not close #39.
 """
 
 import inspect
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from django.contrib.auth.models import Group
 from django.core.checks import Error, run_checks
 from django.db import models
 from django.db.models import Q, UniqueConstraint
-from django.test import TestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
 from trusts.checks import (
     CHECK_ID_INVALID_CONTEXT,
@@ -244,6 +247,94 @@ class ContextRegistryContractTest(TestCase):
     def test_unregistered_lookup_fails_closed(self):
         with self.assertRaises(ContextNotRegistered):
             Context.scope_path(UnregisteredReceiptNote)
+
+    def test_finalizers_run_once_before_freeze(self):
+        registry = ContextRegistry()
+        calls = []
+
+        def fin():
+            calls.append(1)
+            registry.register_direct(ContextTrap, scope_field='scope')
+
+        registry.add_finalizer(fin)
+        registry.ensure_frozen()
+        self.assertTrue(registry.is_frozen())
+        self.assertTrue(registry.is_registered(ContextTrap))
+        registry.ensure_frozen()
+        registry.freeze()
+        self.assertEqual(calls, [1])
+        with self.assertRaises(ContextRegistryFrozen):
+            registry.add_finalizer(lambda: None)
+
+    def test_finalizer_failure_does_not_keep_partial_map(self):
+        registry = ContextRegistry()
+        registry.register_direct(ContextDocument, scope_field='scope')
+
+        def fin():
+            registry.register_related(ContextAttachment, through='document')
+            raise RuntimeError('finalizer failed')
+
+        registry.add_finalizer(fin)
+        with self.assertRaises(RuntimeError):
+            registry.filter_by_scope(ContextDocument.objects.none(), [])
+        self.assertFalse(registry.is_frozen())
+        self.assertTrue(registry.is_registered(ContextDocument))
+        self.assertFalse(registry.is_registered(ContextAttachment))
+        self.assertEqual(len(registry._finalizers), 1)
+
+    def test_query_paths_run_registry_finalizers(self):
+        registry = ContextRegistry()
+        registry.register_direct(ContextTrap, scope_field='scope')
+        calls = []
+        registry.add_finalizer(lambda: calls.append('fin'))
+        registry.filter_by_scope(ContextTrap.objects.none(), [])
+        self.assertEqual(calls, ['fin'])
+        self.assertTrue(registry.is_frozen())
+
+
+class ContextFreshProcessFreezeTest(SimpleTestCase):
+    def test_filter_by_scope_finalizes_pending_before_freeze(self):
+        # Exact fresh-process ordering from the PR review: after
+        # django.setup(), Group is only pending. A public Context query
+        # must run the registered finalizer before freeze so prepare
+        # cannot skip it.
+        root = Path(__file__).resolve().parents[2]
+        env = os.environ.copy()
+        env['DJANGO_SETTINGS_MODULE'] = 'tests.settings'
+        env['PYTHONPATH'] = os.pathsep.join(
+            [str(root)] + ([env['PYTHONPATH']] if env.get('PYTHONPATH') else [])
+        )
+        script = r'''
+import django
+django.setup()
+from django.contrib.auth.models import Group
+from tests.models import ContextDocument
+from trusts.context import Context
+from trusts.models import Content, prepare_context_registry
+
+assert not Context.is_frozen()
+assert Content._pending_related
+assert not Context.is_registered(Group)
+
+Context.filter_by_scope(ContextDocument.objects.all(), [])
+
+assert Context.is_frozen()
+assert Context.is_registered(Group)
+assert not any(model is Group for model, _through in Content._pending_related)
+
+prepare_context_registry()
+assert Context.is_registered(Group)
+print('ok')
+'''
+        proc = subprocess.run(
+            [sys.executable, '-c', script],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn('ok', proc.stdout)
 
 
 class ContextValidationTest(TestCase):

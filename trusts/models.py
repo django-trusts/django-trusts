@@ -29,17 +29,16 @@ from trusts.conditions import (
 
 
 def prepare_context_registry():
-    """Mirror deferred Content conveniences, then freeze before queries.
+    """Finalize pending Content conveniences, then freeze before queries.
 
     ``trusts.AppConfig.ready`` runs before later ``INSTALLED_APPS`` have
-    registered. Authorization queries and ``manage.py check`` call this
-    so the map is complete and static. After freeze, public registration
-    is idempotent-only or rejected.
+    registered. Authorization queries and ``manage.py check`` share
+    ``Context.ensure_frozen()``, which runs registered finalizers
+    (including ``Content.sync_pending_context_registrations``) before
+    freeze. After freeze, public registration is idempotent-only or
+    rejected.
     """
-    if Context.is_frozen():
-        return
-    Content.sync_pending_context_registrations()
-    Context.freeze()
+    Context.ensure_frozen()
 
 
 options.DEFAULT_NAMES += ('roles', 'permission_conditions',
@@ -763,16 +762,28 @@ class Content(ReadonlyFieldsMixin, models.Model):
     def sync_pending_context_registrations():
         """Register Content conveniences that deferred Context until ready.
 
-        Called from ``prepare_context_registry`` immediately before
-        freeze. Does not invent new public content; it only mirrors
-        ``_contents`` and deferred Junction related hops. Invalid
-        leftovers stay in ``_contents`` so ``trusts.E006`` can report
-        them; they are not raised out of prepare.
+        Registered as a ``Context`` finalizer so every freeze path
+        (including ``filter_by_scope`` / ``resolves_to_scope``) mirrors
+        ``_contents`` and deferred Junction related hops before the map
+        becomes static. Invalid leftovers stay in ``_contents`` so
+        ``trusts.E006`` can report them; they are not raised out of
+        prepare.
         """
         if Context.is_frozen():
             return
         pending = list(Content._pending_related)
+        contents = dict(Content._contents)
         Content._pending_related = []
+        try:
+            Content._sync_pending_context_registrations(pending)
+        except Exception:
+            Content._pending_related = pending
+            Content._contents.clear()
+            Content._contents.update(contents)
+            raise
+
+    @staticmethod
+    def _sync_pending_context_registrations(pending):
         for model, through in pending:
             if Context.is_registered(model):
                 continue
@@ -874,6 +885,9 @@ class Content(ReadonlyFieldsMixin, models.Model):
         for codes in Content._conditions.values():
             for cond_code, record in codes.items():
                 yield record.model, cond_code, record
+
+
+Context.add_finalizer(Content.sync_pending_context_registrations)
 
 
 class Trust(Content):
