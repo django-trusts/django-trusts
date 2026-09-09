@@ -57,7 +57,12 @@ def has_trust_row_perm(user, trust, perm):
     ``has_perm`` when the object itself is a ``Trust``. Create-under-trust
     and trust-row administration use this check.
     """
-    if not is_active_principal(user) or trust is None:
+    from trusts.query import require_configured_requester
+
+    if user is None or getattr(user, 'is_anonymous', False) or trust is None:
+        return False
+    require_configured_requester(user)
+    if not is_active_principal(user):
         return False
     permission = Trust.objects.get_permission(perm) if isinstance(perm, str) else perm
     return Trust.objects.filter(pk=trust.pk).filter(

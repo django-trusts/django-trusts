@@ -1584,7 +1584,7 @@ migration.
 ## Out of scope (unchanged)
 
 - Rewiring `TrustModelBackend` / `ContentQuerySet.permitted` onto
-  compose (Step 2)
+  compose (Step 2; recorded in the Step 2 section below)
 - Relocating concrete models/migrations to `django-trusts-zero`
   (Step 3)
 - Recursive hierarchy / bounded ancestor walk
@@ -1609,6 +1609,173 @@ migration.
 - [ ] Run the packaging / wheel-import check.
 - [ ] Confirm exact one-query list/exists AuthorizationPath evaluation
       and the GH membership vs containment proof.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #43 from this PR.
+
+# Issue #43 Step 2: Zero evaluation consumes AuthorizationPath (1.0.0.dev0)
+
+This record covers routing the existing django-trusts concrete
+implementation through the composed `AuthorizationPath` seam. Version
+remains **1.0.0.dev0**. **No Trusts schema migration is required.** This
+PR does **not** close
+[#43](https://github.com/django-trusts/django-trusts/issues/43); review
+owns that. Relocation to `django-trusts-zero` is a later step.
+Recursive traversal and ordered remaining-bits helpers remain reserved
+slots only.
+
+## Decision
+
+`ContentQuerySet.permitted` and object-level `TrustModelBackend`
+evaluation compile through `trusts.path.compose` (Zero-enabled adapter
+names) rather than a parallel `Context.scope_path` + `Trustee.grant_q`
+or `Content.is_content` + `Trust.objects.filter_by_content` join.
+
+Zero policy stays out of the kernel:
+
+- adapter names `direct` / `group` and settings-based gating
+- Django `auth.Permission` strings / `parse_perm_code` /
+  `resolve_content_permission`
+- `TrustModelBackend` / `_trust_perm_cache` / `User.has_perm`
+- opt-in callable permission conditions
+- `is_active` / anonymous short-circuit. Object-level superuser is **not**
+  a global True: `TrustModelBackend.has_perm(obj)` uses the same composed
+  grant as other requesters (pre-PR `get_all_permissions(obj)` did the
+  same). `User.has_perm` without `obj` still follows Django's
+  `PermissionsMixin` shortcut. `.permitted()` never treated superuser as
+  return-all.
+- public-content gate `Content.is_content` (Junction table rows still
+  do not enter `User.has_perm`)
+
+Create-under-trust (`filter_by_user_content_perm`,
+`has_trust_row_perm`) still uses `Trustee.grant_q` with empty
+`scope_from_row` because `Trust` as Content is registered with the
+parent hop (`resource_to_scope='trust'`), not identity. Those helpers
+now fail closed on raw PKs and wrong-model same-PK requesters /
+operations.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` signatures
+- `ContentQuerySet.permitted(perm, user)` signature
+- `Trust.objects.filter_by_user_content_perm` / `filter_by_user_perm` /
+  `filter_by_content`
+- `from trusts.context import Context` / `from trusts.trustee import Trustee`
+- `from trusts.path import compose, row_is_granted, filter_granted`
+- `from trusts.models import Trust, Content, Junction, Role`
+- `AUTHENTICATION_BACKENDS = ('trusts.backends.TrustModelBackend',)`
+- `Role` / `RolePermission` / `TrustGroup` / `TrustGroupPermission` tables
+- Package version `1.0.0.dev0`
+- Historical `0001_initial` / `0002_trustgroup` file contents
+
+Authorization **behavior** for current User / Group / Role-ceiling /
+condition / custom-user / inactive-user / backend-composition paths is
+**intended identical**. Direct check ≡ queryset. Same-PK collisions of
+the wrong model and raw primary keys now fail closed at these public
+compatibility entry points instead of letting Django coerce the PK.
+
+## Changes
+
+### 37. Concrete evaluation consumes `compose`
+
+| | |
+| --- | --- |
+| Previous (Step 1) | `ContentQuerySet.permitted` called `trust_grant_q(..., trust_fk=Context.scope_path(model))`. `TrustModelBackend.get_all_permissions` / `has_perm` materialized Trusts via `filter_by_content` then `Trustee.operation_grant_q`. |
+| New | `.permitted()` uses `compose_zero_path` / `path.grant_q`. Object-level `has_perm` uses `row_is_zero_granted` / `queryset_is_zero_granted` (the same composed predicate). `get_all_permissions` enumerates operations per scope PK taken from `path.resource_to_scope` (resource-origin), still intersecting across scopes for QuerySets. `get_group_permissions` remains a Zero mapping onto the named `group` adapter. |
+| Replacement | Same `has_perm` / `.permitted()` call sites. New kernel callers still use `from trusts.path import compose`. |
+| Affected | Internal evaluation only. |
+| Authorization | Same allow/deny for current User / Group / Role-ceiling / Content paths. Unregistered and Junction-table objects still deny on object-level `has_perm`. Active superusers without a Trust-scoped grant stay denied on object-level `TrustModelBackend.has_perm` and `.permitted()`; a granted superuser is present on both. Django `obj=None` / `User.has_perm` without an object still short-circuits active superusers. |
+
+Migration-bot checklist:
+
+- [ ] Keep using `User.has_perm` / `.permitted()` for current Content.
+- [ ] Do not pass a raw PK or a non-requester model as the user argument
+      to `.permitted()`, `TrustModelBackend.has_perm`,
+      `filter_by_user_content_perm`, or `has_trust_row_perm`.
+- [ ] Do not relocate models, migrations, commands, or the backend to
+      `django-trusts-zero` in this slice.
+- [ ] Do not add a Trusts schema migration. Do not edit `0001_initial`
+      or `0002_trustgroup`.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_zero_path`).
+- [ ] Run `python -m tests.runtests_custom`.
+- [ ] Run `python -m django check` (default and custom settings).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
+- [ ] Confirm `has_perm` and `.permitted()` still agree and stay
+      fixed-query.
+- [ ] Confirm an active superuser without a Trust-scoped grant is denied
+      on object-level `TrustModelBackend.has_perm` and `.permitted()`, a
+      granted superuser is allowed on both, and Junction / unregistered
+      objects plus unknown permission codes stay denied.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #43 from this PR.
+
+### 38. Deletion report (noun-dependent query branches)
+
+Removed as genuinely redundant after the compose rewire. They were
+already unused call sites or parallel joins of the same frozen adapters:
+
+| Removed | Why redundant |
+| --- | --- |
+| `query.group_local_grant_exists` | Called `Trustee.get('group').exists_q` by adapter name. No remaining caller after #40; group grants OR-compose through `path.grant_q`. |
+| `query.permission_granted_via_group_exists` | Called `Trustee.get('group').operation_exists_q` by adapter name. No remaining caller. Zero `get_group_permissions` still uses that adapter explicitly. |
+| `query._never_exists` | Imported `TrustGroup` to return `Exists(TrustGroup.objects.none())`. Empty adapter sets use `Q(pk__in=[])`. |
+| `query._scope_from_row_for_outerref` | Trust-PK outerref name munging (`trust_id` → `trust`) used only by the deleted group helpers. Compose passes `resource_to_scope` as registered. |
+| `TrustModelBackendMixin._get_trusts` | Trust-origin `filter_by_content` join, parallel to Context's resource-origin hop. Replaced by `compose_zero_path` + `scope_pks_from_resource`. |
+| `backends._trust_permission_grant_q` | Thin wrapper over `Trustee.operation_grant_q`; inlined on the composed scope list. |
+
+Isolated, not deleted (still Zero policy / compatibility):
+
+| Kept | Why |
+| --- | --- |
+| `query.enabled_trustee_adapter_names` | Zero gating of built-in `direct` / `group`; extra adapters stay enabled. Passed to `compose(..., names=...)`. |
+| `query.trust_grant_q` | Create-under-trust / `has_trust_row_perm` (empty `scope_from_row`). Now fail-closed on requester/operation terminals. |
+| `query.is_active_principal` | Django user flags; not a kernel default. |
+| `Content.is_content` as `has_perm` gate | Public-content facade. Junction tables are Context-registered but must not newly authorize. |
+| `Trustee.get(GROUP_TRUSTEE)` in `get_group_permissions` | Django's user/group permission split mapped onto a named Zero adapter. |
+| `Content._contents` / `_conditions` / `class_prepared` | Zero convenience; not this slice. |
+| V1 `Expr` compile on `.permitted()` | Still AND-ed after the composed grant `Q`. `condition=` on `compose` remains reserved. |
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m django migrate --settings=tests.custom_settings
+```
+
+Trusts still applies `0001`–`0002` only.
+
+## Upgrade of a representative legacy database
+
+`scripts/verify-legacy-upgrade.py` is unchanged: pending
+`0002_trustgroup` after recording `0001_initial`, then
+`{0001_initial, 0002_trustgroup}` after migrate. No new Trusts
+migration.
+
+## Out of scope (unchanged)
+
+- Relocating concrete models/migrations to `django-trusts-zero`
+  (Step 3)
+- Recursive hierarchy / bounded ancestor walk
+- Ordered remaining-bits / Windows ACE semantics
+- Compiling resource-row V1 `Expr` on the IR (`condition=` reserved)
+- Implementing complete GH authorization semantics
+- A separate `django-trusts-core` distribution
+- Closing #43
+
+## Migration-bot summary (issue #43 Step 2)
+
+- [ ] Keep current `has_perm` / `.permitted()` / backend signatures.
+- [ ] Expect same-PK / raw-PK requesters to fail closed
+      (`AuthorizationPathError`) at those entry points.
+- [ ] Do not relocate packages or migrations.
+- [ ] Do not add a Trusts schema migration.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_zero_path`).
+- [ ] Run `python -m tests.runtests_custom`.
+- [ ] Run `python -m django check` (default and custom settings).
+- [ ] Run `python scripts/verify-legacy-upgrade.py`.
+- [ ] Confirm `has_perm` ≡ `.permitted()`, fixed-query, and current
+      User/Group/Role-ceiling allow/deny.
+- [ ] Confirm object-level superuser follows relational grants on both
+      `TrustModelBackend.has_perm` and `.permitted()`.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #43 from this PR.
 

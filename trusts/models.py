@@ -19,7 +19,7 @@ from trusts.context import (
     check_registration,
 )
 from trusts.trustee import Trustee, TrusteeMixin
-from trusts.query import is_active_principal, trust_grant_q
+from trusts.query import compose_zero_path, is_active_principal, trust_grant_q
 from trusts.conditions import (
     Expr,
     PermissionConditionError,
@@ -232,19 +232,28 @@ class ContentQuerySet(models.QuerySet):
         condition`` in SQL (paginate the returned QuerySet). Callables
         raise ``PermissionConditionNotQueryable`` so they cannot
         over-grant.
+
+        The relational grant is the composed ``AuthorizationPath``
+        predicate (same seam as object-level ``has_perm``). Anonymous
+        principals stay empty; other non-requester values fail closed.
         """
+        from trusts.query import require_configured_requester
+
         condition_q = None
         if permission_has_condition(perm):
             condition_q = compile_registered_condition_q(self.model, perm, user)
+        if user is None or getattr(user, 'is_anonymous', False):
+            return self.none()
+        require_configured_requester(user)
         if not is_active_principal(user):
             return self.none()
         if not supported_entity_contract() or not supported_permission_contract():
             return self.none()
         permission = resolve_content_permission(self.model, perm)
-        prepare_context_registry()
-        granted = trust_grant_q(
-            user, permission, trust_fk=Context.scope_path(self.model),
-        )
+        path = compose_zero_path(self.model, permission)
+        if path is None:
+            return self.none()
+        granted = path.grant_q(user, permission)
         if condition_q is None:
             return self.filter(granted).distinct()
         return self.filter(granted & condition_q).distinct()
@@ -351,9 +360,14 @@ class TrustManager(ContentManager):
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
 
+        from trusts.query import require_configured_requester
+
         reject_queryable_condition(
             perm_name, 'Trust.objects.filter_by_user_content_perm'
         )
+        if user is None or getattr(user, 'is_anonymous', False):
+            return self.none()
+        require_configured_requester(user)
         if not is_active_principal(user):
             return self.none()
         if not supported_entity_contract() or not supported_permission_contract():

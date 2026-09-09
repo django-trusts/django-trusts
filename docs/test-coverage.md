@@ -20,11 +20,14 @@ installable `trusts/` package:
 - `tests/core/test_gh_vocab.py` — issue #43 GH-shaped private proof
   (`Account` / `Organization` / `Team` / `PermissionBundle` / `Policy` /
   `Repository`; `account.teams` membership vs organization containment)
+- `tests/core/test_zero_path.py` — issue #43 Step 2 Zero consumer of compose
+  (`ContentQuerySet.permitted` / `TrustModelBackend`; same-PK fail-closed)
 - `tests/regressions/test_issue_*.py` — historical issue regressions
 - `python -m tests.runtests` — discovers the core and regression modules
   by explicit labels (`tests.core.test_core`, `tests.core.test_context`,
   `tests.core.test_trustee`, `tests.core.test_path`,
-  `tests.core.test_gh_vocab`, `tests.core.test_wheel_install`,
+  `tests.core.test_gh_vocab`, `tests.core.test_zero_path`,
+  `tests.core.test_wheel_install`,
   `tests.regressions.test_issue_*`)
 - `python -m tests.runtests_custom` — isolated custom-user suite
   (`tests.custom_content`)
@@ -60,7 +63,7 @@ joined model. That is historical, not a new denial-widening.
 | Area | Why it is a gap |
 | --- | --- |
 | Anonymous request users | Settlor-anonymous is rejected; object-level anonymous grants are not specified. |
-| Superuser short-circuit | Django's `ModelBackend` still treats superusers as having all perms; no extra Trusts test. |
+| Superuser short-circuit | Django `PermissionsMixin.has_perm` still treats active superusers as having all perms before backends run (`obj=None` and with `obj`). Object-level `TrustModelBackend.has_perm` and `.permitted()` follow relational grants; covered in `tests.core.test_zero_path`. |
 | Nested / inherited trusts | `Trust.trust` is a parent pointer with a readonly check; no recursive ACL evaluation (out of scope). |
 | `has_perm` without `obj` | Falls through to Django model-level perms; only lightly covered via role tests. |
 | `get_group_permissions` content path | Returns a permission queryset, not the string set `ModelBackend` uses; no dedicated assertion. |
