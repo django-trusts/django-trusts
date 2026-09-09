@@ -19,6 +19,7 @@ INSTALLED_APPS = (
     'django.contrib.staticfiles',
     'trusts',
     'tests.apps.TestsConfig',
+    'tests.gh_vocab.apps.GhVocabConfig',
 )
 
 AUTHENTICATION_BACKENDS = (
