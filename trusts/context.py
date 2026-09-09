@@ -5,13 +5,15 @@ The reusable question:
     Starting from this resource model, what validated relational path
     resolves its authorization scope?
 
-Two registration forms:
+Three registration forms:
 
-* **Direct** — the resource owns a single-valued relationship to its
-  policy scope (``register_direct(model, scope_field=...)``).
-* **Related** — the resource reaches an already registered resource
-  through a validated, single-valued relational path and therefore
-  resolves the same scope (``register_related(model, through=...)``).
+    * **Direct** — the resource owns a single-valued relationship to its
+      policy scope (``register_direct(model, scope_field=...)``).
+    * **Related** — the resource reaches an already registered resource
+      through a validated, single-valued relational path and therefore
+      resolves the same scope (``register_related(model, through=...)``).
+    * **Identity** — the resource *is* its policy scope
+      (``register_identity(model)``). The compiled scope path is empty.
 
 Registration is static during application loading and frozen before
 authorization queries. Validation uses Django ``_meta`` only: no
@@ -30,6 +32,7 @@ from django.db.models.constants import LOOKUP_SEP
 
 KIND_DIRECT = 'direct'
 KIND_RELATED = 'related'
+KIND_IDENTITY = 'identity'
 
 
 class ContextRegistrationError(ValueError):
@@ -312,6 +315,8 @@ class ContextAdapter(object):
 
     def scope_model(self):
         """Terminal policy-scope model this adapter resolves to."""
+        if self.kind == KIND_IDENTITY:
+            return self.model
         if self.kind == KIND_DIRECT:
             field = _get_field(self.model, self.decl, self.decl)
             return _resolve_related_model(field)
@@ -319,21 +324,31 @@ class ContextAdapter(object):
         return self.registry.get(terminal).scope_model()
 
     def terminal_model(self):
-        """Direct: the resource itself. Related: the registered parent."""
-        if self.kind == KIND_DIRECT:
+        """Identity/direct: the resource itself. Related: the registered parent."""
+        if self.kind in (KIND_IDENTITY, KIND_DIRECT):
             return self.model
         terminal, _hops = _walk(self.model, self.decl)
         return terminal
 
     def scope_path(self):
-        """Resource → scope ORM lookup shared by exists and list filters."""
+        """Resource → scope ORM lookup shared by exists and list filters.
+
+        Identity: the empty string. The filtered row *is* the scope.
+        """
+        if self.kind == KIND_IDENTITY:
+            return ''
         if self.kind == KIND_DIRECT:
             return self.decl
         parent = self.registry.get(self.terminal_model())
-        return '%s__%s' % (self.decl, parent.scope_path())
+        parent_path = parent.scope_path()
+        if not parent_path:
+            return self.decl
+        return '%s__%s' % (self.decl, parent_path)
 
     def resource_path(self):
         """Scope → resource ORM lookup (the inverse of ``scope_path``)."""
+        if self.kind == KIND_IDENTITY:
+            return ''
         if self.kind == KIND_DIRECT:
             _target, reverse = _invert_hop(self.model, self.decl, self.decl)
             return reverse
@@ -344,7 +359,11 @@ class ContextAdapter(object):
             current, reverse = _invert_hop(current, name, self.decl)
             inverted.append(reverse)
         inverted.reverse()
-        return '%s__%s' % (parent.resource_path(), '__'.join(inverted))
+        parent_path = parent.resource_path()
+        child_path = '__'.join(inverted)
+        if not parent_path:
+            return child_path
+        return '%s__%s' % (parent_path, child_path)
 
     def equivalent(self, other):
         return (
@@ -454,8 +473,13 @@ class ContextRegistry(object):
         """``Q`` matching rows whose registered path resolves to ``scope``.
 
         Instance and queryset/list ``scope`` values use the same lookup.
+        Identity adapters match the row primary key.
         """
         path = self.scope_path(model)
+        if not path:
+            if hasattr(scope, 'pk') and not hasattr(scope, 'model'):
+                return Q(pk=scope.pk)
+            return Q(pk__in=scope)
         if hasattr(scope, 'pk') and not hasattr(scope, 'model'):
             return Q(**{path: scope})
         return Q(**{'%s__in' % path: scope})
@@ -498,6 +522,19 @@ class ContextRegistry(object):
         adapter = ContextAdapter(KIND_RELATED, model, through, self)
         return self._commit(adapter)
 
+    def register_identity(self, model):
+        """Register a resource that is its own policy scope.
+
+        Identity is not ``register_direct`` with a fake field. The compiled
+        scope path is empty: the filtered row *is* the scope.
+        """
+        if not isinstance(model, type) or not hasattr(model, '_meta'):
+            raise ContextRegistrationError(
+                'register_identity requires a model class, not %r.' % (model,)
+            )
+        adapter = ContextAdapter(KIND_IDENTITY, model, '', self)
+        return self._commit(adapter)
+
     def _commit(self, adapter):
         key = _model_key(adapter.model)
         existing = self._adapters.get(key)
@@ -522,6 +559,16 @@ class ContextRegistry(object):
 
     def revalidate(self, adapter):
         """Re-walk a stored adapter. Raise ``ContextRegistrationError`` if stale."""
+        if adapter.kind == KIND_IDENTITY:
+            if not isinstance(adapter.model, type) or not hasattr(adapter.model, '_meta'):
+                raise ContextRegistrationError(
+                    'Identity Context %s is no longer a model class.' % (
+                        _model_label(adapter.model),
+                    )
+                )
+            adapter.scope_path()
+            adapter.resource_path()
+            return
         if adapter.kind == KIND_DIRECT:
             parts = _split_path(adapter.decl, 'scope_field')
             if len(parts) != 1:
@@ -558,7 +605,12 @@ def check_registration(model, kind, path, registry=None):
     """
     registry = registry if registry is not None else ContextRegistry()
     try:
-        if kind == KIND_DIRECT:
+        if kind == KIND_IDENTITY:
+            if not isinstance(model, type) or not hasattr(model, '_meta'):
+                raise ContextRegistrationError(
+                    'register_identity requires a model class, not %r.' % (model,)
+                )
+        elif kind == KIND_DIRECT:
             parts = _split_path(path, 'scope_field')
             if len(parts) != 1:
                 raise ContextRegistrationError(
@@ -596,6 +648,7 @@ class Context(object):
 
     KIND_DIRECT = KIND_DIRECT
     KIND_RELATED = KIND_RELATED
+    KIND_IDENTITY = KIND_IDENTITY
 
     @classmethod
     def register_direct(cls, model, scope_field):
@@ -604,6 +657,10 @@ class Context(object):
     @classmethod
     def register_related(cls, model, through):
         return cls.registry.register_related(model, through)
+
+    @classmethod
+    def register_identity(cls, model):
+        return cls.registry.register_identity(model)
 
     @classmethod
     def add_finalizer(cls, func):
@@ -661,6 +718,7 @@ class Context(object):
 __all__ = [
     'KIND_DIRECT',
     'KIND_RELATED',
+    'KIND_IDENTITY',
     'Context',
     'ContextAdapter',
     'ContextNotRegistered',

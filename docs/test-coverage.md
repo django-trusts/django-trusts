@@ -20,6 +20,10 @@ installable `trusts/` package:
 - `tests/core/test_gh_vocab.py` — issue #43 GH-shaped private proof
   (`Account` / `Organization` / `Team` / `PermissionBundle` / `Policy` /
   `Repository`; `account.teams` membership vs organization containment)
+- `tests/core/test_s1_kernel.py` — issue #47 S1 runtime / queryset /
+  identity Context / `operation_lookup` / `alignment_paths` / `compose_scope`
+  (isolated registries; object≡list; one-query; cross-org and NULL
+  alignment deny; registration traps)
 - `tests/core/test_zero_path.py` — issue #43 Step 2 Zero consumer of compose
   (`ContentQuerySet.permitted` / `TrustModelBackend`; same-PK fail-closed)
 - `tests/core/test_kernel_split.py` — issue #43 Step 3 kernel/Zero AppConfig,
@@ -28,7 +32,8 @@ installable `trusts/` package:
 - `python -m tests.runtests` — discovers the core and regression modules
   by explicit labels (`tests.core.test_core`, `tests.core.test_context`,
   `tests.core.test_trustee`, `tests.core.test_path`,
-  `tests.core.test_gh_vocab`, `tests.core.test_zero_path`,
+  `tests.core.test_gh_vocab`, `tests.core.test_s1_kernel`,
+  `tests.core.test_zero_path`,
   `tests.core.test_kernel_split`, `tests.core.test_wheel_install`,
   `tests.regressions.test_issue_*`)
 - `python -m tests.runtests_custom` — isolated custom-user suite

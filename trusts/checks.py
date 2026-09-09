@@ -35,7 +35,8 @@ def check_context_registry(app_configs, **kwargs):
     """Re-validate the frozen Context registry after models are loaded.
 
     Missing, cyclic, ambiguous, scalar, many-valued, and wrong-terminal
-    paths are rejected at ``register_direct`` / ``register_related``.
+    paths are rejected at ``register_direct`` / ``register_related`` /
+    ``register_identity``.
     This check re-walks every installed adapter so ``manage.py check``
     reports ``trusts.E006`` if the map is stale. ``app_configs`` is
     ignored so ``manage.py check trusts_kernel`` still sees the full

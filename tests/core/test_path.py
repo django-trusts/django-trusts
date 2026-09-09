@@ -20,6 +20,7 @@ from trusts.path import (
     OrderedContribution,
     RecursiveEdge,
     compose,
+    compose_scope,
     empty_grant_q,
     filter_granted,
     row_is_granted,
@@ -71,6 +72,7 @@ class AuthorizationPathReusableLayerTest(TestCase):
         self.assertIs(Imported, AuthorizationPath)
         self.assertIs(ImportedBranch, AuthorizationBranch)
         self.assertTrue(callable(compose))
+        self.assertTrue(callable(compose_scope))
         self.assertTrue(callable(row_is_granted))
         self.assertTrue(callable(filter_granted))
 

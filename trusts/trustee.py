@@ -20,13 +20,41 @@ tables.
 """
 
 from django.apps import apps
-from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
+from django.core.exceptions import (
+    AppRegistryNotReady,
+    FieldDoesNotExist,
+    FieldError,
+    ValidationError,
+)
 from django.db import models
-from django.db.models import Exists, OuterRef, Q, UniqueConstraint
+from django.db.models import (
+    Exists,
+    F,
+    OuterRef,
+    Q,
+    UniqueConstraint,
+    BinaryField,
+    BooleanField,
+    CharField,
+    DateField,
+    DateTimeField,
+    DecimalField,
+    DurationField,
+    FloatField,
+    IntegerField,
+    TextField,
+    TimeField,
+    UUIDField,
+)
 from django.db.models.constants import LOOKUP_SEP
+from django.db.models.fields import GenericIPAddressField
 
 
 KIND_GRANT = 'grant'
+
+# Sentinel: a string operation that the configured lookup field cannot accept.
+# Compiles to an always-false grant predicate (ordinary denial, no SQL raise).
+_UNPREPARABLE_LOOKUP = object()
 
 
 class TrusteeRegistrationError(ValueError):
@@ -289,6 +317,175 @@ def _scope_filter(scope_path, scopes):
     return {'%s__in' % scope_path: scopes}
 
 
+def _scalar_types_for_field(field):
+    """V1 type family for a scalar field. Relations are not scalars."""
+    if isinstance(field, BooleanField):
+        return (bool,)
+    if isinstance(field, IntegerField):
+        return (int,)
+    if isinstance(field, FloatField):
+        return (float, int)
+    if isinstance(field, DecimalField):
+        from decimal import Decimal
+        return (Decimal,)
+    if isinstance(field, (CharField, TextField, GenericIPAddressField)):
+        return (str,)
+    if isinstance(field, UUIDField):
+        from uuid import UUID
+        return (UUID,)
+    if isinstance(field, DateTimeField):
+        from datetime import datetime
+        return (datetime,)
+    if isinstance(field, DateField):
+        from datetime import date
+        return (date,)
+    if isinstance(field, TimeField):
+        from datetime import time
+        return (time,)
+    if isinstance(field, DurationField):
+        from datetime import timedelta
+        return (timedelta,)
+    if isinstance(field, BinaryField):
+        return (bytes,)
+    return ()
+
+
+def _prepare_lookup_value(field, value):
+    """Coerce ``value`` through ``field`` without a database lookup.
+
+    Returns the prepared value, or ``_UNPREPARABLE_LOOKUP`` when the
+    field cannot accept the value (unknown / wrong-type operation *data*).
+    """
+    try:
+        return field.get_prep_value(field.to_python(value))
+    except (TypeError, ValueError, OverflowError, ValidationError, FieldError):
+        return _UNPREPARABLE_LOOKUP
+
+
+def _field_is_unique_scalar(model, field_name):
+    """True when ``field_name`` is a unique non-relation scalar on ``model``."""
+    field = _get_field(model, field_name, field_name)
+    if getattr(field, 'is_relation', False):
+        return False
+    if getattr(field, 'unique', False):
+        return True
+    for constraint in getattr(model._meta, 'constraints', ()):
+        if _unconditional_single_field_unique(constraint, field_name):
+            return True
+    return False
+
+
+def _walk_alignment(model, path, api_name):
+    """Walk a grant-origin alignment path.
+
+    Intermediate hops must be single-valued relations. The terminal is a
+    single-valued FK or a scalar field. Returns
+    ``(terminal_field, related_model_or_None)``.
+    """
+    parts = _split_path(path, api_name)
+    seen = [_model_key(model)]
+    current = model
+    field = None
+    for index, name in enumerate(parts):
+        field = _get_field(current, name, path)
+        last = index == len(parts) - 1
+        if last:
+            if getattr(field, 'is_relation', False) is True:
+                _assert_single_valued_relation(field, path, current, name)
+                return field, _resolve_related_model(field)
+            if getattr(field, 'is_relation', False):
+                raise TrusteeRegistrationError(
+                    'Path %r: %r on %s is not a single-valued FK or scalar.' % (
+                        path, name, _model_label(current),
+                    )
+                )
+            return field, None
+        _assert_single_valued_relation(field, path, current, name)
+        target = _resolve_related_model(field)
+        key = _model_key(target)
+        if key in seen:
+            raise TrusteeRegistrationError(
+                'Path %r is cyclic: %s is visited twice.' % (
+                    path, _model_label(target),
+                )
+            )
+        seen.append(key)
+        current = target
+    raise TrusteeRegistrationError(
+        '%s %r is not a composable relational path.' % (api_name, path)
+    )
+
+
+def _alignment_terminals_compatible(left_field, left_related, right_field, right_related):
+    """True when two alignment terminals are the same identity kind."""
+    left_rel = left_related is not None
+    right_rel = right_related is not None
+    if left_rel and right_rel:
+        return _model_key(left_related) is _model_key(right_related)
+    if left_rel or right_rel:
+        return False
+    left_types = set(_scalar_types_for_field(left_field))
+    right_types = set(_scalar_types_for_field(right_field))
+    return bool(left_types and left_types.intersection(right_types))
+
+
+def _normalize_alignment_paths(alignment_paths):
+    """Validate shape. Return a tuple of ``(left, right)`` path pairs."""
+    if alignment_paths is None:
+        return ()
+    if callable(alignment_paths):
+        raise TrusteeRegistrationError(
+            'alignment_paths must be a sequence of pairs, not a callable.'
+        )
+    if isinstance(alignment_paths, (str, bytes)):
+        raise TrusteeRegistrationError(
+            'alignment_paths must be a sequence of pairs, not %r.' % (
+                alignment_paths,
+            )
+        )
+    try:
+        items = tuple(alignment_paths)
+    except TypeError:
+        raise TrusteeRegistrationError(
+            'alignment_paths must be a sequence of pairs, not %r.' % (
+                alignment_paths,
+            )
+        )
+    pairs = []
+    for item in items:
+        if callable(item):
+            raise TrusteeRegistrationError(
+                'alignment_paths entries must be pairs of relational paths, '
+                'not a callable.'
+            )
+        if not isinstance(item, (tuple, list)) or len(item) != 2:
+            raise TrusteeRegistrationError(
+                'alignment_paths entries must be pairs of relational paths, '
+                'not %r.' % (item,)
+            )
+        left, right = item
+        pairs.append((left, right))
+    return tuple(pairs)
+
+
+def _validate_alignment_pair(grant_model, left, right):
+    left_field, left_related = _walk_alignment(grant_model, left, 'alignment_path')
+    right_field, right_related = _walk_alignment(
+        grant_model, right, 'alignment_path',
+    )
+    if not _alignment_terminals_compatible(
+        left_field, left_related, right_field, right_related,
+    ):
+        raise TrusteeRegistrationError(
+            'alignment_paths pair (%r, %r) on %s does not terminate in '
+            'compatible identities (same FK model or same scalar type '
+            'family; FK vs scalar PK is rejected).' % (
+                left, right, _model_label(grant_model),
+            )
+        )
+    return (left, right)
+
+
 class TrusteeMixin(models.Model):
     """Abstract declaration convenience. Adds no concrete fields.
 
@@ -307,12 +504,13 @@ class TrusteeAdapter(object):
     __slots__ = (
         'kind', 'name', 'trustee_model', 'membership_path', 'grant_model',
         'trustee_path', 'scope_path', 'operation_path', 'constraint_paths',
-        'registry',
+        'alignment_paths', 'registry',
     )
 
     def __init__(
         self, kind, name, trustee_model, membership_path, grant_model,
         trustee_path, scope_path, operation_path, constraint_paths, registry,
+        alignment_paths=(),
     ):
         self.kind = kind
         self.name = name
@@ -323,6 +521,7 @@ class TrusteeAdapter(object):
         self.scope_path = scope_path
         self.operation_path = operation_path
         self.constraint_paths = tuple(constraint_paths)
+        self.alignment_paths = tuple(alignment_paths)
         self.registry = registry
 
     def __repr__(self):
@@ -369,22 +568,79 @@ class TrusteeAdapter(object):
             and self.scope_path == other.scope_path
             and self.operation_path == other.operation_path
             and self.constraint_paths == other.constraint_paths
+            and self.alignment_paths == other.alignment_paths
         )
 
+    def _string_operation_lookup(self, operation):
+        """Prepare a string operation through the configured lookup field.
+
+        Returns ``(lookup, prepared)``. ``prepared`` is
+        ``_UNPREPARABLE_LOOKUP`` when the field cannot accept the value.
+        There is no preliminary ``get()``.
+        """
+        lookup = None
+        if self.registry is not None:
+            lookup = getattr(self.registry, '_operation_lookup', None)
+        if not lookup:
+            raise TrusteeRegistrationError(
+                'String operations require operation_lookup on the '
+                'Trustee registry.'
+            )
+        field = _get_field(self.operation_model(), lookup, lookup)
+        return lookup, _prepare_lookup_value(field, operation)
+
+    def _operation_filters(self, operation):
+        """Compile an operation instance or lookup string into grant filters.
+
+        Strings become ``{operation_path__lookup: prepared}`` when the
+        registry has ``operation_lookup``. Unpreparable strings compile
+        to an always-false filter. There is no preliminary ``get()``.
+        """
+        if isinstance(operation, str):
+            lookup, prepared = self._string_operation_lookup(operation)
+            if prepared is _UNPREPARABLE_LOOKUP:
+                return {'pk__in': []}
+            return {'%s__%s' % (self.operation_path, lookup): prepared}
+        return {self.operation_path: operation}
+
+    def _apply_alignments(self, qs):
+        """AND grant-row equalities. NULL on either side does not authorize."""
+        for left, right in self.alignment_paths:
+            qs = qs.filter(
+                Q(**{left: F(right)})
+                & Q(**{'%s__isnull' % left: False})
+                & Q(**{'%s__isnull' % right: False})
+            )
+        return qs
+
     def _base_grant_qs(self, requester, operation, extra=None):
+        if isinstance(operation, str):
+            lookup, prepared = self._string_operation_lookup(operation)
+            if prepared is _UNPREPARABLE_LOOKUP:
+                return self.grant_model._default_manager.none()
+            operation_filters = {
+                '%s__%s' % (self.operation_path, lookup): prepared,
+            }
+        else:
+            lookup = None
+            prepared = None
+            operation_filters = {self.operation_path: operation}
         filters = {
             self.requester_from_grant_path(): requester,
-            self.operation_path: operation,
         }
+        filters.update(operation_filters)
         if extra:
             filters.update(extra)
         qs = self.grant_model._default_manager.filter(**filters)
         if self.constraint_paths:
             constraint = Q()
             for path in self.constraint_paths:
-                constraint |= Q(**{path: operation})
+                if isinstance(operation, str):
+                    constraint |= Q(**{'%s__%s' % (path, lookup): prepared})
+                else:
+                    constraint |= Q(**{path: operation})
             qs = qs.filter(constraint)
-        return qs
+        return self._apply_alignments(qs)
 
     def exists_q(self, requester, operation, scope_from_row=''):
         """``Exists`` matching this adapter on the filtered row's scope."""
@@ -405,21 +661,28 @@ class TrusteeAdapter(object):
             for path in self.constraint_paths:
                 constraint |= Q(**{path: OuterRef('pk')})
             qs = qs.filter(constraint)
+        qs = self._apply_alignments(qs)
         return Exists(qs)
 
 
 class TrusteeRegistry(object):
     """Mutable adapter map that freezes before authorization queries."""
 
-    def __init__(self, requester_model=None, scope_model=None, operation_model=None):
+    def __init__(
+        self, requester_model=None, scope_model=None, operation_model=None,
+        operation_lookup=None,
+    ):
         self._adapters = {}
         self._requester_model = requester_model
         self._scope_model = scope_model
         self._operation_model = operation_model
+        self._operation_lookup = None
         self._frozen = False
         self._finalizers = []
         self._finalized = False
         self._finalizing = False
+        if operation_lookup is not None:
+            self._set_operation_lookup(operation_lookup)
 
     def is_frozen(self):
         return self._frozen
@@ -444,6 +707,53 @@ class TrusteeRegistry(object):
                 'Operation model is not configured.'
             )
         return _resolve_model(self._operation_model, 'operation_model')
+
+    def operation_lookup(self):
+        return self._operation_lookup
+
+    def _validate_operation_lookup(self, lookup, operation_model=None):
+        """``lookup`` must name a unique scalar on the operation model."""
+        if lookup is None:
+            return None
+        if not isinstance(lookup, str) or not lookup or LOOKUP_SEP in lookup:
+            raise TrusteeRegistrationError(
+                'operation_lookup must be a unique scalar field name, not %r.' % (
+                    lookup,
+                )
+            )
+        if operation_model is None:
+            if self._operation_model is None:
+                return lookup
+            operation_model = _resolve_model(self._operation_model, 'operation_model')
+        if not _field_is_unique_scalar(operation_model, lookup):
+            raise TrusteeRegistrationError(
+                'operation_lookup %r on %s must be a unique scalar field.' % (
+                    lookup, _model_label(operation_model),
+                )
+            )
+        return lookup
+
+    def _set_operation_lookup(self, lookup):
+        resolved = self._validate_operation_lookup(lookup)
+        current = self._operation_lookup
+        if current is not None:
+            if current == resolved:
+                return current
+            if self._frozen or self._finalized:
+                raise TrusteeRegistryFrozen(
+                    'Trustee registry is frozen; cannot reconfigure '
+                    'operation_lookup.'
+                )
+            raise TrusteeRegistrationError(
+                'operation_lookup is already configured as %r; cannot '
+                'configure %r.' % (current, resolved)
+            )
+        if self._frozen or self._finalized:
+            raise TrusteeRegistryFrozen(
+                'Trustee registry is frozen; cannot configure operation_lookup.'
+            )
+        self._operation_lookup = resolved
+        return resolved
 
     def _set_configured_model(self, attr, value, what):
         resolved = _resolve_model(value, what)
@@ -472,8 +782,17 @@ class TrusteeRegistry(object):
         setattr(self, attr, resolved)
         return resolved
 
-    def configure(self, requester_model=None, scope_model=None, operation_model=None):
-        """Set requester / scope / operation models adapters must terminate at.
+    def configure(
+        self, requester_model=None, scope_model=None, operation_model=None,
+        operation_lookup=None,
+    ):
+        """Set requester / scope / operation terminals and optional lookup.
+
+        ``operation_lookup`` is a unique scalar on ``operation_model``.
+        String operations are prepared through that field and compile as
+        ``operation_path__lookup`` inside the grant ``Exists``; there is
+        no preliminary ``get()``. A value the field cannot accept
+        compiles to an always-false predicate (ordinary denial).
 
         The first successful registration may infer unset scope and
         operation models from its validated paths. Later adapters must
@@ -493,10 +812,22 @@ class TrusteeRegistry(object):
             resolved = self._set_configured_model(
                 '_operation_model', operation_model, 'operation_model',
             )
-        if requester_model is None and scope_model is None and operation_model is None:
+        if operation_lookup is not None:
+            resolved = self._set_operation_lookup(operation_lookup)
+        if (
+            requester_model is None and scope_model is None
+            and operation_model is None and operation_lookup is None
+        ):
             raise TrusteeRegistrationError(
-                'configure() requires requester_model, scope_model, or '
-                'operation_model.'
+                'configure() requires requester_model, scope_model, '
+                'operation_model, or operation_lookup.'
+            )
+        if self._operation_lookup and self._operation_model is not None:
+            self._validate_operation_lookup(
+                self._operation_lookup,
+                operation_model=_resolve_model(
+                    self._operation_model, 'operation_model',
+                ),
             )
         return resolved
 
@@ -533,15 +864,33 @@ class TrusteeRegistry(object):
                 requester_snapshot = self._requester_model
                 scope_snapshot = self._scope_model
                 operation_snapshot = self._operation_model
+                lookup_snapshot = self._operation_lookup
                 try:
                     for func in list(self._finalizers):
                         func()
+                    if self._operation_lookup is not None:
+                        self._validate_operation_lookup(
+                            self._operation_lookup,
+                            operation_model=(
+                                _resolve_model(
+                                    self._operation_model, 'operation_model',
+                                )
+                                if self._operation_model is not None
+                                else None
+                            ),
+                        )
+                        if self._operation_model is None:
+                            raise TrusteeRegistrationError(
+                                'operation_lookup is configured but '
+                                'operation_model is not.'
+                            )
                 except Exception:
                     self._adapters.clear()
                     self._adapters.update(snapshot)
                     self._requester_model = requester_snapshot
                     self._scope_model = scope_snapshot
                     self._operation_model = operation_snapshot
+                    self._operation_lookup = lookup_snapshot
                     raise
                 self._finalizers = []
                 self._finalized = True
@@ -576,6 +925,7 @@ class TrusteeRegistry(object):
     def register(
         self, name, trustee_model, grant_model, trustee_path, scope_path,
         operation_path, membership_path='', constraint_paths=(),
+        alignment_paths=(),
     ):
         """Register one grant adapter.
 
@@ -585,16 +935,23 @@ class TrusteeRegistry(object):
         operation model; they constrain a completed path and never create
         authorization. They are OR-composed with each other and AND-ed
         with the grant match.
+
+        ``alignment_paths`` are grant-origin pairs of compatible
+        identities. Each pair is AND-ed into this adapter's ``Exists``
+        with ``F()`` equality and non-NULL on both sides. They are not
+        ``constraint_paths`` and never mention the operation model.
         """
         adapter = self._build_adapter(
             KIND_GRANT, name, trustee_model, membership_path, grant_model,
             trustee_path, scope_path, operation_path, constraint_paths,
+            alignment_paths=alignment_paths,
         )
         return self._commit(adapter)
 
     def _build_adapter(
         self, kind, name, trustee_model, membership_path, grant_model,
         trustee_path, scope_path, operation_path, constraint_paths,
+        alignment_paths=(),
     ):
         if callable(name):
             raise TrusteeRegistrationError(
@@ -699,9 +1056,26 @@ class TrusteeRegistry(object):
                     )
                 )
 
+        pairs = _normalize_alignment_paths(alignment_paths)
+        validated_pairs = []
+        for left, right in pairs:
+            validated_pairs.append(
+                _validate_alignment_pair(grant_model, left, right)
+            )
+        alignment_paths = tuple(validated_pairs)
+
+        if self._operation_lookup is not None and self._operation_model is not None:
+            self._validate_operation_lookup(
+                self._operation_lookup,
+                operation_model=_resolve_model(
+                    self._operation_model, 'operation_model',
+                ),
+            )
+
         return TrusteeAdapter(
             kind, name, trustee_model, membership_path, grant_model,
             trustee_path, scope_path, operation_path, constraint_paths, self,
+            alignment_paths=alignment_paths,
         )
 
     def _commit(self, adapter):
@@ -723,6 +1097,7 @@ class TrusteeRegistry(object):
                 and other.scope_path == adapter.scope_path
                 and other.operation_path == adapter.operation_path
                 and other.constraint_paths == adapter.constraint_paths
+                and other.alignment_paths == adapter.alignment_paths
             ):
                 raise TrusteeRegistrationError(
                     'Trustee adapter %r duplicates %r for the same '
@@ -780,10 +1155,20 @@ class TrusteeRegistry(object):
 
     def revalidate(self, adapter):
         """Re-walk a stored adapter. Raise ``TrusteeRegistrationError`` if stale."""
+        if self._operation_lookup is not None:
+            self._validate_operation_lookup(
+                self._operation_lookup,
+                operation_model=(
+                    _resolve_model(self._operation_model, 'operation_model')
+                    if self._operation_model is not None
+                    else None
+                ),
+            )
         rebuilt = self._build_adapter(
             adapter.kind, adapter.name, adapter.trustee_model,
             adapter.membership_path, adapter.grant_model, adapter.trustee_path,
             adapter.scope_path, adapter.operation_path, adapter.constraint_paths,
+            alignment_paths=adapter.alignment_paths,
         )
         if not rebuilt.equivalent(adapter):
             raise TrusteeRegistrationError(
@@ -852,7 +1237,9 @@ class TrusteeRegistry(object):
 def check_registration(
     name, trustee_model, grant_model, trustee_path, scope_path,
     operation_path, membership_path='', constraint_paths=(),
-    requester_model=None, scope_model=None, operation_model=None, registry=None,
+    alignment_paths=(),
+    requester_model=None, scope_model=None, operation_model=None,
+    operation_lookup=None, registry=None,
 ):
     """Validate a proposed registration without committing it.
 
@@ -864,6 +1251,7 @@ def check_registration(
             requester_model=requester_model,
             scope_model=scope_model,
             operation_model=operation_model,
+            operation_lookup=operation_lookup,
         )
     else:
         if requester_model is not None and registry._requester_model is None:
@@ -872,10 +1260,13 @@ def check_registration(
             registry.configure(scope_model=scope_model)
         if operation_model is not None and registry._operation_model is None:
             registry.configure(operation_model=operation_model)
+        if operation_lookup is not None and registry._operation_lookup is None:
+            registry.configure(operation_lookup=operation_lookup)
     try:
         registry._build_adapter(
             KIND_GRANT, name, trustee_model, membership_path, grant_model,
             trustee_path, scope_path, operation_path, constraint_paths,
+            alignment_paths=alignment_paths,
         )
     except TrusteeRegistrationError as exc:
         return exc
@@ -894,22 +1285,28 @@ class Trustee(object):
     KIND_GRANT = KIND_GRANT
 
     @classmethod
-    def configure(cls, requester_model=None, scope_model=None, operation_model=None):
+    def configure(
+        cls, requester_model=None, scope_model=None, operation_model=None,
+        operation_lookup=None,
+    ):
         return cls.registry.configure(
             requester_model=requester_model,
             scope_model=scope_model,
             operation_model=operation_model,
+            operation_lookup=operation_lookup,
         )
 
     @classmethod
     def register(
         cls, name, trustee_model, grant_model, trustee_path, scope_path,
         operation_path, membership_path='', constraint_paths=(),
+        alignment_paths=(),
     ):
         return cls.registry.register(
             name, trustee_model, grant_model, trustee_path, scope_path,
             operation_path, membership_path=membership_path,
             constraint_paths=constraint_paths,
+            alignment_paths=alignment_paths,
         )
 
     @classmethod
