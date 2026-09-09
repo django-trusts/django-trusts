@@ -23,11 +23,14 @@ Kernel positions are requester / subject / resource / scope / grant /
 operation. This module must not name a concrete authorization product's
 resource, scope, principal, collective, bundle, or grant tables.
 
-Public construction is ``compose`` only. Direct ``AuthorizationPath(...)``
-is rejected. Adapter-specific data is always a tuple of immutable
-``AuthorizationBranch`` records. Evaluation requires requester and
-operation *instances* whose concrete model matches the composed
-terminals; raw primary keys are not accepted.
+Public construction is ``compose`` (resource-origin, Context hop) or
+``compose_scope`` (the filtered row *is* the frozen Trustee scope).
+Direct ``AuthorizationPath(...)`` is rejected. Adapter-specific data is
+always a tuple of immutable ``AuthorizationBranch`` records. Evaluation
+requires a requester instance of the composed terminal. Operation may be
+an operation-model instance or, when ``Trustee.operation_lookup`` is
+set, a string compiled into the grant predicate. Raw primary keys are
+not accepted.
 
 Recursive and ordered remaining-bits helpers are reserved slots only.
 They are not compiled in this slice. An instance that carries a
@@ -190,6 +193,7 @@ def _branch_from_adapter(adapter):
         grant_to_scope=adapter.scope_path,
         grant_to_operation=adapter.operation_path,
         constraint_paths=adapter.constraint_paths,
+        alignment_paths=adapter.alignment_paths,
     )
 
 
@@ -250,12 +254,13 @@ class AuthorizationBranch(object):
         'grant_to_scope',
         'grant_to_operation',
         'constraint_paths',
+        'alignment_paths',
     )
 
     def __init__(
         self, name, subject_model, subject_from_grant, membership_path,
         requester_from_grant, grant_model, grant_to_scope,
-        grant_to_operation, constraint_paths,
+        grant_to_operation, constraint_paths, alignment_paths=(),
     ):
         object.__setattr__(self, 'name', name)
         object.__setattr__(self, 'subject_model', subject_model)
@@ -266,6 +271,9 @@ class AuthorizationBranch(object):
         object.__setattr__(self, 'grant_to_scope', grant_to_scope)
         object.__setattr__(self, 'grant_to_operation', grant_to_operation)
         object.__setattr__(self, 'constraint_paths', tuple(constraint_paths))
+        object.__setattr__(self, 'alignment_paths', tuple(
+            tuple(pair) for pair in alignment_paths
+        ))
 
     def __setattr__(self, name, value):
         raise AttributeError('AuthorizationBranch is immutable.')
@@ -302,6 +310,7 @@ class AuthorizationPath(object):
         '_trustee_adapters',
         '_context_registry',
         '_trustee_registry',
+        '_scope_origin',
     )
 
     def __init__(self, *args, **kwargs):
@@ -328,6 +337,10 @@ class AuthorizationPath(object):
         return tuple(branch.name for branch in self._branches)
 
     @property
+    def scope_origin(self):
+        return self._scope_origin
+
+    @property
     def condition(self):
         return self._condition
 
@@ -342,7 +355,7 @@ class AuthorizationPath(object):
     @classmethod
     def _from_validated(
         cls, context_adapter, trustee_adapters, context_registry,
-        trustee_registry,
+        trustee_registry, scope_origin=False, scope_model=None,
     ):
         """Install a validated, frozen join. Reserved slots are always None."""
         inst = object.__new__(cls)
@@ -350,9 +363,15 @@ class AuthorizationPath(object):
         object.__setattr__(inst, '_trustee_adapters', tuple(trustee_adapters))
         object.__setattr__(inst, '_context_registry', context_registry)
         object.__setattr__(inst, '_trustee_registry', trustee_registry)
-        object.__setattr__(inst, 'resource_model', context_adapter.model)
-        object.__setattr__(inst, 'resource_to_scope', context_adapter.scope_path())
-        object.__setattr__(inst, 'scope_model', context_adapter.scope_model())
+        object.__setattr__(inst, '_scope_origin', bool(scope_origin))
+        if scope_origin:
+            object.__setattr__(inst, 'resource_model', scope_model)
+            object.__setattr__(inst, 'resource_to_scope', '')
+            object.__setattr__(inst, 'scope_model', scope_model)
+        else:
+            object.__setattr__(inst, 'resource_model', context_adapter.model)
+            object.__setattr__(inst, 'resource_to_scope', context_adapter.scope_path())
+            object.__setattr__(inst, 'scope_model', context_adapter.scope_model())
         object.__setattr__(inst, 'requester_model', trustee_registry.requester_model())
         object.__setattr__(
             inst, 'operation_model', trustee_adapters[0].operation_model(),
@@ -403,12 +422,108 @@ class AuthorizationPath(object):
             )
 
         operation_cls = None
-        if operation is not None:
+        if isinstance(operation, str):
+            if not trustee_registry.operation_lookup():
+                raise AuthorizationPathError(
+                    'String operations require operation_lookup on the '
+                    'Trustee registry.'
+                )
+        elif operation is not None:
             operation_cls = _as_model(operation, 'operation')
 
         _assert_adapter_terminals(context_adapter, adapters, operation_cls)
         return cls._from_validated(
             context_adapter, adapters, context_registry, trustee_registry,
+        )
+
+    @classmethod
+    def compose_scope(
+        cls, scope_model, operation, trustee=None, names=None,
+        condition=None, recursive_edge=None, ordered_contribution=None,
+    ):
+        """Compose a path whose filtered row *is* the frozen Trustee scope.
+
+        No Context adapter is required. The compiled grant predicate uses
+        identity scope (grant ``scope_path`` → row ``pk``). ``scope_from_row``
+        is not a public argument.
+        """
+        _reject_reserved(condition, recursive_edge, ordered_contribution)
+
+        scope_model = _as_model(scope_model, 'scope_model')
+        trustee_registry = _as_trustee_registry(trustee)
+        trustee_registry.ensure_frozen()
+
+        try:
+            configured_scope = trustee_registry.scope_model()
+        except TrusteeRegistrationError as exc:
+            raise AuthorizationPathError(str(exc))
+
+        if not _same_model(scope_model, configured_scope):
+            raise AuthorizationPathError(
+                'Scope %s is not the configured Trustee scope %s.' % (
+                    _model_label(scope_model),
+                    _model_label(configured_scope),
+                )
+            )
+
+        try:
+            adapters = _enabled_adapters(trustee_registry, names)
+        except TrusteeNotRegistered as exc:
+            raise AuthorizationPathError(str(exc))
+
+        if not adapters:
+            raise AuthorizationPathError(
+                'No grant adapters are enabled for scope %s.' % (
+                    _model_label(scope_model),
+                )
+            )
+
+        operation_cls = None
+        if isinstance(operation, str):
+            if not trustee_registry.operation_lookup():
+                raise AuthorizationPathError(
+                    'String operations require operation_lookup on the '
+                    'Trustee registry.'
+                )
+        elif operation is not None:
+            operation_cls = _as_model(operation, 'operation')
+
+        for adapter in adapters:
+            grant_scope = adapter.scope_model()
+            if not _same_model(grant_scope, scope_model):
+                raise AuthorizationPathError(
+                    'Scope %s does not match grant adapter %r scope %s.' % (
+                        _model_label(scope_model),
+                        adapter.name,
+                        _model_label(grant_scope),
+                    )
+                )
+            grant_operation = adapter.operation_model()
+            if operation_cls is not None and not _same_model(
+                operation_cls, grant_operation,
+            ):
+                raise AuthorizationPathError(
+                    'Operation %s does not match grant adapter %r '
+                    'operation %s.' % (
+                        _model_label(operation_cls),
+                        adapter.name,
+                        _model_label(grant_operation),
+                    )
+                )
+            if not _same_model(adapter.scope_model(), adapters[0].scope_model()):
+                raise AuthorizationPathError(
+                    'Grant adapters mix scope terminals; refusing to compose.'
+                )
+            if not _same_model(
+                adapter.operation_model(), adapters[0].operation_model(),
+            ):
+                raise AuthorizationPathError(
+                    'Grant adapters mix operation terminals; refusing to compose.'
+                )
+
+        return cls._from_validated(
+            None, adapters, None, trustee_registry,
+            scope_origin=True, scope_model=scope_model,
         )
 
     def _assert_evaluable(self, requester, operation):
@@ -423,7 +538,14 @@ class AuthorizationPath(object):
                 'slot and cannot evaluate.'
             )
         _require_instance(requester, self.requester_model, 'requester')
-        _require_instance(operation, self.operation_model, 'operation')
+        if isinstance(operation, str):
+            if not self._trustee_registry.operation_lookup():
+                raise AuthorizationPathError(
+                    'String operations require operation_lookup on the '
+                    'Trustee registry.'
+                )
+        else:
+            _require_instance(operation, self.operation_model, 'operation')
 
     def grant_q(self, requester, operation):
         """Compiled grant predicate for this resource's scope path."""
@@ -438,11 +560,14 @@ class AuthorizationPath(object):
     def filter_granted(self, queryset, requester, operation):
         """SQL-filter ``queryset`` with the composed predicate (one query)."""
         self._assert_evaluable(requester, operation)
-        if not _same_model(queryset.model, self.resource_model):
+        expected = self.scope_model if self._scope_origin else self.resource_model
+        what = 'scope' if self._scope_origin else 'path resource'
+        if not _same_model(queryset.model, expected):
             raise AuthorizationPathError(
-                'Queryset model %s is not this path resource %s.' % (
+                'Queryset model %s is not this %s %s.' % (
                     _model_label(queryset.model),
-                    _model_label(self.resource_model),
+                    what,
+                    _model_label(expected),
                 )
             )
         return self._trustee_registry.filter_granted(
@@ -456,7 +581,10 @@ class AuthorizationPath(object):
     def row_is_granted(self, obj, requester, operation):
         """One-query exists check using the same predicate as ``filter_granted``."""
         self._assert_evaluable(requester, operation)
-        _require_instance(obj, self.resource_model, 'resource')
+        if self._scope_origin:
+            _require_instance(obj, self.scope_model, 'scope')
+        else:
+            _require_instance(obj, self.resource_model, 'resource')
         return self._trustee_registry.row_is_granted(
             obj,
             requester,
@@ -478,6 +606,22 @@ def compose(
         resource_model,
         operation,
         context=context,
+        trustee=trustee,
+        names=names,
+        condition=condition,
+        recursive_edge=recursive_edge,
+        ordered_contribution=ordered_contribution,
+    )
+
+
+def compose_scope(
+    scope_model, operation, trustee=None, names=None,
+    condition=None, recursive_edge=None, ordered_contribution=None,
+):
+    """Freeze the Trustee map and return a scope-origin ``AuthorizationPath``."""
+    return AuthorizationPath.compose_scope(
+        scope_model,
+        operation,
         trustee=trustee,
         names=names,
         condition=condition,
@@ -534,6 +678,7 @@ __all__ = [
     'OrderedContribution',
     'RecursiveEdge',
     'compose',
+    'compose_scope',
     'empty_grant_q',
     'filter_granted',
     'row_is_granted',

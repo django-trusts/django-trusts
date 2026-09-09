@@ -25,6 +25,7 @@ from trusts.checks import (
 )
 from trusts.context import (
     KIND_DIRECT,
+    KIND_IDENTITY,
     KIND_RELATED,
     Context,
     ContextAdapter,
@@ -74,6 +75,7 @@ class ContextReusableLayerTest(TestCase):
         self.assertIs(Imported, Context)
         self.assertIs(PublicJunction, Junction)
         self.assertTrue(issubclass(TestGroupJunction, Junction))
+        self.assertEqual(Context.KIND_IDENTITY, KIND_IDENTITY)
 
 
 class ContextRegistryContractTest(TestCase):

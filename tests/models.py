@@ -4,6 +4,7 @@ from django.contrib.auth.models import Group, User
 
 from trusts.conditions import condition_refs
 from trusts.context import Context
+from trusts.query import AuthorizedManager
 from trusts.zero.models import Content, Junction
 from trusts.trustee import Trustee, TrusteeMixin
 
@@ -457,3 +458,164 @@ def sync_test_team_trustee_adapter():
 
 
 Trustee.add_finalizer(sync_test_team_trustee_adapter)
+
+
+class S1Account(models.Model):
+    """S1 requester. No Django auth flags (attribute protocol ignores missing)."""
+
+    name = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.name
+
+
+class S1Organization(models.Model):
+    """S1 alignment terminal. Not a requester."""
+
+    name = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.name
+
+
+class S1Team(models.Model):
+    """S1 collective. ``organization`` is nullable so NULL alignment can deny."""
+
+    organization = models.ForeignKey(
+        S1Organization, related_name='teams', null=True, blank=True,
+        on_delete=models.CASCADE,
+    )
+    name = models.CharField(max_length=40, null=False, blank=False)
+    members = models.ManyToManyField(
+        S1Account, related_name='teams', blank=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class S1Operation(models.Model):
+    """S1 operation with unique ``code`` for ``operation_lookup``."""
+
+    code = models.CharField(max_length=40, null=False, blank=False, unique=True)
+
+    def __str__(self):
+        return self.code
+
+
+class S1Bundle(models.Model):
+    """Operation ceiling. Constraints never create a grant."""
+
+    team = models.ForeignKey(
+        S1Team, related_name='bundles', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    name = models.CharField(max_length=40, null=False, blank=False)
+    operations = models.ManyToManyField(
+        S1Operation, related_name='bundles', blank=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class S1Repository(models.Model):
+    """Identity resource and Trustee scope. ``organization`` may be NULL."""
+
+    organization = models.ForeignKey(
+        S1Organization, related_name='repositories', null=True, blank=True,
+        on_delete=models.CASCADE,
+    )
+    title = models.CharField(max_length=40, null=False, blank=False)
+
+    objects = AuthorizedManager()
+
+    def __str__(self):
+        return self.title
+
+
+class S1Issue(models.Model):
+    """Related Context resource through an identity-registered repository."""
+
+    repository = models.ForeignKey(
+        S1Repository, related_name='issues', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    title = models.CharField(max_length=40, null=False, blank=False)
+
+    def __str__(self):
+        return self.title
+
+
+class S1TeamGrant(models.Model):
+    """Team → repository grant. Alignment compares team and repository orgs."""
+
+    team = models.ForeignKey(
+        S1Team, related_name='repo_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    repository = models.ForeignKey(
+        S1Repository, related_name='team_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    operation = models.ForeignKey(
+        S1Operation, related_name='team_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    class Meta:
+        unique_together = ('team', 'repository', 'operation')
+
+
+class S1DirectGrant(models.Model):
+    """Direct account → repository grant. No alignment_paths."""
+
+    account = models.ForeignKey(
+        S1Account, related_name='repo_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    repository = models.ForeignKey(
+        S1Repository, related_name='direct_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    operation = models.ForeignKey(
+        S1Operation, related_name='direct_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    class Meta:
+        unique_together = ('account', 'repository', 'operation')
+
+
+class S1TrapGrant(models.Model):
+    """Grant whose Python getters must never run during S1 resolution."""
+
+    team = models.ForeignKey(
+        S1Team, related_name='trap_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    repository = models.ForeignKey(
+        S1Repository, related_name='trap_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    operation = models.ForeignKey(
+        S1Operation, related_name='trap_grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+
+    @property
+    def forbidden(self):
+        raise AssertionError('S1 kernel must not execute properties')
+
+    def get_team(self):
+        raise AssertionError('S1 kernel must not execute getters')
+
+
+class S1UnregisteredNote(models.Model):
+    """Must stay unregistered so missing compose fails closed."""
+
+    repository = models.ForeignKey(
+        S1Repository, related_name='notes', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    text = models.CharField(max_length=80, null=False, blank=False, default='')

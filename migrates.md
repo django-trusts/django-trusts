@@ -1946,3 +1946,140 @@ Already-applied 0001+0002: `migrate --plan` for `trusts` is empty.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #43 from this PR.
 
+# Issue #47 S1: runtime, queryset, identity, alignment (1.0.0.dev0)
+
+This record covers the first kernel execution slice. Version remains
+**1.0.0.dev0**. This PR does **not** close
+[#47](https://github.com/django-trusts/django-trusts/issues/47); review
+owns that. It implements accepted **framework-execution-r1+r2+r3**
+kernel S1 only. It does **not** modify `django-trusts-zero`, start
+gh-permissions#1, resume #17, or implement S2 backend / S3 decorators /
+S4 UI.
+
+## Decision
+
+```text
+trusts.context: register_direct / register_related / register_identity
+trusts.trustee: configure(..., operation_lookup=) / register(..., alignment_paths=)
+trusts.path: compose / compose_scope
+trusts.runtime:
+  AuthorizationDenied, AuthorizationConfigError
+  is_authorized / require_authorized / filter_authorized / authorized_q
+  is_scope_authorized / require_scope_authorized / filter_authorized_scope / authorized_scope_q
+  (no configure_runtime, no all_authorized, no public scope_from_row)
+trusts.query: AuthorizedQuerySet.authorized / AuthorizedManager
+```
+
+The queryset class name is **`AuthorizedQuerySet`** (not
+`AuthorizationQuerySet`). That is the r1/r2 name: `authorized` is the
+neutral verb, and Zero keeps `permitted` with its Django-permission
+argument order.
+
+Object decisions and authorized querysets compile from the same frozen
+`AuthorizationPath.grant_q`. String operations compile as
+`operation_path__lookup` inside that `Exists` when
+`Trustee.operation_lookup` is set. There is no preliminary
+`Operation.objects.get()`.
+
+`alignment_paths` are grant-row equalities, AND-ed into that adapter's
+`Exists` with `F()` and non-NULL on both sides. They are not
+`constraint_paths` (those still terminate at the operation model).
+NULL or mismatched identities deny at read time.
+
+## No change to these public call sites
+
+- `Context.register_direct` / `register_related`
+- `Trustee.register` without `alignment_paths` (default `()`)
+- `Trustee.configure` without `operation_lookup` (default unset)
+- `AuthorizationPath.compose` / `filter_granted` / `row_is_granted`
+- Zero `ContentQuerySet.permitted`, `TrustModelBackend`, decorators,
+  admin, views, historical migrations, app label `trusts`
+
+## Changes
+
+### 39. `Context.register_identity` (new)
+
+| | |
+| --- | --- |
+| Previous | Resource→scope required `register_direct` (a real field) or `register_related`. |
+| New | `register_identity(model)` registers a resource that *is* its policy scope. Kind `identity`. Compiled `scope_path` is the empty string. |
+| Replacement | Use identity when the row is the scope (for example a repository that is also the grant scope). Do not fake a field on `register_direct`. |
+| Affected | New kernel consumers. Zero still uses `register_direct` / `register_related`. |
+| Authorization | Identity `compose(Model, op)` uses grant `scope_path` → row `pk`. Same predicate as list/`exists`. |
+
+### 40. Trustee `operation_lookup` (new, optional)
+
+| | |
+| --- | --- |
+| Previous | `grant_q` required an operation-model *instance*. |
+| New | `Trustee.configure(..., operation_lookup='code')` (unique scalar on `operation_model`). Strings compile as `{operation_path__lookup: value}` inside the same `Exists`. Unknown codes deny (match nothing). Missing lookup + string is `AuthorizationConfigError` on direct APIs. |
+| Replacement | Prefer instances, or configure a unique lookup. Zero does not have to use this (`auth.Permission.codename` is not unique alone). |
+| Affected | New kernel consumers that want `'read'`-style operations. |
+| Authorization | One SQL statement for supported object/list decisions. No preliminary `get()`. |
+
+### 41. Trustee `alignment_paths` (new, optional)
+
+| | |
+| --- | --- |
+| Previous | Extra grant constraints had to be operation-terminal `constraint_paths` or write-time integrity. |
+| New | `register(..., alignment_paths=(('team__organization', 'repository__organization'),))`. Each pair is grant-origin, single-valued, compatible FK or scalar identity. AND-ed with `F()` + `__isnull=False`. Default `()`. Copied onto `AuthorizationBranch`. `equivalent` / `revalidate` / `trusts.E007` include it. |
+| Replacement | Do **not** overload `constraint_paths`. Those still walk grant → operation model. |
+| Affected | Any consumer that must refuse malformed/cross-terminal grant rows at read time. |
+| Authorization | Cross-org or NULL-org grant rows deny even when membership, operation, and bundle ceiling hold. Adapters still OR only as complete paths. Read-time alignment is the security boundary. |
+
+### 42. `AuthorizationPath.compose_scope` (new)
+
+| | |
+| --- | --- |
+| Previous | `compose()` always required a Context resource hop. Scope-is-row was an empty-string back-channel. |
+| New | `compose_scope(scope_model, operation, ...)` when the queryset/row *is* `Trustee.scope_model()`. No Context adapter. No public `scope_from_row`. |
+| Replacement | Resource listings: `compose` / `filter_authorized`. Scope listings: `compose_scope` / `filter_authorized_scope`. |
+| Affected | Create-under-scope listings. Zero `trust_grant_q` can wrap `authorized_scope_q` later. |
+| Authorization | Same grant `Exists` as resource-origin, including `alignment_paths`. |
+
+### 43. `trusts.runtime` and `trusts.query` (new)
+
+| | |
+| --- | --- |
+| Previous | Consumers wrote their own exists/list helpers on top of `compose`. |
+| New | `is_authorized` / `require_authorized` / `filter_authorized` / `authorized_q` and scope-origin siblings. `AuthorizedQuerySet.authorized` / `AuthorizedManager`. |
+| Replacement | Call these instead of copying `grant_q`. Isolated tests pass `context=` / `trustee=`. |
+| Affected | New kernel consumers. Zero wrappers are a later follow-up. |
+| Authorization | Unusable principal / unknown operation *data* deny. Unregistered resource, no adapters, raw PK, wrong concrete model, mixed/stale terminals, reserved slot, incomplete `operation_lookup` raise `AuthorizationConfigError`. `require_*` raises `AuthorizationDenied` only for ordinary denials. Equivalence: `is_authorized(p, op, obj)` == `exists()` of the same `Q` as `filter_authorized`. One query each. |
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m tests.runtests
+```
+
+No Trusts schema migration. Test-only `trusts_tests.0007_s1_kernel` adds
+isolated S1 models.
+
+## Upgrade of a representative legacy database
+
+Unchanged. `scripts/verify-legacy-upgrade.py` still expects
+`{0001_initial, 0002_trustgroup}` on label `trusts`.
+
+## Out of scope (unchanged)
+
+- S2 `ObjectAuthorizationBackend` / S3 decorators / S4 admin/CBV/templates
+- Generic `register_row_condition`
+- `RecursiveEdge` / `OrderedContribution`
+- django-trusts-zero wrappers or pin bump
+- gh-permissions#1
+- Closing #17 or #47
+
+## Migration-bot summary (issue #47 S1)
+
+- [ ] Register identity resources with `Context.register_identity`.
+- [ ] Configure `Trustee.operation_lookup` if you pass operation strings.
+- [ ] Declare org/identity equalities as `alignment_paths`, not `constraint_paths`.
+- [ ] Use `compose_scope` / `filter_authorized_scope` when the row is the scope.
+- [ ] Catch `AuthorizationConfigError` only at security boundaries.
+- [ ] Attach `AuthorizedManager` (class name `AuthorizedQuerySet`) if you want `.authorized()`.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_s1_kernel`).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #47 from this PR.
+

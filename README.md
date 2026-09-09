@@ -50,8 +50,8 @@ AUTHENTICATION_BACKENDS = (
 ```
 
 Import concrete models from ``trusts.zero.models``. Kernel APIs stay
-``trusts.context``, ``trusts.trustee``, and ``trusts.path``. This
-package does not ship ``trusts/zero``.
+``trusts.context``, ``trusts.trustee``, ``trusts.path``, ``trusts.runtime``,
+and ``trusts.query``. This package does not ship ``trusts/zero``.
 
 API and compatibility notes for this modernization are in [migrates.md](migrates.md).
 
