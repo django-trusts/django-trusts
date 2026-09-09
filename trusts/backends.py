@@ -4,9 +4,17 @@ from django.contrib.auth.models import Permission
 
 from trusts.models import (
     GROUP_TRUSTEE, Trust, Content, legacy_permission_callbacks_allowed,
-    prepare_context_registry, prepare_trustee_registry,
+    prepare_trustee_registry, resolve_content_permission,
 )
-from trusts.query import enabled_trustee_adapter_names
+from trusts.query import (
+    compose_zero_path,
+    enabled_trustee_adapter_names,
+    is_active_principal,
+    queryset_is_zero_granted,
+    require_configured_requester,
+    row_is_zero_granted,
+    scope_pks_from_resource,
+)
 from trusts.trustee import Trustee
 from trusts.conditions import PermissionConditionError, evaluate_registered_expression
 from trusts import (
@@ -25,28 +33,30 @@ class TrustModelBackendMixin(object):
         )
 
     @staticmethod
-    def _get_trusts(obj):
-        if not Content.is_content(obj):
-            return []
-
-        prepare_context_registry()
-        prepare_trustee_registry()
-        trusts = Trust.objects.filter_by_content(obj)
-        if trusts is None:
-            return []
-
-        if not hasattr(trusts, '__iter__'):
-            trusts = [trusts]
-
-        return trusts
-
-    @staticmethod
     def _get_class(obj):
         if isinstance(obj, QuerySet):
             klass = obj.model
         else:
             klass = obj.__class__
         return klass
+
+    def _scopes_for_content(self, obj):
+        """Trust rows reached by the composed resource→scope hop.
+
+        Zero public-content gate stays ``Content.is_content`` so Junction
+        table rows do not enter ``User.has_perm``. Scope identity comes
+        from ``AuthorizationPath.resource_to_scope``, not a Trust-origin
+        reverse lookup.
+        """
+        if not Content.is_content(obj):
+            return Trust.objects.none()
+        path = compose_zero_path(self._get_class(obj), None)
+        if path is None:
+            return Trust.objects.none()
+        pks = scope_pks_from_resource(obj, path)
+        if not pks:
+            return Trust.objects.none()
+        return Trust.objects.filter(pk__in=pks)
 
     def get_group_permissions(self, user_obj, obj=None):
         """
@@ -60,9 +70,11 @@ class TrustModelBackendMixin(object):
         if not _group_permission_queries_allowed():
             return set()
 
+        require_configured_requester(user_obj)
+
         if Content.is_content(obj):
-            trusts = self._get_trusts(obj)
-            if not trusts:
+            trusts = self._scopes_for_content(obj)
+            if not trusts.exists():
                 return Permission.objects.none()
             prepare_trustee_registry()
             return Permission.objects.filter(
@@ -78,19 +90,24 @@ class TrustModelBackendMixin(object):
         if not supported_entity_contract() or not supported_permission_contract():
             return []
 
+        require_configured_requester(user_obj)
+
         if not hasattr(user_obj, '_trust_perm_cache'):
             setattr(user_obj, '_trust_perm_cache', dict())
         perm_cache = getattr(user_obj, '_trust_perm_cache')
 
-        trusts = self._get_trusts(obj)
+        trusts = list(self._scopes_for_content(obj))
         if len(trusts):
             all_perms = []
+            names = enabled_trustee_adapter_names()
             for trust in trusts:
                 if trust.pk not in perm_cache.keys():
-                    grant_q = _trust_permission_grant_q(user_obj, trust)
-                    if grant_q is None:
+                    if not names:
                         trust_perm = set()
                     else:
+                        grant_q = Trustee.operation_grant_q(
+                            user_obj, trust, names=names,
+                        )
                         trust_perm = set([self._get_perm_code(p) for p in
                             Permission.objects.filter(grant_q)
                         ])
@@ -131,6 +148,20 @@ class TrustModelBackendMixin(object):
             )
         return all([record.func(user_obj, perm, o) for o in objs])
 
+    def _object_perm_granted(self, user_obj, perm, obj):
+        """Object-level grant via compose, not ``get_all_permissions``."""
+        if not supported_entity_contract() or not supported_permission_contract():
+            return False
+        if not is_active_principal(user_obj):
+            return False
+        if not Content.is_content(obj):
+            return False
+        klass = self._get_class(obj)
+        permission = resolve_content_permission(klass, perm)
+        if isinstance(obj, QuerySet):
+            return queryset_is_zero_granted(obj, user_obj, permission)
+        return row_is_zero_granted(obj, user_obj, permission)
+
     def has_perm(self, user_obj, permext, obj=None):
         applabel, modelname, action, cond = utils.parse_perm_code(permext)
         record = None
@@ -140,7 +171,17 @@ class TrustModelBackendMixin(object):
                 raise AttributeError('Permission condition code "%s" is not associate with model "%s_%s"' % (cond, applabel, modelname))
 
         perm = '%s.%s_%s' % (applabel, action, modelname)
-        positive = super(TrustModelBackendMixin, self).has_perm(user_obj=user_obj, perm=perm, obj=obj)
+        if obj is None or getattr(user_obj, 'is_anonymous', False):
+            positive = super(TrustModelBackendMixin, self).has_perm(
+                user_obj=user_obj, perm=perm, obj=obj,
+            )
+        elif getattr(user_obj, 'is_active', False) and getattr(
+            user_obj, 'is_superuser', False,
+        ):
+            positive = True
+        else:
+            require_configured_requester(user_obj)
+            positive = self._object_perm_granted(user_obj, perm, obj)
         if positive:
             if len(cond) == 0:
                 return True
@@ -156,14 +197,6 @@ def _group_permission_queries_allowed():
         and supported_group_contract()
         and supported_permission_contract()
     )
-
-
-def _trust_permission_grant_q(user_obj, trust):
-    prepare_trustee_registry()
-    names = enabled_trustee_adapter_names()
-    if not names:
-        return None
-    return Trustee.operation_grant_q(user_obj, trust, names=names)
 
 
 class TrustModelBackend(TrustModelBackendMixin, ModelBackend):

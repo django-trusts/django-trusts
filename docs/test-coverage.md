@@ -20,11 +20,14 @@ installable `trusts/` package:
 - `tests/core/test_gh_vocab.py` — issue #43 GH-shaped private proof
   (`Account` / `Organization` / `Team` / `PermissionBundle` / `Policy` /
   `Repository`; `account.teams` membership vs organization containment)
+- `tests/core/test_zero_path.py` — issue #43 Step 2 Zero consumer of compose
+  (`ContentQuerySet.permitted` / `TrustModelBackend`; same-PK fail-closed)
 - `tests/regressions/test_issue_*.py` — historical issue regressions
 - `python -m tests.runtests` — discovers the core and regression modules
   by explicit labels (`tests.core.test_core`, `tests.core.test_context`,
   `tests.core.test_trustee`, `tests.core.test_path`,
-  `tests.core.test_gh_vocab`, `tests.core.test_wheel_install`,
+  `tests.core.test_gh_vocab`, `tests.core.test_zero_path`,
+  `tests.core.test_wheel_install`,
   `tests.regressions.test_issue_*`)
 - `python -m tests.runtests_custom` — isolated custom-user suite
   (`tests.custom_content`)
