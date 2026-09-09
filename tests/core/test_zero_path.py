@@ -270,9 +270,8 @@ class ZeroComposeConsumerTest(ContentModelMixin, TestCase):
         self.assertFalse(Content.is_content(unregistered))
         self.assertFalse(Context.is_registered(Organization))
         self.assertFalse(backend.has_perm(superuser, perm, unregistered))
-        self.assertFalse(
-            backend.has_perm(superuser, 'tests.nosuch_category', self.content)
-        )
+        unknown = '%s.nosuch_%s' % (self.app_label, self.model_name)
+        self.assertFalse(backend.has_perm(superuser, unknown, self.content))
 
 
 class ZeroSamePkFailClosedTest(ContentModelMixin, TransactionTestCase):

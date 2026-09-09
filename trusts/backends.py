@@ -159,6 +159,7 @@ class TrustModelBackendMixin(object):
 
     def _object_perm_granted(self, user_obj, perm, obj):
         """Object-level grant via compose, not ``get_all_permissions``."""
+        from django.contrib.contenttypes.models import ContentType
         from django.core.exceptions import ValidationError
         from trusts.context import Context
         from trusts.path import AuthorizationPathError
@@ -177,7 +178,7 @@ class TrustModelBackendMixin(object):
             return False
         try:
             permission = resolve_content_permission(klass, perm)
-        except (Permission.DoesNotExist, ValidationError, ValueError):
+        except (Permission.DoesNotExist, ContentType.DoesNotExist, ValidationError, ValueError):
             return False
         try:
             if isinstance(obj, QuerySet):
