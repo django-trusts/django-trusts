@@ -25,6 +25,7 @@ from trusts.models import (
     prepare_trustee_registry,
 )
 from trusts.path import (
+    AuthorizationBranch,
     AuthorizationPathError,
     compose,
     filter_granted,
@@ -160,10 +161,13 @@ class GhVocabNamingTest(TestCase):
         self.assertNotIn(DIRECT_TRUSTEE, path.adapter_names)
         self.assertNotIn(GROUP_TRUSTEE, path.adapter_names)
         self.assertNotEqual(path.operation_model._meta.label, 'auth.Permission')
-        self.assertIs(path.subject_model, Team)
-        self.assertEqual(path.membership_path, 'members')
+        self.assertEqual(len(path.branches), 1)
+        branch = path.branches[0]
+        self.assertIsInstance(branch, AuthorizationBranch)
+        self.assertIs(branch.subject_model, Team)
+        self.assertEqual(branch.membership_path, 'members')
         self.assertEqual(
-            path.constraint_paths,
+            branch.constraint_paths,
             ('team__permission_bundles__operations',),
         )
         prepare_trustee_registry()
@@ -219,16 +223,19 @@ class GhVocabProofTest(TransactionTestCase):
         self.assertEqual(self.path.resource_to_scope, 'policy')
         self.assertIs(self.path.scope_model, Policy)
         self.assertIs(self.path.requester_model, Account)
-        self.assertEqual(self.path.requester_from_grant, 'team__members')
-        self.assertIs(self.path.subject_model, Team)
-        self.assertEqual(self.path.subject_from_grant, 'team')
-        self.assertEqual(self.path.membership_path, 'members')
-        self.assertIs(self.path.grant_model, TeamPolicyGrant)
-        self.assertEqual(self.path.grant_to_scope, 'policy')
-        self.assertEqual(self.path.grant_to_operation, 'operation')
+        self.assertEqual(len(self.path.branches), 1)
+        branch = self.path.branches[0]
+        self.assertIsInstance(branch, AuthorizationBranch)
+        self.assertEqual(branch.requester_from_grant, 'team__members')
+        self.assertIs(branch.subject_model, Team)
+        self.assertEqual(branch.subject_from_grant, 'team')
+        self.assertEqual(branch.membership_path, 'members')
+        self.assertIs(branch.grant_model, TeamPolicyGrant)
+        self.assertEqual(branch.grant_to_scope, 'policy')
+        self.assertEqual(branch.grant_to_operation, 'operation')
         self.assertIs(self.path.operation_model, Operation)
         self.assertEqual(
-            self.path.constraint_paths,
+            branch.constraint_paths,
             ('team__permission_bundles__operations',),
         )
 

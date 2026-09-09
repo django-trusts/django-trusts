@@ -1513,8 +1513,8 @@ Zero policy registration (`direct` / `group`, Role-as-ceiling).
 | | |
 | --- | --- |
 | Previous | The Context / Trustee join was implicit: `Trustee.grant_q(..., scope_from_row=Context.scope_path(model))` inside Zero list/`has_perm` helpers. |
-| New | Named IR `AuthorizationPath` with `compose` / `row_is_granted` / `filter_granted`. Shared terminals are scalars. Adapter-specific fields are a scalar when one grant adapter is enabled and a tuple when several OR-compose. Unregistered resources, empty grant sets, and mismatched scope/operation terminals fail closed (`AuthorizationPathError`). `RecursiveEdge` / `OrderedContribution` / resource-row `condition=` are reserved and reject construction/use. |
-| Replacement | New kernel callers use `from trusts.path import compose, row_is_granted, filter_granted`. Existing `has_perm` / `.permitted()` keep working on the current Zero path. |
+| New | Named IR `AuthorizationPath` with `compose` / `row_is_granted` / `filter_granted`. Public construction is `compose` only; `AuthorizationPath(...)` is rejected. Shared terminals are scalars. Adapter-specific data is always `path.branches`: a non-empty tuple of immutable `AuthorizationBranch` records (`constraint_paths` on each branch is `tuple[str]`), the same shape for one adapter or many. Unregistered resources, empty grant sets, and mismatched scope/operation terminals fail closed (`AuthorizationPathError`). Evaluation requires requester and operation *instances* of the composed terminals; raw primary keys are rejected so Django cannot normalize a colliding PK. `RecursiveEdge` / `OrderedContribution` / resource-row `condition=` are reserved: `compose` rejects them, and an instance that carries a non-empty reserved slot cannot evaluate. |
+| Replacement | New kernel callers use `from trusts.path import compose, row_is_granted, filter_granted`. Read adapter-specific fields from `path.branches[i]`, not from scalar/tuple path attributes. Existing `has_perm` / `.permitted()` keep working on the current Zero path. |
 | Affected | New registrations and the private GH proof. Current Content / Trust / Group callers are unchanged. |
 | Authorization | Same allow/deny for current User and Group paths. GH `Account` / `Team` graphs use kernel APIs. No schema change. |
 
@@ -1522,9 +1522,14 @@ Migration-bot checklist:
 
 - [ ] Prefer `compose` / `row_is_granted` / `filter_granted` for new
       noun-independent callers. Pass isolated registries in tests.
+- [ ] Traverse `path.branches` (always a tuple of `AuthorizationBranch`).
+      Do not expect `grant_model` / `constraint_paths` on the path
+      object itself.
+- [ ] Pass requester and operation model instances, not raw PKs.
 - [ ] Keep using `User.has_perm` / `.permitted()` for current Content.
 - [ ] Do not treat `RecursiveEdge` / `OrderedContribution` /
-      `condition=` as implemented.
+      `condition=` as implemented. Do not construct `AuthorizationPath`
+      directly.
 - [ ] Do not relocate models, migrations, commands, or the backend to
       `django-trusts-zero` in this slice.
 - [ ] Do not add a Trusts schema migration. Do not edit `0001_initial`

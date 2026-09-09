@@ -96,7 +96,7 @@ def main() -> int:
     from trusts.models import Trust, Junction
     from trusts.context import Context
     from trusts.trustee import Trustee
-    from trusts.path import AuthorizationPath, compose
+    from trusts.path import AuthorizationPath, AuthorizationBranch, compose
     from trusts.backends import TrustModelBackend
     from django_trusts import TQ, condition_refs
 
@@ -118,6 +118,7 @@ def main() -> int:
     print('Context', Context)
     print('Trustee', Trustee)
     print('AuthorizationPath', AuthorizationPath)
+    print('AuthorizationBranch', AuthorizationBranch)
     print('compose', compose)
     print('TrustModelBackend', TrustModelBackend)
     print('TQ', TQ)

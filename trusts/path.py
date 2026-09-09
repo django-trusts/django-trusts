@@ -23,8 +23,15 @@ Kernel positions are requester / subject / resource / scope / grant /
 operation. This module must not name a concrete authorization product's
 resource, scope, principal, collective, bundle, or grant tables.
 
+Public construction is ``compose`` only. Direct ``AuthorizationPath(...)``
+is rejected. Adapter-specific data is always a tuple of immutable
+``AuthorizationBranch`` records. Evaluation requires requester and
+operation *instances* whose concrete model matches the composed
+terminals; raw primary keys are not accepted.
+
 Recursive and ordered remaining-bits helpers are reserved slots only.
-They are not compiled in this slice.
+They are not compiled in this slice. An instance that carries a
+non-empty reserved slot cannot evaluate.
 """
 
 from django.db.models import Q
@@ -130,107 +137,233 @@ def _same_model(left, right):
     return _model_key(left) is _model_key(right)
 
 
-def _scalar_or_tuple(values):
-    if len(values) == 1:
-        return values[0]
-    return values
+def _reject_reserved(condition, recursive_edge, ordered_contribution):
+    if condition is not None:
+        raise AuthorizationPathError(
+            'Resource-row conditions are reserved; this slice compiles '
+            'the grant join only.'
+        )
+    if recursive_edge is not None:
+        raise AuthorizationPathError(
+            'RecursiveEdge is reserved; bounded recursive traversal '
+            'is not implemented.'
+        )
+    if ordered_contribution is not None:
+        raise AuthorizationPathError(
+            'OrderedContribution is reserved; ordered remaining-bits '
+            'combination is not implemented.'
+        )
+
+
+def _require_instance(value, expected_model, what):
+    """Require a model *instance* of ``expected_model``. Raw PKs are rejected."""
+    if isinstance(value, type):
+        raise AuthorizationPathError(
+            '%s must be a %s instance, not a model class.' % (
+                what, _model_label(expected_model),
+            )
+        )
+    meta = getattr(value, '_meta', None)
+    if meta is None:
+        raise AuthorizationPathError(
+            '%s must be a %s instance, not %r. Raw primary keys are '
+            'not accepted.' % (what, _model_label(expected_model), value)
+        )
+    if not _same_model(value, expected_model):
+        raise AuthorizationPathError(
+            '%s is %s, which is not the configured %s %s.' % (
+                what, _model_label(value.__class__),
+                what, _model_label(expected_model),
+            )
+        )
+    return value
+
+
+def _branch_from_adapter(adapter):
+    return AuthorizationBranch(
+        name=adapter.name,
+        subject_model=adapter.trustee_model,
+        subject_from_grant=adapter.trustee_path,
+        membership_path=adapter.membership_path,
+        requester_from_grant=adapter.requester_from_grant_path(),
+        grant_model=adapter.grant_model,
+        grant_to_scope=adapter.scope_path,
+        grant_to_operation=adapter.operation_path,
+        constraint_paths=adapter.constraint_paths,
+    )
+
+
+def _assert_adapter_terminals(context_adapter, adapters, operation_cls):
+    resource_model = context_adapter.model
+    resource_scope = context_adapter.scope_model()
+    for adapter in adapters:
+        grant_scope = adapter.scope_model()
+        if not _same_model(grant_scope, resource_scope):
+            raise AuthorizationPathError(
+                'Resource %s resolves to scope %s, which does not match '
+                'grant adapter %r scope %s.' % (
+                    _model_label(resource_model),
+                    _model_label(resource_scope),
+                    adapter.name,
+                    _model_label(grant_scope),
+                )
+            )
+        grant_operation = adapter.operation_model()
+        if operation_cls is not None and not _same_model(
+            operation_cls, grant_operation,
+        ):
+            raise AuthorizationPathError(
+                'Operation %s does not match grant adapter %r '
+                'operation %s.' % (
+                    _model_label(operation_cls),
+                    adapter.name,
+                    _model_label(grant_operation),
+                )
+            )
+        if not _same_model(adapter.scope_model(), adapters[0].scope_model()):
+            raise AuthorizationPathError(
+                'Grant adapters mix scope terminals; refusing to compose.'
+            )
+        if not _same_model(
+            adapter.operation_model(), adapters[0].operation_model(),
+        ):
+            raise AuthorizationPathError(
+                'Grant adapters mix operation terminals; refusing to compose.'
+            )
+
+
+class AuthorizationBranch(object):
+    """Immutable per-adapter grant record on a composed path.
+
+    ``constraint_paths`` is always a tuple of strings. One composed path
+    always exposes a tuple of these records, including when there is
+    only one grant adapter.
+    """
+
+    __slots__ = (
+        'name',
+        'subject_model',
+        'subject_from_grant',
+        'membership_path',
+        'requester_from_grant',
+        'grant_model',
+        'grant_to_scope',
+        'grant_to_operation',
+        'constraint_paths',
+    )
+
+    def __init__(
+        self, name, subject_model, subject_from_grant, membership_path,
+        requester_from_grant, grant_model, grant_to_scope,
+        grant_to_operation, constraint_paths,
+    ):
+        object.__setattr__(self, 'name', name)
+        object.__setattr__(self, 'subject_model', subject_model)
+        object.__setattr__(self, 'subject_from_grant', subject_from_grant)
+        object.__setattr__(self, 'membership_path', membership_path)
+        object.__setattr__(self, 'requester_from_grant', requester_from_grant)
+        object.__setattr__(self, 'grant_model', grant_model)
+        object.__setattr__(self, 'grant_to_scope', grant_to_scope)
+        object.__setattr__(self, 'grant_to_operation', grant_to_operation)
+        object.__setattr__(self, 'constraint_paths', tuple(constraint_paths))
+
+    def __setattr__(self, name, value):
+        raise AttributeError('AuthorizationBranch is immutable.')
+
+    def __repr__(self):
+        return 'AuthorizationBranch(%r, %s)' % (
+            self.name, _model_label(self.grant_model),
+        )
 
 
 class AuthorizationPath(object):
     """Frozen join of one Context resource adapter and enabled grant adapters.
 
-    Shared terminals (requester, resource, scope, operation) are always
-    scalars. Adapter-specific fields (subject, grant, membership,
-    constraint paths) are a scalar when exactly one grant adapter is
-    enabled and a tuple when several adapters OR-compose.
+    Shared terminals (requester, resource, scope, operation) are scalars.
+    Adapter-specific data is ``branches``: a non-empty tuple of immutable
+    ``AuthorizationBranch`` records, the same shape for one adapter or many.
+
+    Construct only with ``compose``. Evaluation refuses reserved slots,
+    raw primary keys, and requester/operation instances whose concrete
+    model is not the composed terminal.
     """
 
     __slots__ = (
         'requester_model',
-        'requester_from_grant',
-        'subject_model',
-        'subject_from_grant',
-        'membership_path',
         'resource_model',
         'resource_to_scope',
         'scope_model',
-        'grant_model',
-        'grant_to_scope',
-        'grant_to_operation',
         'operation_model',
-        'constraint_paths',
-        'condition',
-        'recursive_edge',
-        'ordered_contribution',
+        '_branches',
+        '_condition',
+        '_recursive_edge',
+        '_ordered_contribution',
         '_context_adapter',
         '_trustee_adapters',
         '_context_registry',
         '_trustee_registry',
     )
 
-    def __init__(
-        self,
-        context_adapter,
-        trustee_adapters,
-        context_registry,
-        trustee_registry,
-        condition=None,
-        recursive_edge=None,
-        ordered_contribution=None,
-    ):
-        trustee_adapters = tuple(trustee_adapters)
-        if not trustee_adapters:
-            raise AuthorizationPathError(
-                'No grant adapters are enabled for this authorization path.'
-            )
-        self._context_adapter = context_adapter
-        self._trustee_adapters = trustee_adapters
-        self._context_registry = context_registry
-        self._trustee_registry = trustee_registry
-        self.condition = condition
-        self.recursive_edge = recursive_edge
-        self.ordered_contribution = ordered_contribution
+    def __init__(self, *args, **kwargs):
+        raise AuthorizationPathError(
+            'AuthorizationPath must be constructed with compose(); '
+            'direct construction is not part of the public contract.'
+        )
 
-        self.resource_model = context_adapter.model
-        self.resource_to_scope = context_adapter.scope_path()
-        self.scope_model = context_adapter.scope_model()
-        self.requester_model = trustee_registry.requester_model()
-        self.operation_model = trustee_adapters[0].operation_model()
-
-        self.requester_from_grant = _scalar_or_tuple(tuple(
-            adapter.requester_from_grant_path() for adapter in trustee_adapters
-        ))
-        self.subject_model = _scalar_or_tuple(tuple(
-            adapter.trustee_model for adapter in trustee_adapters
-        ))
-        self.subject_from_grant = _scalar_or_tuple(tuple(
-            adapter.trustee_path for adapter in trustee_adapters
-        ))
-        self.membership_path = _scalar_or_tuple(tuple(
-            adapter.membership_path for adapter in trustee_adapters
-        ))
-        self.grant_model = _scalar_or_tuple(tuple(
-            adapter.grant_model for adapter in trustee_adapters
-        ))
-        self.grant_to_scope = _scalar_or_tuple(tuple(
-            adapter.scope_path for adapter in trustee_adapters
-        ))
-        self.grant_to_operation = _scalar_or_tuple(tuple(
-            adapter.operation_path for adapter in trustee_adapters
-        ))
-        self.constraint_paths = _scalar_or_tuple(tuple(
-            adapter.constraint_paths for adapter in trustee_adapters
-        ))
+    def __setattr__(self, name, value):
+        raise AttributeError('AuthorizationPath is immutable.')
 
     def __repr__(self):
-        names = ', '.join(adapter.name for adapter in self._trustee_adapters)
+        names = ', '.join(branch.name for branch in self._branches)
         return 'AuthorizationPath(%s, [%s])' % (
             _model_label(self.resource_model), names,
         )
 
     @property
+    def branches(self):
+        return self._branches
+
+    @property
     def adapter_names(self):
-        return tuple(adapter.name for adapter in self._trustee_adapters)
+        return tuple(branch.name for branch in self._branches)
+
+    @property
+    def condition(self):
+        return self._condition
+
+    @property
+    def recursive_edge(self):
+        return self._recursive_edge
+
+    @property
+    def ordered_contribution(self):
+        return self._ordered_contribution
+
+    @classmethod
+    def _from_validated(
+        cls, context_adapter, trustee_adapters, context_registry,
+        trustee_registry,
+    ):
+        """Install a validated, frozen join. Reserved slots are always None."""
+        inst = object.__new__(cls)
+        object.__setattr__(inst, '_context_adapter', context_adapter)
+        object.__setattr__(inst, '_trustee_adapters', tuple(trustee_adapters))
+        object.__setattr__(inst, '_context_registry', context_registry)
+        object.__setattr__(inst, '_trustee_registry', trustee_registry)
+        object.__setattr__(inst, 'resource_model', context_adapter.model)
+        object.__setattr__(inst, 'resource_to_scope', context_adapter.scope_path())
+        object.__setattr__(inst, 'scope_model', context_adapter.scope_model())
+        object.__setattr__(inst, 'requester_model', trustee_registry.requester_model())
+        object.__setattr__(
+            inst, 'operation_model', trustee_adapters[0].operation_model(),
+        )
+        object.__setattr__(inst, '_branches', tuple(
+            _branch_from_adapter(adapter) for adapter in trustee_adapters
+        ))
+        object.__setattr__(inst, '_condition', None)
+        object.__setattr__(inst, '_recursive_edge', None)
+        object.__setattr__(inst, '_ordered_contribution', None)
+        return inst
 
     @classmethod
     def compose(
@@ -242,22 +375,9 @@ class AuthorizationPath(object):
 
         Fail closed when the resource is unregistered, no grant adapters
         are enabled, terminals mismatch, or a reserved slot is used.
+        Direct ``AuthorizationPath(...)`` construction is rejected.
         """
-        if condition is not None:
-            raise AuthorizationPathError(
-                'Resource-row conditions are reserved; this slice compiles '
-                'the grant join only.'
-            )
-        if recursive_edge is not None:
-            raise AuthorizationPathError(
-                'RecursiveEdge is reserved; bounded recursive traversal '
-                'is not implemented.'
-            )
-        if ordered_contribution is not None:
-            raise AuthorizationPathError(
-                'OrderedContribution is reserved; ordered remaining-bits '
-                'combination is not implemented.'
-            )
+        _reject_reserved(condition, recursive_edge, ordered_contribution)
 
         resource_model = _as_model(resource_model, 'resource_model')
         context_registry = _as_context_registry(context)
@@ -282,52 +402,32 @@ class AuthorizationPath(object):
                 )
             )
 
-        resource_scope = context_adapter.scope_model()
         operation_cls = None
         if operation is not None:
             operation_cls = _as_model(operation, 'operation')
 
-        for adapter in adapters:
-            grant_scope = adapter.scope_model()
-            if not _same_model(grant_scope, resource_scope):
-                raise AuthorizationPathError(
-                    'Resource %s resolves to scope %s, which does not match '
-                    'grant adapter %r scope %s.' % (
-                        _model_label(resource_model),
-                        _model_label(resource_scope),
-                        adapter.name,
-                        _model_label(grant_scope),
-                    )
-                )
-            grant_operation = adapter.operation_model()
-            if operation_cls is not None and not _same_model(
-                operation_cls, grant_operation,
-            ):
-                raise AuthorizationPathError(
-                    'Operation %s does not match grant adapter %r '
-                    'operation %s.' % (
-                        _model_label(operation_cls),
-                        adapter.name,
-                        _model_label(grant_operation),
-                    )
-                )
-            if not _same_model(adapter.scope_model(), adapters[0].scope_model()):
-                raise AuthorizationPathError(
-                    'Grant adapters mix scope terminals; refusing to compose.'
-                )
-            if not _same_model(
-                adapter.operation_model(), adapters[0].operation_model(),
-            ):
-                raise AuthorizationPathError(
-                    'Grant adapters mix operation terminals; refusing to compose.'
-                )
-
-        return cls(
+        _assert_adapter_terminals(context_adapter, adapters, operation_cls)
+        return cls._from_validated(
             context_adapter, adapters, context_registry, trustee_registry,
         )
 
+    def _assert_evaluable(self, requester, operation):
+        """Refuse reserved slots, raw PKs, and wrong concrete terminals."""
+        if (
+            self._condition is not None
+            or self._recursive_edge is not None
+            or self._ordered_contribution is not None
+        ):
+            raise AuthorizationPathError(
+                'This authorization path carries an unimplemented reserved '
+                'slot and cannot evaluate.'
+            )
+        _require_instance(requester, self.requester_model, 'requester')
+        _require_instance(operation, self.operation_model, 'operation')
+
     def grant_q(self, requester, operation):
         """Compiled grant predicate for this resource's scope path."""
+        self._assert_evaluable(requester, operation)
         return self._trustee_registry.grant_q(
             requester,
             operation,
@@ -337,6 +437,7 @@ class AuthorizationPath(object):
 
     def filter_granted(self, queryset, requester, operation):
         """SQL-filter ``queryset`` with the composed predicate (one query)."""
+        self._assert_evaluable(requester, operation)
         if not _same_model(queryset.model, self.resource_model):
             raise AuthorizationPathError(
                 'Queryset model %s is not this path resource %s.' % (
@@ -354,13 +455,8 @@ class AuthorizationPath(object):
 
     def row_is_granted(self, obj, requester, operation):
         """One-query exists check using the same predicate as ``filter_granted``."""
-        if not _same_model(obj, self.resource_model):
-            raise AuthorizationPathError(
-                'Object %s is not this path resource %s.' % (
-                    _model_label(obj.__class__),
-                    _model_label(self.resource_model),
-                )
-            )
+        self._assert_evaluable(requester, operation)
+        _require_instance(obj, self.resource_model, 'resource')
         return self._trustee_registry.row_is_granted(
             obj,
             requester,
@@ -392,7 +488,7 @@ def compose(
 
 def filter_granted(
     queryset, requester, operation, context=None, trustee=None, names=None,
-    condition=None,
+    condition=None, recursive_edge=None, ordered_contribution=None,
 ):
     """SQL-filter ``queryset`` through a composed ``AuthorizationPath``."""
     path = compose(
@@ -402,13 +498,15 @@ def filter_granted(
         trustee=trustee,
         names=names,
         condition=condition,
+        recursive_edge=recursive_edge,
+        ordered_contribution=ordered_contribution,
     )
     return path.filter_granted(queryset, requester, operation)
 
 
 def row_is_granted(
     obj, requester, operation, context=None, trustee=None, names=None,
-    condition=None,
+    condition=None, recursive_edge=None, ordered_contribution=None,
 ):
     """One-query exists check through a composed ``AuthorizationPath``."""
     path = compose(
@@ -418,6 +516,8 @@ def row_is_granted(
         trustee=trustee,
         names=names,
         condition=condition,
+        recursive_edge=recursive_edge,
+        ordered_contribution=ordered_contribution,
     )
     return path.row_is_granted(obj, requester, operation)
 
@@ -428,6 +528,7 @@ def empty_grant_q():
 
 
 __all__ = [
+    'AuthorizationBranch',
     'AuthorizationPath',
     'AuthorizationPathError',
     'OrderedContribution',

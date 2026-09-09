@@ -285,12 +285,16 @@ not require the concrete names ``Trust``, ``Content``, ``Junction``,
 
 .. admonition:: Verified — first AuthorizationPath slice (``#43`` Step 1)
 
-   ``compose`` freezes both maps and joins ``Context.scope_path`` with
-   the enabled Trustee grant adapters. Direct exists-checks and list
-   filters share that predicate and stay one SQL query each.
-   Unregistered resources, empty grant sets, and mismatched terminals
-   fail closed. Recursive traversal and ordered remaining-bits helpers
-   are reserved slots only.
+   ``compose`` is the only public constructor. It freezes both maps and
+   joins ``Context.scope_path`` with the enabled Trustee grant adapters.
+   Adapter-specific data is always ``path.branches``, a tuple of
+   immutable ``AuthorizationBranch`` records. Direct exists-checks and
+   list filters share that predicate and stay one SQL query each.
+   Unregistered resources, empty grant sets, mismatched terminals, raw
+   primary keys, and requester/operation instances of the wrong concrete
+   model fail closed. Recursive traversal and ordered remaining-bits
+   helpers are reserved slots only; an instance that carries one cannot
+   evaluate.
 
    .. code-block:: python
 
@@ -316,6 +320,7 @@ not require the concrete names ``Trust``, ``Content``, ``Junction``,
           constraint_paths=('team__permission_bundles__operations',),
       )
       path = compose(Repository, operation, context=context, trustee=trustee)
+      path.branches[0].membership_path  # always a tuple of AuthorizationBranch
       row_is_granted(repo, account, operation, context=context, trustee=trustee)
       filter_granted(Repository.objects.all(), account, operation,
                      context=context, trustee=trustee)

@@ -14,6 +14,7 @@ from django.test import TestCase, TransactionTestCase
 from trusts.context import Context, ContextRegistry
 from trusts.models import Trust, prepare_context_registry, prepare_trustee_registry
 from trusts.path import (
+    AuthorizationBranch,
     AuthorizationPath,
     AuthorizationPathError,
     OrderedContribution,
@@ -66,7 +67,9 @@ class AuthorizationPathReusableLayerTest(TestCase):
 
     def test_public_imports(self):
         from trusts.path import AuthorizationPath as Imported
+        from trusts.path import AuthorizationBranch as ImportedBranch
         self.assertIs(Imported, AuthorizationPath)
+        self.assertIs(ImportedBranch, AuthorizationBranch)
         self.assertTrue(callable(compose))
         self.assertTrue(callable(row_is_granted))
         self.assertTrue(callable(filter_granted))
@@ -107,25 +110,58 @@ class AuthorizationPathComposeTest(TestCase):
             set(path.adapter_names),
             {'collective', 'direct'},
         )
+        self.assertEqual(len(path.branches), 2)
+        self.assertIsInstance(path.branches, tuple)
         self.assertIsNone(path.condition)
         self.assertIsNone(path.recursive_edge)
         self.assertIsNone(path.ordered_contribution)
 
-    def test_single_adapter_ir_fields_are_scalars(self):
+    def test_branches_are_uniform_records_for_one_or_many_adapters(self):
         context, trustee = _resource_maps()
-        path = compose(
+        single = compose(
             TrusteeResource, None, context=context, trustee=trustee,
             names=('direct',),
         )
-        self.assertEqual(path.adapter_names, ('direct',))
-        self.assertEqual(path.requester_from_grant, 'requester')
-        self.assertIs(path.subject_model, TrusteeRequester)
-        self.assertEqual(path.subject_from_grant, 'requester')
-        self.assertEqual(path.membership_path, '')
-        self.assertIs(path.grant_model, TrusteeDirectGrant)
-        self.assertEqual(path.grant_to_scope, 'scope')
-        self.assertEqual(path.grant_to_operation, 'operation')
-        self.assertEqual(path.constraint_paths, ())
+        self.assertEqual(single.adapter_names, ('direct',))
+        self.assertIsInstance(single.branches, tuple)
+        self.assertEqual(len(single.branches), 1)
+        branch = single.branches[0]
+        self.assertIsInstance(branch, AuthorizationBranch)
+        self.assertEqual(branch.name, 'direct')
+        self.assertEqual(branch.requester_from_grant, 'requester')
+        self.assertIs(branch.subject_model, TrusteeRequester)
+        self.assertEqual(branch.subject_from_grant, 'requester')
+        self.assertEqual(branch.membership_path, '')
+        self.assertIs(branch.grant_model, TrusteeDirectGrant)
+        self.assertEqual(branch.grant_to_scope, 'scope')
+        self.assertEqual(branch.grant_to_operation, 'operation')
+        self.assertEqual(branch.constraint_paths, ())
+        self.assertIsInstance(branch.constraint_paths, tuple)
+        with self.assertRaises(AttributeError):
+            branch.grant_model = TrusteeDirectGrant
+
+        many = compose(
+            TrusteeResource, None, context=context, trustee=trustee,
+        )
+        self.assertIsInstance(many.branches, tuple)
+        self.assertEqual(len(many.branches), 2)
+        names = tuple(item.name for item in many.branches)
+        self.assertEqual(names, tuple(sorted(names)))
+        for item in many.branches:
+            self.assertIsInstance(item, AuthorizationBranch)
+            self.assertIsInstance(item.constraint_paths, tuple)
+            self.assertIsInstance(item.name, str)
+            self.assertIsInstance(item.grant_to_scope, str)
+            self.assertTrue(hasattr(item.grant_model, '_meta'))
+        collective = [
+            item for item in many.branches if item.name == 'collective'
+        ][0]
+        self.assertEqual(
+            collective.constraint_paths,
+            ('collective__operations', 'collective__bundles__operations'),
+        )
+        self.assertFalse(hasattr(many, 'grant_model'))
+        self.assertFalse(hasattr(many, 'constraint_paths'))
 
     def test_unregistered_resource_fails_closed(self):
         context, trustee = _resource_maps()
@@ -206,6 +242,24 @@ class AuthorizationPathComposeTest(TestCase):
                 TrusteeResource, None, context=context, trustee=trustee,
                 ordered_contribution=object(),
             )
+
+    def test_direct_construction_is_rejected(self):
+        context, trustee = _resource_maps()
+        with self.assertRaises(AuthorizationPathError) as ctx:
+            AuthorizationPath()
+        self.assertIn('compose', str(ctx.exception))
+        with self.assertRaises(AuthorizationPathError):
+            AuthorizationPath(condition=object())
+        path = compose(
+            TrusteeResource, None, context=context, trustee=trustee,
+            names=('direct',),
+        )
+        with self.assertRaises(AttributeError):
+            path.condition = object()
+        with self.assertRaises(AttributeError):
+            path.recursive_edge = object()
+        with self.assertRaises(AttributeError):
+            path.ordered_contribution = object()
 
     def test_process_wide_maps_do_not_register_isolated_resources(self):
         prepare_context_registry()
@@ -319,3 +373,116 @@ class AuthorizationPathQueryTest(TransactionTestCase):
             self.path.filter_granted(
                 TrusteeScope.objects.all(), self.requester, self.read,
             )
+
+    def test_poked_reserved_slot_cannot_evaluate(self):
+        TrusteeDirectGrant.objects.create(
+            scope=self.scope_a, requester=self.requester, operation=self.read,
+        )
+        self.assertTrue(
+            self.path.row_is_granted(
+                self.resource_a, self.requester, self.read,
+            )
+        )
+        for slot in ('_condition', '_recursive_edge', '_ordered_contribution'):
+            saved = getattr(self.path, slot)
+            object.__setattr__(self.path, slot, object())
+            try:
+                with self.assertRaises(AuthorizationPathError) as ctx:
+                    self.path.row_is_granted(
+                        self.resource_a, self.requester, self.read,
+                    )
+                self.assertIn('reserved', str(ctx.exception).lower())
+                with self.assertRaises(AuthorizationPathError):
+                    self.path.filter_granted(
+                        TrusteeResource.objects.all(),
+                        self.requester, self.read,
+                    )
+                with self.assertRaises(AuthorizationPathError):
+                    self.path.grant_q(self.requester, self.read)
+            finally:
+                object.__setattr__(self.path, slot, saved)
+        self.assertTrue(
+            self.path.row_is_granted(
+                self.resource_a, self.requester, self.read,
+            )
+        )
+
+    def test_wrong_requester_same_pk_fails_closed_on_all_entry_points(self):
+        TrusteeDirectGrant.objects.create(
+            scope=self.scope_a, requester=self.requester, operation=self.read,
+        )
+        self.assertEqual(self.requester.pk, self.scope_a.pk)
+        with self.assertRaises(AuthorizationPathError) as ctx:
+            self.path.row_is_granted(
+                self.resource_a, self.scope_a, self.read,
+            )
+        self.assertIn('requester', str(ctx.exception))
+        with self.assertRaises(AuthorizationPathError):
+            self.path.filter_granted(
+                TrusteeResource.objects.all(), self.scope_a, self.read,
+            )
+        with self.assertRaises(AuthorizationPathError):
+            self.path.grant_q(self.scope_a, self.read)
+        with self.assertRaises(AuthorizationPathError):
+            row_is_granted(
+                self.resource_a, self.scope_a, self.read,
+                context=self.context, trustee=self.trustee,
+            )
+        with self.assertRaises(AuthorizationPathError):
+            filter_granted(
+                TrusteeResource.objects.all(), self.scope_a, self.read,
+                context=self.context, trustee=self.trustee,
+            )
+
+    def test_wrong_operation_same_pk_fails_closed_on_all_entry_points(self):
+        TrusteeDirectGrant.objects.create(
+            scope=self.scope_a, requester=self.requester, operation=self.read,
+        )
+        self.assertEqual(self.requester.pk, self.read.pk)
+        with self.assertRaises(AuthorizationPathError) as ctx:
+            self.path.row_is_granted(
+                self.resource_a, self.requester, self.requester,
+            )
+        self.assertIn('operation', str(ctx.exception))
+        with self.assertRaises(AuthorizationPathError):
+            self.path.filter_granted(
+                TrusteeResource.objects.all(), self.requester, self.requester,
+            )
+        with self.assertRaises(AuthorizationPathError):
+            self.path.grant_q(self.requester, self.requester)
+        with self.assertRaises(AuthorizationPathError):
+            row_is_granted(
+                self.resource_a, self.requester, self.requester,
+                context=self.context, trustee=self.trustee,
+            )
+        with self.assertRaises(AuthorizationPathError):
+            filter_granted(
+                TrusteeResource.objects.all(), self.requester, self.requester,
+                context=self.context, trustee=self.trustee,
+            )
+
+    def test_raw_primary_keys_are_rejected(self):
+        TrusteeDirectGrant.objects.create(
+            scope=self.scope_a, requester=self.requester, operation=self.read,
+        )
+        with self.assertRaises(AuthorizationPathError) as ctx:
+            self.path.row_is_granted(
+                self.resource_a, self.requester.pk, self.read,
+            )
+        self.assertIn('primary key', str(ctx.exception).lower())
+        with self.assertRaises(AuthorizationPathError):
+            self.path.row_is_granted(
+                self.resource_a, self.requester, self.read.pk,
+            )
+        with self.assertRaises(AuthorizationPathError):
+            row_is_granted(
+                self.resource_a, self.requester.pk, self.read,
+                context=self.context, trustee=self.trustee,
+            )
+        with self.assertRaises(AuthorizationPathError):
+            filter_granted(
+                TrusteeResource.objects.all(), self.requester.pk, self.read,
+                context=self.context, trustee=self.trustee,
+            )
+        with self.assertRaises(AuthorizationPathError):
+            self.path.grant_q(self.requester.pk, self.read)
