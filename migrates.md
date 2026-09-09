@@ -2393,8 +2393,11 @@ list mixin has already applied `list_operation`. Both mixins reuse S1
 walker and no resolver/policy callback.
 
 `require_singular_identity` fails closed on 0 (404) or 2+ (403)
-candidates and never uses `.first()`. `resolve_authorized_object`
-requires that singular source identity, then authorizes that one row.
+candidates and never uses `.first()`. The candidate queryset must be
+**unsliced**: a pre-sliced `qs[:1]` (or any limit/offset) is
+`AuthorizationConfigError` on the helper so a hidden second row cannot
+be accepted as singular. `resolve_authorized_object` converts that
+config error to denial (403), then authorizes the one remaining row.
 
 Stub templates live under the `trusts/` namespace only. Consumers set
 `template_name` or place an earlier `trusts/authorized_*.html` on the
@@ -2427,6 +2430,7 @@ Query contract (honest):
 | CBV existing unauthorized / unknown operation data | 2 → 403 |
 | CBV missing unique identity | 1 (`[:2]` empty) → 404 |
 | Ambiguous slug / candidate set (one or both granted) | 1 (`[:2]`) → 403, no row returned |
+| Pre-sliced candidate queryset (`ambiguous[:1]`) | 0 → config error / 403 |
 | Missing URL identity | 0 → 404 |
 | Unusable principal + existing singular object | 1 identity, no auth `Exists` → 403 |
 | Unusable principal list | 0 (empty queryset) |
@@ -2464,7 +2468,7 @@ No per-row permission checks.
 | New | `AuthorizedQuerySetMixin` / `AuthorizedObjectMixin` plus four `trusts/` stubs. `require_singular_identity` + `resolve_authorized_object` for singular identity then 404/403. `get_identity_base_queryset()` is the unauthorized application scope. |
 | Replacement | Mix the classes into Django CBVs and set operation data + `model`. Put tenant / soft-delete filters on `queryset` or `get_identity_base_queryset()`, not only on an authorized `get_queryset()`. Override `template_name` or the `trusts/authorized_*.html` stubs. Do not import Zero team views for generic CRUD. |
 | Affected | New kernel list/detail/update views. |
-| Authorization | Same S1 predicate as admin/runtime. Source identity must be singular; 2+ candidates are 403 even if one or both are granted. Absent from consumer scope → 404. Present in that scope but denied → 403. `query_pk_and_slug` applies both request values. Superuser flags are ignored. |
+| Authorization | Same S1 predicate as admin/runtime. Source identity must be singular and unsliced; 2+ candidates are 403 even if one or both are granted. A pre-sliced `qs[:1]` is `AuthorizationConfigError` on `require_singular_identity` and 403 on `resolve_authorized_object`. Absent from consumer scope → 404. Present in that scope but denied → 403. `query_pk_and_slug` applies both request values. Superuser flags are ignored. |
 
 ## Fresh database
 
@@ -2499,6 +2503,7 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Expect 404 for missing / out-of-scope objects and 403 for in-scope unauthorized ones.
 - [ ] Put application scope on `queryset` / `get_identity_base_queryset()`, not on the authorized list queryset.
 - [ ] Treat ambiguous slug/candidate identity as 403; do not take `.first()` of the authorized subset.
+- [ ] Pass unsliced candidate querysets to `require_singular_identity` / `resolve_authorized_object`; `qs[:1]` is a config error / 403.
 - [ ] Do not expect admin `get_object` to apply `view_operation`; change/delete hooks are independent.
 - [ ] Catch `AuthorizationConfigError` only at security boundaries (admin/CBVs already do).
 - [ ] Override `trusts/authorized_*.html` or set `template_name`; do not move Zero `auth/group_*`.

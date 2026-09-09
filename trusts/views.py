@@ -6,8 +6,9 @@ resolves a declared URL identity through the same predicate: missing
 rows are 404, existing unauthorized rows are 403.
 
 Source identity is established **before** authorization and must be
-singular. ``resolve_authorized_object`` never uses ``.first()`` to pick
-an authorized row from an ambiguous candidate set.
+singular and unsliced. ``resolve_authorized_object`` never uses
+``.first()`` to pick an authorized row from an ambiguous candidate
+set, and a caller-supplied ``qs[:1]`` cannot hide a second row.
 
 Application scoping (tenant, soft-delete, an explicit CBV
 ``queryset``) belongs on ``queryset`` or
@@ -221,17 +222,34 @@ class AuthorizedObjectMixin(object):
             raise Http404
 
 
+def _queryset_is_sliced(queryset):
+    query = getattr(queryset, 'query', None)
+    if query is None:
+        return True
+    if getattr(query, 'low_mark', 0):
+        return True
+    return getattr(query, 'high_mark', None) is not None
+
+
 def require_singular_identity(queryset):
     """Return the only row in ``queryset``, or fail closed.
 
     Source identity is checked **before** authorization. ``.first()``
-    is not used.
+    is not used. ``queryset`` must be **unsliced**: a caller-supplied
+    ``candidates[:1]`` (or any other limit/offset) cannot hide a second
+    row from this check.
 
+    * Pre-sliced queryset → ``AuthorizationConfigError`` (0 SQL).
     * 0 rows → ``Http404`` (1 SQL ``[:2]``).
     * 2+ rows → ``PermissionDenied`` (1 SQL ``[:2]``). Ambiguous
       identity is never resolved by order or by which row is granted.
     * 1 row → that instance.
     """
+    if _queryset_is_sliced(queryset):
+        raise AuthorizationConfigError(
+            'require_singular_identity requires an unsliced candidate '
+            'queryset. Do not pass a sliced queryset such as qs[:1].'
+        )
     matched = list(queryset[:2])
     if len(matched) > 1:
         raise PermissionDenied
@@ -245,7 +263,8 @@ def resolve_authorized_object(queryset, principal, operation, **runtime):
 
     ``queryset`` is the candidate set **after** application scope and
     declared identity filters, **before** Trusts authorization. It must
-    already be singular.
+    already be singular and **unsliced**. A pre-sliced queryset is
+    ``AuthorizationConfigError`` on the helper and denial (403) here.
 
     * 0 candidates → ``Http404``.
     * 2+ candidates → ``PermissionDenied`` (not an existential grant).

@@ -686,6 +686,25 @@ class S4CBVObjectTest(S4FixtureMixin, TestCase):
                     S1Repository.objects.filter(pk=self.repo_a.pk + 10000),
                 )
 
+    def test_pre_sliced_ambiguous_queryset_fails_closed(self):
+        self.repo_a.title = 'shared'
+        self.repo_a.save(update_fields=['title'])
+        self.repo_b.title = 'shared'
+        self.repo_b.save(update_fields=['title'])
+        ambiguous = S1Repository.objects.filter(title='shared')
+        sliced = ambiguous[:1]
+        with self.assertNumQueries(0):
+            with self.assertRaises(AuthorizationConfigError):
+                require_singular_identity(sliced)
+        with self.assertNumQueries(0):
+            with self.assertRaises(PermissionDenied):
+                resolve_authorized_object(
+                    sliced, self.member, 'read', **self.runtime,
+                )
+        with self.assertNumQueries(0):
+            with self.assertRaises(AuthorizationConfigError):
+                require_singular_identity(ambiguous[1:])
+
 
 class S4TemplateOverrideTest(S4FixtureMixin, TestCase):
     def test_consumer_template_override_wins(self):
