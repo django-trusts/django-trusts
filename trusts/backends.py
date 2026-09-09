@@ -2,7 +2,9 @@ from django.db.models import Q, QuerySet
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Permission
 
-from trusts.models import Trust, Content, legacy_permission_callbacks_allowed
+from trusts.models import (
+    Trust, Content, legacy_permission_callbacks_allowed, prepare_context_registry,
+)
 from trusts.query import permission_granted_via_group_exists
 from trusts.conditions import PermissionConditionError, evaluate_registered_expression
 from trusts import (
@@ -25,6 +27,7 @@ class TrustModelBackendMixin(object):
         if not Content.is_content(obj):
             return []
 
+        prepare_context_registry()
         trusts = Trust.objects.filter_by_content(obj)
         if trusts is None:
             return []

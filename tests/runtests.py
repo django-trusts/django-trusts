@@ -26,6 +26,7 @@ NORMAL_SUITE = [
     'tests.regressions.test_issue_4',
     'tests.regressions.test_issue_8',
     'tests.core.test_core',
+    'tests.core.test_context',
     'tests.core.test_wheel_install',
 ]
 
