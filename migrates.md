@@ -2334,3 +2334,182 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #47 from this PR.
 
+# Issue #47 S4: authorized admin, CBV mixins, stub templates (1.0.0.dev0)
+
+This record covers the fourth kernel execution slice. Version remains
+**1.0.0.dev0**. This PR does **not** close
+[#47](https://github.com/django-trusts/django-trusts/issues/47); review
+owns that. It implements accepted **framework-execution-r1+r2+r3**
+kernel S4 only. It does **not** modify `django-trusts-zero`, start S5
+checks cleanup, gh-permissions#1, or resume #17.
+
+## Decision
+
+```text
+trusts.admin:
+  AuthorizedModelAdmin
+    list_operation / view_operation / change_operation / delete_operation
+trusts.views:
+  AuthorizedQuerySetMixin
+  AuthorizedObjectMixin
+  resolve_authorized_object
+trusts/templates/trusts/:
+  authorized_list.html
+  authorized_detail.html
+  authorized_form.html
+  authorized_confirm_delete.html
+```
+
+`AuthorizedModelAdmin` is noun-independent and configured by operation
+data (instance or `operation_lookup` string). Django hooks:
+
+- `list_operation` → `get_queryset` uses S1 `filter_authorized`.
+  `ChangeList.root_queryset` is that authorized queryset, so pagination
+  happens after the SQL grant filter.
+- `view_operation` (fallback: `list_operation`) → `has_view_permission`.
+- `change_operation` → `has_change_permission`.
+- `delete_operation` → `has_delete_permission`.
+- Add is fail-closed (`has_add_permission` is False). No FK/form
+  queryset helper is shipped; generic UI tests did not demonstrate a
+  need.
+
+`get_object` retrieves a **singular identity** from
+`get_identity_base_queryset` (unauthorized consumer scope; default
+manager). It does **not** apply `view_operation`. Missing rows stay
+`None` (admin 404). Ambiguous identity (2+ candidates) is 403.
+Existing rows are returned so Django's change/delete/view hooks apply
+their own operations independently. A change-only or delete-only grant
+is not blocked by a view ceiling. The authorization-filtered list
+queryset is not reused for identity.
+
+`AuthorizedQuerySetMixin` is the list CBV hook (`list_operation` or
+fallback `operation`). `AuthorizedObjectMixin` is the detail/update
+hook (`object_operation` / `view_operation` / `operation`; identity
+from `pk_url_kwarg` / `slug_url_kwarg`, honoring `query_pk_and_slug`).
+Application scoping belongs on the CBV `queryset` or
+`get_identity_base_queryset()` — not on `get_queryset()` after the
+list mixin has already applied `list_operation`. Both mixins reuse S1
+`filter_authorized` / `is_authorized`. There is no second authorization
+walker and no resolver/policy callback.
+
+`require_singular_identity` fails closed on 0 (404) or 2+ (403)
+candidates and never uses `.first()`. The candidate queryset must be
+**unsliced**: a pre-sliced `qs[:1]` (or any limit/offset) is
+`AuthorizationConfigError` on the helper so a hidden second row cannot
+be accepted as singular. `resolve_authorized_object` converts that
+config error to denial (403), then authorizes the one remaining row.
+
+Stub templates live under the `trusts/` namespace only. Consumers set
+`template_name` or place an earlier `trusts/authorized_*.html` on the
+template loaders. Object stubs accept optional `update_url` /
+`delete_url` context. There are **no** framework `urlpatterns`.
+
+Zero team URLs, forms, `auth/group_*` templates, and product
+ModelAdmins stay in `django-trusts-zero`.
+
+`AuthorizationConfigError` → `PermissionDenied` / `False` at these
+security boundaries. Direct runtime APIs still raise. Unusable
+principals deny. Active `is_superuser` does not bypass registered
+object policy. `has_*` methods do not call the Django user-permission
+helper.
+
+Isolated tests pass `context=` / `trustee=` as class attributes
+(process-wide maps remain the no-arg default).
+
+Query contract (honest):
+
+| Path | SQL |
+| --- | ---: |
+| Authorized list (`get_queryset` / unpaginated CBV) | 1 |
+| Paginated CBV list (count + page) | 2, both on the authorized queryset |
+| Admin `ChangeList` page | Django changelist queries on the already-filtered root queryset |
+| Admin `get_object` (PK identity only; no view ceiling) | 1 (`[:2]`) |
+| Admin missing PK | 1 → `None` (404) |
+| Admin ambiguous identity | 1 (`[:2]`) → 403 |
+| CBV granted unique object | 2 (identity `[:2]` + `is_authorized`) |
+| CBV existing unauthorized / unknown operation data | 2 → 403 |
+| CBV missing unique identity | 1 (`[:2]` empty) → 404 |
+| Ambiguous slug / candidate set (one or both granted) | 1 (`[:2]`) → 403, no row returned |
+| Pre-sliced candidate queryset (`ambiguous[:1]`) | 0 → config error / 403 |
+| Missing URL identity | 0 → 404 |
+| Unusable principal + existing singular object | 1 identity, no auth `Exists` → 403 |
+| Unusable principal list | 0 (empty queryset) |
+| Consumer-scoped identity excluding an authorized row | 1 (`[:2]` empty) → 404 |
+
+No per-row permission checks.
+
+## No change to these public call sites
+
+- S1 `trusts.runtime` / `trusts.query` / `compose` / `compose_scope`
+- S2 `ObjectAuthorizationBackend` / `ObjectAuthorizationModelBackend`
+- S3 `trusts.decorators.require_authorized` / `P` / `K` / `G` / `O`
+- Zero `trusts.zero.admin`, team views / urls / `auth/group_*`
+  templates, `TrustModelBackend`, `ContentQuerySet.permitted`,
+  historical migrations, app label `trusts`
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 48. `trusts.admin.AuthorizedModelAdmin` (new)
+
+| | |
+| --- | --- |
+| Previous | Consumers copied `get_queryset` / `has_*_permission` onto `ModelAdmin`, or used Zero's concrete Trust/Role/TrustGroup admins and `auto_modeladmin`. |
+| New | Noun-independent `AuthorizedModelAdmin` configured by operation data. Isolated registries via `context` / `trustee` class attributes. |
+| Replacement | Subclass `AuthorizedModelAdmin` and set `list_operation` / `view_operation` / `change_operation` / `delete_operation`. Keep Zero product ModelAdmins in `trusts.zero.admin`. |
+| Affected | New kernel consumers. Zero is not re-exported from `trusts.admin`. |
+| Authorization | List membership is the S1 grant `Exists` before pagination. `get_object` is identity-only. Object view/change/delete are independent `is_authorized` hooks. Missing objects are 404; in-scope unauthorized objects are 403. Change-only / delete-only grants reach their hook. Malformed configuration cannot produce access. Superuser flags are ignored. Add stays closed. |
+
+### 49. `trusts.views` mixins and stub templates (new)
+
+| | |
+| --- | --- |
+| Previous | Consumers wrote List/Detail/Update `get_queryset` / `get_object` by hand, or copied Zero team views (`auth/group_*`, `SelectUserForm`). |
+| New | `AuthorizedQuerySetMixin` / `AuthorizedObjectMixin` plus four `trusts/` stubs. `require_singular_identity` + `resolve_authorized_object` for singular identity then 404/403. `get_identity_base_queryset()` is the unauthorized application scope. |
+| Replacement | Mix the classes into Django CBVs and set operation data + `model`. Put tenant / soft-delete filters on `queryset` or `get_identity_base_queryset()`, not only on an authorized `get_queryset()`. Override `template_name` or the `trusts/authorized_*.html` stubs. Do not import Zero team views for generic CRUD. |
+| Affected | New kernel list/detail/update views. |
+| Authorization | Same S1 predicate as admin/runtime. Source identity must be singular and unsliced; 2+ candidates are 403 even if one or both are granted. A pre-sliced `qs[:1]` is `AuthorizationConfigError` on `require_singular_identity` and 403 on `resolve_authorized_object`. Absent from consumer scope → 404. Present in that scope but denied → 403. `query_pk_and_slug` applies both request values. Superuser flags are ignored. |
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m tests.runtests
+```
+
+No Trusts schema migration. S4 uses the existing isolated S1 test models.
+
+## Upgrade of a representative legacy database
+
+Unchanged. `scripts/verify-legacy-upgrade.py` still expects
+`{0001_initial, 0002_trustgroup}` on label `trusts`.
+
+## Out of scope (unchanged)
+
+- S5 `E008` / kernel `Content` leftover import cleanup
+- Framework URL patterns
+- FK / `ModelChoiceField` queryset helper
+- Generic `register_row_condition`
+- `RecursiveEdge` / `OrderedContribution`
+- django-trusts-zero admin/views/templates wrappers or pin bump
+- gh-permissions#1
+- Closing #17 or #47
+
+## Migration-bot summary (issue #47 S4)
+
+- [ ] Import `AuthorizedModelAdmin` from `trusts.admin`, not Zero.
+- [ ] Import CBV mixins from `trusts.views`; set operation data and `model`.
+- [ ] Expect list querysets to be S1-filtered before pagination.
+- [ ] Expect 404 for missing / out-of-scope objects and 403 for in-scope unauthorized ones.
+- [ ] Put application scope on `queryset` / `get_identity_base_queryset()`, not on the authorized list queryset.
+- [ ] Treat ambiguous slug/candidate identity as 403; do not take `.first()` of the authorized subset.
+- [ ] Pass unsliced candidate querysets to `require_singular_identity` / `resolve_authorized_object`; `qs[:1]` is a config error / 403.
+- [ ] Do not expect admin `get_object` to apply `view_operation`; change/delete hooks are independent.
+- [ ] Catch `AuthorizationConfigError` only at security boundaries (admin/CBVs already do).
+- [ ] Override `trusts/authorized_*.html` or set `template_name`; do not move Zero `auth/group_*`.
+- [ ] Do not expect framework `urlpatterns` or an add/FK form helper.
+- [ ] Keep Zero product ModelAdmins and team People UI in `django-trusts-zero`.
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_s4_admin_views`).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #47 from this PR.
+

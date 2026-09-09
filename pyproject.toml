@@ -57,4 +57,4 @@ include = ["trusts*"]
 exclude = ["trusts.zero*", "tests*", "docs*", "scripts*", "packaging*"]
 
 [tool.setuptools.package-data]
-trusts = ["*"]
+trusts = ["*", "templates/trusts/*.html"]

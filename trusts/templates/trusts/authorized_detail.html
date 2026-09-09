@@ -1,0 +1,19 @@
+{# Framework stub. Override with template_name or an earlier trusts/authorized_detail.html. #}
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorized detail</title>
+</head>
+<body>
+  <h1>Authorized detail</h1>
+  {% if object %}
+  <p>{{ object }}</p>
+  {% endif %}
+  {% if update_url %}
+  <p><a href="{{ update_url }}">Update</a></p>
+  {% endif %}
+  {% if delete_url %}
+  <p><a href="{{ delete_url }}">Delete</a></p>
+  {% endif %}
+</body>
+</html>
