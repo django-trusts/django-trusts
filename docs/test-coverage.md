@@ -24,6 +24,10 @@ installable `trusts/` package:
   identity Context / `operation_lookup` / `alignment_paths` / `compose_scope`
   (isolated registries; object≡list; one-query; cross-org and NULL
   alignment deny; registration traps)
+- `tests/core/test_s2_backend.py` — issue #47 S2 object-only
+  `ObjectAuthorizationBackend` (`BaseBackend`; `obj is None` False;
+  config error → denial; superuser does not grant objects; ModelBackend
+  coexistence)
 - `tests/core/test_zero_path.py` — issue #43 Step 2 Zero consumer of compose
   (`ContentQuerySet.permitted` / `TrustModelBackend`; same-PK fail-closed)
 - `tests/core/test_kernel_split.py` — issue #43 Step 3 kernel/Zero AppConfig,
@@ -33,6 +37,7 @@ installable `trusts/` package:
   by explicit labels (`tests.core.test_core`, `tests.core.test_context`,
   `tests.core.test_trustee`, `tests.core.test_path`,
   `tests.core.test_gh_vocab`, `tests.core.test_s1_kernel`,
+  `tests.core.test_s2_backend`,
   `tests.core.test_zero_path`,
   `tests.core.test_kernel_split`, `tests.core.test_wheel_install`,
   `tests.regressions.test_issue_*`)

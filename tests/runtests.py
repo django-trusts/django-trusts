@@ -31,6 +31,7 @@ NORMAL_SUITE = [
     'tests.core.test_path',
     'tests.core.test_gh_vocab',
     'tests.core.test_s1_kernel',
+    'tests.core.test_s2_backend',
     'tests.core.test_zero_path',
     'tests.core.test_kernel_split',
     'tests.core.test_wheel_install',

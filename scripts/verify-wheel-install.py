@@ -99,6 +99,7 @@ def main() -> int:
     from trusts.context import Context
     from trusts.trustee import Trustee
     from trusts.path import AuthorizationPath, AuthorizationBranch, compose
+    from trusts.backends import ObjectAuthorizationBackend
     from django_trusts import TQ, condition_refs
 
     trusts_file = Path(trusts.__file__).resolve()
@@ -132,6 +133,7 @@ def main() -> int:
     print('AuthorizationPath', AuthorizationPath)
     print('AuthorizationBranch', AuthorizationBranch)
     print('compose', compose)
+    print('ObjectAuthorizationBackend', ObjectAuthorizationBackend)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
     print('absent test modules', ' '.join(ABSENT_TEST_MODULES))
