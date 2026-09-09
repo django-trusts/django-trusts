@@ -2708,7 +2708,7 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Keep using `trusts.E006` / `trusts.E007` for stale adapters only.
 - [ ] Do not expect an admin `add_operation` / `scope_field` / `parent_field` check.
 - [ ] Run `python -m tests.runtests` (includes `tests.core.test_s5_checks`).
-- [ ] Pair with the Zero leftover-check companion; update `scripts/zero-companion.pin` to that SHA.
+- [ ] Pair with the merged Zero leftover-check companion (`scripts/zero-companion.pin` is Zero `main` `d694866e7475f20b7bf568c378ed21dcebb56abf`).
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #47 from this PR.
 - [ ] Do not treat Zero / GH / Windows acceptance as complete because the kernel surface exists.

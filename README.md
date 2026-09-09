@@ -76,18 +76,17 @@ python scripts/verify-namespace-install.py
 Authorization tests import ``trusts.zero`` from the companion checkout,
 not from this tree. CI clones
 [`django-trusts-zero`](https://github.com/django-trusts/django-trusts-zero)
-at the **40-char SHA** in ``scripts/zero-companion.pin``
-(coordinated S5 leftover-check companion
-``3c8fb43f74dfbc89f1c0f73bb9a2604be6ea1ec1``; replace with the
-Zero ``main`` merge SHA after that companion lands), not a branch name.
+at the **stable ``main`` merge SHA** in ``scripts/zero-companion.pin``
+(django-trusts-zero#2 / ``d694866e7475f20b7bf568c378ed21dcebb56abf``),
+not an ephemeral PR branch.
 
 The executable suite lives under `tests/` (`tests/core/`,
 `tests/regressions/`, and the isolated `tests/custom_content/` app).
 Shared fixtures are in `tests/support.py`. Those modules are not part of
 the installable `trusts` package.
 
-CI is GitHub Actions (`.github/workflows/ci.yml`): reads the pinned
-Zero SHA from ``scripts/zero-companion.pin``, checks out that
+CI is GitHub Actions (`.github/workflows/ci.yml`): reads the stable
+Zero ``main`` SHA from ``scripts/zero-companion.pin``, checks out that
 commit of ``django-trusts-zero``, then runs authorization tests, a fresh
 migrate, ``manage.py check``, the isolated custom-user suite, the
 legacy-upgrade script, and migration-identity on Python 3.12, 3.13, and
