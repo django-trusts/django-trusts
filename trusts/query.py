@@ -19,8 +19,10 @@ from trusts.path import AuthorizationPathError, compose
 def is_active_principal(user):
     """Match ``User.has_perm``: anonymous and inactive principals are denied.
 
-    Superuser short-circuit on ``has_perm`` is a Django ``ModelBackend``
-    behavior and is not duplicated in SQL list filters.
+    Django ``PermissionsMixin.has_perm`` still short-circuits active
+    superusers before backends run (including ``obj=None``). Object-level
+    ``TrustModelBackend.has_perm`` and ``.permitted()`` evaluate the
+    composed grant instead; they do not treat superuser as return-all.
     """
     if user is None:
         return False

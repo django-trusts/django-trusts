@@ -1637,7 +1637,12 @@ Zero policy stays out of the kernel:
   `resolve_content_permission`
 - `TrustModelBackend` / `_trust_perm_cache` / `User.has_perm`
 - opt-in callable permission conditions
-- `is_active` / anonymous short-circuit
+- `is_active` / anonymous short-circuit. Object-level superuser is **not**
+  a global True: `TrustModelBackend.has_perm(obj)` uses the same composed
+  grant as other requesters (pre-PR `get_all_permissions(obj)` did the
+  same). `User.has_perm` without `obj` still follows Django's
+  `PermissionsMixin` shortcut. `.permitted()` never treated superuser as
+  return-all.
 - public-content gate `Content.is_content` (Junction table rows still
   do not enter `User.has_perm`)
 
@@ -1678,7 +1683,7 @@ compatibility entry points instead of letting Django coerce the PK.
 | New | `.permitted()` uses `compose_zero_path` / `path.grant_q`. Object-level `has_perm` uses `row_is_zero_granted` / `queryset_is_zero_granted` (the same composed predicate). `get_all_permissions` enumerates operations per scope PK taken from `path.resource_to_scope` (resource-origin), still intersecting across scopes for QuerySets. `get_group_permissions` remains a Zero mapping onto the named `group` adapter. |
 | Replacement | Same `has_perm` / `.permitted()` call sites. New kernel callers still use `from trusts.path import compose`. |
 | Affected | Internal evaluation only. |
-| Authorization | Same allow/deny for current User / Group / Role-ceiling / Content paths. Unregistered and Junction-table objects still deny on `User.has_perm`. |
+| Authorization | Same allow/deny for current User / Group / Role-ceiling / Content paths. Unregistered and Junction-table objects still deny on object-level `has_perm`. Active superusers without a Trust-scoped grant stay denied on object-level `TrustModelBackend.has_perm` and `.permitted()`; a granted superuser is present on both. Django `obj=None` / `User.has_perm` without an object still short-circuits active superusers. |
 
 Migration-bot checklist:
 
@@ -1696,6 +1701,10 @@ Migration-bot checklist:
 - [ ] Run `python scripts/verify-legacy-upgrade.py`.
 - [ ] Confirm `has_perm` and `.permitted()` still agree and stay
       fixed-query.
+- [ ] Confirm an active superuser without a Trust-scoped grant is denied
+      on object-level `TrustModelBackend.has_perm` and `.permitted()`, a
+      granted superuser is allowed on both, and Junction / unregistered
+      objects plus unknown permission codes stay denied.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #43 from this PR.
 
@@ -1765,6 +1774,8 @@ migration.
 - [ ] Run `python scripts/verify-legacy-upgrade.py`.
 - [ ] Confirm `has_perm` ≡ `.permitted()`, fixed-query, and current
       User/Group/Role-ceiling allow/deny.
+- [ ] Confirm object-level superuser follows relational grants on both
+      `TrustModelBackend.has_perm` and `.permitted()`.
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #43 from this PR.
 

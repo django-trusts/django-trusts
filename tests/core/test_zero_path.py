@@ -9,7 +9,7 @@ concrete models.
 import inspect
 from pathlib import Path
 
-from django.contrib.auth.models import Group, Permission
+from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, TransactionTestCase
 
@@ -30,7 +30,7 @@ from trusts.query import (
     require_configured_requester,
     trust_grant_q,
 )
-from tests.models import Category, TestGroupJunction
+from tests.models import Category, Organization, TestGroupJunction
 from tests.support import (
     ContentModelMixin,
     enable_local_group_grant,
@@ -63,6 +63,12 @@ class ZeroComposeConsumerSourceTest(TestCase):
         self.assertNotIn('_get_trusts', source)
         self.assertIn('Content.is_content', source)
         self.assertIn('GROUP_TRUSTEE', source)
+        has_perm_src = inspect.getsource(TrustModelBackendMixin.has_perm)
+        self.assertNotIn(
+            'is_superuser',
+            has_perm_src,
+            'object-level has_perm must not short-circuit active superusers',
+        )
 
     def test_deleted_noun_dependent_query_helpers_are_gone(self):
         source = _query_source()
@@ -194,6 +200,79 @@ class ZeroComposeConsumerTest(ContentModelMixin, TestCase):
             self.user, Category.objects.none(),
         )
         self.assertEqual(empty, [])
+
+    def _read_perm(self):
+        return self.get_perm_code(self.perm_read)
+
+    def _permitted_pks(self, user):
+        return set(
+            Category.objects.permitted('read', user).values_list('pk', flat=True)
+        )
+
+    def _make_superuser(self, user):
+        user.is_superuser = True
+        user.is_active = True
+        user.save()
+        reload_test_users(self)
+        return User._default_manager.get(pk=user.pk)
+
+    def test_ungranted_superuser_absent_from_has_perm_and_permitted(self):
+        superuser = self._make_superuser(self.user1)
+        self.assertTrue(superuser.is_superuser)
+        self.assertTrue(superuser.is_active)
+        perm = self._read_perm()
+        # Django User.has_perm still short-circuits before backends.
+        self.assertTrue(superuser.has_perm(perm))
+        backend = TrustModelBackend()
+        self.assertFalse(backend.has_perm(superuser, perm, self.content))
+        self.assertFalse(backend.has_perm(superuser, perm, self.content_b))
+        listed = self._permitted_pks(superuser)
+        self.assertNotIn(self.content.pk, listed)
+        self.assertNotIn(self.content_b.pk, listed)
+        allowed = {
+            obj.pk
+            for obj in Category.objects.order_by('pk')
+            if backend.has_perm(superuser, perm, obj)
+        }
+        self.assertEqual(listed, allowed)
+
+    def test_granted_superuser_present_in_has_perm_and_permitted(self):
+        TrustUserPermission.objects.get_or_create(
+            trust=self.org, entity=self.user1, permission=self.perm_read,
+        )
+        superuser = self._make_superuser(self.user1)
+        perm = self._read_perm()
+        backend = TrustModelBackend()
+        self.assertTrue(backend.has_perm(superuser, perm, self.content))
+        self.assertFalse(backend.has_perm(superuser, perm, self.content_b))
+        listed = self._permitted_pks(superuser)
+        self.assertEqual(listed, {self.content.pk})
+        allowed = {
+            obj.pk
+            for obj in Category.objects.order_by('pk')
+            if backend.has_perm(superuser, perm, obj)
+        }
+        self.assertEqual(listed, allowed)
+
+    def test_superuser_junction_unregistered_and_unknown_perm_denied(self):
+        superuser = self._make_superuser(self.user)
+        perm = self._read_perm()
+        backend = TrustModelBackend()
+        self.assertTrue(backend.has_perm(superuser, perm, self.content))
+        junction = TestGroupJunction.objects.create(
+            content=self.group, trust=self.org, name='superuser-junction',
+        )
+        self.assertFalse(Content.is_content(junction))
+        self.assertFalse(backend.has_perm(superuser, perm, junction))
+        unregistered = Organization.objects.create(
+            name='superuser-unregistered', manager=superuser,
+        )
+        self.assertFalse(Content.is_content(unregistered))
+        self.assertFalse(Context.is_registered(Organization))
+        self.assertFalse(backend.has_perm(superuser, perm, unregistered))
+        self.assertFalse(
+            backend.has_perm(superuser, 'tests.nosuch_category', self.content)
+        )
 
 
 class ZeroSamePkFailClosedTest(ContentModelMixin, TransactionTestCase):

@@ -198,13 +198,13 @@ class TrustModelBackendMixin(object):
 
         perm = '%s.%s_%s' % (applabel, action, modelname)
         if obj is None or getattr(user_obj, 'is_anonymous', False):
+            # ``obj=None`` keeps Django's model-level path (including
+            # PermissionsMixin's superuser shortcut on ``User.has_perm``).
+            # Object-level checks do not: they use the composed grant, as
+            # pre-PR ``get_all_permissions(obj)`` did.
             positive = super(TrustModelBackendMixin, self).has_perm(
                 user_obj=user_obj, perm=perm, obj=obj,
             )
-        elif getattr(user_obj, 'is_active', False) and getattr(
-            user_obj, 'is_superuser', False,
-        ):
-            positive = True
         else:
             require_configured_requester(user_obj)
             positive = self._object_perm_granted(user_obj, perm, obj)
