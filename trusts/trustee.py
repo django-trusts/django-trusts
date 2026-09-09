@@ -7,7 +7,7 @@ The reusable question:
     scoped authorization decision?
 
 Adapters are declared explicitly. Mixin inheritance is declaration
-convenience only; ``__subclasses__()`` discovery is not a query-building
+convenience only; automatic subclass discovery is not a query-building
 source.
 
 Registration is static during application loading and frozen before
@@ -293,8 +293,8 @@ class TrusteeMixin(models.Model):
     """Abstract declaration convenience. Adds no concrete fields.
 
     Inheriting this mixin does not register an adapter. The frozen
-    registry—not ``__subclasses__()``—is the complete query-building
-    source.
+    registry—not automatic subclass discovery—is the complete
+    query-building source.
     """
 
     class Meta:

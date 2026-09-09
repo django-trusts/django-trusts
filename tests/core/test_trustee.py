@@ -178,17 +178,21 @@ class TrusteeRegistryContractTest(TestCase):
     def test_freeze_rejects_late_successful_registration(self):
         prepare_trustee_registry()
         self.assertTrue(Trustee.is_frozen())
+        registry = _kernel_registry()
+        registry.freeze()
+        self.assertTrue(registry.is_frozen())
         with self.assertRaises(TrusteeRegistryFrozen):
-            Trustee.register(
-                name='late',
-                trustee_model=TrusteeRequester,
-                grant_model=UnregisteredTrusteeNote,
-                trustee_path='scope',
+            registry.register(
+                name='desk',
+                trustee_model=TrusteeDesk,
+                grant_model=TrusteeDeskGrant,
+                trustee_path='desk',
                 scope_path='scope',
-                operation_path='scope',
-                membership_path='',
+                operation_path='operation',
+                membership_path='collective__members',
             )
-        self.assertFalse(Trustee.is_registered('late'))
+        self.assertFalse(registry.is_registered('desk'))
+        self.assertFalse(Trustee.is_registered('desk'))
 
     def test_private_registry_freeze_and_order(self):
         registry = _kernel_registry()
@@ -356,19 +360,35 @@ class TrusteeValidationTest(TestCase):
                 operation_path=lambda: 'operation',
             )
         self.assertIn('callable', str(ctx.exception).lower())
+        class ScalarGrant(models.Model):
+            scope = models.ForeignKey(
+                TrusteeScope, on_delete=models.CASCADE,
+            )
+            requester = models.ForeignKey(
+                TrusteeRequester, on_delete=models.CASCADE,
+            )
+            operation = models.ForeignKey(
+                TrusteeOperation, on_delete=models.CASCADE,
+            )
+            label = models.CharField(max_length=16)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                managed = False
+
         with self.assertRaises(TrusteeRegistrationError) as ctx:
             registry.register(
                 name='direct',
                 trustee_model=TrusteeRequester,
-                grant_model=TrusteeDirectGrant,
+                grant_model=ScalarGrant,
                 trustee_path='requester',
-                scope_path='title',
+                scope_path='label',
                 operation_path='operation',
             )
         self.assertIn('scalar', str(ctx.exception).lower())
         self.assertIsNotNone(check_registration(
-            'direct', TrusteeRequester, TrusteeDirectGrant, 'requester',
-            'title', 'operation', requester_model=TrusteeRequester,
+            'direct', TrusteeRequester, ScalarGrant, 'requester',
+            'label', 'operation', requester_model=TrusteeRequester,
         ))
 
     def test_missing_and_incomplete_fail_closed(self):
@@ -543,7 +563,7 @@ class TrusteeSystemCheckTest(TestCase):
         saved = registry._adapters[DIRECT_TRUSTEE]
         registry._adapters[DIRECT_TRUSTEE] = TrusteeAdapter(
             KIND_GRANT, DIRECT_TRUSTEE, saved.trustee_model, '',
-            TrustUserPermission, 'entity', 'trust', 'trust', (), registry,
+            TrustUserPermission, 'entity', 'trust', 'not_a_field', (), registry,
         )
         try:
             messages = check_trustee_registry(None)
@@ -553,7 +573,7 @@ class TrusteeSystemCheckTest(TestCase):
             self.assertIsInstance(e007[0], Error)
             self.assertIs(e007[0].obj, TrustUserPermission)
             self.assertEqual(e007[0].hint, _SILENCE_DOES_NOT_ENABLE_TRUSTEE_HINT)
-            self.assertIn('not the operation model', e007[0].msg)
+            self.assertIn('not a field', e007[0].msg)
             self.assertIn('fail-closed', e007[0].hint)
         finally:
             registry._adapters[DIRECT_TRUSTEE] = saved
