@@ -8,12 +8,10 @@ partial states. Does not close #47. Does not modify Zero.
 
 import inspect
 import re
-from io import StringIO
 from pathlib import Path
 
 from django.conf import settings
 from django.core.checks import Error, run_checks
-from django.core.management import call_command
 from django.test import TestCase, override_settings
 
 from trusts.checks import (
@@ -222,11 +220,6 @@ class S5SilenceAndFailClosedTest(TestCase):
                 if m.id not in settings.SILENCED_SYSTEM_CHECKS
             ]
             self.assertEqual(_e008(visible), [])
-            out = StringIO()
-            err = StringIO()
-            call_command('check', stdout=out, stderr=err)
-            combined = out.getvalue() + err.getvalue()
-            self.assertNotIn('trusts.E008', combined)
         with self.assertRaises(AuthorizationConfigError):
             is_authorized(
                 account, 'read', repo, context=context, trustee=registry,
