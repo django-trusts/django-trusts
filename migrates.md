@@ -2045,7 +2045,7 @@ NULL or mismatched identities deny at read time.
 | New | `is_authorized` / `require_authorized` / `filter_authorized` / `authorized_q` and scope-origin siblings. `AuthorizedQuerySet.authorized` / `AuthorizedManager`. |
 | Replacement | Call these instead of copying `grant_q`. Isolated tests pass `context=` / `trustee=`. |
 | Affected | New kernel consumers. Zero wrappers are a later follow-up. |
-| Authorization | Unusable principal / unknown operation *data* deny. Unregistered resource, no adapters, raw PK, wrong concrete model, mixed/stale terminals, reserved slot, incomplete `operation_lookup` raise `AuthorizationConfigError`. `require_*` raises `AuthorizationDenied` only for ordinary denials. Equivalence: `is_authorized(p, op, obj)` == `exists()` of the same `Q` as `filter_authorized`. One query each. |
+| Authorization | Explicitly unusable principal (`is_anonymous is True`, `is_authenticated is False`, or `is_active is False`, including Django `AnonymousUser`) and unknown operation *data* deny. Unusable flags are checked **before** requester-model identity so `AnonymousUser` is an ordinary denial, not `AuthorizationConfigError`. Unregistered resource, no adapters, raw PK, *usable* wrong concrete model, mixed/stale terminals, reserved slot, incomplete `operation_lookup` raise `AuthorizationConfigError`. `require_*` raises `AuthorizationDenied` only for ordinary denials. Equivalence: `is_authorized(p, op, obj)` == `exists()` of the same `Q` as `filter_authorized`. One query each. |
 
 ## Fresh database
 

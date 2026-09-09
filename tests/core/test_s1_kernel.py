@@ -9,6 +9,7 @@ import inspect
 import re
 from pathlib import Path
 
+from django.contrib.auth.models import AnonymousUser
 from django.core.checks import Error
 from django.db import models
 from django.db.models import UniqueConstraint
@@ -29,6 +30,7 @@ from trusts.path import (
     AuthorizationPathError,
     compose,
     compose_scope,
+    empty_grant_q,
 )
 from trusts.query import AuthorizedManager, AuthorizedQuerySet
 from trusts.runtime import (
@@ -681,6 +683,52 @@ class S1RuntimeConfigTest(TransactionTestCase):
     def test_missing_flags_are_usable(self):
         self.assertTrue(principal_is_usable(self.account))
 
+    def test_anonymous_user_takes_ordinary_denial_path(self):
+        principal = AnonymousUser()
+        self.assertFalse(principal_is_usable(principal))
+
+        with self.assertNumQueries(0):
+            self.assertFalse(
+                is_authorized(principal, 'read', self.repo, **self.runtime)
+            )
+            self.assertFalse(
+                is_scope_authorized(
+                    principal, 'read', self.repo, trustee=self.trustee,
+                )
+            )
+
+        with self.assertNumQueries(0):
+            filtered = filter_authorized(
+                S1Repository.objects.all(), principal, 'read', **self.runtime,
+            )
+            self.assertTrue(filtered.query.is_empty())
+            self.assertEqual(list(filtered), [])
+            scoped = filter_authorized_scope(
+                S1Repository.objects.all(), principal, 'read',
+                trustee=self.trustee,
+            )
+            self.assertTrue(scoped.query.is_empty())
+            self.assertEqual(list(scoped), [])
+
+        with self.assertNumQueries(0):
+            with self.assertRaises(AuthorizationDenied):
+                require_authorized(
+                    principal, 'read', self.repo, **self.runtime,
+                )
+            with self.assertRaises(AuthorizationDenied):
+                require_scope_authorized(
+                    principal, 'read', self.repo, trustee=self.trustee,
+                )
+
+        empty = authorized_q(
+            S1Repository, principal, 'read', **self.runtime,
+        )
+        empty_scope = authorized_scope_q(
+            S1Repository, principal, 'read', trustee=self.trustee,
+        )
+        self.assertEqual(str(empty), str(empty_grant_q()))
+        self.assertEqual(str(empty_scope), str(empty_grant_q()))
+
     def test_wrong_model_and_raw_pk_are_config_errors(self):
         with self.assertRaises(AuthorizationConfigError):
             is_authorized(self.repo, 'read', self.repo, **self.runtime)
@@ -691,6 +739,14 @@ class S1RuntimeConfigTest(TransactionTestCase):
         with self.assertRaises(AuthorizationConfigError):
             filter_authorized(
                 S1Repository.objects.all(), self.repo, 'read', **self.runtime,
+            )
+        with self.assertRaises(AuthorizationConfigError):
+            is_scope_authorized(
+                self.repo, 'read', self.repo, trustee=self.trustee,
+            )
+        with self.assertRaises(AuthorizationConfigError):
+            is_scope_authorized(
+                self.account.pk, 'read', self.repo, trustee=self.trustee,
             )
 
     def test_unregistered_resource_and_wrong_queryset_raise(self):

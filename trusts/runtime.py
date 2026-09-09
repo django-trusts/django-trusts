@@ -7,12 +7,18 @@ and list share one ``grant_q``. There is no preliminary operation
 
 Denial versus configuration:
 
-* Unusable principal (attribute protocol) and unknown operation *data*
-  deny (``False``, empty queryset, ``AuthorizationDenied``).
-* Wrong-model / raw-PK terminals, unregistered resources, missing
-  adapters, mixed/stale terminals, reserved slots, and incomplete
-  ``operation_lookup`` raise ``AuthorizationConfigError``. Direct APIs
-  never hide a broken install behind ``.none()``.
+* Explicitly unusable principals are ordinary denials, checked **before**
+  requester-model identity. A principal is explicitly unusable when any of
+  ``is_anonymous is True``, ``is_authenticated is False``, or
+  ``is_active is False``. Django's ``AnonymousUser`` therefore denies
+  instead of raising a wrong-model config error.
+* Unknown operation *data* also denies (``False``, empty queryset,
+  ``AuthorizationDenied``).
+* Usable principals that are the wrong requester model, raw PKs,
+  unregistered resources, missing adapters, mixed/stale terminals,
+  reserved slots, and incomplete ``operation_lookup`` raise
+  ``AuthorizationConfigError``. Direct APIs never hide a broken install
+  behind ``.none()`` for a *usable* principal.
 """
 
 from django.core.exceptions import PermissionDenied
@@ -106,8 +112,13 @@ def principal_is_usable(principal):
     """Attribute protocol. Missing attributes are ignored.
 
     ``is_anonymous is True``, ``is_authenticated is False``, or
-    ``is_active is False`` makes the principal unusable. A model with
-    none of those attributes (for example a custom account) is usable.
+    ``is_active is False`` makes the principal unusable. Runtime entry
+    points check this **before** requester-model identity so Django's
+    ``AnonymousUser`` (and any other explicitly unusable object) takes
+    the ordinary denial path. A model with none of those attributes
+    (for example a custom account) is usable. ``None`` and raw PKs have
+    no flags and are still configuration errors via
+    :func:`_require_instance`.
     """
     if getattr(principal, 'is_anonymous', None) is True:
         return False
@@ -180,12 +191,12 @@ def _deny_empty(queryset):
 
 def is_authorized(principal, operation, resource, context=None, trustee=None, names=None):
     """True when ``principal`` may perform ``operation`` on ``resource``."""
+    if not principal_is_usable(principal):
+        return False
     path, trustee_registry, requester_model = _prepare_resource(
         resource, context, trustee, names,
     )
     _require_instance(principal, requester_model, 'requester')
-    if not principal_is_usable(principal):
-        return False
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.row_is_granted(resource, principal, operation)
@@ -209,6 +220,8 @@ def require_authorized(principal, operation, resource, context=None, trustee=Non
 
 def filter_authorized(queryset, principal, operation, context=None, trustee=None, names=None):
     """SQL-filter ``queryset`` with the composed resource-origin predicate."""
+    if not principal_is_usable(principal):
+        return _deny_empty(queryset)
     context_registry = _as_context_registry(context)
     trustee_registry = _as_trustee_registry(trustee)
     try:
@@ -223,8 +236,6 @@ def filter_authorized(queryset, principal, operation, context=None, trustee=None
         )
     except AuthorizationPathError as exc:
         _wrap_path_error(exc)
-    if not principal_is_usable(principal):
-        return _deny_empty(queryset)
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.filter_granted(queryset, principal, operation)
@@ -234,6 +245,8 @@ def filter_authorized(queryset, principal, operation, context=None, trustee=None
 
 def authorized_q(resource_model, principal, operation, context=None, trustee=None, names=None):
     """Shared ``Q`` for resource-origin exists and list filters."""
+    if not principal_is_usable(principal):
+        return empty_grant_q()
     context_registry = _as_context_registry(context)
     trustee_registry = _as_trustee_registry(trustee)
     try:
@@ -248,8 +261,6 @@ def authorized_q(resource_model, principal, operation, context=None, trustee=Non
         )
     except AuthorizationPathError as exc:
         _wrap_path_error(exc)
-    if not principal_is_usable(principal):
-        return empty_grant_q()
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.grant_q(principal, operation)
@@ -259,12 +270,12 @@ def authorized_q(resource_model, principal, operation, context=None, trustee=Non
 
 def is_scope_authorized(principal, operation, scope_obj, trustee=None, names=None):
     """True when ``principal`` may perform ``operation`` on the scope row."""
+    if not principal_is_usable(principal):
+        return False
     path, trustee_registry, requester_model = _prepare_scope(
         scope_obj, trustee, names,
     )
     _require_instance(principal, requester_model, 'requester')
-    if not principal_is_usable(principal):
-        return False
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.row_is_granted(scope_obj, principal, operation)
@@ -287,6 +298,8 @@ def require_scope_authorized(principal, operation, scope_obj, trustee=None, name
 
 def filter_authorized_scope(queryset, principal, operation, trustee=None, names=None):
     """SQL-filter a queryset whose model *is* the frozen Trustee scope."""
+    if not principal_is_usable(principal):
+        return _deny_empty(queryset)
     trustee_registry = _as_trustee_registry(trustee)
     try:
         requester_model = trustee_registry.requester_model()
@@ -299,8 +312,6 @@ def filter_authorized_scope(queryset, principal, operation, trustee=None, names=
         )
     except AuthorizationPathError as exc:
         _wrap_path_error(exc)
-    if not principal_is_usable(principal):
-        return _deny_empty(queryset)
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.filter_granted(queryset, principal, operation)
@@ -310,6 +321,8 @@ def filter_authorized_scope(queryset, principal, operation, trustee=None, names=
 
 def authorized_scope_q(scope_model, principal, operation, trustee=None, names=None):
     """Shared ``Q`` for scope-origin exists and list filters."""
+    if not principal_is_usable(principal):
+        return empty_grant_q()
     trustee_registry = _as_trustee_registry(trustee)
     try:
         requester_model = trustee_registry.requester_model()
@@ -322,8 +335,6 @@ def authorized_scope_q(scope_model, principal, operation, trustee=None, names=No
         )
     except AuthorizationPathError as exc:
         _wrap_path_error(exc)
-    if not principal_is_usable(principal):
-        return empty_grant_q()
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.grant_q(principal, operation)
