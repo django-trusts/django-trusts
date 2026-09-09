@@ -20,7 +20,12 @@ tables.
 """
 
 from django.apps import apps
-from django.core.exceptions import AppRegistryNotReady, FieldDoesNotExist
+from django.core.exceptions import (
+    AppRegistryNotReady,
+    FieldDoesNotExist,
+    FieldError,
+    ValidationError,
+)
 from django.db import models
 from django.db.models import (
     Exists,
@@ -46,6 +51,10 @@ from django.db.models.fields import GenericIPAddressField
 
 
 KIND_GRANT = 'grant'
+
+# Sentinel: a string operation that the configured lookup field cannot accept.
+# Compiles to an always-false grant predicate (ordinary denial, no SQL raise).
+_UNPREPARABLE_LOOKUP = object()
 
 
 class TrusteeRegistrationError(ValueError):
@@ -341,6 +350,18 @@ def _scalar_types_for_field(field):
     return ()
 
 
+def _prepare_lookup_value(field, value):
+    """Coerce ``value`` through ``field`` without a database lookup.
+
+    Returns the prepared value, or ``_UNPREPARABLE_LOOKUP`` when the
+    field cannot accept the value (unknown / wrong-type operation *data*).
+    """
+    try:
+        return field.get_prep_value(field.to_python(value))
+    except (TypeError, ValueError, OverflowError, ValidationError, FieldError):
+        return _UNPREPARABLE_LOOKUP
+
+
 def _field_is_unique_scalar(model, field_name):
     """True when ``field_name`` is a unique non-relation scalar on ``model``."""
     field = _get_field(model, field_name, field_name)
@@ -550,22 +571,36 @@ class TrusteeAdapter(object):
             and self.alignment_paths == other.alignment_paths
         )
 
+    def _string_operation_lookup(self, operation):
+        """Prepare a string operation through the configured lookup field.
+
+        Returns ``(lookup, prepared)``. ``prepared`` is
+        ``_UNPREPARABLE_LOOKUP`` when the field cannot accept the value.
+        There is no preliminary ``get()``.
+        """
+        lookup = None
+        if self.registry is not None:
+            lookup = getattr(self.registry, '_operation_lookup', None)
+        if not lookup:
+            raise TrusteeRegistrationError(
+                'String operations require operation_lookup on the '
+                'Trustee registry.'
+            )
+        field = _get_field(self.operation_model(), lookup, lookup)
+        return lookup, _prepare_lookup_value(field, operation)
+
     def _operation_filters(self, operation):
         """Compile an operation instance or lookup string into grant filters.
 
-        Strings become ``{operation_path__lookup: value}`` when the registry
-        has ``operation_lookup``. There is no preliminary ``get()``.
+        Strings become ``{operation_path__lookup: prepared}`` when the
+        registry has ``operation_lookup``. Unpreparable strings compile
+        to an always-false filter. There is no preliminary ``get()``.
         """
         if isinstance(operation, str):
-            lookup = None
-            if self.registry is not None:
-                lookup = getattr(self.registry, '_operation_lookup', None)
-            if not lookup:
-                raise TrusteeRegistrationError(
-                    'String operations require operation_lookup on the '
-                    'Trustee registry.'
-                )
-            return {'%s__%s' % (self.operation_path, lookup): operation}
+            lookup, prepared = self._string_operation_lookup(operation)
+            if prepared is _UNPREPARABLE_LOOKUP:
+                return {'pk__in': []}
+            return {'%s__%s' % (self.operation_path, lookup): prepared}
         return {self.operation_path: operation}
 
     def _apply_alignments(self, qs):
@@ -579,10 +614,21 @@ class TrusteeAdapter(object):
         return qs
 
     def _base_grant_qs(self, requester, operation, extra=None):
+        if isinstance(operation, str):
+            lookup, prepared = self._string_operation_lookup(operation)
+            if prepared is _UNPREPARABLE_LOOKUP:
+                return self.grant_model._default_manager.none()
+            operation_filters = {
+                '%s__%s' % (self.operation_path, lookup): prepared,
+            }
+        else:
+            lookup = None
+            prepared = None
+            operation_filters = {self.operation_path: operation}
         filters = {
             self.requester_from_grant_path(): requester,
         }
-        filters.update(self._operation_filters(operation))
+        filters.update(operation_filters)
         if extra:
             filters.update(extra)
         qs = self.grant_model._default_manager.filter(**filters)
@@ -590,8 +636,7 @@ class TrusteeAdapter(object):
             constraint = Q()
             for path in self.constraint_paths:
                 if isinstance(operation, str):
-                    lookup = getattr(self.registry, '_operation_lookup', None)
-                    constraint |= Q(**{'%s__%s' % (path, lookup): operation})
+                    constraint |= Q(**{'%s__%s' % (path, lookup): prepared})
                 else:
                     constraint |= Q(**{path: operation})
             qs = qs.filter(constraint)
@@ -744,8 +789,10 @@ class TrusteeRegistry(object):
         """Set requester / scope / operation terminals and optional lookup.
 
         ``operation_lookup`` is a unique scalar on ``operation_model``.
-        String operations compile as ``operation_path__lookup`` inside
-        the grant ``Exists``; there is no preliminary ``get()``.
+        String operations are prepared through that field and compile as
+        ``operation_path__lookup`` inside the grant ``Exists``; there is
+        no preliminary ``get()``. A value the field cannot accept
+        compiles to an always-false predicate (ordinary denial).
 
         The first successful registration may infer unset scope and
         operation models from its validated paths. Later adapters must

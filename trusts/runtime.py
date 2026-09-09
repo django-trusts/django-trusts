@@ -13,7 +13,9 @@ Denial versus configuration:
   ``is_active is False``. Django's ``AnonymousUser`` therefore denies
   instead of raising a wrong-model config error.
 * Unknown operation *data* also denies (``False``, empty queryset,
-  ``AuthorizationDenied``).
+  ``AuthorizationDenied``), including a string the configured
+  ``operation_lookup`` field cannot prepare (for example
+  ``operation_lookup='id'`` plus ``'missing'``).
 * Usable principals that are the wrong requester model, raw PKs,
   unregistered resources, missing adapters, mixed/stale terminals,
   reserved slots, and incomplete ``operation_lookup`` raise

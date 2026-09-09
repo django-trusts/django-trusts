@@ -1978,8 +1978,9 @@ argument order.
 Object decisions and authorized querysets compile from the same frozen
 `AuthorizationPath.grant_q`. String operations compile as
 `operation_path__lookup` inside that `Exists` when
-`Trustee.operation_lookup` is set. There is no preliminary
-`Operation.objects.get()`.
+`Trustee.operation_lookup` is set. Strings are prepared through that
+field; an unpreparable value is an always-false predicate. There is no
+preliminary `Operation.objects.get()`.
 
 `alignment_paths` are grant-row equalities, AND-ed into that adapter's
 `Exists` with `F()` and non-NULL on both sides. They are not
@@ -2012,10 +2013,10 @@ NULL or mismatched identities deny at read time.
 | | |
 | --- | --- |
 | Previous | `grant_q` required an operation-model *instance*. |
-| New | `Trustee.configure(..., operation_lookup='code')` (unique scalar on `operation_model`). Strings compile as `{operation_path__lookup: value}` inside the same `Exists`. Unknown codes deny (match nothing). Missing lookup + string is `AuthorizationConfigError` on direct APIs. |
+| New | `Trustee.configure(..., operation_lookup='code')` (unique scalar on `operation_model`, including non-text fields such as `id`). Strings are prepared through the lookup field (no `get()`) and compile as `{operation_path__lookup: prepared}` inside the same `Exists`. Unknown codes and values the field cannot accept (for example `operation_lookup='id'` plus `'missing'`) deny via an always-false predicate. Missing lookup + string is `AuthorizationConfigError` on direct APIs. |
 | Replacement | Prefer instances, or configure a unique lookup. Zero does not have to use this (`auth.Permission.codename` is not unique alone). |
 | Affected | New kernel consumers that want `'read'`-style operations. |
-| Authorization | One SQL statement for supported object/list decisions. No preliminary `get()`. |
+| Authorization | One SQL statement for supported object/list decisions. Unpreparable string data is ordinary denial, not `ValueError` / `FieldError`. No preliminary `get()`. |
 
 ### 41. Trustee `alignment_paths` (new, optional)
 

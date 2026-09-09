@@ -77,7 +77,10 @@ S1_TEAM = 'team'
 S1_DIRECT = 'direct'
 
 
-def _s1_maps(grant_model=None, include_direct=True, alignment=True):
+def _s1_maps(
+    grant_model=None, include_direct=True, alignment=True,
+    operation_lookup='code',
+):
     """Isolated identity + alignment registries. Never touch process-wide maps."""
     if grant_model is None:
         grant_model = S1TeamGrant
@@ -87,7 +90,7 @@ def _s1_maps(grant_model=None, include_direct=True, alignment=True):
         requester_model=S1Account,
         scope_model=S1Repository,
         operation_model=S1Operation,
-        operation_lookup='code',
+        operation_lookup=operation_lookup,
     )
     alignment_paths = (
         (('team__organization', 'repository__organization'),)
@@ -178,6 +181,15 @@ class S1IdentityContextTest(TestCase):
 
 
 class S1OperationLookupTest(TestCase):
+    def test_integer_pk_lookup_is_accepted(self):
+        registry = TrusteeRegistry(
+            requester_model=S1Account,
+            scope_model=S1Repository,
+            operation_model=S1Operation,
+            operation_lookup='id',
+        )
+        self.assertEqual(registry.operation_lookup(), 'id')
+
     def test_unique_lookup_configures_and_is_idempotent(self):
         registry = TrusteeRegistry(
             requester_model=S1Account,
@@ -502,6 +514,69 @@ class S1EvaluationTest(TransactionTestCase):
             self.assertFalse(
                 is_authorized(self.member, 'missing', self.repo_a, **self.runtime)
             )
+
+    def test_non_text_lookup_unknown_string_denies_without_exception(self):
+        context, trustee = _s1_maps(operation_lookup='id')
+        runtime = dict(context=context, trustee=trustee)
+        supported = str(self.read.pk)
+
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                is_authorized(self.member, supported, self.repo_a, **runtime)
+            )
+        with self.assertNumQueries(1):
+            listed = list(
+                filter_authorized(
+                    S1Repository.objects.all(), self.member, supported,
+                    **runtime,
+                ).order_by('pk').values_list('pk', flat=True)
+            )
+        self.assertEqual(listed, [self.repo_a.pk])
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                is_scope_authorized(
+                    self.member, supported, self.repo_a, trustee=trustee,
+                )
+            )
+
+        with self.assertNumQueries(1):
+            self.assertFalse(
+                is_authorized(self.member, 'missing', self.repo_a, **runtime)
+            )
+        with self.assertNumQueries(1):
+            listed = list(
+                filter_authorized(
+                    S1Repository.objects.all(), self.member, 'missing',
+                    **runtime,
+                )
+            )
+        self.assertEqual(listed, [])
+        with self.assertNumQueries(1):
+            self.assertFalse(
+                is_scope_authorized(
+                    self.member, 'missing', self.repo_a, trustee=trustee,
+                )
+            )
+        with self.assertNumQueries(1):
+            scoped = list(
+                filter_authorized_scope(
+                    S1Repository.objects.all(), self.member, 'missing',
+                    trustee=trustee,
+                )
+            )
+        self.assertEqual(scoped, [])
+        with self.assertRaises(AuthorizationDenied):
+            require_authorized(
+                self.member, 'missing', self.repo_a, **runtime,
+            )
+        with self.assertRaises(AuthorizationDenied):
+            require_scope_authorized(
+                self.member, 'missing', self.repo_a, trustee=trustee,
+            )
+        authorized_q(S1Repository, self.member, 'missing', **runtime)
+        authorized_scope_q(
+            S1Repository, self.member, 'missing', trustee=trustee,
+        )
 
     def test_cross_org_malformed_grant_denies(self):
         other_bundle = S1Bundle.objects.create(team=self.team, name='cross-bundle')
