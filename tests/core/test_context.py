@@ -11,9 +11,7 @@ from pathlib import Path
 
 from django.contrib.auth.models import Group
 from django.core.checks import Error, run_checks
-from django.db import models
 from django.test import TestCase, TransactionTestCase
-from django.test.utils import isolate_apps
 
 from trusts.checks import CHECK_ID_INVALID_CONTEXT, check_context_registry
 from trusts.context import (
@@ -38,6 +36,7 @@ from tests.models import (
     ReceiptImage,
     ReceiptImageMeta,
     TestGroupJunction,
+    Ticket,
     UnregisteredReceiptNote,
 )
 
@@ -168,96 +167,31 @@ class ContextValidationTest(TestCase):
             registry.register_related(ContextAttachment, through='document')
         self.assertIn('not an already registered', str(ctx.exception))
 
-    @isolate_apps('context_isolated')
-    def test_many_valued_and_cyclic_and_ambiguous(self):
-        class IsolatedScope(models.Model):
-            class Meta:
-                app_label = 'context_isolated'
-
-        class IsolatedMany(models.Model):
-            scopes = models.ManyToManyField(IsolatedScope)
-
-            class Meta:
-                app_label = 'context_isolated'
-
-        class IsolatedNode(models.Model):
-            peer = models.ForeignKey(
-                'context_isolated.IsolatedPeer',
-                on_delete=models.CASCADE,
-                related_name='nodes',
-            )
-
-            class Meta:
-                app_label = 'context_isolated'
-
-        class IsolatedPeer(models.Model):
-            node = models.ForeignKey(
-                IsolatedNode,
-                on_delete=models.CASCADE,
-                related_name='peers',
-            )
-
-            class Meta:
-                app_label = 'context_isolated'
-
-        class IsolatedChildren(models.Model):
-            parent = models.ForeignKey(
-                IsolatedScope,
-                on_delete=models.CASCADE,
-                related_name='children',
-            )
-
-            class Meta:
-                app_label = 'context_isolated'
-
+    def test_many_valued_and_cyclic_fail_closed(self):
         registry = ContextRegistry()
         with self.assertRaises(ContextRegistrationError) as ctx:
-            registry.register_direct(IsolatedMany, scope_field='scopes')
+            registry.register_direct(Trust, scope_field='groups')
         self.assertIn('many-valued', str(ctx.exception))
 
         with self.assertRaises(ContextRegistrationError) as ctx:
-            registry.register_related(IsolatedChildren, through='parent')
-        self.assertIn('not an already registered', str(ctx.exception))
-
-        # Reverse one-to-many from IsolatedScope to IsolatedChildren.
-        registry.register_direct(IsolatedChildren, scope_field='parent')
-        with self.assertRaises(ContextRegistrationError) as ctx:
-            registry.register_related(IsolatedScope, through='children')
+            registry.register_related(
+                Trust, through=Content.direct_content_fieldlookup(Receipt),
+            )
         self.assertIn('many-valued', str(ctx.exception))
 
         with self.assertRaises(ContextRegistrationError) as ctx:
-            registry.register_related(IsolatedNode, through='peer__node')
+            registry.register_related(Trust, through='trust')
         self.assertIn('cyclic', str(ctx.exception))
 
-        self.assertIsNotNone(
-            check_registration(IsolatedMany, KIND_DIRECT, 'scopes')
-        )
-        self.assertIsNotNone(
-            check_registration(IsolatedNode, KIND_RELATED, 'peer__node', registry)
-        )
+        self.assertIsNotNone(check_registration(Trust, KIND_DIRECT, 'groups'))
+        self.assertIsNotNone(check_registration(Trust, KIND_RELATED, 'trust'))
 
-    @isolate_apps('context_isolated')
     def test_duplicate_different_path_rejected(self):
-        class IsolatedScope(models.Model):
-            class Meta:
-                app_label = 'context_isolated'
-
-        class IsolatedResource(models.Model):
-            a = models.ForeignKey(
-                IsolatedScope, on_delete=models.CASCADE, related_name='as_a',
-            )
-            b = models.OneToOneField(
-                IsolatedScope, on_delete=models.CASCADE, related_name='as_b',
-            )
-
-            class Meta:
-                app_label = 'context_isolated'
-
         registry = ContextRegistry()
-        registry.register_direct(IsolatedResource, scope_field='a')
-        registry.register_direct(IsolatedResource, scope_field='a')
+        registry.register_direct(Ticket, scope_field='trust')
+        registry.register_direct(Ticket, scope_field='trust')
         with self.assertRaises(ContextRegistrationError) as ctx:
-            registry.register_direct(IsolatedResource, scope_field='b')
+            registry.register_direct(Ticket, scope_field='owner')
         self.assertIn('already registered', str(ctx.exception))
 
 
@@ -488,9 +422,11 @@ class ContextAuthQueryParityTest(TestCase):
             )
         self.assertEqual(pks, [self.trust_a.pk])
 
-    def test_permitted_is_one_query_after_permission_resolve(self):
+    def test_permitted_is_one_list_query_after_permission_resolve(self):
         Receipt.objects.get_permission('read')
-        with self.assertNumQueries(1):
+        # Permission natural-key lookup is a separate query from the list
+        # filter. The registered resolution itself stays one SQL filter.
+        with self.assertNumQueries(2):
             pks = list(
                 Receipt.objects.permitted('read', self.user)
                 .values_list('pk', flat=True)

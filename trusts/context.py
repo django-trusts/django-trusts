@@ -56,8 +56,20 @@ def _model_key(model):
     return model._meta.concrete_model
 
 
+def _related_ref(field):
+    """Related model or string label without forcing ``apps.models_ready``.
+
+    ``field.related_model`` calls ``check_models_ready()`` and cannot be
+    used during ``class_prepared`` / class-body registration.
+    """
+    remote = getattr(field, 'remote_field', None)
+    if remote is None:
+        return None
+    return getattr(remote, 'model', None)
+
+
 def _resolve_related_model(field):
-    related = field.related_model
+    related = _related_ref(field)
     if related is None:
         raise ContextRegistrationError(
             'Relation %r has no related model (ambiguous or generic).' % (field,)
@@ -83,6 +95,55 @@ def _get_field(model, name, path):
         )
 
 
+def _forward_field(field):
+    if getattr(field, 'concrete', False):
+        return field
+    fwd = getattr(field, 'field', None)
+    if fwd is not None:
+        return fwd
+    return getattr(field, 'remote_field', None)
+
+
+def _reverse_is_unique(field):
+    """True when a reverse relation is constrained to one row.
+
+    ``ForeignKey(unique=True)`` and a single-field ``unique_together`` /
+    ``UniqueConstraint`` are single-valued even when Django still exposes
+    the reverse as ``one_to_many``.
+    """
+    fwd = _forward_field(field)
+    if fwd is None:
+        return False
+    if getattr(fwd, 'unique', False):
+        return True
+    concrete = getattr(fwd, 'model', None)
+    name = getattr(fwd, 'name', None)
+    if concrete is None or not name:
+        return False
+    for unique in concrete._meta.unique_together:
+        if tuple(unique) == (name,):
+            return True
+    for constraint in getattr(concrete._meta, 'constraints', ()):
+        fields = getattr(constraint, 'fields', None)
+        if fields is not None and tuple(fields) == (name,):
+            return True
+    return False
+
+
+def _is_single_valued_relation(field):
+    if getattr(field, 'is_relation', False) is not True:
+        return False
+    if _related_ref(field) is None:
+        return False
+    if getattr(field, 'many_to_many', False):
+        return False
+    if getattr(field, 'one_to_one', False) or getattr(field, 'many_to_one', False):
+        return True
+    if getattr(field, 'one_to_many', False):
+        return _reverse_is_unique(field)
+    return False
+
+
 def _assert_single_valued_relation(field, path, model, hop):
     if getattr(field, 'is_relation', False) is not True:
         raise ContextRegistrationError(
@@ -90,12 +151,14 @@ def _assert_single_valued_relation(field, path, model, hop):
                 path, hop, _model_label(model),
             )
         )
-    if getattr(field, 'related_model', None) is None:
+    if _related_ref(field) is None:
         raise ContextRegistrationError(
             'Path %r: %r on %s is ambiguous (no related model).' % (
                 path, hop, _model_label(model),
             )
         )
+    if _is_single_valued_relation(field):
+        return
     if getattr(field, 'many_to_many', False) or getattr(field, 'one_to_many', False):
         raise ContextRegistrationError(
             'Path %r: %r on %s is many-valued. Many-valued hops require '
@@ -103,12 +166,11 @@ def _assert_single_valued_relation(field, path, model, hop):
                 path, hop, _model_label(model),
             )
         )
-    if not (getattr(field, 'many_to_one', False) or getattr(field, 'one_to_one', False)):
-        raise ContextRegistrationError(
-            'Path %r: %r on %s is not a single-valued relation.' % (
-                path, hop, _model_label(model),
-            )
+    raise ContextRegistrationError(
+        'Path %r: %r on %s is not a single-valued relation.' % (
+            path, hop, _model_label(model),
         )
+    )
 
 
 def _split_path(path, api_name):
@@ -317,7 +379,7 @@ class ContextRegistry(object):
         model = obj.__class__
         return model.objects.filter(pk=obj.pk).filter(self.scope_q(model, scope)).exists()
 
-    def register_direct(self, model, scope_field):
+    def register_direct(self, model, scope_field, allow_late=False):
         """Register a resource that owns a single-valued scope relation."""
         parts = _split_path(scope_field, 'scope_field')
         if len(parts) != 1:
@@ -328,9 +390,9 @@ class ContextRegistry(object):
         _assert_single_valued_relation(field, scope_field, model, scope_field)
         _resolve_related_model(field)
         adapter = ContextAdapter(KIND_DIRECT, model, scope_field, self)
-        return self._commit(adapter)
+        return self._commit(adapter, allow_late=allow_late)
 
-    def register_related(self, model, through):
+    def register_related(self, model, through, allow_late=False):
         """Register a resource that reaches an already registered resource."""
         terminal, _hops = _walk(model, through)
         if not self.is_registered(terminal):
@@ -341,9 +403,9 @@ class ContextRegistry(object):
                 )
             )
         adapter = ContextAdapter(KIND_RELATED, model, through, self)
-        return self._commit(adapter)
+        return self._commit(adapter, allow_late=allow_late)
 
-    def _commit(self, adapter):
+    def _commit(self, adapter, allow_late=False):
         key = _model_key(adapter.model)
         existing = self._adapters.get(key)
         if existing is not None:
@@ -356,7 +418,7 @@ class ContextRegistry(object):
                     adapter.kind, adapter.decl,
                 )
             )
-        if self._frozen:
+        if self._frozen and not allow_late:
             raise ContextRegistryFrozen(
                 'Context registry is frozen; cannot register %s.' % (
                     _model_label(adapter.model),

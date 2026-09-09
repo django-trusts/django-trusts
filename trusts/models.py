@@ -384,6 +384,7 @@ class Content(ReadonlyFieldsMixin, models.Model):
     objects = ContentManager()
     _contents = {}
     _conditions = {}
+    _pending_related = []
 
     class Meta:
         abstract = True
@@ -677,7 +678,9 @@ class Content(ReadonlyFieldsMixin, models.Model):
         )
         if fieldlookup == Content.direct_content_fieldlookup(klass):
             try:
-                Context.register_direct(klass, scope_field='trust')
+                Context.registry.register_direct(
+                    klass, scope_field='trust', allow_late=True,
+                )
             except ContextRegistrationError as exc:
                 raise InvalidContentFieldlookup(str(exc)) from exc
         else:
@@ -685,7 +688,9 @@ class Content(ReadonlyFieldsMixin, models.Model):
                 related_through = Content._through_from_trust_origin_lookup(
                     klass, fieldlookup,
                 )
-                Context.register_related(klass, through=related_through)
+                Context.registry.register_related(
+                    klass, through=related_through, allow_late=True,
+                )
             except (ContentLookupNotReady, AppRegistryNotReady):
                 if not defer:
                     raise InvalidContentFieldlookup(
@@ -708,9 +713,21 @@ class Content(ReadonlyFieldsMixin, models.Model):
     def sync_pending_context_registrations():
         """Register Content conveniences that deferred Context until ready.
 
-        Called from ``AppConfig.ready`` immediately before freeze. Does
-        not invent new public content; it only mirrors ``_contents``.
+        Called from ``prepare_context_registry`` immediately before
+        freeze. Does not invent new public content; it only mirrors
+        ``_contents`` and deferred Junction related hops.
         """
+        pending = list(Content._pending_related)
+        Content._pending_related = []
+        for model, through in pending:
+            if Context.is_registered(model):
+                continue
+            Context.registry.register_related(
+                model, through=through, allow_late=True,
+            )
+            Content._contents[utils.get_short_model_name(model)] = (
+                Context.resource_path(model)
+            )
         for short_name, fieldlookup in list(Content._contents.items()):
             try:
                 model = apps.get_model(short_name)
@@ -723,12 +740,16 @@ class Content(ReadonlyFieldsMixin, models.Model):
                     fieldlookup is None
                     or fieldlookup == Content.direct_content_fieldlookup(model)
                 ):
-                    Context.register_direct(model, scope_field='trust')
+                    Context.registry.register_direct(
+                        model, scope_field='trust', allow_late=True,
+                    )
                 else:
                     through = Content._through_from_trust_origin_lookup(
                         model, fieldlookup,
                     )
-                    Context.register_related(model, through=through)
+                    Context.registry.register_related(
+                        model, through=through, allow_late=True,
+                    )
             except (ContextRegistrationError, ContentLookupNotReady, AppRegistryNotReady):
                 continue
             Content._contents[short_name] = Context.resource_path(model)
@@ -1163,14 +1184,18 @@ class Junction(ReadonlyFieldsMixin, models.Model):
             Junction._register_junction_conditions(klass)
             return
         try:
-            Context.register_direct(klass, scope_field='trust')
-            Context.register_related(
-                content, through=content_fields[0].related_query_name(),
+            Context.registry.register_direct(
+                klass, scope_field='trust', allow_late=True,
             )
         except ContextRegistrationError as exc:
             raise InvalidContentFieldlookup(str(exc)) from exc
+        # Reverse accessors on the wrapped model are not visible during
+        # class_prepared. Defer the related hop until models are ready.
+        Content._pending_related.append(
+            (content, content_fields[0].related_query_name())
+        )
         Content._contents[utils.get_short_model_name(content)] = (
-            Context.resource_path(content)
+            klass.get_fieldlookup()
         )
         Junction._register_junction_conditions(klass)
 
