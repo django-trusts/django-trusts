@@ -411,9 +411,11 @@ class TrusteeAdapter(object):
 class TrusteeRegistry(object):
     """Mutable adapter map that freezes before authorization queries."""
 
-    def __init__(self, requester_model=None):
+    def __init__(self, requester_model=None, scope_model=None, operation_model=None):
         self._adapters = {}
         self._requester_model = requester_model
+        self._scope_model = scope_model
+        self._operation_model = operation_model
         self._frozen = False
         self._finalizers = []
         self._finalized = False
@@ -429,27 +431,73 @@ class TrusteeRegistry(object):
             )
         return _resolve_model(self._requester_model, 'requester_model')
 
-    def configure(self, requester_model):
-        """Set the requester model membership paths must terminate at."""
-        resolved = _resolve_model(requester_model, 'requester_model')
-        if self._requester_model is not None:
-            existing = _resolve_model(self._requester_model, 'requester_model')
+    def scope_model(self):
+        if self._scope_model is None:
+            raise TrusteeRegistrationError(
+                'Scope model is not configured.'
+            )
+        return _resolve_model(self._scope_model, 'scope_model')
+
+    def operation_model(self):
+        if self._operation_model is None:
+            raise TrusteeRegistrationError(
+                'Operation model is not configured.'
+            )
+        return _resolve_model(self._operation_model, 'operation_model')
+
+    def _set_configured_model(self, attr, value, what):
+        resolved = _resolve_model(value, what)
+        current = getattr(self, attr)
+        if current is not None:
+            existing = _resolve_model(current, what)
             if _model_key(existing) is _model_key(resolved):
                 return existing
             if self._frozen or self._finalized:
                 raise TrusteeRegistryFrozen(
-                    'Trustee registry is frozen; cannot reconfigure the requester.'
+                    'Trustee registry is frozen; cannot reconfigure the %s.' % (
+                        what.replace('_model', ''),
+                    )
                 )
             raise TrusteeRegistrationError(
-                'Requester is already configured as %s; cannot configure %s.' % (
-                    _model_label(existing), _model_label(resolved),
+                '%s is already configured as %s; cannot configure %s.' % (
+                    what, _model_label(existing), _model_label(resolved),
                 )
             )
         if self._frozen or self._finalized:
             raise TrusteeRegistryFrozen(
-                'Trustee registry is frozen; cannot configure the requester.'
+                'Trustee registry is frozen; cannot configure the %s.' % (
+                    what.replace('_model', ''),
+                )
             )
-        self._requester_model = resolved
+        setattr(self, attr, resolved)
+        return resolved
+
+    def configure(self, requester_model=None, scope_model=None, operation_model=None):
+        """Set requester / scope / operation models adapters must terminate at.
+
+        The first successful registration may infer unset scope and
+        operation models from its validated paths. Later adapters must
+        use the same terminals. Membership still terminates at the
+        configured requester.
+        """
+        resolved = None
+        if requester_model is not None:
+            resolved = self._set_configured_model(
+                '_requester_model', requester_model, 'requester_model',
+            )
+        if scope_model is not None:
+            resolved = self._set_configured_model(
+                '_scope_model', scope_model, 'scope_model',
+            )
+        if operation_model is not None:
+            resolved = self._set_configured_model(
+                '_operation_model', operation_model, 'operation_model',
+            )
+        if requester_model is None and scope_model is None and operation_model is None:
+            raise TrusteeRegistrationError(
+                'configure() requires requester_model, scope_model, or '
+                'operation_model.'
+            )
         return resolved
 
     def add_finalizer(self, func):
@@ -483,6 +531,8 @@ class TrusteeRegistry(object):
             if not self._finalized:
                 snapshot = dict(self._adapters)
                 requester_snapshot = self._requester_model
+                scope_snapshot = self._scope_model
+                operation_snapshot = self._operation_model
                 try:
                     for func in list(self._finalizers):
                         func()
@@ -490,6 +540,8 @@ class TrusteeRegistry(object):
                     self._adapters.clear()
                     self._adapters.update(snapshot)
                     self._requester_model = requester_snapshot
+                    self._scope_model = scope_snapshot
+                    self._operation_model = operation_snapshot
                     raise
                 self._finalizers = []
                 self._finalized = True
@@ -603,10 +655,36 @@ class TrusteeRegistry(object):
                     _model_label(trustee_terminal), _model_label(trustee_model),
                 )
             )
-        _walk(grant_model, scope_path, 'scope_path', True)
+        scope_terminal, _hops = _walk(
+            grant_model, scope_path, 'scope_path', True,
+        )
+        if self._scope_model is not None:
+            canonical_scope = _resolve_model(self._scope_model, 'scope_model')
+            if _model_key(scope_terminal) is not _model_key(canonical_scope):
+                raise TrusteeRegistrationError(
+                    'scope_path %r on %s terminates at %s, which is not '
+                    'the configured scope %s.' % (
+                        scope_path, _model_label(grant_model),
+                        _model_label(scope_terminal),
+                        _model_label(canonical_scope),
+                    )
+                )
         operation_terminal, _hops = _walk(
             grant_model, operation_path, 'operation_path', True,
         )
+        if self._operation_model is not None:
+            canonical_operation = _resolve_model(
+                self._operation_model, 'operation_model',
+            )
+            if _model_key(operation_terminal) is not _model_key(canonical_operation):
+                raise TrusteeRegistrationError(
+                    'operation_path %r on %s terminates at %s, which is not '
+                    'the configured operation %s.' % (
+                        operation_path, _model_label(grant_model),
+                        _model_label(operation_terminal),
+                        _model_label(canonical_operation),
+                    )
+                )
         for path in constraint_paths:
             constraint_terminal, _hops = _walk(
                 grant_model, path, 'constraint_path', False,
@@ -656,8 +734,49 @@ class TrusteeRegistry(object):
                     adapter.name,
                 )
             )
+        self._assert_adapter_terminals(adapter)
         self._adapters[adapter.name] = adapter
+        if self._scope_model is None:
+            self._scope_model = adapter.scope_model()
+        if self._operation_model is None:
+            self._operation_model = adapter.operation_model()
         return adapter
+
+    def _assert_adapter_terminals(self, adapter):
+        """Reject adapters whose scope/operation terminals do not match."""
+        if self._scope_model is not None:
+            canonical = _resolve_model(self._scope_model, 'scope_model')
+            terminal = adapter.scope_model()
+            if _model_key(terminal) is not _model_key(canonical):
+                raise TrusteeRegistrationError(
+                    'Trustee adapter %r scope terminates at %s, which is '
+                    'not the configured scope %s.' % (
+                        adapter.name, _model_label(terminal),
+                        _model_label(canonical),
+                    )
+                )
+        if self._operation_model is not None:
+            canonical = _resolve_model(self._operation_model, 'operation_model')
+            terminal = adapter.operation_model()
+            if _model_key(terminal) is not _model_key(canonical):
+                raise TrusteeRegistrationError(
+                    'Trustee adapter %r operation terminates at %s, which is '
+                    'not the configured operation %s.' % (
+                        adapter.name, _model_label(terminal),
+                        _model_label(canonical),
+                    )
+                )
+
+    def _assert_query_compatible(self, adapters):
+        """Fail closed before OR-composing adapters with mixed terminals."""
+        if not adapters:
+            return
+        if self._scope_model is None:
+            self._scope_model = adapters[0].scope_model()
+        if self._operation_model is None:
+            self._operation_model = adapters[0].operation_model()
+        for adapter in adapters:
+            self._assert_adapter_terminals(adapter)
 
     def revalidate(self, adapter):
         """Re-walk a stored adapter. Raise ``TrusteeRegistrationError`` if stale."""
@@ -690,6 +809,7 @@ class TrusteeRegistry(object):
         """
         self.ensure_frozen()
         adapters = self._enabled(names)
+        self._assert_query_compatible(adapters)
         if not adapters:
             return Q(pk__in=[])
         grant_q = adapters[0].exists_q(requester, operation, scope_from_row)
@@ -701,6 +821,7 @@ class TrusteeRegistry(object):
         """OR-compose ``Exists`` predicates against an outer operation queryset."""
         self.ensure_frozen()
         adapters = self._enabled(names)
+        self._assert_query_compatible(adapters)
         if not adapters:
             return Q(pk__in=[])
         grant_q = adapters[0].operation_exists_q(requester, scopes)
@@ -731,7 +852,7 @@ class TrusteeRegistry(object):
 def check_registration(
     name, trustee_model, grant_model, trustee_path, scope_path,
     operation_path, membership_path='', constraint_paths=(),
-    requester_model=None, registry=None,
+    requester_model=None, scope_model=None, operation_model=None, registry=None,
 ):
     """Validate a proposed registration without committing it.
 
@@ -739,9 +860,18 @@ def check_registration(
     instance when invalid. Does not execute getters or properties.
     """
     if registry is None:
-        registry = TrusteeRegistry(requester_model=requester_model)
-    elif requester_model is not None and registry._requester_model is None:
-        registry.configure(requester_model)
+        registry = TrusteeRegistry(
+            requester_model=requester_model,
+            scope_model=scope_model,
+            operation_model=operation_model,
+        )
+    else:
+        if requester_model is not None and registry._requester_model is None:
+            registry.configure(requester_model=requester_model)
+        if scope_model is not None and registry._scope_model is None:
+            registry.configure(scope_model=scope_model)
+        if operation_model is not None and registry._operation_model is None:
+            registry.configure(operation_model=operation_model)
     try:
         registry._build_adapter(
             KIND_GRANT, name, trustee_model, membership_path, grant_model,
@@ -764,8 +894,12 @@ class Trustee(object):
     KIND_GRANT = KIND_GRANT
 
     @classmethod
-    def configure(cls, requester_model):
-        return cls.registry.configure(requester_model)
+    def configure(cls, requester_model=None, scope_model=None, operation_model=None):
+        return cls.registry.configure(
+            requester_model=requester_model,
+            scope_model=scope_model,
+            operation_model=operation_model,
+        )
 
     @classmethod
     def register(

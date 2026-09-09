@@ -1244,7 +1244,11 @@ def sync_default_trustee_adapters():
     behavior is the second Group constraint path (global ceiling), not a
     third OR-composed grant branch. No new grant table is introduced.
     """
-    Trustee.configure(requester_model=ENTITY_MODEL_NAME)
+    Trustee.configure(
+        requester_model=ENTITY_MODEL_NAME,
+        scope_model='trusts.Trust',
+        operation_model=PERMISSION_MODEL_NAME,
+    )
     Trustee.register(
         name=DIRECT_TRUSTEE,
         trustee_model=ENTITY_MODEL_NAME,

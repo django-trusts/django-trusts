@@ -221,7 +221,11 @@ is ``trusts.trustee.Trustee``. It does not require the concrete names
       class Bundle(TrusteeMixin, models.Model):
           name = models.CharField(max_length=80, unique=True)
 
-      Trustee.configure(requester_model=Requester)
+      Trustee.configure(
+          requester_model=Requester,
+          scope_model=Scope,
+          operation_model=Operation,
+      )
       Trustee.register(
           name='direct',
           trustee_model=Requester,
@@ -242,7 +246,11 @@ is ``trusts.trustee.Trustee``. It does not require the concrete names
       )
 
    Mixin inheritance is declaration convenience only. The frozen
-   registry is the complete query-building source.
+   registry is the complete query-building source. Built-in conveniences
+   may be gated by settings; additional installed adapters stay in the
+   compiled ``has_perm`` / ``.permitted()`` predicate. Scope and
+   operation paths must terminate at the configured models so OR-composed
+   adapters cannot authorize by colliding primary keys.
    ``Trustee.grant_q`` / ``Trustee.filter_granted`` /
    ``Trustee.row_is_granted`` share one compiled ``Exists`` predicate.
    List and exists checks are one SQL query each. Constraint paths

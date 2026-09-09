@@ -52,16 +52,26 @@ def _group_permission_queries_allowed():
 
 
 def enabled_trustee_adapter_names():
-    """django-trusts adapter names enabled by the live auth-model contract."""
-    from trusts import supported_entity_contract, supported_permission_contract
-    from trusts.models import DIRECT_TRUSTEE, GROUP_TRUSTEE
+    """Installed adapter names after settings-based gating of built-ins.
 
-    names = []
-    if supported_entity_contract() and supported_permission_contract():
-        names.append(DIRECT_TRUSTEE)
-    if _group_permission_queries_allowed():
-        names.append(GROUP_TRUSTEE)
-    return tuple(names)
+    The frozen registry is the complete query-building source. Built-in
+    ``direct`` / ``group`` adapters are omitted when their auth-model
+    contract fails. Additional installed adapters stay in the set.
+    """
+    from trusts import supported_entity_contract, supported_permission_contract
+    from trusts.models import DIRECT_TRUSTEE, GROUP_TRUSTEE, prepare_trustee_registry
+    from trusts.trustee import Trustee
+
+    prepare_trustee_registry()
+    skip = set()
+    if not (supported_entity_contract() and supported_permission_contract()):
+        skip.add(DIRECT_TRUSTEE)
+    if not _group_permission_queries_allowed():
+        skip.add(GROUP_TRUSTEE)
+    return tuple(
+        adapter.name for adapter in Trustee.adapters()
+        if adapter.name not in skip
+    )
 
 
 def _scope_from_row_for_outerref(trust_id_outerref):

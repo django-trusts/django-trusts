@@ -18,7 +18,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.checks import Error, run_checks
 from django.core.management import call_command
 from django.db import models
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 
 from trusts.checks import (
     CHECK_ID_INVALID_TRUSTEE,
@@ -46,6 +46,7 @@ from trusts.trustee import (
     check_registration,
 )
 from tests.models import (
+    TEST_TEAM_TRUSTEE,
     Receipt,
     TrusteeBundle,
     TrusteeCollective,
@@ -57,9 +58,12 @@ from tests.models import (
     TrusteeRequester,
     TrusteeResource,
     TrusteeScope,
+    TrusteeTeam,
+    TrusteeTeamGrant,
     TrusteeTrapGrant,
     UnregisteredTrusteeNote,
 )
+from trusts.query import enabled_trustee_adapter_names
 from tests.support import (
     create_test_users,
     enable_local_group_grant,
@@ -79,7 +83,11 @@ def _trustee_source():
 
 
 def _kernel_registry():
-    registry = TrusteeRegistry(requester_model=TrusteeRequester)
+    registry = TrusteeRegistry(
+        requester_model=TrusteeRequester,
+        scope_model=TrusteeScope,
+        operation_model=TrusteeOperation,
+    )
     registry.register(
         name='direct',
         trustee_model=TrusteeRequester,
@@ -146,7 +154,12 @@ class TrusteeRegistryContractTest(TestCase):
         prepare_trustee_registry()
         self.assertTrue(Trustee.is_registered(DIRECT_TRUSTEE))
         self.assertTrue(Trustee.is_registered(GROUP_TRUSTEE))
+        self.assertTrue(Trustee.is_registered(TEST_TEAM_TRUSTEE))
         self.assertFalse(Trustee.is_registered('role'))
+        self.assertEqual(
+            list(enabled_trustee_adapter_names()),
+            [DIRECT_TRUSTEE, GROUP_TRUSTEE, TEST_TEAM_TRUSTEE],
+        )
         self.assertEqual(Trustee.get(DIRECT_TRUSTEE).kind, KIND_GRANT)
         self.assertEqual(Trustee.get(GROUP_TRUSTEE).kind, KIND_GRANT)
         self.assertEqual(Trustee.get(DIRECT_TRUSTEE).membership_path, '')
@@ -160,7 +173,25 @@ class TrusteeRegistryContractTest(TestCase):
         )
         labels = [adapter.label for adapter in Trustee.adapters()]
         self.assertEqual(labels, sorted(labels))
-        self.assertEqual(labels, [DIRECT_TRUSTEE, GROUP_TRUSTEE])
+        self.assertEqual(
+            labels, [DIRECT_TRUSTEE, GROUP_TRUSTEE, TEST_TEAM_TRUSTEE],
+        )
+
+    @override_settings(TRUSTS_GROUP_MODEL='trusts_tests.Organization')
+    def test_settings_gate_builtins_keep_additional_adapters(self):
+        prepare_trustee_registry()
+        names = list(enabled_trustee_adapter_names())
+        self.assertNotIn(GROUP_TRUSTEE, names)
+        self.assertIn(DIRECT_TRUSTEE, names)
+        self.assertIn(TEST_TEAM_TRUSTEE, names)
+
+    @override_settings(TRUSTS_PERMISSION_MODEL='trusts_tests.Organization')
+    def test_settings_gate_direct_keeps_additional_adapters(self):
+        prepare_trustee_registry()
+        names = list(enabled_trustee_adapter_names())
+        self.assertNotIn(DIRECT_TRUSTEE, names)
+        self.assertNotIn(GROUP_TRUSTEE, names)
+        self.assertIn(TEST_TEAM_TRUSTEE, names)
 
     def test_duplicate_registration_is_idempotent(self):
         prepare_trustee_registry()
@@ -219,7 +250,11 @@ class TrusteeRegistryContractTest(TestCase):
             Trustee.get('missing')
 
     def test_finalizers_run_once_before_freeze(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         calls = []
 
         def fin():
@@ -244,7 +279,11 @@ class TrusteeRegistryContractTest(TestCase):
             registry.add_finalizer(lambda: None)
 
     def test_finalizer_failure_does_not_keep_partial_map(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         registry.register(
             name='direct',
             trustee_model=TrusteeRequester,
@@ -277,7 +316,11 @@ class TrusteeRegistryContractTest(TestCase):
         self.assertEqual(len(registry._finalizers), 1)
 
     def test_query_paths_run_registry_finalizers(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         calls = []
         registry.add_finalizer(lambda: calls.append('fin'))
         registry.register(
@@ -329,7 +372,7 @@ assert Trustee.is_frozen()
 assert Trustee.is_registered(DIRECT_TRUSTEE)
 assert Trustee.is_registered(GROUP_TRUSTEE)
 assert [adapter.name for adapter in Trustee.adapters()] == [
-    DIRECT_TRUSTEE, GROUP_TRUSTEE,
+    DIRECT_TRUSTEE, GROUP_TRUSTEE, 'team',
 ]
 
 prepare_trustee_registry()
@@ -349,7 +392,11 @@ print('ok')
 
 class TrusteeValidationTest(TestCase):
     def test_scalar_and_callable_paths_fail_closed(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         with self.assertRaises(TrusteeRegistrationError) as ctx:
             registry.register(
                 name='direct',
@@ -392,7 +439,11 @@ class TrusteeValidationTest(TestCase):
         ))
 
     def test_missing_and_incomplete_fail_closed(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         with self.assertRaises(TrusteeRegistrationError):
             registry.register(
                 name='',
@@ -422,7 +473,11 @@ class TrusteeValidationTest(TestCase):
             )
 
     def test_wrong_requester_terminal_fail_closed(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         with self.assertRaises(TrusteeRegistrationError) as ctx:
             registry.register(
                 name='collective',
@@ -436,7 +491,11 @@ class TrusteeValidationTest(TestCase):
         self.assertIn('not the configured requester', str(ctx.exception))
 
     def test_identity_requires_requester_trustee(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         with self.assertRaises(TrusteeRegistrationError) as ctx:
             registry.register(
                 name='collective',
@@ -450,7 +509,11 @@ class TrusteeValidationTest(TestCase):
         self.assertIn('Identity membership', str(ctx.exception))
 
     def test_many_valued_grant_identity_fail_closed(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         with self.assertRaises(TrusteeRegistrationError) as ctx:
             registry.register(
                 name='collective',
@@ -498,7 +561,11 @@ class TrusteeValidationTest(TestCase):
         self.assertIn('duplicates', str(ctx.exception))
 
     def test_wrong_trustee_path_terminal_fail_closed(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         with self.assertRaises(TrusteeRegistrationError) as ctx:
             registry.register(
                 name='direct',
@@ -511,7 +578,11 @@ class TrusteeValidationTest(TestCase):
         self.assertIn('not trustee_model', str(ctx.exception))
 
     def test_constraint_must_terminate_at_operation(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         with self.assertRaises(TrusteeRegistrationError) as ctx:
             registry.register(
                 name='collective',
@@ -526,7 +597,11 @@ class TrusteeValidationTest(TestCase):
         self.assertIn('not the operation model', str(ctx.exception))
 
     def test_multi_hop_membership_is_valid(self):
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         adapter = registry.register(
             name='desk',
             trustee_model=TrusteeDesk,
@@ -543,6 +618,47 @@ class TrusteeValidationTest(TestCase):
         registry = _kernel_registry()
         self.assertFalse(issubclass(TrusteeCollective, TrusteeMixin))
         self.assertTrue(registry.is_registered('collective'))
+
+    def test_wrong_scope_terminal_fail_closed(self):
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
+        with self.assertRaises(TrusteeRegistrationError) as ctx:
+            registry.register(
+                name='direct',
+                trustee_model=TrusteeRequester,
+                grant_model=TrusteeDirectGrant,
+                trustee_path='requester',
+                scope_path='requester',
+                operation_path='operation',
+            )
+        self.assertIn('not the configured scope', str(ctx.exception))
+        self.assertIsNotNone(check_registration(
+            'direct', TrusteeRequester, TrusteeDirectGrant, 'requester',
+            'requester', 'operation',
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        ))
+
+    def test_wrong_operation_terminal_fail_closed(self):
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
+        with self.assertRaises(TrusteeRegistrationError) as ctx:
+            registry.register(
+                name='direct',
+                trustee_model=TrusteeRequester,
+                grant_model=TrusteeDirectGrant,
+                trustee_path='requester',
+                scope_path='scope',
+                operation_path='requester',
+            )
+        self.assertIn('not the configured operation', str(ctx.exception))
 
 
 class TrusteeSystemCheckTest(TestCase):
@@ -592,7 +708,11 @@ class TrusteeNoCallbackTest(TestCase):
         grant = TrusteeTrapGrant.objects.create(
             scope=scope, requester=requester, operation=operation,
         )
-        registry = TrusteeRegistry(requester_model=TrusteeRequester)
+        registry = TrusteeRegistry(
+            requester_model=TrusteeRequester,
+            scope_model=TrusteeScope,
+            operation_model=TrusteeOperation,
+        )
         registry.register(
             name='trap',
             trustee_model=TrusteeRequester,
@@ -782,6 +902,62 @@ class TrusteeQueryContractTest(TransactionTestCase):
         )
         self.assertIn('trusteer', exists_sql.lower() + list_sql.lower())
 
+    def test_stale_scope_terminal_does_not_authorize_by_pk_collision(self):
+        self.assertEqual(self.requester.pk, self.scope_a.pk)
+        TrusteeDirectGrant.objects.create(
+            scope=self.scope_b, requester=self.requester, operation=self.read,
+        )
+        stale = TrusteeAdapter(
+            KIND_GRANT, 'direct', TrusteeRequester, '',
+            TrusteeDirectGrant, 'requester', 'requester', 'operation',
+            (), self.registry,
+        )
+        saved = self.registry._adapters['direct']
+        self.registry._adapters['direct'] = stale
+        try:
+            with self.assertRaises(TrusteeRegistrationError) as ctx:
+                self.registry.row_is_granted(
+                    self.scope_a, self.requester, self.read,
+                )
+            self.assertIn('not the configured scope', str(ctx.exception))
+            with self.assertRaises(TrusteeRegistrationError):
+                list(self.registry.filter_granted(
+                    TrusteeScope.objects.all(), self.requester, self.read,
+                ))
+        finally:
+            self.registry._adapters['direct'] = saved
+        self.assertFalse(
+            self.registry.row_is_granted(
+                self.scope_a, self.requester, self.read,
+            )
+        )
+        self.assertTrue(
+            self.registry.row_is_granted(
+                self.scope_b, self.requester, self.read,
+            )
+        )
+
+    def test_stale_operation_terminal_does_not_match_by_pk_collision(self):
+        self.assertEqual(self.requester.pk, self.read.pk)
+        TrusteeDirectGrant.objects.create(
+            scope=self.scope_b, requester=self.requester, operation=self.write,
+        )
+        stale = TrusteeAdapter(
+            KIND_GRANT, 'direct', TrusteeRequester, '',
+            TrusteeDirectGrant, 'requester', 'scope', 'requester',
+            (), self.registry,
+        )
+        saved = self.registry._adapters['direct']
+        self.registry._adapters['direct'] = stale
+        try:
+            with self.assertRaises(TrusteeRegistrationError) as ctx:
+                list(TrusteeOperation.objects.filter(
+                    self.registry.operation_grant_q(self.requester, self.scope_b)
+                ))
+            self.assertIn('not the configured operation', str(ctx.exception))
+        finally:
+            self.registry._adapters['direct'] = saved
+
 
 class TrusteeConvenienceCompatibilityTest(TestCase):
     def test_group_is_explicit_external_registration(self):
@@ -796,7 +972,7 @@ class TrusteeConvenienceCompatibilityTest(TestCase):
         self.assertTrue(issubclass(Role, TrusteeMixin))
         self.assertEqual(
             [adapter.name for adapter in Trustee.adapters()],
-            [DIRECT_TRUSTEE, GROUP_TRUSTEE],
+            [DIRECT_TRUSTEE, GROUP_TRUSTEE, TEST_TEAM_TRUSTEE],
         )
         group = Trustee.get(GROUP_TRUSTEE)
         self.assertIn('roles__permissions', group.constraint_paths[1])
@@ -895,3 +1071,23 @@ class TrusteeAuthQueryParityTest(TestCase):
                 .values_list('pk', flat=True)
             )
         self.assertEqual(pks, [self.receipt_a.pk])
+
+    def test_registered_third_adapter_participates_in_has_perm_and_permitted(self):
+        prepare_trustee_registry()
+        self.assertIn(TEST_TEAM_TRUSTEE, enabled_trustee_adapter_names())
+        team = TrusteeTeam.objects.create(name='reviewers')
+        team.members.add(self.user)
+        TrusteeTeamGrant.objects.create(
+            trust=self.trust_a, team=team, permission=self.perm,
+        )
+        reload_test_users(self)
+        self.assertTrue(
+            self.user.has_perm('trusts_tests.read_receipt', self.receipt_a)
+        )
+        self.assertFalse(
+            self.user.has_perm('trusts_tests.read_receipt', self.receipt_b)
+        )
+        listed = set(
+            Receipt.objects.permitted('read', self.user).values_list('pk', flat=True)
+        )
+        self.assertEqual(listed, {self.receipt_a.pk})

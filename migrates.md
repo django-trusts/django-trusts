@@ -1250,7 +1250,8 @@ migration. No Junction table rewrite.
 
 This record covers the first additive Trustee-extraction slice. Version
 remains **1.0.0.dev0**. **No Trusts schema migration is required.** Test
-fixtures add `trusts_tests` models only (`0005_trustee_contract`). This
+fixtures add `trusts_tests` models only (`0005_trustee_contract`,
+`0006_trustee_team`). This
 PR does **not** close
 [#40](https://github.com/django-trusts/django-trusts/issues/40); review
 owns that. A separate `django-trusts-core` distribution is not created
@@ -1267,7 +1268,11 @@ lives in `trusts.trustee` and must not name `User`, `Group`, `Role`,
 ```python
 from trusts.trustee import Trustee, TrusteeMixin
 
-Trustee.configure(requester_model=Requester)
+Trustee.configure(
+    requester_model=Requester,
+    scope_model=Scope,
+    operation_model=Operation,
+)
 Trustee.register(
     name="direct",
     trustee_model=Requester,
@@ -1345,7 +1350,7 @@ the Group local/global intersection (Role as ceiling only).
 | | |
 | --- | --- |
 | Previous | `trust_grant_q` and the backend hardcoded `TrustUserPermission` / `TrustGroup` / `Group.permissions` / `group.roles` lookups. |
-| New | Abstract/model-free `Trustee.configure` / `Trustee.register`. `Trustee.adapters()` is the complete deterministic set. `Trustee.add_finalizer` runs pending integration work once before every freeze (`filter_granted` / `row_is_granted` / `prepare_trustee_registry`). After freeze, public `Trustee.register` is idempotent-only or rejected. `trusts.E007` re-walks the installed map. |
+| New | Abstract/model-free `Trustee.configure` / `Trustee.register`. `Trustee.adapters()` is the complete deterministic set and the complete query-building source: built-in `direct` / `group` adapters may be gated by the auth-model contract, but additional installed adapters stay in `has_perm` / `.permitted()`. `configure(scope_model=..., operation_model=...)` (or first-adapter inference) rejects mismatched terminals so OR-composed adapters cannot authorize by colliding primary keys. `Trustee.add_finalizer` runs pending integration work once before every freeze. After freeze, public `Trustee.register` is idempotent-only or rejected. `trusts.E007` re-walks the installed map. |
 | Replacement | New kernel callers use `from trusts.trustee import Trustee`. Existing `has_perm` / `.permitted()` keep working. |
 | Affected | New registrations; documentation distinguishes the core contract from django-trusts conveniences. |
 | Authorization | Same allow/deny results for current User and Group paths. No schema change. |
@@ -1394,8 +1399,8 @@ python -m django migrate --settings=tests.custom_settings
 ```
 
 Trusts still applies `0001`–`0002` only. The isolated test app applies
-`trusts_tests.0005_trustee_contract` for kernel models. That is not a
-Trusts schema change.
+`trusts_tests.0005_trustee_contract` and `0006_trustee_team` for kernel
+and extra-adapter models. That is not a Trusts schema change.
 
 ## Upgrade of a representative legacy database
 

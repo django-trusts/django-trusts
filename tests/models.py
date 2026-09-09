@@ -1,10 +1,11 @@
+from django.conf import settings
 from django.db import models
 from django.contrib.auth.models import Group, User
 
 from trusts.conditions import condition_refs
 from trusts.context import Context
 from trusts.models import Content, Junction
-from trusts.trustee import TrusteeMixin
+from trusts.trustee import Trustee, TrusteeMixin
 
 _u, _p, _o = condition_refs()
 
@@ -405,3 +406,54 @@ class UnregisteredTrusteeNote(models.Model):
         on_delete=models.CASCADE,
     )
     text = models.CharField(max_length=80, null=False, blank=False, default='')
+
+
+TEST_TEAM_TRUSTEE = 'team'
+
+
+class TrusteeTeam(models.Model):
+    """Test-only extra trustee for process-wide registry completeness."""
+
+    name = models.CharField(max_length=40, null=False, blank=False)
+    members = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, related_name='trustee_teams', blank=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class TrusteeTeamGrant(models.Model):
+    """Scoped grant for the test-only extra trustee adapter."""
+
+    trust = models.ForeignKey(
+        'trusts.Trust', related_name='trustee_team_grants',
+        null=False, blank=False, on_delete=models.CASCADE,
+    )
+    team = models.ForeignKey(
+        TrusteeTeam, related_name='grants', null=False, blank=False,
+        on_delete=models.CASCADE,
+    )
+    permission = models.ForeignKey(
+        'auth.Permission', related_name='trustee_team_grants',
+        null=False, blank=False, on_delete=models.CASCADE,
+    )
+
+    class Meta:
+        unique_together = ('trust', 'team', 'permission')
+
+
+def sync_test_team_trustee_adapter():
+    """Register the extra test trustee on the process-wide map."""
+    Trustee.register(
+        name=TEST_TEAM_TRUSTEE,
+        trustee_model=TrusteeTeam,
+        grant_model=TrusteeTeamGrant,
+        trustee_path='team',
+        scope_path='trust',
+        operation_path='permission',
+        membership_path='members',
+    )
+
+
+Trustee.add_finalizer(sync_test_team_trustee_adapter)
