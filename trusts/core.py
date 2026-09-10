@@ -455,7 +455,7 @@ class TrustsRegistry(object):
         return self.plan_for(content, user=user).permissions(user, content)
 
     def has_permission(self, user, content, permission):
-        """Whether ``permission`` is in the same plan as ``permissions_for``."""
+        """Whether ``permission`` exists in the common plan for this pair."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')

@@ -10,13 +10,12 @@ import re
 from contextlib import contextmanager
 from pathlib import Path
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.db.models.query import QuerySet
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.test.utils import isolate_apps
 
 from trusts.core import (
@@ -54,11 +53,11 @@ def _projection_models():
         class Meta:
             app_label = 'trusts_tests'
 
+    User = get_user_model()
+
     class DocumentGrant(models.Model):
         document = models.ForeignKey(Document, on_delete=models.CASCADE)
-        user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-        )
+        user = models.ForeignKey(User, on_delete=models.CASCADE)
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
         class Meta:
@@ -66,9 +65,7 @@ def _projection_models():
 
     class DocumentPermit(models.Model):
         document = models.ForeignKey(Document, on_delete=models.CASCADE)
-        user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-        )
+        user = models.ForeignKey(User, on_delete=models.CASCADE)
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
         class Meta:
@@ -127,7 +124,7 @@ def _pks(rows):
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryProjectionTest(TestCase):
+class TrustsRegistryProjectionTest(TransactionTestCase):
     def setUp(self):
         (
             self.Document,
@@ -234,9 +231,7 @@ class TrustsRegistryProjectionTest(TestCase):
             self.Document.objects.order_by('pk'), self.alice, self.read,
         )
         self.assertIsInstance(qs, QuerySet)
-        self.assertEqual(list(qs), expected)
         self.assertEqual(_pks(expected), {self.doc_a.pk, self.doc_c.pk})
-
         with self.assertNumQueries(1):
             self.assertEqual(list(qs), expected)
 
@@ -401,11 +396,12 @@ class TrustsRegistryProjectionTest(TestCase):
         )
         registry_src = inspect.getsource(TrustsRegistry.has_permission)
         plan_src = inspect.getsource(RelationPlan.has_permission)
-        self.assertNotIn('permissions_for', registry_src)
-        self.assertNotIn('list(', plan_src)
-        self.assertNotIn('permissions_for', plan_src)
-        body = plan_src.split('def has_permission', 1)[-1]
-        self.assertNotIn('for ', body)
+        registry_body = registry_src.split('"""', 2)[-1]
+        plan_body = plan_src.split('"""', 2)[-1]
+        self.assertNotIn('permissions_for', registry_body)
+        self.assertNotIn('list(', plan_body)
+        self.assertNotIn('permissions_for', plan_body)
+        self.assertNotIn('for ', plan_body)
 
         from django.test.utils import CaptureQueriesContext
         with CaptureQueriesContext(connection) as captured:
