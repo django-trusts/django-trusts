@@ -58,5 +58,13 @@ content model fails closed: empty enumeration, `False`, and
 Callers pass model instances for `user`, `content`, and `permission`.
 This slice does not accept codename strings or dotted permission syntax.
 
+Registered relations may target a unique field other than the related
+model's primary key (`ForeignKey(..., to_field=...)`). Correlation reads
+that target field from Django `_meta` and builds `OuterRef` against it,
+not an assumed `pk`. `RelationPlan` projection methods require
+model-instance bindings; a supplied `None` or other non-instance value
+raises `TrustsConfigurationError` and is never omitted from the
+predicate.
+
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

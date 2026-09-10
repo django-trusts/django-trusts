@@ -866,9 +866,42 @@ Migration-bot checklist:
 - [ ] Leave historical ``Content`` / ``Junction`` authorization alone.
 - [ ] Leave package version at ``1.0.0.dev0``.
 
+### 29. Common-plan target-field correlation and required bindings (review on #61)
+
+The imported ``trusts.core`` development API from §28 is corrected.
+Version remains **1.0.0.dev0**. There is **no schema or Django
+migration change**. Historical authorization is unchanged.
+
+| | |
+| --- | --- |
+| Previous (#61 / §28) | ``RelationPlan._correlated_exists()`` always used ``OuterRef('pk')``. A valid direct ``ForeignKey(..., to_field='slug')`` (or any unique non-PK target) compared the root FK column to the outer row's primary key. |
+| New | Correlation reads the relation's Django target field (``ForeignKey.target_field`` / ``attname``) and builds ``OuterRef`` against that outer field. |
+| Replacement | Same ``RelationPlan`` / ``plan_for`` / registry projection call sites. Register direct single-valued relations as before; non-PK ``to_field`` now enumerates and filters correctly. |
+| Affected | Isolated ``trusts.core`` development callers that register a FK targeting a unique field other than ``pk``. PK-targeting FKs keep the same SQL meaning. |
+| Authorization | Unchanged for historical Trusts. Corrects mock-plan enumeration/list results for non-PK targets. |
+
+| | |
+| --- | --- |
+| Previous (#61 / §28) | ``_bound_root_qs()`` skipped any binding whose value was ``None``. A direct ``RelationPlan`` call with a missing principal/permission dropped that predicate and could broaden to all matching rows. |
+| New | Required bindings reject ``None`` and other non-model values with ``TrustsConfigurationError``. ``_bound_root_qs()`` and the three projection methods never omit a supplied binding. Nullable grant columns do not make ``None`` a valid binding. |
+| Replacement | Pass model instances for ``user``, ``content``, and ``permission`` on ``RelationPlan.permissions`` / ``has_permission`` / ``filter_content``. Registry wrappers already required instances. |
+| Affected | Direct ``RelationPlan`` / ``plan_for`` projection callers. ``TrustsRegistry`` wrappers already validated instances. |
+| Authorization | Fail closed. A missing binding cannot widen to all rows. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Import ``TrustsRegistry`` / ``RelationPlan`` from ``trusts.core``, not ``trusts``.
+- [ ] Pass model instances into ``RelationPlan`` projections; do not pass ``None``.
+- [ ] If a registered FK uses ``to_field``, expect correlation on that unique field, not ``pk``.
+- [ ] Leave historical ``Content`` / ``Junction`` authorization alone.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
 ## Schema
 
-No change. The plan compiler adds no model and no migration.
+No change. The plan compiler adds no model and no migration. The §29
+corrections change only ``trusts.core`` query construction and binding
+validation.
 
 ## Out of scope (not acceptance criteria)
 

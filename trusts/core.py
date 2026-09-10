@@ -237,6 +237,23 @@ def _require_instance(value, role):
     return value
 
 
+def _outer_ref_for_relation(root, field_name):
+    """Build ``OuterRef`` for the relation's actual target field.
+
+    Direct ``ForeignKey(..., to_field=...)`` and other single-valued
+    relations may target a unique field other than the related model's
+    primary key. Correlation must use that field, not assumed ``pk``.
+    """
+    field = root._meta.get_field(field_name)
+    target = getattr(field, 'target_field', None)
+    if target is None:
+        raise TrustsConfigurationError(
+            'Cannot correlate %s.%s; relation has no target field.'
+            % (root._meta.label, field_name)
+        )
+    return OuterRef(target.attname)
+
+
 def _content_model(content):
     if isinstance(content, QuerySet):
         return content.model._meta.concrete_model
@@ -264,8 +281,7 @@ class RelationPlan:
     def _bound_root_qs(self, record, **bindings):
         filters = {}
         for role, value in bindings.items():
-            if value is None:
-                continue
+            _require_instance(value, role)
             filters[getattr(record, _BINDING_FIELDS[role])] = value
         return record.root._default_manager.filter(**filters)
 
@@ -274,7 +290,7 @@ class RelationPlan:
         for record in self.records:
             terminal = getattr(record, terminal_field_attr)
             inner = self._bound_root_qs(record, **bindings).filter(
-                **{terminal: OuterRef('pk')}
+                **{terminal: _outer_ref_for_relation(record.root, terminal)}
             )
             parts.append(Exists(inner))
         if not parts:
@@ -285,6 +301,8 @@ class RelationPlan:
 
     def permissions(self, user, content):
         """Distinct permission rows for ``(user, content)``."""
+        user = _require_instance(user, 'user')
+        content = _require_instance(content, 'content')
         if not self.records or self.permission_model is None:
             return ()
         exists = self._correlated_exists(
@@ -294,6 +312,9 @@ class RelationPlan:
 
     def has_permission(self, user, content, permission):
         """SQL ``EXISTS`` membership of ``permission`` in ``permissions()``."""
+        user = _require_instance(user, 'user')
+        content = _require_instance(content, 'content')
+        permission = _require_instance(permission, 'permission')
         if not self.records or self.permission_model is None:
             return False
         if permission._meta.concrete_model is not self.permission_model:
@@ -307,6 +328,8 @@ class RelationPlan:
 
     def filter_content(self, queryset, user, permission):
         """Lazy queryset of candidate rows correlated to the same plan."""
+        user = _require_instance(user, 'user')
+        permission = _require_instance(permission, 'permission')
         if not self.records:
             return queryset.none()
         exists = self._correlated_exists(
