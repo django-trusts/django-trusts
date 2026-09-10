@@ -420,23 +420,22 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         plan = registry.plan_for(
             self.doc_a, user=self.alice, permission=self.read,
         )
-        with patch.object(
-            plan, '_correlated_exists', wraps=plan._correlated_exists,
-        ) as correlated:
+        terminals = []
+        original = RelationPlan._correlated_exists
+
+        def spy(self, terminal_field_attr, **bindings):
+            terminals.append(terminal_field_attr)
+            return original(self, terminal_field_attr, **bindings)
+
+        with patch.object(RelationPlan, '_correlated_exists', spy):
             list(plan.permissions(self.alice, self.doc_a))
             plan.has_permission(self.alice, self.doc_a, self.read)
             list(plan.filter_content(
                 self.Document.objects.all(), self.alice, self.read,
             ))
-        self.assertEqual(correlated.call_count, 3)
         self.assertEqual(
-            correlated.call_args_list[0].args[0], 'permission_field',
-        )
-        self.assertEqual(
-            correlated.call_args_list[1].args[0], 'permission_field',
-        )
-        self.assertEqual(
-            correlated.call_args_list[2].args[0], 'content_field',
+            terminals,
+            ['permission_field', 'permission_field', 'content_field'],
         )
 
     def test_configured_user_model_uses_registered_terminal_metadata(self):
