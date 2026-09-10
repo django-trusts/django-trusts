@@ -22,7 +22,7 @@ class S1AccountProxy(S1Account):
 
     class Meta:
         proxy = True
-        app_label = 'tests'
+        app_label = S1Account._meta.app_label
 
 
 class RequireConfiguredTerminalTest(TransactionTestCase):
@@ -61,30 +61,45 @@ class RequireConfiguredTerminalTest(TransactionTestCase):
             require_configured_terminal(self.account, S1Operation, 'operation')
         self.assertIn('operation', str(ctx.exception))
 
-    def test_require_configured_terminal_rejects_malformed_expected_model(self):
-        cases = (
-            self.account,
-            object,
-            object(),
-            1,
-            'S1Account',
-        )
-        for expected in cases:
-            with self.assertRaises(AuthorizationConfigError) as ctx:
-                require_configured_terminal(self.account, expected, 'requester')
-            self.assertIn('Django model class', str(ctx.exception))
-            self.assertNotIsInstance(ctx.exception, AttributeError)
-
-    def test_require_configured_terminal_accepts_proxy_expected_model(self):
+    def test_require_configured_terminal_accepts_proxy_and_concrete(self):
+        proxy_account = S1AccountProxy(pk=self.account.pk, name=self.account.name)
         self.assertIs(
             require_configured_terminal(self.account, S1AccountProxy, 'requester'),
             self.account,
         )
-        proxied = S1AccountProxy.objects.get(pk=self.account.pk)
         self.assertIs(
-            require_configured_terminal(proxied, S1Account, 'requester'),
-            proxied,
+            require_configured_terminal(proxy_account, S1Account, 'requester'),
+            proxy_account,
         )
+        self.assertIs(
+            require_configured_terminal(proxy_account, S1AccountProxy, 'requester'),
+            proxy_account,
+        )
+
+    def test_require_configured_terminal_rejects_malformed_expected_model(self):
+        class NotAModel(object):
+            pass
+
+        malformed = (
+            self.account,
+            object,
+            NotAModel,
+            1,
+            'S1Account',
+            None,
+        )
+        for expected_model in malformed:
+            with self.assertRaises(AuthorizationConfigError) as ctx:
+                require_configured_terminal(
+                    self.account, expected_model, 'requester',
+                )
+            self.assertIsInstance(ctx.exception, AuthorizationConfigError)
+            self.assertIn('Django model class', str(ctx.exception))
+            self.assertNotIsInstance(ctx.exception, AttributeError)
+
+        with self.assertRaises(AuthorizationConfigError) as ctx:
+            require_configured_terminal(1, object, 'requester')
+        self.assertIn('Django model class', str(ctx.exception))
 
     def test_require_configured_terminal_is_public_export(self):
         import trusts.runtime as runtime_mod
