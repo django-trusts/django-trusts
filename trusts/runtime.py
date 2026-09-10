@@ -87,7 +87,15 @@ def _same_model(left, right):
     return left._meta.concrete_model is right._meta.concrete_model
 
 
-def _require_instance(value, expected_model, what):
+def require_configured_terminal(value, expected_model, what):
+    """Fail closed unless ``value`` is an instance of ``expected_model``.
+
+    Rejects model classes, raw primary keys, and wrong concrete models so
+    Django cannot coerce a colliding PK. Raises
+    :class:`AuthorizationConfigError`. Compatibility façades (Zero
+    ``require_configured_requester`` / ``require_configured_operation``)
+    call this public surface and may translate the exception type.
+    """
     if isinstance(value, type):
         raise AuthorizationConfigError(
             '%s must be a %s instance, not a model class.' % (
@@ -120,7 +128,7 @@ def principal_is_usable(principal):
     the ordinary denial path. A model with none of those attributes
     (for example a custom account) is usable. ``None`` and raw PKs have
     no flags and are still configuration errors via
-    :func:`_require_instance`.
+    :func:`require_configured_terminal`.
     """
     if getattr(principal, 'is_anonymous', None) is True:
         return False
@@ -144,7 +152,7 @@ def _prepare_resource(resource, context, trustee, names):
         requester_model = trustee_registry.requester_model()
     except TrusteeRegistrationError as exc:
         _wrap_path_error(exc)
-    _require_instance(resource, resource.__class__, 'resource')
+    require_configured_terminal(resource, resource.__class__, 'resource')
     try:
         path = compose(
             resource.__class__, None, context=context_registry,
@@ -162,7 +170,7 @@ def _prepare_scope(scope_obj, trustee, names):
         scope_model = trustee_registry.scope_model()
     except TrusteeRegistrationError as exc:
         _wrap_path_error(exc)
-    _require_instance(scope_obj, scope_model, 'scope')
+    require_configured_terminal(scope_obj, scope_model, 'scope')
     try:
         path = compose_scope(
             scope_obj.__class__, None, trustee=trustee_registry, names=names,
@@ -184,7 +192,7 @@ def _prepare_operation(operation, trustee_registry):
         operation_model = trustee_registry.operation_model()
     except TrusteeRegistrationError as exc:
         _wrap_path_error(exc)
-    return _require_instance(operation, operation_model, 'operation')
+    return require_configured_terminal(operation, operation_model, 'operation')
 
 
 def _deny_empty(queryset):
@@ -198,7 +206,7 @@ def is_authorized(principal, operation, resource, context=None, trustee=None, na
     path, trustee_registry, requester_model = _prepare_resource(
         resource, context, trustee, names,
     )
-    _require_instance(principal, requester_model, 'requester')
+    require_configured_terminal(principal, requester_model, 'requester')
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.row_is_granted(resource, principal, operation)
@@ -230,7 +238,7 @@ def filter_authorized(queryset, principal, operation, context=None, trustee=None
         requester_model = trustee_registry.requester_model()
     except TrusteeRegistrationError as exc:
         _wrap_path_error(exc)
-    _require_instance(principal, requester_model, 'requester')
+    require_configured_terminal(principal, requester_model, 'requester')
     try:
         path = compose(
             queryset.model, None, context=context_registry,
@@ -255,7 +263,7 @@ def authorized_q(resource_model, principal, operation, context=None, trustee=Non
         requester_model = trustee_registry.requester_model()
     except TrusteeRegistrationError as exc:
         _wrap_path_error(exc)
-    _require_instance(principal, requester_model, 'requester')
+    require_configured_terminal(principal, requester_model, 'requester')
     try:
         path = compose(
             resource_model, None, context=context_registry,
@@ -277,7 +285,7 @@ def is_scope_authorized(principal, operation, scope_obj, trustee=None, names=Non
     path, trustee_registry, requester_model = _prepare_scope(
         scope_obj, trustee, names,
     )
-    _require_instance(principal, requester_model, 'requester')
+    require_configured_terminal(principal, requester_model, 'requester')
     operation = _prepare_operation(operation, trustee_registry)
     try:
         return path.row_is_granted(scope_obj, principal, operation)
@@ -307,7 +315,7 @@ def filter_authorized_scope(queryset, principal, operation, trustee=None, names=
         requester_model = trustee_registry.requester_model()
     except TrusteeRegistrationError as exc:
         _wrap_path_error(exc)
-    _require_instance(principal, requester_model, 'requester')
+    require_configured_terminal(principal, requester_model, 'requester')
     try:
         path = compose_scope(
             queryset.model, None, trustee=trustee_registry, names=names,
@@ -330,7 +338,7 @@ def authorized_scope_q(scope_model, principal, operation, trustee=None, names=No
         requester_model = trustee_registry.requester_model()
     except TrusteeRegistrationError as exc:
         _wrap_path_error(exc)
-    _require_instance(principal, requester_model, 'requester')
+    require_configured_terminal(principal, requester_model, 'requester')
     try:
         path = compose_scope(
             scope_model, None, trustee=trustee_registry, names=names,
@@ -355,5 +363,6 @@ __all__ = [
     'is_scope_authorized',
     'principal_is_usable',
     'require_authorized',
+    'require_configured_terminal',
     'require_scope_authorized',
 ]
