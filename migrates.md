@@ -762,5 +762,65 @@ Migration-bot checklist:
 - Authentication-backend composition / multi-backend OR semantics
 - Closing #4 for arbitrary Python callbacks
 
+---
+
+# Registration primitive (issue #57)
+
+This record covers the additive ``trusts.core`` registration surface.
+Version remains **1.0.0.dev0**. It closes the #57 slice (register and
+validate only). It does **not** compile queries, migrate historical
+models, or change authorization results. There is **no schema or
+migration change**.
+
+## Decision
+
+Authorization metadata for a permission-bearing relation is declared
+from root-relative ``Ref`` paths on an isolated ``TrustsRegistry``
+instance. The root model comes from the refs. Terminal models and field
+names are inferred from Django ``_meta``. One immutable
+``RegisteredRelation`` is stored per root. Duplicate (identical) and
+conflicting (same root, different normalized record) registrations both
+raise ``TrustsConfigurationError`` and leave the first record unchanged.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``ContentQuerySet.permitted`` signatures
+- ``Content`` / ``Junction`` registration and ``class_prepared`` dispatch
+- Authentication-backend composition
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 27. ``trusts.core`` registration primitive (new, additive)
+
+| | |
+| --- | --- |
+| Previous | No generic relation-root registry. Historical registration state lives on ``Content`` / ``Junction``. |
+| New | ``TrustsRegistry``, root-relative ``Ref``, ``register(...)``, and immutable ``RegisteredRelation`` records in ``trusts.core``. Isolated instances only; not re-exported from ``trusts``. Direct single-valued forward paths only. ``condition`` omitted/``None`` only. |
+| Replacement | None for existing callers. Import ``from trusts.core import TrustsRegistry, Ref`` for new isolated declarations. |
+| Affected | None of the live authorization path. Tests use ordinary Document / DocumentGrant models. |
+| Authorization | Unchanged. No query compilation. No schema or migration. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Do not import ``TrustsRegistry`` from ``trusts``; import ``trusts.core``.
+- [ ] Leave historical ``Content`` / ``Junction`` registration alone.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. ``trusts.core`` performs zero SQL and adds no model.
+
+## Out of scope (not acceptance criteria)
+
+- Query compilation and the three projections
+- Historical model registration
+- String / ``__`` path desugaring
+- ``condition`` representation (``Q`` / ``Expr`` / callable)
+- Process-global registry or ``trusts`` package re-export
+
+
 
 

@@ -66,6 +66,7 @@ def main() -> int:
     import trusts
     from trusts.models import Trust
     from trusts.backends import TrustModelBackend
+    from trusts.core import Ref, RegisteredRelation, TrustsRegistry
     from django_trusts import TQ, condition_refs
 
     trusts_file = Path(trusts.__file__).resolve()
@@ -73,12 +74,16 @@ def main() -> int:
         raise SystemExit('Imported trusts from the checkout: %s' % trusts_file)
     if 'site-packages' not in str(trusts_file) and 'dist-packages' not in str(trusts_file):
         raise SystemExit('trusts.__file__ is not a site-packages install: %s' % trusts_file)
+    core_file = Path(trusts.core.__file__).resolve()
+    if 'site-packages' not in str(core_file) and 'dist-packages' not in str(core_file):
+        raise SystemExit('trusts.core is not a site-packages install: %s' % core_file)
 
     print('wheel import ok')
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
     print('Trust', Trust)
     print('TrustModelBackend', TrustModelBackend)
+    print('trusts.core', TrustsRegistry, Ref, RegisteredRelation)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
     return 0
