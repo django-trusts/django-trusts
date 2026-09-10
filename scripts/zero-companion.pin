@@ -2,11 +2,9 @@
 # publish Zero metadata. Override with DJANGO_TRUSTS_ZERO_REPO,
 # DJANGO_TRUSTS_ZERO_REF, or DJANGO_TRUSTS_ZERO_SRC (already-cloned tree).
 # `ref` must be a 40-char commit SHA (not a cursor/ branch name).
-# TEMPORARY PR proof only: django-trusts-zero#4 / #3 implementation SHA.
-# After Zero #4 merges to main against this kernel head, replace `ref`
-# with that stable main merge SHA and rerun kernel CI before merging
-# this kernel PR. Do not land kernel master with a PR-only Zero pin.
+# Stable Zero main merge of django-trusts-zero#4 / #3
+# (e7bbd1acf74c058224d6505005694395ec8baf03).
 repo=https://github.com/django-trusts/django-trusts-zero.git
-ref=038896b3a3461719ce8d377e4ff5a68b1286eb76
+ref=e7bbd1acf74c058224d6505005694395ec8baf03
 expected_version=2.0.0.dev0
 required_dist=django-trusts
