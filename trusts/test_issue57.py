@@ -92,13 +92,6 @@ class TrustsRegistryTest(SimpleTestCase):
         registry = TrustsRegistry()
         j = Ref(DocumentGrant)
 
-        self.assertIs(j.document.root, DocumentGrant)
-        self.assertIs(j.user.root, DocumentGrant)
-        self.assertIs(j.permission.root, DocumentGrant)
-        self.assertEqual(j.document.path, ('document',))
-        self.assertEqual(j.user.path, ('user',))
-        self.assertEqual(j.permission.path, ('permission',))
-
         record = registry.register(
             content=j.document,
             user=j.user,
@@ -122,10 +115,11 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_all_refs_share_the_same_root(self):
         _document, DocumentGrant, _other = _mock_models()
-        j = Ref(DocumentGrant)
-        self.assertIs(j.document.root, j.user.root)
-        self.assertIs(j.user.root, j.permission.root)
-        self.assertIs(j.root, DocumentGrant)
+        record = _register(TrustsRegistry(), DocumentGrant)
+        self.assertIs(record.root, DocumentGrant)
+        self.assertEqual(record.content_path[0], 'document')
+        self.assertEqual(record.user_path[0], 'user')
+        self.assertEqual(record.permission_path[0], 'permission')
 
     def test_mixed_roots_rejected(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
@@ -199,6 +193,57 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+
+    def test_root_and_path_field_names_build_refs(self):
+        Document, _grant, _other = _mock_models()
+
+        class CollisionGrant(models.Model):
+            root = models.ForeignKey(
+                Document, related_name='collision_root_grants',
+                on_delete=models.CASCADE,
+            )
+            path = models.ForeignKey(
+                settings.AUTH_USER_MODEL, related_name='collision_path_grants',
+                on_delete=models.CASCADE,
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        User = get_user_model()
+        j = Ref(CollisionGrant)
+        self.assertIsInstance(j.root, Ref)
+        self.assertIsInstance(j.path, Ref)
+        self.assertEqual(j.root, Ref(CollisionGrant, ('root',)))
+        self.assertEqual(j.path, Ref(CollisionGrant, ('path',)))
+
+        registry = TrustsRegistry()
+        record = registry.register(
+            content=j.root,
+            user=j.path,
+            permission=j.permission,
+        )
+        self.assertIs(record.root, CollisionGrant)
+        self.assertEqual(record.content_path, ('root',))
+        self.assertEqual(record.content_field, 'root')
+        self.assertIs(record.content_model, Document)
+        self.assertEqual(record.user_path, ('path',))
+        self.assertEqual(record.user_field, 'path')
+        self.assertIs(record.user_model, User)
+
+        alt = TrustsRegistry()
+        via_path_content = alt.register(
+            content=Ref(CollisionGrant).path,
+            user=Ref(CollisionGrant).root,
+            permission=Ref(CollisionGrant).permission,
+        )
+        self.assertEqual(via_path_content.content_path, ('path',))
+        self.assertIs(via_path_content.content_model, User)
+        self.assertEqual(via_path_content.user_path, ('root',))
+        self.assertIs(via_path_content.user_model, Document)
 
     def test_non_model_root_rejected(self):
         with self.assertRaisesRegex(TrustsConfigurationError, r'model class'):

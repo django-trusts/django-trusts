@@ -140,6 +140,10 @@ class Ref(object):
 
         j = Ref(DocumentGrant)
         j.document  # path ('document',) on DocumentGrant
+
+    Attribute access always builds a field ref, including names such as
+    ``root`` and ``path``. Inspect the model and segments on the
+    normalized ``RegisteredRelation``, not on ``Ref``.
     """
 
     __slots__ = ('_root', '_path')
@@ -159,14 +163,6 @@ class Ref(object):
             )
         object.__setattr__(self, '_root', root)
         object.__setattr__(self, '_path', tuple(path))
-
-    @property
-    def root(self):
-        return self._root
-
-    @property
-    def path(self):
-        return self._path
 
     def __getattr__(self, name):
         return Ref(self._root, self._path + (name,))
@@ -251,7 +247,7 @@ class TrustsRegistry(object):
         user_ref = _require_ref(user, 'user')
         permission_ref = _require_ref(permission, 'permission')
 
-        roots = (content_ref.root, user_ref.root, permission_ref.root)
+        roots = (content_ref._root, user_ref._root, permission_ref._root)
         if len(set(roots)) != 1:
             raise TrustsConfigurationError(
                 'All refs in one registration must share the same root model; '
@@ -260,13 +256,13 @@ class TrustsRegistry(object):
         root = roots[0]
 
         content_path, content_model, content_field = _resolve_direct_path(
-            root, content_ref.path, 'content'
+            root, content_ref._path, 'content'
         )
         user_path, user_model, user_field = _resolve_direct_path(
-            root, user_ref.path, 'user'
+            root, user_ref._path, 'user'
         )
         permission_path, permission_model, permission_field = _resolve_direct_path(
-            root, permission_ref.path, 'permission'
+            root, permission_ref._path, 'permission'
         )
 
         record = RegisteredRelation(

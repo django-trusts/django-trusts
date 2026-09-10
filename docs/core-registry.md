@@ -5,8 +5,10 @@ This slice does **not** re-export a process-global registry from `trusts`.
 
 `TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
 permission-bearing relation root; attribute access builds a root-relative
-path. `register` accepts those refs, validates them through Django `_meta`
-(zero SQL), and stores one immutable `RegisteredRelation` per root.
+path, including ordinary field names such as `root` and `path`. `register`
+accepts those refs, validates them through Django `_meta` (zero SQL), and
+stores one immutable `RegisteredRelation` per root. Inspect the inferred
+root and paths on that record, not on `Ref`.
 
 ```python
 from trusts.core import Ref, TrustsRegistry
