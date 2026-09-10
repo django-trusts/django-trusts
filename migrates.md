@@ -2713,3 +2713,70 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Do not close #47 from this PR.
 - [ ] Do not treat Zero / GH / Windows acceptance as complete because the kernel surface exists.
 
+# Public `require_configured_terminal` (Zero #3 compatibility façades, 1.0.0.dev0)
+
+This record covers the narrowly public terminal-validation surface
+required by Zero #3 compatibility façades. Version remains
+**1.0.0.dev0**. This PR does **not** close
+[#47](https://github.com/django-trusts/django-trusts/issues/47) and does
+**not** resume [#17](https://github.com/django-trusts/django-trusts/issues/17).
+Existing S1 runtime entry-point behavior is unchanged. The companion pin
+is the stable Zero `main` merge of
+[django-trusts-zero#4](https://github.com/django-trusts/django-trusts-zero/pull/4)
+(`e7bbd1acf74c058224d6505005694395ec8baf03`), not the reviewed PR-branch
+tip (`80523d9a52f98ef7429f1a6eb8922e2348ff54af`).
+
+## No change to these public call sites
+
+- S1 `is_authorized` / `require_authorized` / `filter_authorized` /
+  `authorized_q` and the scope-origin siblings
+- S2 `ObjectAuthorizationBackend` / `ObjectAuthorizationModelBackend`
+- S3 `trusts.decorators.require_authorized` / `P` / `K` / `G` / `O`
+- S4 `AuthorizedModelAdmin` / CBV mixins / stub templates
+- S5 kernel checks (`trusts.E006` / `E007` / `E008`)
+- Package version `1.0.0.dev0`
+
+## Changes
+
+### 52. `trusts.runtime.require_configured_terminal` is public; `_require_instance` is removed
+
+| | |
+| --- | --- |
+| Previous | Terminal instance checks lived on private `trusts.runtime._require_instance`. That name was not in `__all__`. A malformed `expected_model` (model instance, non-model class, or raw object) could escape as `AttributeError` from `_same_model`. |
+| New | Public `require_configured_terminal(value, expected_model, what)` in `__all__`. `_require_instance` is gone from the runtime module. `expected_model` is validated first and must be a Django model class (concrete or proxy). Malformed expected terminals raise `AuthorizationConfigError`. Comparison still uses `_meta.concrete_model`, so a proxy class matches its concrete instance and the reverse. |
+| Replacement | Import `require_configured_terminal` from `trusts.runtime`. Do not import `_require_instance`. |
+| Affected | Zero `require_configured_requester` / `require_configured_operation` compatibility façades. Direct S1 callers that already passed a configured model class are unchanged. |
+| Authorization | Existing runtime entry points keep the same fail-closed rule (reject model class, raw PK, wrong concrete model) and the same allow/deny results. This is a public spelling plus a complete fail-closed contract, not a permission-model change. |
+
+## Fresh database
+
+```
+python -m django migrate --settings=tests.settings
+python -m tests.runtests
+```
+
+No Trusts schema migration.
+
+## Upgrade of a representative legacy database
+
+Unchanged. `scripts/verify-legacy-upgrade.py` still expects
+`{0001_initial, 0002_trustgroup}` on label `trusts`.
+
+## Out of scope (unchanged)
+
+- django-trusts#17 / Windows
+- example#7
+- Closing #47
+- Package publish / version bump
+
+## Migration-bot checklist
+
+- [ ] Use `trusts.runtime.require_configured_terminal`. Never import `_require_instance`.
+- [ ] Pass a valid Django model class as `expected_model` (concrete or proxy). Do not pass a model instance, a non-model class, or a raw object.
+- [ ] Translate `AuthorizationConfigError` only where a compatibility façade requires a historical exception type (Zero maps it to `AuthorizationPathError`). Direct kernel callers keep `AuthorizationConfigError`.
+- [ ] Existing runtime entry-point behavior is unchanged (`is_authorized`, `filter_authorized`, scope siblings, `require_*`).
+- [ ] Pair with merged Zero #4 on `main` (`scripts/zero-companion.pin` is `e7bbd1acf74c058224d6505005694395ec8baf03`).
+- [ ] Run `python -m tests.runtests` (includes `tests.core.test_require_configured_terminal`).
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not close #47 or resume #17 from this PR.
+

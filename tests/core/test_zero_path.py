@@ -48,10 +48,10 @@ def _backend_source():
 
 
 class ZeroComposeConsumerSourceTest(TestCase):
-    def test_permitted_uses_compose_not_parallel_join(self):
+    def test_permitted_uses_filter_authorized_not_parallel_join(self):
         source = inspect.getsource(ContentQuerySet.permitted)
-        self.assertIn('compose_zero_path', source)
-        self.assertIn('grant_q', source)
+        self.assertIn('filter_authorized', source)
+        self.assertNotIn('compose_zero_path', source)
         self.assertNotIn('trust_grant_q', source)
         self.assertNotIn('Context.scope_path', source)
 
