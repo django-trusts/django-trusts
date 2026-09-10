@@ -5,10 +5,10 @@ authorization, and authorized-content filtering. Ordinary test-only
 models; no historical Trusts types required.
 """
 
-import inspect
 import re
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -394,33 +394,50 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.read,
         )
-        registry_src = inspect.getsource(TrustsRegistry.has_permission)
-        plan_src = inspect.getsource(RelationPlan.has_permission)
-        registry_body = registry_src.split('"""', 2)[-1]
-        plan_body = plan_src.split('"""', 2)[-1]
-        self.assertNotIn('permissions_for', registry_body)
-        self.assertNotIn('list(', plan_body)
-        self.assertNotIn('permissions_for', plan_body)
-        self.assertNotIn('for ', plan_body)
-
-        from django.test.utils import CaptureQueriesContext
-        with CaptureQueriesContext(connection) as captured:
-            self.assertTrue(
-                registry.has_permission(self.alice, self.doc_a, self.read),
-            )
+        with patch.object(RelationPlan, 'permissions') as permissions:
+            from django.test.utils import CaptureQueriesContext
+            with CaptureQueriesContext(connection) as captured:
+                self.assertTrue(
+                    registry.has_permission(self.alice, self.doc_a, self.read),
+                )
+        permissions.assert_not_called()
         self.assertEqual(len(captured.captured_queries), 1)
         self.assertIn('EXISTS', captured.captured_queries[0]['sql'].upper())
 
     def test_three_projections_share_one_plan_builder(self):
-        for name in ('permissions_for', 'has_permission', 'filter_authorized'):
-            source = inspect.getsource(getattr(TrustsRegistry, name))
-            self.assertIn('plan_for', source)
-        plan_source = inspect.getsource(RelationPlan)
-        self.assertIn('_correlated_exists', plan_source)
-        self.assertIn('_bound_root_qs', plan_source)
-        for name in ('permissions', 'has_permission', 'filter_content'):
-            method = inspect.getsource(getattr(RelationPlan, name))
-            self.assertIn('_correlated_exists', method)
+        registry = self._registry()
+        self.DocumentGrant.objects.create(
+            document=self.doc_a, user=self.alice, permission=self.read,
+        )
+        with patch.object(registry, 'plan_for', wraps=registry.plan_for) as plan_for:
+            list(registry.permissions_for(self.alice, self.doc_a))
+            registry.has_permission(self.alice, self.doc_a, self.read)
+            list(registry.filter_authorized(
+                self.Document.objects.all(), self.alice, self.read,
+            ))
+        self.assertEqual(plan_for.call_count, 3)
+
+        plan = registry.plan_for(
+            self.doc_a, user=self.alice, permission=self.read,
+        )
+        with patch.object(
+            plan, '_correlated_exists', wraps=plan._correlated_exists,
+        ) as correlated:
+            list(plan.permissions(self.alice, self.doc_a))
+            plan.has_permission(self.alice, self.doc_a, self.read)
+            list(plan.filter_content(
+                self.Document.objects.all(), self.alice, self.read,
+            ))
+        self.assertEqual(correlated.call_count, 3)
+        self.assertEqual(
+            correlated.call_args_list[0].args[0], 'permission_field',
+        )
+        self.assertEqual(
+            correlated.call_args_list[1].args[0], 'permission_field',
+        )
+        self.assertEqual(
+            correlated.call_args_list[2].args[0], 'content_field',
+        )
 
     def test_configured_user_model_uses_registered_terminal_metadata(self):
         User = get_user_model()
@@ -549,4 +566,156 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         with self.assertRaisesRegex(TrustsConfigurationError, r'QuerySet'):
             registry.filter_authorized(
                 [self.doc_a], self.alice, self.read,
+            )
+
+    def test_non_pk_to_field_correlates_both_projection_directions(self):
+        User = get_user_model()
+
+        class SlugDocument(models.Model):
+            slug = models.SlugField(unique=True)
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class ActionCode(models.Model):
+            code = models.CharField(max_length=40, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class SlugGrant(models.Model):
+            document = models.ForeignKey(
+                SlugDocument, to_field='slug', on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                ActionCode, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(SlugDocument, ActionCode, SlugGrant):
+            registry = TrustsRegistry()
+            _register(registry, SlugGrant)
+            doc_alpha = SlugDocument.objects.create(slug='alpha', title='A')
+            doc_beta = SlugDocument.objects.create(slug='beta', title='B')
+            read = ActionCode.objects.create(code='read')
+            write = ActionCode.objects.create(code='write')
+            self.assertNotEqual(doc_alpha.pk, 'alpha')
+            self.assertNotEqual(read.pk, 'read')
+            SlugGrant.objects.create(
+                document=doc_alpha, user=self.alice, permission=read,
+            )
+            SlugGrant.objects.create(
+                document=doc_beta, user=self.bob, permission=write,
+            )
+
+            self.assertEqual(
+                _pks(registry.permissions_for(self.alice, doc_alpha)),
+                {read.pk},
+            )
+            self.assertEqual(
+                list(registry.permissions_for(self.alice, doc_beta)),
+                [],
+            )
+            self.assertTrue(
+                registry.has_permission(self.alice, doc_alpha, read),
+            )
+            self.assertFalse(
+                registry.has_permission(self.alice, doc_alpha, write),
+            )
+            self.assertFalse(
+                registry.has_permission(self.alice, doc_beta, read),
+            )
+            enumerated = registry.permissions_for(self.alice, doc_alpha)
+            perm_sql = str(enumerated.query).lower()
+            self.assertIn('exists', perm_sql)
+            self.assertIn('code', perm_sql)
+            authorized = registry.filter_authorized(
+                SlugDocument.objects.order_by('pk'), self.alice, read,
+            )
+            sql = str(authorized.query).lower()
+            self.assertIn('exists', sql)
+            self.assertIn('slug', sql)
+            with self.assertNumQueries(1):
+                self.assertEqual(list(authorized), [doc_alpha])
+            self.assertEqual(
+                list(registry.filter_authorized(
+                    SlugDocument.objects.all(), self.alice, write,
+                )),
+                [],
+            )
+
+    def test_none_binding_is_rejected_and_does_not_broaden(self):
+        User = get_user_model()
+
+        class OptionalGrant(models.Model):
+            document = models.ForeignKey(
+                self.Document, on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, null=True,
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE, null=True,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(OptionalGrant):
+            registry = TrustsRegistry()
+            _register(registry, OptionalGrant)
+            OptionalGrant.objects.create(
+                document=self.doc_a, user=self.alice, permission=self.read,
+            )
+            OptionalGrant.objects.create(
+                document=self.doc_b, user=None, permission=self.read,
+            )
+            OptionalGrant.objects.create(
+                document=self.doc_c, user=self.alice, permission=None,
+            )
+            OptionalGrant.objects.create(
+                document=self.doc_a, user=self.bob, permission=self.write,
+            )
+            plan = registry.plan_for(self.Document)
+            candidates = self.Document.objects.order_by('pk')
+
+            with self.assertRaisesRegex(TrustsConfigurationError, r'user'):
+                list(plan.permissions(None, self.doc_a))
+            with self.assertRaisesRegex(TrustsConfigurationError, r'content'):
+                list(plan.permissions(self.alice, None))
+            with self.assertRaisesRegex(TrustsConfigurationError, r'permission'):
+                plan.has_permission(self.alice, self.doc_a, None)
+            with self.assertRaisesRegex(TrustsConfigurationError, r'user'):
+                list(plan.filter_content(candidates, None, self.read))
+            with self.assertRaisesRegex(TrustsConfigurationError, r'permission'):
+                list(plan.filter_content(candidates, self.alice, None))
+            with self.assertRaisesRegex(TrustsConfigurationError, r'user'):
+                list(plan.permissions('alice', self.doc_a))
+
+            self.assertEqual(
+                _pks(plan.permissions(self.alice, self.doc_a)),
+                {self.read.pk},
+            )
+            self.assertTrue(
+                plan.has_permission(self.alice, self.doc_a, self.read),
+            )
+            self.assertFalse(
+                plan.has_permission(self.alice, self.doc_b, self.read),
+            )
+            self.assertFalse(
+                plan.has_permission(self.alice, self.doc_c, self.read),
+            )
+            self.assertEqual(
+                _pks(plan.filter_content(candidates, self.alice, self.read)),
+                {self.doc_a.pk},
+            )
+            self.assertEqual(
+                _pks(registry.filter_authorized(
+                    candidates, self.alice, self.read,
+                )),
+                {self.doc_a.pk},
             )
