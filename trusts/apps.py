@@ -8,6 +8,18 @@ class AppConfig(DjangoAppConfig):
     # Preserve the historical AutoField primary keys from 0001_initial.
     default_auto_field = 'django.db.models.AutoField'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Import here: a module-level trusts.core import loads contenttypes
+        # models before Apps.populate finishes.
+        from trusts.core import TrustsRegistry
+
+        # Package-owned live registry. Created here so every AppConfig exists
+        # before any contributor ready(). ready() must not replace this object;
+        # tests re-enter ready() and isolated core tests keep their own
+        # TrustsRegistry() instances.
+        self.registry = TrustsRegistry()
+
     def ready(self):
         # admin.py registers core ModelAdmins at import. Only load it when
         # django.contrib.admin is installed so a wheel import without admin

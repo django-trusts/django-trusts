@@ -981,6 +981,90 @@ and no migration. Query construction remains lazy.
 - Process-global registry or ``trusts`` package re-export
 - ``condition`` representation
 
+---
+
+# First historical Category reader (issue #67)
+
+This record covers the first historical registration-only vertical slice.
+Version remains **1.0.0.dev0**. It closes the #67 Child H slice: one
+explicit ``TrustUserPermission → Trust ← Category`` declaration and the
+trustee half of ``ContentQuerySet.permitted`` for that terminal. It does
+**not** migrate backend enumeration, ``has_perm``, conditions-as-atom,
+mutations, Trust-as-object, Junction, Ticket, or Group/Role. There is
+**no schema or Django migration change**.
+
+## Decision
+
+The live ``TrustsRegistry`` is owned by ``trusts.apps.AppConfig`` and is
+created in ``AppConfig.__init__`` after ``super()``. ``ready()`` does not
+replace that object. Readers obtain it with
+``django.apps.apps.get_app_config('trusts').registry``. Isolated core
+tests continue to construct their own ``TrustsRegistry()``. There is no
+core singleton and no package-root registry export.
+
+The external test application contributes the Category declaration in
+``TestsConfig.ready()``. Trusts does not import or discover
+``tests.Category``. The reverse hop is taken from Django ``_meta``, not
+hard-coded. Re-entry is a no-op only when the same contributor
+``AppConfig`` instance has already donated this declaration to the same
+registry object (instance-local sentinel, set only after ``register()``
+succeeds). Unrelated Category records do not suppress the TUP
+contribution.
+
+``ContentQuerySet.permitted`` keeps the public signature and documented
+results. When ``plan_for`` has records, the trustee predicate comes from
+plan-level ``content_exists`` and is OR-ed with the existing group-local
+grant on the original candidate queryset. The named-condition overlay
+still applies after the complete trustee|group grant. The method still
+returns a lazy ``.filter(...).distinct()`` queryset. Unregistered models
+keep the old ``trust_grant_q`` path.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``User.has_perms`` signatures and backend
+  implementation
+- ``ContentQuerySet.permitted`` signature and documented allow/deny
+  results
+- ``Content`` / ``Junction`` ``class_prepared`` registration
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 31. Category trustee list path uses the registered plan (internal)
+
+| | |
+| --- | --- |
+| Previous | ``ContentQuerySet.permitted`` always built the trustee half with ``trust_grant_q(..., trust_fk='trust')``. No package-owned registry. |
+| New | ``trusts.apps.AppConfig`` owns one ``TrustsRegistry``. The test app registers ``TrustUserPermission → Trust ← Category``. For that terminal, ``.permitted`` ORs ``plan.content_exists`` with the existing group predicate on the incoming queryset. Other content models stay on ``trust_grant_q``. |
+| Replacement | Same ``Model.objects.permitted(perm, user)`` call. Results and laziness are unchanged. |
+| Affected | Internal implementation of ``Category`` list filtering only. ``has_perm`` remains on the old backend path. |
+| Authorization | Unchanged results. Group-only rows are not dropped. No schema or migration. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Do not import a registry from ``trusts``; readers use
+      ``apps.get_app_config('trusts').registry``.
+- [ ] Do not expect Trusts to discover project Content models. Contribute
+      registrations from the project's ``AppConfig.ready()``.
+- [ ] Leave backend ``has_perm`` / ``get_all_permissions`` alone.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. Child H adds no model and no Django migration. Query
+construction remains lazy.
+
+## Out of scope (not acceptance criteria)
+
+- Backend ``get_all_permissions`` / ``has_perm`` / ``get_group_permissions``
+- ``Content.is_content`` / ``_contents`` / ``register_content`` /
+  ``class_prepared``
+- Conditions as a registry atom; mutation helpers
+- Trust-as-object, Junction, Ticket, Group/Role registrations
+- Generic core path semantics; Zero; GH; example #7; Windows #17
+
 
 
 
