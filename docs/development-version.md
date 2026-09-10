@@ -34,6 +34,13 @@ API and method changes for the modernization are recorded in
   `legacy-pre-modernization`
 - No permission-model redesign
 
+## Internal registration primitive
+
+`trusts.core` adds an isolated `TrustsRegistry` and root-relative `Ref`
+(issue #57). That is an additive development API: it is not re-exported
+from `trusts`, does not change authorization results, and does not add a
+schema or migration. See [core-registry.md](core-registry.md).
+
 ## Preserved legacy source
 
 The pre-modernization tree remains available at:
