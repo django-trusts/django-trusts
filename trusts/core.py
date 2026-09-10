@@ -1,18 +1,25 @@
-"""Isolated registration primitive for permission-bearing relations.
+"""Isolated registration and common authorization-plan compiler.
 
-This module is registration only: it validates root-relative ``Ref`` paths
-through Django model ``_meta`` and stores one immutable record per relation.
-It does not compile queries, run SQL, or change authorization results.
+``TrustsRegistry`` validates root-relative ``Ref`` paths through Django
+model ``_meta`` and stores one immutable record per relation. The same
+registered records compile into one correlated relation plan. Three
+projections change only the terminal: permission enumeration, object
+authorization (SQL ``EXISTS`` membership over that enumeration), and
+authorized-content filtering.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``.
 """
 
 from dataclasses import dataclass
+from functools import reduce
+from operator import or_
 
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
+from django.db.models import Exists, Model, OuterRef
 from django.db.models.base import ModelBase
+from django.db.models.query import QuerySet
 
 try:
     from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -206,11 +213,114 @@ class RegisteredRelation:
     condition: None = None
 
 
+_BINDING_FIELDS = {
+    'user': 'user_field',
+    'content': 'content_field',
+    'permission': 'permission_field',
+}
+
+
+def _concrete_model(value):
+    opts = getattr(value, '_meta', None)
+    if opts is None:
+        raise TrustsConfigurationError(
+            'Expected a model class or instance, not %r.' % (value,)
+        )
+    return opts.concrete_model
+
+
+def _require_instance(value, role):
+    if not isinstance(value, Model):
+        raise TrustsConfigurationError(
+            '%s must be a model instance, not %r.' % (role, value)
+        )
+    return value
+
+
+def _content_model(content):
+    if isinstance(content, QuerySet):
+        return content.model._meta.concrete_model
+    if _is_model_class(content):
+        return content._meta.concrete_model
+    if isinstance(content, Model):
+        return content._meta.concrete_model
+    raise TrustsConfigurationError(
+        'content must be a model class, instance, or QuerySet, not %r.'
+        % (content,)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RelationPlan:
+    """One correlated plan compiled from applicable ``RegisteredRelation`` rows.
+
+    Root selection, field correlation, and ``EXISTS`` assembly live here.
+    Projection methods only choose the outer terminal or wrap ``exists()``.
+    """
+
+    records: tuple
+    permission_model: type | None = None
+
+    def _bound_root_qs(self, record, **bindings):
+        filters = {}
+        for role, value in bindings.items():
+            if value is None:
+                continue
+            filters[getattr(record, _BINDING_FIELDS[role])] = value
+        return record.root._default_manager.filter(**filters)
+
+    def _correlated_exists(self, terminal_field_attr, **bindings):
+        parts = []
+        for record in self.records:
+            terminal = getattr(record, terminal_field_attr)
+            inner = self._bound_root_qs(record, **bindings).filter(
+                **{terminal: OuterRef('pk')}
+            )
+            parts.append(Exists(inner))
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return reduce(or_, parts)
+
+    def permissions(self, user, content):
+        """Distinct permission rows for ``(user, content)``."""
+        if not self.records or self.permission_model is None:
+            return ()
+        exists = self._correlated_exists(
+            'permission_field', user=user, content=content,
+        )
+        return self.permission_model._default_manager.filter(exists).distinct()
+
+    def has_permission(self, user, content, permission):
+        """SQL ``EXISTS`` membership of ``permission`` in ``permissions()``."""
+        if not self.records or self.permission_model is None:
+            return False
+        if permission._meta.concrete_model is not self.permission_model:
+            return False
+        exists = self._correlated_exists(
+            'permission_field', user=user, content=content,
+        )
+        return self.permission_model._default_manager.filter(
+            pk=permission.pk,
+        ).filter(exists).exists()
+
+    def filter_content(self, queryset, user, permission):
+        """Lazy queryset of candidate rows correlated to the same plan."""
+        if not self.records:
+            return queryset.none()
+        exists = self._correlated_exists(
+            'content_field', user=user, permission=permission,
+        )
+        return queryset.filter(exists).distinct()
+
+
 class TrustsRegistry(object):
     """Instantiable registry of permission-bearing relation declarations.
 
     Create a new instance per isolated context. There is no process-global
-    singleton in this slice. ``register`` performs zero SQL.
+    singleton in this slice. ``register`` performs zero SQL. Projection
+    methods compile one shared plan from stored records.
     """
 
     def __init__(self):
@@ -293,3 +403,74 @@ class TrustsRegistry(object):
         self._by_root[root] = record
         self._order.append(record)
         return record
+
+    def _records_for(self, content_model, user_model=None, permission_model=None):
+        chosen = []
+        for record in self._order:
+            if record.content_model is not content_model:
+                continue
+            if user_model is not None and record.user_model is not user_model:
+                continue
+            if (
+                permission_model is not None
+                and record.permission_model is not permission_model
+            ):
+                continue
+            chosen.append(record)
+        return tuple(chosen)
+
+    def plan_for(self, content, *, user=None, permission=None):
+        """Build the common relation plan for these terminals.
+
+        ``content`` may be a model class, instance, or ``QuerySet``.
+        Optional ``user`` / ``permission`` instances keep only registrations
+        whose inferred terminals match those models. Construction is lazy.
+        """
+        content_model = _content_model(content)
+        user_model = None
+        if user is not None:
+            user_model = _concrete_model(_require_instance(user, 'user'))
+        permission_model = None
+        if permission is not None:
+            permission_model = _concrete_model(
+                _require_instance(permission, 'permission')
+            )
+
+        records = self._records_for(content_model, user_model, permission_model)
+        if records:
+            models = {record.permission_model for record in records}
+            if len(models) != 1:
+                raise TrustsConfigurationError(
+                    'Applicable registrations must share one permission '
+                    'model; got %s.'
+                    % ', '.join(sorted(model._meta.label for model in models))
+                )
+            permission_model = models.pop()
+        return RelationPlan(records=records, permission_model=permission_model)
+
+    def permissions_for(self, user, content):
+        """Distinct permission rows granted to ``user`` on ``content``."""
+        user = _require_instance(user, 'user')
+        content = _require_instance(content, 'content')
+        return self.plan_for(content, user=user).permissions(user, content)
+
+    def has_permission(self, user, content, permission):
+        """Whether ``permission`` exists in the common plan for this pair."""
+        user = _require_instance(user, 'user')
+        content = _require_instance(content, 'content')
+        permission = _require_instance(permission, 'permission')
+        return self.plan_for(
+            content, user=user, permission=permission,
+        ).has_permission(user, content, permission)
+
+    def filter_authorized(self, queryset, user, permission):
+        """Lazy queryset of rows ``user`` holds ``permission`` on."""
+        if not isinstance(queryset, QuerySet):
+            raise TrustsConfigurationError(
+                'filter_authorized requires a QuerySet, not %r.' % (queryset,)
+            )
+        user = _require_instance(user, 'user')
+        permission = _require_instance(permission, 'permission')
+        return self.plan_for(
+            queryset, user=user, permission=permission,
+        ).filter_content(queryset, user, permission)
