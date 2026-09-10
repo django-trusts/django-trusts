@@ -1,7 +1,5 @@
 from django.apps import AppConfig as DjangoAppConfig
 
-from trusts.core import TrustsRegistry
-
 
 class AppConfig(DjangoAppConfig):
     name = 'trusts'
@@ -12,6 +10,10 @@ class AppConfig(DjangoAppConfig):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Import here: a module-level trusts.core import loads contenttypes
+        # models before Apps.populate finishes.
+        from trusts.core import TrustsRegistry
+
         # Package-owned live registry. Created here so every AppConfig exists
         # before any contributor ready(). ready() must not replace this object;
         # tests re-enter ready() and isolated core tests keep their own

@@ -438,9 +438,12 @@ class CategoryPermittedRegistryTest(TestCase):
 
     def test_reader_uses_content_exists_not_filter_authorized(self):
         registry = apps.get_app_config('trusts').registry
+        plan = registry.plan_for(
+            Category.objects.all(), user=self.carol, permission=self.change,
+        )
         with patch.object(registry, 'filter_authorized') as filtered:
             with patch.object(
-                RelationPlan, 'content_exists', wraps=RelationPlan.content_exists,
+                RelationPlan, 'content_exists', wraps=plan.content_exists,
             ) as exists:
                 list(Category.objects.permitted(self.change_code, self.carol))
         filtered.assert_not_called()

@@ -22,12 +22,6 @@ from django.db.models import Exists, Model, OuterRef
 from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
 
-try:
-    from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
-except ImportError:  # pragma: no cover - contenttypes is a Django contrib app
-    GenericForeignKey = type('GenericForeignKey', (), {})
-    GenericRelation = type('GenericRelation', (), {})
-
 
 class TrustsConfigurationError(Exception):
     """Malformed or unsupported ``TrustsRegistry`` registration."""
@@ -37,8 +31,26 @@ def _is_model_class(value):
     return isinstance(value, ModelBase)
 
 
+def _generic_relation_types():
+    """Load GFK types lazily so ``AppConfig.__init__`` can import this module.
+
+    ``contenttypes.fields`` imports ``ContentType`` models and cannot run
+    during ``Apps.populate`` phase 1.
+    """
+    try:
+        from django.contrib.contenttypes.fields import (
+            GenericForeignKey,
+            GenericRelation,
+        )
+    except ImportError:  # pragma: no cover - contenttypes is a Django contrib app
+        GenericForeignKey = type('GenericForeignKey', (), {})
+        GenericRelation = type('GenericRelation', (), {})
+    return GenericForeignKey, GenericRelation
+
+
 def _classify_field(field):
-    if isinstance(field, (GenericForeignKey, GenericRelation)):
+    generic_foreign_key, generic_relation = _generic_relation_types()
+    if isinstance(field, (generic_foreign_key, generic_relation)):
         return 'gfk'
     if not getattr(field, 'is_relation', False):
         return 'scalar'
