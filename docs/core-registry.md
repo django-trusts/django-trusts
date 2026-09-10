@@ -1,8 +1,8 @@
 # TrustsRegistry (internal development primitive)
 
-Additive registration and projection surface for issues #57, #60, and #65.
-Import from `trusts.core`. This slice does **not** re-export a
-process-global registry from `trusts`.
+Additive registration and projection surface for issues #57, #60, #65,
+and the first historical reader in #67. Import from `trusts.core`. This
+slice does **not** re-export a process-global registry from `trusts`.
 
 `TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
 permission-bearing relation root; attribute access builds a root-relative
@@ -107,6 +107,20 @@ This slice does not accept codename strings or dotted permission syntax.
 `RelationPlan` projection methods require model-instance bindings; a
 supplied `None` or other non-instance value raises
 `TrustsConfigurationError` and is never omitted from the predicate.
+
+The live package-owned instance lives on `trusts.apps.AppConfig.registry`
+and is created in `AppConfig.__init__`. `ready()` does not replace it.
+Historical readers obtain it with
+`django.apps.apps.get_app_config('trusts').registry`. Isolated tests
+still construct their own `TrustsRegistry()`. External applications
+contribute declarations in their own `AppConfig.ready()`; Trusts does
+not import or discover `tests.Category`.
+
+`ContentQuerySet.permitted` is the first historical reader. For a
+registered Category terminal it ORs `plan.content_exists` with the
+existing group-local grant on the original candidate queryset. Public
+signature and documented results are unchanged. Unregistered models keep
+the old `trust_grant_q` path. Backend `has_perm` is not migrated.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

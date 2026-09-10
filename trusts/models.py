@@ -1,3 +1,4 @@
+from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import signals, Q, options
@@ -7,7 +8,11 @@ from django.utils.translation import gettext_lazy as _
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
                     get_permission_model, utils
-from trusts.query import is_active_principal, trust_grant_q
+from trusts.query import (
+    group_local_grant_exists,
+    is_active_principal,
+    trust_grant_q,
+)
 from trusts.conditions import (
     Expr,
     PermissionConditionError,
@@ -184,7 +189,20 @@ class ContentQuerySet(models.QuerySet):
         if not is_active_principal(user):
             return self.none()
         permission = resolve_content_permission(self.model, perm)
-        granted = trust_grant_q(user, permission, trust_fk='trust')
+        # Child H: registered Category trustee half from the package registry.
+        # Group stays in this reader and is OR-ed on the original candidate
+        # queryset. Do not filter_authorized(...) then OR group — filtered-out
+        # group-only rows cannot be restored. Unregistered models keep the
+        # old trust_grant_q path.
+        registry = django_apps.get_app_config('trusts').registry
+        plan = registry.plan_for(self, user=user, permission=permission)
+        if plan.records:
+            trustee = plan.content_exists(user=user, permission=permission)
+            granted = Q(trustee) | Q(
+                group_local_grant_exists(user, permission, 'trust_id')
+            )
+        else:
+            granted = trust_grant_q(user, permission, trust_fk='trust')
         if condition_q is None:
             return self.filter(granted).distinct()
         return self.filter(granted & condition_q).distinct()
