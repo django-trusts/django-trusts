@@ -87,15 +87,35 @@ def _same_model(left, right):
     return left._meta.concrete_model is right._meta.concrete_model
 
 
+def _configured_terminal_model(expected_model, what):
+    """Require a Django model class for the configured terminal.
+
+    Concrete and proxy model classes are accepted. A model instance,
+    non-model class, or raw object is ``AuthorizationConfigError``, not
+    an ``AttributeError`` from ``_same_model``.
+    """
+    if isinstance(expected_model, type):
+        meta = getattr(expected_model, '_meta', None)
+        if meta is not None and getattr(meta, 'concrete_model', None) is not None:
+            return expected_model
+    raise AuthorizationConfigError(
+        'configured %s model must be a Django model class, not %r.' % (
+            what, expected_model,
+        )
+    )
+
+
 def require_configured_terminal(value, expected_model, what):
     """Fail closed unless ``value`` is an instance of ``expected_model``.
 
+    ``expected_model`` must be a Django model class (concrete or proxy).
     Rejects model classes, raw primary keys, and wrong concrete models so
     Django cannot coerce a colliding PK. Raises
     :class:`AuthorizationConfigError`. Compatibility façades (Zero
     ``require_configured_requester`` / ``require_configured_operation``)
     call this public surface and may translate the exception type.
     """
+    expected_model = _configured_terminal_model(expected_model, what)
     if isinstance(value, type):
         raise AuthorizationConfigError(
             '%s must be a %s instance, not a model class.' % (
