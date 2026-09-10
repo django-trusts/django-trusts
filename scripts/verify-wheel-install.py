@@ -66,7 +66,7 @@ def main() -> int:
     import trusts
     from trusts.models import Trust
     from trusts.backends import TrustModelBackend
-    from trusts.core import Ref, RegisteredRelation, TrustsRegistry
+    from trusts.core import Ref, RegisteredRelation, RelationPlan, TrustsRegistry
     from django_trusts import TQ, condition_refs
 
     trusts_file = Path(trusts.__file__).resolve()
@@ -83,7 +83,7 @@ def main() -> int:
     print('trusts.__file__', trusts_file)
     print('Trust', Trust)
     print('TrustModelBackend', TrustModelBackend)
-    print('trusts.core', TrustsRegistry, Ref, RegisteredRelation)
+    print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
     return 0

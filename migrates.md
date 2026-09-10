@@ -815,11 +815,69 @@ No change. ``trusts.core`` performs zero SQL and adds no model.
 
 ## Out of scope (not acceptance criteria)
 
-- Query compilation and the three projections
 - Historical model registration
 - String / ``__`` path desugaring
 - ``condition`` representation (``Q`` / ``Expr`` / callable)
 - Process-global registry or ``trusts`` package re-export
+
+---
+
+# Common plan and three projections (issue #60)
+
+This record covers the additive ``trusts.core`` plan compiler.
+Version remains **1.0.0.dev0**. It closes the #60 slice (one registered
+relation plan, three mock projections). It does **not** migrate historical
+models or change authorization results. There is **no schema or Django
+migration change**.
+
+## Decision
+
+``TrustsRegistry`` compiles applicable ``RegisteredRelation`` records into
+one ``RelationPlan``. Permission enumeration, object authorization, and
+authorized-content filtering are terminal projections of that plan.
+Object authorization is SQL ``EXISTS`` membership over the same relational
+meaning as enumeration; it does not iterate a Python list. Multiple
+applicable roots combine by SQL ``OR``. Unregistered content fails closed.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``ContentQuerySet.permitted`` signatures
+- ``Content`` / ``Junction`` registration and ``class_prepared`` dispatch
+- Authentication-backend composition
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 28. ``trusts.core`` common plan and three projections (new, additive)
+
+| | |
+| --- | --- |
+| Previous (#57) | Registration and ``_meta`` validation only. No query compilation. |
+| New | Internal ``RelationPlan`` plus development surfaces ``permissions_for``, ``has_permission``, and ``filter_authorized``. One shared ``EXISTS`` builder; projections add only the terminal or existence wrapper. Isolated instances only; not re-exported from ``trusts``. |
+| Replacement | None for existing callers. Import ``from trusts.core import TrustsRegistry, Ref`` and call the projection methods on an isolated registry. |
+| Affected | None of the live authorization path. Tests use ordinary Document / DocumentGrant / DocumentPermit models. |
+| Authorization | Unchanged for historical Trusts. No schema or migration. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Do not import ``TrustsRegistry`` from ``trusts``; import ``trusts.core``.
+- [ ] Leave historical ``Content`` / ``Junction`` authorization alone.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. The plan compiler adds no model and no migration.
+
+## Out of scope (not acceptance criteria)
+
+- Historical model registration or vertical migration
+- String / ``__`` path desugaring
+- ``condition`` representation
+- Process-global registry or ``trusts`` package re-export
+- Codename strings, dotted permission syntax, or heterogeneous
+  permission-terminal normalization
 
 
 
