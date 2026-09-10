@@ -4,8 +4,7 @@ Registration only. Does not exercise object authorization, authorized-content
 filtering, permission enumeration, backends, conditions, or compatibility.
 """
 
-import re
-from pathlib import Path
+import types
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -367,19 +366,36 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
         self.assertIsNone(getattr(trusts, 'RegisteredRelation', None))
 
-    def test_core_module_does_not_name_historical_types(self):
-        source = Path(__import__('trusts.core', fromlist=['core']).__file__).read_text()
-        forbidden = (
-            r'\bTrust\b',
-            r'\bContent\b',
-            r'\bJunction\b',
-            r'\bTrustUserPermission\b',
-            r'\bTrustGroupPermission\b',
-            r'\bGroup\b',
-            r'\bRole\b',
+    def test_core_module_has_no_historical_import_or_global(self):
+        import trusts.core as core
+
+        forbidden = {
+            'Trust',
+            'Content',
+            'Junction',
+            'TrustUserPermission',
+            'TrustGroupPermission',
+            'Group',
+            'Role',
+        }
+        self.assertFalse(forbidden.intersection(vars(core)))
+
+        imported = {
+            value.__name__
+            for value in vars(core).values()
+            if isinstance(value, types.ModuleType)
+        }
+        self.assertTrue(
+            all(
+                name == 'trusts.core' or not name.startswith('trusts.')
+                for name in imported
+            ),
+            imported,
         )
-        for pattern in forbidden:
-            self.assertIsNone(
-                re.search(pattern, source),
-                'trusts/core.py must not name %s' % pattern,
-            )
+        for value in vars(core).values():
+            module = getattr(value, '__module__', None)
+            if isinstance(module, str):
+                self.assertFalse(
+                    module.startswith('trusts.') and module != 'trusts.core',
+                    module,
+                )
