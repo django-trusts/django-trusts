@@ -2720,7 +2720,11 @@ required by Zero #3 compatibility façades. Version remains
 **1.0.0.dev0**. This PR does **not** close
 [#47](https://github.com/django-trusts/django-trusts/issues/47) and does
 **not** resume [#17](https://github.com/django-trusts/django-trusts/issues/17).
-Existing S1 runtime entry-point behavior is unchanged.
+Existing S1 runtime entry-point behavior is unchanged. The companion pin
+is the stable Zero `main` merge of
+[django-trusts-zero#4](https://github.com/django-trusts/django-trusts-zero/pull/4)
+(`e7bbd1acf74c058224d6505005694395ec8baf03`), not the reviewed PR-branch
+tip (`80523d9a52f98ef7429f1a6eb8922e2348ff54af`).
 
 ## No change to these public call sites
 
@@ -2764,7 +2768,6 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - example#7
 - Closing #47
 - Package publish / version bump
-- Landing kernel `master` with a PR-only Zero pin
 
 ## Migration-bot checklist
 
@@ -2772,6 +2775,7 @@ Unchanged. `scripts/verify-legacy-upgrade.py` still expects
 - [ ] Pass a valid Django model class as `expected_model` (concrete or proxy). Do not pass a model instance, a non-model class, or a raw object.
 - [ ] Translate `AuthorizationConfigError` only where a compatibility façade requires a historical exception type (Zero maps it to `AuthorizationPathError`). Direct kernel callers keep `AuthorizationConfigError`.
 - [ ] Existing runtime entry-point behavior is unchanged (`is_authorized`, `filter_authorized`, scope siblings, `require_*`).
+- [ ] Pair with merged Zero #4 on `main` (`scripts/zero-companion.pin` is `e7bbd1acf74c058224d6505005694395ec8baf03`).
 - [ ] Run `python -m tests.runtests` (includes `tests.core.test_require_configured_terminal`).
 - [ ] Leave package version at `1.0.0.dev0`.
 - [ ] Do not close #47 or resume #17 from this PR.
