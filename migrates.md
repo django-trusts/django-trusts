@@ -912,6 +912,75 @@ validation.
 - Codename strings, dotted permission syntax, or heterogeneous
   permission-terminal normalization
 
+---
+
+# Same-root registrations and trailing-reverse content paths (issue #65)
+
+This record covers the additive ``trusts.core`` same-root and
+bounded content-path extension. Version remains **1.0.0.dev0**. It
+closes the #65 slice (isolated mocks only). It does **not** migrate
+historical models, start Child H, or change authorization results.
+There is **no schema or Django migration change**.
+
+## Decision
+
+One permission-bearing root may store several normalized
+``RegisteredRelation`` rows when they terminate on different content
+models. A content path may be the existing direct single-valued hop or
+one or more forward single-valued hops followed by exactly one final
+reverse one-to-many hop. User and permission paths stay direct.
+Bindings and ``EXISTS`` use the complete root-relative lookup and the
+last hop's single path-info target field.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``ContentQuerySet.permitted`` signatures
+- ``Content`` / ``Junction`` registration and ``class_prepared`` dispatch
+- Authentication-backend composition
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 30. Same-root records and trailing-reverse content paths (new, additive)
+
+| | |
+| --- | --- |
+| Previous (#57 / #60 / §29) | ``_by_root`` stored one record per root. ``get(root)`` returned that record. A second different registration for the same root was always a conflict. Content, user, and permission paths were one direct single-valued hop. ``content_field`` was the last segment on the root. ``OuterRef`` was resolved by looking up that field on the root. |
+| New | ``_by_root[root]`` is an insertion-ordered list. ``records_for_root(root)`` returns that tuple and raises when absent. ``get(root)`` is removed. Exact duplicates still raise. Same root plus the same content terminal with a different registration is still a conflict. Same root plus different content terminals is allowed. Content may also be ``(forward single-valued)+`` then one final reverse one-to-many. Each hop is resolved with ``get_path_info()``: exactly one ``PathInfo`` and exactly one target field, or the path is rejected. Stored ``*_field`` is the full ``'__'.join(path)`` lookup; ``*_target`` is the last hop's target ``attname``. ``RelationPlan.content_exists`` is the one content-``EXISTS`` surface; ``filter_authorized`` consumes it. |
+| Replacement | None for existing callers. Isolated ``register`` / ``plan_for`` / projection call sites stay the same. Use ``records_for_root`` instead of ``get``. Register a trailing-reverse content path when the terminal is not a field on the root. |
+| Affected | Isolated ``trusts.core`` development callers. Direct one-hop registrations keep the same lookup (``document``) and #64 target-field ``OuterRef``. |
+| Authorization | Unchanged for historical Trusts. No schema or migration. |
+
+Rejected during ``register`` (zero SQL): reverse before the final hop;
+reverse as the only hop; reverse one-to-one; many-to-many; generic
+foreign keys; anything after the final reverse; multi-hop all-forward
+content; arbitrary multi-valued chains; composite / multi-column
+correlation.
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Import ``TrustsRegistry`` / ``RelationPlan`` from ``trusts.core``, not ``trusts``.
+- [ ] Do not call ``registry.get(root)``; use ``records_for_root(root)`` or ``plan_for``.
+- [ ] Same-root second paths to one content model are conflicts, not precedence.
+- [ ] Leave historical ``Content`` / ``Junction`` authorization alone.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. The same-root and trailing-reverse extension adds no model
+and no migration. Query construction remains lazy.
+
+## Out of scope (not acceptance criteria)
+
+- Historical model registration, package-owned registry lifecycle, or
+  reader migration (Child H / #62)
+- Junction reverse-then-forward, group M2M, custom ``fieldlookup``
+  chains, or parent hierarchy
+- Process-global registry or ``trusts`` package re-export
+- ``condition`` representation
+
 
 
 

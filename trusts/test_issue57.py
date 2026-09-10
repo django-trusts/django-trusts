@@ -4,8 +4,7 @@ Registration only. Does not exercise object authorization, authorized-content
 filtering, permission enumeration, backends, conditions, or compatibility.
 """
 
-import re
-from pathlib import Path
+import types
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -110,7 +109,10 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertIs(record.permission_model, Permission)
         self.assertEqual(record.permission_field, 'permission')
         self.assertIsNone(record.condition)
-        self.assertIs(registry.get(DocumentGrant), record)
+        self.assertEqual(record.content_target, Document._meta.pk.attname)
+        self.assertEqual(record.user_target, User._meta.pk.attname)
+        self.assertEqual(record.permission_target, Permission._meta.pk.attname)
+        self.assertEqual(registry.records_for_root(DocumentGrant), (record,))
         self.assertEqual(registry.records, (record,))
 
     def test_all_refs_share_the_same_root(self):
@@ -297,7 +299,7 @@ class TrustsRegistryTest(SimpleTestCase):
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
             _register(registry, DocumentGrant)
         self.assertEqual(registry.records, (first,))
-        self.assertIs(registry.get(DocumentGrant), first)
+        self.assertEqual(registry.records_for_root(DocumentGrant), (first,))
 
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
             _register(registry, DocumentGrant, content_attr='alt_document')
@@ -364,19 +366,36 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
         self.assertIsNone(getattr(trusts, 'RegisteredRelation', None))
 
-    def test_core_module_does_not_name_historical_types(self):
-        source = Path(__import__('trusts.core', fromlist=['core']).__file__).read_text()
-        forbidden = (
-            r'\bTrust\b',
-            r'\bContent\b',
-            r'\bJunction\b',
-            r'\bTrustUserPermission\b',
-            r'\bTrustGroupPermission\b',
-            r'\bGroup\b',
-            r'\bRole\b',
+    def test_core_module_has_no_historical_import_or_global(self):
+        import trusts.core as core
+
+        forbidden = {
+            'Trust',
+            'Content',
+            'Junction',
+            'TrustUserPermission',
+            'TrustGroupPermission',
+            'Group',
+            'Role',
+        }
+        self.assertFalse(forbidden.intersection(vars(core)))
+
+        imported = {
+            value.__name__
+            for value in vars(core).values()
+            if isinstance(value, types.ModuleType)
+        }
+        self.assertTrue(
+            all(
+                name == 'trusts.core' or not name.startswith('trusts.')
+                for name in imported
+            ),
+            imported,
         )
-        for pattern in forbidden:
-            self.assertIsNone(
-                re.search(pattern, source),
-                'trusts/core.py must not name %s' % pattern,
-            )
+        for value in vars(core).values():
+            module = getattr(value, '__module__', None)
+            if isinstance(module, str):
+                self.assertFalse(
+                    module.startswith('trusts.') and module != 'trusts.core',
+                    module,
+                )

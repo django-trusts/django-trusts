@@ -1,11 +1,12 @@
 """Isolated registration and common authorization-plan compiler.
 
 ``TrustsRegistry`` validates root-relative ``Ref`` paths through Django
-model ``_meta`` and stores one immutable record per relation. The same
-registered records compile into one correlated relation plan. Three
-projections change only the terminal: permission enumeration, object
-authorization (SQL ``EXISTS`` membership over that enumeration), and
-authorized-content filtering.
+model ``_meta`` and stores immutable records. More than one normalized
+registration may share one permission-bearing root when they terminate
+on different content models. The same registered records compile into
+one correlated relation plan. Three projections change only the
+terminal: permission enumeration, object authorization (SQL ``EXISTS``
+membership over that enumeration), and authorized-content filtering.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``.
@@ -41,11 +42,13 @@ def _classify_field(field):
         return 'gfk'
     if not getattr(field, 'is_relation', False):
         return 'scalar'
-    if getattr(field, 'many_to_many', False) or getattr(field, 'one_to_many', False):
-        return 'multi'
-    if getattr(field, 'auto_created', False) and not getattr(field, 'concrete', False):
-        return 'reverse'
+    if getattr(field, 'many_to_many', False):
+        return 'm2m'
     if getattr(field, 'one_to_one', False) and not getattr(field, 'concrete', False):
+        return 'reverse_o2o'
+    if getattr(field, 'one_to_many', False):
+        return 'reverse_o2m'
+    if getattr(field, 'auto_created', False) and not getattr(field, 'concrete', False):
         return 'reverse'
     related = getattr(field, 'related_model', None)
     if related is None:
@@ -57,19 +60,98 @@ def _path_text(path):
     return '.'.join(path)
 
 
-def _terminal_model(field):
+def _lookup_text(path):
+    return '__'.join(path)
+
+
+def _materialize_related_model(field):
+    """Resolve a still-string ``remote_field.model`` through the app registry.
+
+    Isolated ``ForeignKey(settings.AUTH_USER_MODEL)`` fields keep a string
+    until Django's lazy related-class hook runs. Path information needs the
+    model class. ``apps.get_model`` is metadata only (zero SQL).
+    """
+    remote = getattr(field, 'remote_field', None)
+    if remote is None:
+        return
+    model = getattr(remote, 'model', None)
+    if _is_model_class(model):
+        return
     related = getattr(field, 'related_model', None)
+    if isinstance(related, str) or related is None:
+        label = related if isinstance(related, str) else model
+        if isinstance(label, str):
+            try:
+                related = django_apps.get_model(label)
+            except (LookupError, ValueError):
+                return
     if _is_model_class(related):
-        return related
-    if isinstance(related, str):
         try:
-            return django_apps.get_model(related)
-        except (LookupError, ValueError):
-            return None
-    return None
+            remote.model = related
+        except (AttributeError, TypeError):
+            return
 
 
-def _resolve_direct_path(root, path, role):
+def _resolved_hop(field, role, path):
+    """Resolve one hop from Django path information.
+
+    Requires exactly one ``PathInfo`` and exactly one target field.
+    Terminal model and outer comparison field come from that metadata.
+    """
+    _materialize_related_model(field)
+    getter = getattr(field, 'get_path_info', None)
+    if not callable(getter):
+        raise TrustsConfigurationError(
+            '%s path %r has no resolvable path information.'
+            % (role, _path_text(path))
+        )
+    infos = getter()
+    if infos is None:
+        infos = ()
+    infos = tuple(infos)
+    if len(infos) != 1:
+        raise TrustsConfigurationError(
+            '%s path %r does not resolve to exactly one relation hop; '
+            'composite and multi-join relations are not supported.'
+            % (role, _path_text(path))
+        )
+    info = infos[0]
+    target_fields = getattr(info, 'target_fields', None) or ()
+    if len(target_fields) != 1:
+        raise TrustsConfigurationError(
+            '%s path %r exposes %s target fields; composite and '
+            'multi-column correlation are not supported.'
+            % (role, _path_text(path), len(target_fields))
+        )
+    to_opts = getattr(info, 'to_opts', None)
+    related = None
+    if to_opts is not None:
+        related = getattr(to_opts, 'concrete_model', None) or getattr(
+            to_opts, 'model', None
+        )
+    if not _is_model_class(related):
+        raise TrustsConfigurationError(
+            '%s path %r does not terminate on a model.'
+            % (role, _path_text(path))
+        )
+    target = target_fields[0]
+    attname = getattr(target, 'attname', None)
+    if not attname:
+        raise TrustsConfigurationError(
+            '%s path %r does not expose one supported target field.'
+            % (role, _path_text(path))
+        )
+    return related._meta.concrete_model, attname
+
+
+def _resolve_path(root, path, role, *, trailing_reverse=False):
+    """Validate a root-relative path and return lookup metadata.
+
+    User and permission paths remain one direct single-valued hop.
+    A content path may be that same direct hop, or one or more forward
+    single-valued hops followed by exactly one final reverse
+    one-to-many hop.
+    """
     if not path:
         raise TrustsConfigurationError(
             '%s must be a non-empty root-relative path from %s.'
@@ -77,9 +159,13 @@ def _resolve_direct_path(root, path, role):
         )
 
     current = root
-    field = None
     related = None
+    target_attname = None
+    saw_reverse = False
+    n = len(path)
+
     for index, name in enumerate(path):
+        is_last = index == n - 1
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
@@ -91,20 +177,14 @@ def _resolve_direct_path(root, path, role):
         kind = _classify_field(field)
         if kind == 'scalar':
             raise TrustsConfigurationError(
-                '%s path %r traverses scalar field %r on %s; only direct '
+                '%s path %r traverses scalar field %r on %s; only '
                 'single-valued relations are supported.'
                 % (role, _path_text(path), name, current._meta.label)
             )
-        if kind == 'multi':
+        if kind == 'm2m':
             raise TrustsConfigurationError(
-                '%s path %r uses multi-valued field %r on %s; multi-valued '
-                'and reverse traversals are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
-            )
-        if kind == 'reverse':
-            raise TrustsConfigurationError(
-                '%s path %r uses reverse relation %r on %s; multi-valued '
-                'and reverse traversals are not supported.'
+                '%s path %r uses multi-valued field %r on %s; many-to-many '
+                'and other multi-valued traversals are not supported.'
                 % (role, _path_text(path), name, current._meta.label)
             )
         if kind == 'gfk':
@@ -113,23 +193,56 @@ def _resolve_direct_path(root, path, role):
                 'foreign keys are not supported.'
                 % (role, _path_text(path), name, current._meta.label)
             )
-
-        related = _terminal_model(field)
-        if not _is_model_class(related):
+        if kind == 'reverse_o2o':
             raise TrustsConfigurationError(
-                '%s path %r does not terminate on a model.'
-                % (role, _path_text(path))
+                '%s path %r uses reverse one-to-one relation %r on %s; '
+                'reverse one-to-one traversals are not supported.'
+                % (role, _path_text(path), name, current._meta.label)
             )
-        if index != len(path) - 1:
+        if kind in ('reverse_o2m', 'reverse'):
+            allowed_final = (
+                trailing_reverse
+                and is_last
+                and index > 0
+                and kind == 'reverse_o2m'
+            )
+            if not allowed_final:
+                if not is_last:
+                    raise TrustsConfigurationError(
+                        '%s path %r uses reverse relation %r on %s before '
+                        'the final hop; reverse relations are only '
+                        'supported as the final content hop.'
+                        % (role, _path_text(path), name, current._meta.label)
+                    )
+                raise TrustsConfigurationError(
+                    '%s path %r uses reverse relation %r on %s; multi-valued '
+                    'and reverse traversals are not supported.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            saw_reverse = True
+        elif kind != 'single':
+            raise TrustsConfigurationError(
+                '%s path %r uses unsupported field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+
+        related, target_attname = _resolved_hop(field, role, path)
+        if not is_last:
             current = related
 
-    if len(path) != 1:
+    if n != 1 and not saw_reverse:
+        if trailing_reverse:
+            raise TrustsConfigurationError(
+                '%s path %r is not a direct single-valued relation or a '
+                'forward path ending in one reverse one-to-many.'
+                % (role, _path_text(path))
+            )
         raise TrustsConfigurationError(
             '%s path %r is not a direct single-valued relation; only '
             'direct paths are supported.'
             % (role, _path_text(path))
         )
-    return tuple(path), related, field.name
+    return tuple(path), related, _lookup_text(path), target_attname
 
 
 def _require_ref(value, role):
@@ -198,18 +311,26 @@ class Ref(object):
 
 @dataclass(frozen=True, slots=True)
 class RegisteredRelation:
-    """Immutable normalized record for one permission-bearing relation."""
+    """Immutable normalized record for one permission-bearing relation.
+
+    ``*_field`` is the complete root-relative Django lookup
+    (``'__'.join(path)``). ``*_target`` is the last hop's single
+    comparison field (``attname``), taken from resolved path metadata.
+    """
 
     root: type
     content_path: tuple
     content_model: type
     content_field: str
+    content_target: str
     user_path: tuple
     user_model: type
     user_field: str
+    user_target: str
     permission_path: tuple
     permission_model: type
     permission_field: str
+    permission_target: str
     condition: None = None
 
 
@@ -217,6 +338,12 @@ _BINDING_FIELDS = {
     'user': 'user_field',
     'content': 'content_field',
     'permission': 'permission_field',
+}
+
+_TARGET_ATTRS = {
+    'user_field': 'user_target',
+    'content_field': 'content_target',
+    'permission_field': 'permission_target',
 }
 
 
@@ -235,23 +362,6 @@ def _require_instance(value, role):
             '%s must be a model instance, not %r.' % (role, value)
         )
     return value
-
-
-def _outer_ref_for_relation(root, field_name):
-    """Build ``OuterRef`` for the relation's actual target field.
-
-    Direct ``ForeignKey(..., to_field=...)`` and other single-valued
-    relations may target a unique field other than the related model's
-    primary key. Correlation must use that field, not assumed ``pk``.
-    """
-    field = root._meta.get_field(field_name)
-    target = getattr(field, 'target_field', None)
-    if target is None:
-        raise TrustsConfigurationError(
-            'Cannot correlate %s.%s; relation has no target field.'
-            % (root._meta.label, field_name)
-        )
-    return OuterRef(target.attname)
 
 
 def _content_model(content):
@@ -273,6 +383,9 @@ class RelationPlan:
 
     Root selection, field correlation, and ``EXISTS`` assembly live here.
     Projection methods only choose the outer terminal or wrap ``exists()``.
+    Bindings and correlation use the complete stored lookup, not only the
+    last path segment. ``OuterRef`` uses the last hop's resolved target
+    field, which need not live on the root and is not assumed to be ``pk``.
     """
 
     records: tuple
@@ -289,8 +402,9 @@ class RelationPlan:
         parts = []
         for record in self.records:
             terminal = getattr(record, terminal_field_attr)
+            target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
             inner = self._bound_root_qs(record, **bindings).filter(
-                **{terminal: _outer_ref_for_relation(record.root, terminal)}
+                **{terminal: OuterRef(target)}
             )
             parts.append(Exists(inner))
         if not parts:
@@ -298,6 +412,21 @@ class RelationPlan:
         if len(parts) == 1:
             return parts[0]
         return reduce(or_, parts)
+
+    def content_exists(self, user, permission):
+        """Candidate-row ``EXISTS`` correlating content through this plan.
+
+        Later readers may OR this predicate with another predicate on the
+        same incoming queryset. ``filter_content`` consumes this same
+        object; there is no second content-correlation builder.
+        """
+        user = _require_instance(user, 'user')
+        permission = _require_instance(permission, 'permission')
+        if not self.records:
+            return None
+        return self._correlated_exists(
+            'content_field', user=user, permission=permission,
+        )
 
     def permissions(self, user, content):
         """Distinct permission rows for ``(user, content)``."""
@@ -328,13 +457,9 @@ class RelationPlan:
 
     def filter_content(self, queryset, user, permission):
         """Lazy queryset of candidate rows correlated to the same plan."""
-        user = _require_instance(user, 'user')
-        permission = _require_instance(permission, 'permission')
-        if not self.records:
+        exists = self.content_exists(user, permission)
+        if exists is None:
             return queryset.none()
-        exists = self._correlated_exists(
-            'content_field', user=user, permission=permission,
-        )
         return queryset.filter(exists).distinct()
 
 
@@ -343,7 +468,8 @@ class TrustsRegistry(object):
 
     Create a new instance per isolated context. There is no process-global
     singleton in this slice. ``register`` performs zero SQL. Projection
-    methods compile one shared plan from stored records.
+    methods compile one shared plan from stored records. One root may
+    store several records when they terminate on different content models.
     """
 
     def __init__(self):
@@ -354,9 +480,13 @@ class TrustsRegistry(object):
     def records(self):
         return tuple(self._order)
 
-    def get(self, root):
+    def records_for_root(self, root):
+        """Insertion-ordered records registered for ``root``.
+
+        Raises ``TrustsConfigurationError`` when the root is absent.
+        """
         try:
-            return self._by_root[root]
+            return tuple(self._by_root[root])
         except KeyError:
             raise TrustsConfigurationError(
                 'No registration for %r.' % (getattr(root, '__name__', root),)
@@ -365,11 +495,11 @@ class TrustsRegistry(object):
     def register(self, *, content, user, permission, condition=None):
         """Register one permission-bearing relation from root-relative refs.
 
-        Duplicate registration of the same root with an identical normalized
-        record raises ``TrustsConfigurationError``. A second registration of
-        the same root with a different normalized record is a conflict and
-        also raises ``TrustsConfigurationError``. Both outcomes are
-        deterministic: the first stored record is left unchanged.
+        Exact duplicate normalized registration raises
+        ``TrustsConfigurationError``. The same root plus the same content
+        terminal with a different registration is a conflict and also
+        raises. The same root may register different content terminals.
+        Both error outcomes leave stored records unchanged.
         """
         if condition is not None:
             raise TrustsConfigurationError(
@@ -388,14 +518,14 @@ class TrustsRegistry(object):
             )
         root = roots[0]
 
-        content_path, content_model, content_field = _resolve_direct_path(
-            root, content_ref._path, 'content'
+        content_path, content_model, content_field, content_target = _resolve_path(
+            root, content_ref._path, 'content', trailing_reverse=True,
         )
-        user_path, user_model, user_field = _resolve_direct_path(
+        user_path, user_model, user_field, user_target = _resolve_path(
             root, user_ref._path, 'user'
         )
-        permission_path, permission_model, permission_field = _resolve_direct_path(
-            root, permission_ref._path, 'permission'
+        permission_path, permission_model, permission_field, permission_target = (
+            _resolve_path(root, permission_ref._path, 'permission')
         )
 
         record = RegisteredRelation(
@@ -403,27 +533,39 @@ class TrustsRegistry(object):
             content_path=content_path,
             content_model=content_model,
             content_field=content_field,
+            content_target=content_target,
             user_path=user_path,
             user_model=user_model,
             user_field=user_field,
+            user_target=user_target,
             permission_path=permission_path,
             permission_model=permission_model,
             permission_field=permission_field,
+            permission_target=permission_target,
             condition=None,
         )
 
-        existing = self._by_root.get(root)
-        if existing is not None:
-            if existing == record:
-                raise TrustsConfigurationError(
-                    'Duplicate registration for %s.' % root._meta.label
-                )
-            raise TrustsConfigurationError(
-                'Conflicting registration for %s: existing %r, new %r.'
-                % (root._meta.label, existing, record)
-            )
-
-        self._by_root[root] = record
+        existing_rows = self._by_root.get(root)
+        if existing_rows:
+            for existing in existing_rows:
+                if existing == record:
+                    raise TrustsConfigurationError(
+                        'Duplicate registration for %s.' % root._meta.label
+                    )
+                if existing.content_model is record.content_model:
+                    raise TrustsConfigurationError(
+                        'Conflicting registration for %s content terminal '
+                        '%s: existing %r, new %r.'
+                        % (
+                            root._meta.label,
+                            record.content_model._meta.label,
+                            existing,
+                            record,
+                        )
+                    )
+            existing_rows.append(record)
+        else:
+            self._by_root[root] = [record]
         self._order.append(record)
         return record
 
@@ -487,7 +629,10 @@ class TrustsRegistry(object):
         ).has_permission(user, content, permission)
 
     def filter_authorized(self, queryset, user, permission):
-        """Lazy queryset of rows ``user`` holds ``permission`` on."""
+        """Lazy queryset of rows ``user`` holds ``permission`` on.
+
+        Consumes ``RelationPlan.content_exists`` through ``filter_content``.
+        """
         if not isinstance(queryset, QuerySet):
             raise TrustsConfigurationError(
                 'filter_authorized requires a QuerySet, not %r.' % (queryset,)
