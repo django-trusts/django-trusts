@@ -332,6 +332,22 @@ class ClosedPredicateRegistrationTest(TestCase):
         )
         registry = TrustsRegistry()
         with self.assertNumQueries(0):
+            # Distinct unique fields on one model. These unsaved rows
+            # collide across fields (A.slug == B.code) and would satisfy
+            # compiled stored-column F() comparison despite being
+            # different objects.
+            site_a = Site(slug='acme', code='x1')
+            site_b = Site(slug='other', code='acme')
+            self.assertEqual(
+                SiteGrant._meta.get_field('left').target_field.attname,
+                'slug',
+            )
+            self.assertEqual(
+                SiteGrant._meta.get_field('right').target_field.attname,
+                'code',
+            )
+            self.assertEqual(site_a.slug, site_b.code)
+            self.assertNotEqual(site_a.slug, site_b.slug)
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'resolved comparison field',
             ):
