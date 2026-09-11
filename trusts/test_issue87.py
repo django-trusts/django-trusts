@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from django.apps import AppConfig, apps
-from trusts.apps import kernel_config
 from django.contrib.auth.models import AnonymousUser, Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
@@ -19,14 +18,11 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_
 from django.test.utils import isolate_apps
 
 import tests as tests_module
-from tests.apps import clone_writable_registry, forget_models, override_apps_ready
+from tests.apps import clone_writable_registry, forget_models, override_apps_ready, live_config
 from tests.backends import MixinOnlyBackend
 from tests.models import Category, TestGroupJunction, Ticket
-from trusts.backends import (
-    HistoricalGroupQueryCompiler,
-    TrustModelBackend,
-    TrustModelBackendMixin,
-)
+from trusts.backends import TrustModelBackendMixin
+from trusts.zero.backends import HistoricalGroupQueryCompiler, TrustModelBackend
 from trusts.checks import check_permission_conditions
 from trusts.conditions import condition_refs, validate_expression
 from trusts.core import (
@@ -35,7 +31,7 @@ from trusts.core import (
     TrustsRegistry,
     common_permissions,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     ContentManager,
     Junction,
@@ -50,7 +46,7 @@ from trusts.tests import (
 )
 
 
-CONCRETE = 'trusts.backends.TrustModelBackend'
+CONCRETE = 'trusts.zero.backends.TrustModelBackend'
 MIXIN = 'tests.backends.MixinOnlyBackend'
 _u, _p, _o = condition_refs()
 _IMPORT_CONDITIONS = {
@@ -191,7 +187,7 @@ class DependentHostConfig(AppConfig):
             return
         if self.holder_model is None:
             return
-        registry = kernel_config(self.apps).configured_backend().registry
+        registry = live_config(self.apps).configured_backend().registry
         j = Ref(TrustUserPermission)
         donated_image = getattr(self, '_trusts_tup_image_registry_id', None)
         if donated_image is not registry:
@@ -221,7 +217,7 @@ def _new_dependent_host(apps_registry, holder_model):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = kernel_config()
+        self.live = live_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -300,7 +296,7 @@ class LegacyContentRegistryDeletedTest(SimpleTestCase):
             Content.register_content(BareNote)
             self.assertFalse(hasattr(Content, '_contents'))
             self.assertFalse(
-                kernel_config().registry.plan_for(BareNote).records
+                live_config().registry.plan_for(BareNote).records
             )
         finally:
             Content._conditions.clear()
@@ -309,7 +305,7 @@ class LegacyContentRegistryDeletedTest(SimpleTestCase):
 
     def test_class_prepared_does_not_write_a_content_map(self):
         before = dict(Content._conditions)
-        live = kernel_config().registry
+        live = live_config().registry
         try:
             class IsolatedSheet(Content):
                 class Meta:
@@ -337,7 +333,7 @@ class LegacyContentRegistryDeletedTest(SimpleTestCase):
 
     def test_register_junction_does_not_write_a_content_map(self):
         before = dict(Content._conditions)
-        live = kernel_config().registry
+        live = live_config().registry
         group_before = live.plan_for(Group).records
         try:
             class IsolatedJunction(Junction):
@@ -402,7 +398,7 @@ class HistoricalCompilerPreservedTest(SimpleTestCase):
         self.assertIsInstance(
             MixinOnlyBackend.query_compiler, PlanQueryCompiler,
         )
-        handle = kernel_config().configured_backend()
+        handle = live_config().configured_backend()
         self.assertTrue(handle.historical_fallback)
         self.assertIsInstance(handle.compiler, HistoricalGroupQueryCompiler)
 
@@ -512,7 +508,7 @@ class DependentHostContributionTest(_RegistryRestoreMixin, SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateDependentContributionTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = kernel_config().registry
+        live = live_config().registry
         before = live.records
         Receipt, *_rest = _receipt_chain()
         contributor = DependentHostConfig('tests', tests_module)
@@ -733,7 +729,7 @@ class UnknownTerminalFailsClosedTest(_UsersMixin, TestCase):
         self.assertEqual(backend.get_all_permissions(self.alice, {}), set())
         self.assertFalse(backend.has_perm(self.alice, 'auth.change_user', self.alice))
         self.assertFalse(
-            kernel_config().configured_backend().registry.plan_for(
+            live_config().configured_backend().registry.plan_for(
                 User,
             ).records
         )

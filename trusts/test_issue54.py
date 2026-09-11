@@ -1,7 +1,7 @@
 """#54 C1: additive generic public seams.
 
 AuthorizedQuerySet / AuthorizedManager, filter_authorized_scopes,
-ConditionLookup / set_condition_lookup, and kernel_config(). Structural
+ConditionLookup / set_condition_lookup, and live_config(). Structural
 and behavioral tests only — no source-token or inspect.getsource
 assertions. Does not retarget the app label, move models, bind a Zero
 Content lookup, or delete the legacy compiler.
@@ -23,9 +23,10 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
+from tests.apps import live_config
 from tests.models import Category, Organization, Ticket
-from trusts.apps import AppConfig, kernel_config
-from trusts.backends import HistoricalGroupQueryCompiler
+from trusts.apps import TrustsImplementationConfig
+from trusts.zero.backends import HistoricalGroupQueryCompiler
 from trusts.core import (
     ConditionLookup,
     PlanQueryCompiler,
@@ -34,7 +35,7 @@ from trusts.core import (
     TrustsRegistry,
     filter_authorized_scopes,
 )
-from trusts.models import (
+from trusts.zero.models import (
     ContentQuerySet,
     PermissionConditionNotQueryable,
     Trust,
@@ -169,17 +170,21 @@ class _UsersMixin(object):
 
 
 class KernelConfigTest(TestCase):
-    def test_kernel_config_is_class_identity_not_zero_label(self):
+    def test_live_owner_is_zero_and_kernel_config_is_gone(self):
+        import trusts.apps as apps_mod
+        from trusts.zero.apps import ZeroConfig
+
         with self.assertNumQueries(0):
-            config = kernel_config()
+            config = live_config()
         zero = apps.get_app_config('trusts')
-        self.assertIs(type(config), AppConfig)
-        self.assertEqual(config.name, 'trusts')
-        self.assertEqual(config.label, 'trusts_core')
-        self.assertIs(config, kernel_config())
-        self.assertIsNot(config, zero)
-        self.assertEqual(zero.name, 'trusts.zero')
-        self.assertEqual(zero.label, 'trusts')
+        self.assertIs(type(config), ZeroConfig)
+        self.assertIsInstance(config, TrustsImplementationConfig)
+        self.assertEqual(config.name, 'trusts.zero')
+        self.assertEqual(config.label, 'trusts')
+        self.assertIs(config, live_config())
+        self.assertIs(config, zero)
+        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
+        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
     def test_legacy_helpers_and_compiler_remain_importable(self):
         from trusts.query import (
@@ -195,13 +200,13 @@ class KernelConfigTest(TestCase):
 
 class LegacyMatrixBPairTest(TestCase):
     def test_pair_zero_owns_trusts_label_and_migration_keys(self):
-        config = kernel_config()
-        self.assertEqual(config.name, 'trusts')
-        self.assertEqual(config.label, 'trusts_core')
-        self.assertIsNot(config, apps.get_app_config('trusts'))
+        config = live_config()
+        self.assertEqual(config.name, 'trusts.zero')
+        self.assertEqual(config.label, 'trusts')
+        self.assertIs(config, apps.get_app_config('trusts'))
         self.assertIs(apps.get_model('trusts', 'Trust'), Trust)
-        self.assertTrue(apps.is_installed('trusts'))
         self.assertTrue(apps.is_installed('trusts.zero'))
+        self.assertFalse(apps.is_installed('trusts'))
         loader = MigrationLoader(connection)
         keys = {
             key for key in loader.disk_migrations
@@ -302,7 +307,7 @@ class ConditionLookupBackendAdapterTest(_UsersMixin, TestCase):
             trust=self.trust_a, entity=self.alice, permission=self.read,
         ).save()
         self._reload()
-        self.handle = kernel_config().configured_backend()
+        self.handle = live_config().configured_backend()
         self.saved_lookup = self.handle.registry.condition_lookup
 
     def tearDown(self):
@@ -672,7 +677,7 @@ class FilterAuthorizedScopesLiveTest(_UsersMixin, TestCase):
         self.add.group_set.add(self.carol_group)
         enable_local_group_grant(self.trust_a, self.carol_group, self.add)
         self._reload()
-        self.handles = kernel_config().configured_handles()
+        self.handles = live_config().configured_handles()
 
     def test_trust_is_prefix_of_category_for_trustee_not_historical_group(self):
         qs = filter_authorized_scopes(

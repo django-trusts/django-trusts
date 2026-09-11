@@ -17,8 +17,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import isolate_live_registry
-from trusts.apps import kernel_config
+from tests.apps import isolate_live_registry, live_config
 from trusts.backends import TrustModelBackendMixin
 from trusts.checks import CHECK_ID_ORDERED_FOLD_RENDERER, check_ordered_fold_renderer
 from trusts.core import (
@@ -848,7 +847,7 @@ class OrderedFoldRegistrationTest(SimpleTestCase):
         Permission, Document, Ace = _direct_models(suffix='E006')
         registry = TrustsRegistry()
         _register_direct(registry, Ace, Permission, Document)
-        live = kernel_config()
+        live = live_config()
         saved = dict(live.registries)
         isolate_live_registry(live, registry)
         try:
@@ -919,7 +918,7 @@ class OrderedFoldVendorGateTest(TransactionTestCase):
         Permission, Document, Ace = _direct_models(suffix='E006Live')
         registry = TrustsRegistry()
         _register_direct(registry, Ace, Permission, Document)
-        live = kernel_config()
+        live = live_config()
         saved = dict(live.registries)
         isolate_live_registry(live, registry)
         try:
@@ -1002,8 +1001,10 @@ class _FoldRuntimeMixin(object):
                     user, permission,
                 )
             )
-        with patch('trusts.apps.kernel_config') as kernel_config:
-            kernel_config.return_value.configured_handles.return_value = handles
+        with patch(
+            'trusts.apps.configured_implementation_handles',
+            return_value=handles,
+        ):
             with self.assertNumQueries(1):
                 via_manager = obj in list(
                     obj._meta.concrete_model.objects.filter(pk=obj.pk).authorized(

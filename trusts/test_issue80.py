@@ -10,21 +10,20 @@ assertions.
 from unittest.mock import patch
 
 from django.apps import apps
-from trusts.apps import kernel_config
 from django.contrib.auth.models import AnonymousUser, Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from tests.apps import install_writable_registry
+from tests.apps import install_writable_registry, live_config
 from tests.models import AutoAdminCategory, Category, Organization, Ticket
 from trusts.core import (
     Ref,
     TrustsRegistry,
     any_plan_records,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     PermissionConditionNotQueryable,
     Trust,
@@ -38,7 +37,7 @@ from trusts.tests import (
 from trusts.views import NewTeamForm
 
 
-CONCRETE = 'trusts.backends.TrustModelBackend'
+CONCRETE = 'trusts.zero.backends.TrustModelBackend'
 MIXIN = 'tests.backends.MixinOnlyBackend'
 
 
@@ -117,7 +116,7 @@ class _UnusableContents(object):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = kernel_config()
+        self.live = live_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None

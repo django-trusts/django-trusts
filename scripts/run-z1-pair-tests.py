@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Run Zero Z1 tests that are valid against real C2.
+"""Run Zero IIa product-path tests that remain valid on Step III.
 
 Invokes Zero's runner from the Zero checkout so ``tests`` is Zero's
-package. Skips ``tests.test_duplicate_label`` (Neg-Z1-C1 gate).
+package. Skips leftover Step I assertions in ``tests.test_appconfig``
+(expects a kernel ``AppConfig`` / ``kernel_config()``). Those leftovers
+are replaced by core pair proofs.
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ if not (zero / 'tests' / 'runtests.py').is_file():
 PROBE = r'''
 import tests.runtests as rt
 rt.NORMAL_SUITE = [
-    "tests.test_appconfig",
     "tests.test_migrations",
     "tests.test_packaging",
     "tests.test_codec",

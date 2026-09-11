@@ -24,7 +24,7 @@ from trusts.authorization import (
     revoke_trustee,
 )
 from trusts import utils
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     PermissionConditionNotQueryable,
     Role,

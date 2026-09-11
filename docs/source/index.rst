@@ -47,32 +47,29 @@ Steps:
 
    AUTHENTICATION_BACKENDS = (
      'django.contrib.auth.backends.ModelBackend',
-     'trusts.backends.TrustModelBackend',
+     'trusts.zero.backends.TrustModelBackend',
    )
 
    ``TrustModelBackend`` still subclasses ``ModelBackend`` for
    ``authenticate`` / ``get_user`` only. That inheritance does not
-   confer global permission authority.
+   confer global permission authority. The generic mixin lives only at
+   ``from trusts.backends import TrustModelBackendMixin``.
 
-3. Add ``trusts`` to ``INSTALLED_APPS`` in ``settings.py``. After the
-   C2 kernel extraction the kernel app label is ``trusts_core``.
-   Hosts that need the historical 0.x schema (``Trust``, content types,
-   permissions, migrations ``trusts.0001_initial`` /
-   ``trusts.0002_trustgroup``) must also install ``django-trusts-zero``
-   and add the explicit class path::
+3. Do not list ``'trusts'`` in ``INSTALLED_APPS``. ``django-trusts`` is
+   a Python library, not an installed Django app. Hosts that need the
+   historical 0.x schema (``Trust``, content types, permissions,
+   migrations ``trusts.0001_initial`` / ``trusts.0002_trustgroup``)
+   install ``django-trusts-zero`` and add the explicit class path::
 
      INSTALLED_APPS = [
        ...,
-       'trusts',  # kernel: name=trusts, label=trusts_core
        'trusts.zero.apps.ZeroConfig',  # schema: name=trusts.zero, label=trusts
      ]
 
-   Bare ``'trusts'`` alone is the kernel with no concrete models.
    Bare ``'trusts.zero'`` is forbidden; use ``ZeroConfig``.
-   ``from trusts.models import Trust`` still resolves when Zero is
-   installed (PEP 562 shim). Without Zero that import raises
-   ``ImportError`` naming ``django-trusts-zero``. Canonical imports are
-   ``trusts.zero.models``.
+   ``from trusts.models import Trust`` and
+   ``from trusts.backends import TrustModelBackend`` fail. Canonical
+   imports are ``trusts.zero.models`` and ``trusts.zero.backends``.
 
 4. Apply migrations::
 
@@ -189,17 +186,21 @@ related-name ``image`` at each hop::
 
    # app/apps.py
    from django.apps import AppConfig
-   from trusts.apps import kernel_config
-   from trusts.core import Ref
-   from trusts.models import TrustUserPermission
+   from trusts.apps import implementation_for_path
+   from trusts.core import Ref, TrustsConfigurationError
+   from trusts.zero.models import TrustUserPermission
 
    class ReceiptsConfig(AppConfig):
        name = 'app'
 
        def ready(self):
            try:
-               registry = kernel_config(self.apps).configured_backend().registry
-           except LookupError:
+               owner = implementation_for_path(
+                   'trusts.zero.backends.TrustModelBackend',
+                   self.apps,
+               )
+               registry = owner.configured_backend().registry
+           except TrustsConfigurationError:
                return
            from app.models import Receipt
            j = Ref(TrustUserPermission)
@@ -333,11 +334,12 @@ correlation uses the hop's resolved target field (including non-PK
 lookup is the C1 default (instance-only callers; historical ``Content``
 conditions stay in place until a later Zero bind).
 
-``trusts.apps.kernel_config()`` returns the kernel ``trusts.apps.AppConfig``
-by class identity. The kernel label is ``trusts_core``. After Zero is
-installed, ``apps.get_app_config('trusts')`` is ``ZeroConfig`` (models,
-not registries). Callers of the kernel store must use ``kernel_config()``
-rather than the string label ``'trusts'``.
+Live registries are owned by installed ``TrustsImplementationConfig``
+subclasses. Resolve them with ``implementation_for_path()``,
+``implementation_for_class()``, or ``configured_implementation_handles()``.
+Core ships no AppConfig and no ``kernel_config()``. After Zero is
+installed, ``apps.get_app_config('trusts')`` is ``ZeroConfig``. Do not
+list ``'trusts'`` in ``INSTALLED_APPS``.
 
 Closed registry predicates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

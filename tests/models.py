@@ -5,9 +5,16 @@ from trusts.conditions import condition_refs
 
 _u, _p, _o = condition_refs()
 
-try:
-    from trusts.models import Content, Junction
-except ImportError:
+from django.conf import settings
+
+_ZERO_LISTED = any(
+    entry == 'trusts.zero' or str(entry).startswith('trusts.zero')
+    for entry in (getattr(settings, 'INSTALLED_APPS', ()) or ())
+)
+
+if _ZERO_LISTED:
+    from trusts.zero.models import Content, Junction
+else:
     Content = Junction = None
 
 

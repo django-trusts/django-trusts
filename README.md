@@ -21,7 +21,7 @@ Read more: http://django-trusts.readthedocs.org/en/latest/
 Supported versions
 ------------------
 
-The `1.0.0.dev2` development line requires **Python 3.12–3.14** and **Django 6.1**.
+The `1.0.0.dev3` development line requires **Python 3.12–3.14** and **Django 6.1**.
 Sources checked on 2026-09-07 and the rationale are in
 [docs/support-matrix.md](docs/support-matrix.md).
 
@@ -33,11 +33,17 @@ python -m pip install "Django>=6.1,<6.2"
 python -m pip install .
 ```
 
-Add `trusts` to `INSTALLED_APPS` and set:
+`django-trusts` is a Python library, not an installed Django app. Do not
+list `'trusts'` in `INSTALLED_APPS`. Install a host
+`TrustsImplementationConfig` such as `trusts.zero.apps.ZeroConfig` and
+set that host's canonical backend path:
 
 ```
+INSTALLED_APPS = (
+    'trusts.zero.apps.ZeroConfig',
+)
 AUTHENTICATION_BACKENDS = (
-    'trusts.backends.TrustModelBackend',
+    'trusts.zero.backends.TrustModelBackend',
 )
 ```
 
@@ -54,18 +60,17 @@ python -m django check --settings=tests.settings
 python scripts/verify-legacy-upgrade.py
 ```
 
-CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
-fresh migrate, ``manage.py check``, and the legacy-upgrade script on Python
-3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel
-and imports it from a temporary directory so the source tree cannot satisfy
-the import. Job names: `tests (Python 3.12)`, `tests (Python 3.13)`,
-`tests (Python 3.14)`, `package`. Do not treat a removed Travis check as a
-stand-in green status.
+CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
+authorization tests, a fresh migrate, ``manage.py check``, an OrderedFold
+PostgreSQL job, pair proofs against the supported Zero companion, and a
+`package` job that builds an sdist/wheel and imports it from a temporary
+directory so the source tree cannot satisfy the import. Do not treat a
+removed Travis check as a stand-in green status.
 
 Development version
 -------------------
 
-The active package version is **1.0.0.dev2**. That is a development-line mark,
+The active package version is **1.0.0.dev3**. That is a development-line mark,
 not a production 1.0 release. See [docs/development-version.md](docs/development-version.md).
 
 Legacy baseline

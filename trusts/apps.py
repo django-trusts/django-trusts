@@ -12,7 +12,7 @@ def _listed_mixin_paths():
     from django.conf import settings
     from django.utils.module_loading import import_string
 
-    from trusts.core_backends import TrustModelBackendMixin
+    from trusts.backends import TrustModelBackendMixin
     from trusts.core import TrustsConfigurationError
 
     listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
@@ -44,7 +44,7 @@ def _listed_mixin_paths():
 
 
 class _TrustsRegistryOwner(object):
-    """Path-scoped registry store shared by kernel and implementations."""
+    """Path-scoped registry store shared by implementation AppConfigs."""
 
     def _init_registries(self):
         # Import here: a module-level trusts.core import loads contenttypes
@@ -104,6 +104,13 @@ class _TrustsRegistryOwner(object):
                 )
             path = paths[0]
         elif path not in paths:
+            apps_registry = getattr(self, 'apps', None)
+            try:
+                other = implementation_for_path(path, apps_registry)
+            except TrustsConfigurationError:
+                other = None
+            if other is not None and other is not self:
+                return other.configured_backend(path)
             raise TrustsConfigurationError(
                 '%r is not a configured Trusts backend' % (path,)
             )
@@ -186,8 +193,8 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
     """Reusable implementation AppConfig helper. Not installed by core.
 
     Host implementations (Zero, GH, Windows, or a project app) subclass
-    this and declare ``trusts_backend_paths``. Core's kernel
-    ``AppConfig`` is *not* a subclass; ``isinstance`` resolvers skip it.
+    this and declare ``trusts_backend_paths``. Core ships no AppConfig
+    and no Django app label; do not list ``'trusts'`` in INSTALLED_APPS.
     """
 
     default = False
@@ -209,7 +216,7 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
     def _validate_ownership(self):
         from django.utils.module_loading import import_string
 
-        from trusts.core_backends import TrustModelBackendMixin
+        from trusts.backends import TrustModelBackendMixin
         from trusts.core import TrustsConfigurationError
 
         owned = self.owned_backend_paths()
@@ -259,74 +266,22 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
         from trusts import checks as _trusts_checks  # noqa: F401
 
 
-class AppConfig(_TrustsRegistryOwner, DjangoAppConfig):
-    name = 'trusts'
-    verbose_name = "Django Trusts Add-in"
-    label = 'trusts_core'
-    default = True
-    # Preserve AutoField if a later kernel model is added. Historical
-    # Trusts PKs live on ZeroConfig (label='trusts').
-    default_auto_field = 'django.db.models.AutoField'
+def configured_implementation_handles(apps_registry=None):
+    """Handles from every installed implementation, in owner then path order.
 
-    def __init__(self, *args, **kwargs):
-        super(AppConfig, self).__init__(*args, **kwargs)
-        self._init_registries()
-
-    def _configured_trusts_paths(self):
-        return _listed_mixin_paths()
-
-    def ready(self):
-        # Auto ModelAdmin registration does not import trusts.models.
-        # Concrete Trust/Role admins are owned by Zero when installed.
-        from django.apps import apps as django_apps
-
-        if django_apps.is_installed('django.contrib.admin'):
-            from trusts.admin import register_auto_modeladmins
-            register_auto_modeladmins()
-        # Register system checks. Do not validate conditions here: raising
-        # from ready() would block shell, migrations, and recovery.
-        from trusts import checks as _trusts_checks  # noqa: F401
-
-        # S3a: ensure one registry per configured Trusts path. Re-entry
-        # must not replace self.registries or any stored object. Freeze
-        # is applied by the supported handle surfaces after this Apps
-        # instance is ready, not by replacing stored objects here.
-        # Package Trust-as-content donation left this ready() on C2;
-        # ZeroConfig.ready() registers TUP+TGP on the kernel store.
-        paths = self._configured_trusts_paths()
-        for path in paths:
-            self._ensure(path)
-
-
-def kernel_config(apps_registry=None):
-    """Return the kernel ``trusts.apps.AppConfig`` by class identity.
-
-    Does not look up the string label ``'trusts'`` (that label is Zero
-    after C2). Optional ``apps_registry`` is an ``Apps`` instance; the
-    default is Django's global registry.
+    Empty when no ``TrustsImplementationConfig`` is installed.
     """
-    from django.apps import apps as django_apps
-
-    registry = django_apps if apps_registry is None else apps_registry
-    matches = [
-        config for config in registry.get_app_configs()
-        if type(config) is AppConfig
-    ]
-    if len(matches) == 1:
-        return matches[0]
-    if not matches:
-        raise LookupError('No installed Trusts kernel AppConfig.')
-    raise LookupError(
-        'Multiple Trusts kernel AppConfig instances: %r' % (matches,)
-    )
+    handles = []
+    for config in implementation_configs(apps_registry):
+        handles.extend(config.configured_handles())
+    return tuple(handles)
 
 
 def implementation_configs(apps_registry=None):
     """Installed ``TrustsImplementationConfig`` instances on one Apps registry.
 
-    Kernel ``AppConfig`` is excluded (it is not a subclass). Optional
-    ``apps_registry`` is an ``Apps`` instance; the default is Django's
-    global registry. Isolated tests pass the isolated Apps.
+    Optional ``apps_registry`` is an ``Apps`` instance; the default is
+    Django's global registry. Isolated tests pass the isolated Apps.
     """
     from django.apps import apps as django_apps
 
@@ -362,8 +317,8 @@ def implementation_for_class(cls, apps_registry=None, required=True):
 
     Ownership is exact class identity of an owned import path
     (``import_string(path) is cls``). ``required=False`` returns
-    ``None`` when no owner exists so the Step I mixin can fall back to
-    ``kernel_config()``. Duplicate owners always fail loud.
+    ``None`` when no owner exists. Duplicate owners always fail loud.
+    Supported mixins require an owner.
     """
     from django.utils.module_loading import import_string
 

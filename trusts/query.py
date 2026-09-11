@@ -189,7 +189,7 @@ class AuthorizedQuerySet(QuerySet):
     """
 
     def authorized(self, user, permission, extra_q=None):
-        from trusts.apps import kernel_config
+        from trusts.apps import configured_implementation_handles
         from trusts.core import TrustsConfigurationError, granted
 
         if not isinstance(permission, Model):
@@ -197,7 +197,7 @@ class AuthorizedQuerySet(QuerySet):
                 'permission must be a model instance, not %r.' % (permission,)
             )
         granted_q = granted(
-            kernel_config().configured_handles(),
+            configured_implementation_handles(),
             self, user, permission, kind='complete',
         )
         if granted_q is None:
