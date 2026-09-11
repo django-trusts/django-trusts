@@ -318,6 +318,129 @@ class OrderedFoldRegistrationTest(SimpleTestCase):
             ))
         self.assertEqual(registry.strategies, ())
 
+    def test_multi_hop_source_and_token_paths_store_full_chains(self):
+        User = get_user_model()
+
+        class Identity(models.Model):
+            code = models.CharField(max_length=16, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Document(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Wrapper(models.Model):
+            document = models.ForeignKey(Document, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Holder(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Ace(models.Model):
+            wrapper = models.ForeignKey(Wrapper, on_delete=models.CASCADE)
+            holder = models.ForeignKey(Holder, on_delete=models.CASCADE)
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Profile(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Card(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Principal(models.Model):
+            profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
+            card = models.ForeignKey(Card, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Person(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Team(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Membership(models.Model):
+            person = models.ForeignKey(Person, on_delete=models.CASCADE)
+            group = models.ForeignKey(Team, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        ace = Ref(Ace)
+        document = Ref(Document)
+        principal = Ref(Principal)
+        member = Ref(Membership)
+        compiled = registry.register_strategy(OrderedFold(
+            content=document,
+            descriptor=document,
+            source=ace,
+            source_descriptor=ace.wrapper.document,
+            order=ace.ace_order,
+            polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+            mask=ace.access_mask,
+            trustee=ace.holder.identity,
+            token=FlatToken(
+                principal=principal,
+                principal_user=principal.profile.user,
+                principal_identity=principal.card.identity,
+                member=member,
+                member_identity=member.person.identity,
+                member_group=member.group.identity,
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+        self.assertGreater(len(compiled.source_desc_hops), 1)
+        self.assertGreater(len(compiled.trustee_hops), 1)
+        self.assertGreater(len(compiled.principal_user_hops), 1)
+        self.assertGreater(len(compiled.principal_identity_hops), 1)
+        self.assertGreater(len(compiled.member_identity_hops), 1)
+        self.assertGreater(len(compiled.member_group_hops), 1)
+        self.assertEqual(compiled.identity_attname, 'code')
+        self.assertEqual(compiled.source_desc_hops[-1].attname, 'document_id')
+        self.assertEqual(compiled.trustee_hops[-1].attname, 'identity_id')
+
     def test_matching_non_pk_to_field_registers(self):
         User = get_user_model()
 
@@ -1058,3 +1181,293 @@ class OrderedFoldDescriptorTest(_FoldRuntimeMixin, TransactionTestCase):
             ))
             self._agree(registry, alice, read, attached, True)
             self._agree(registry, alice, read, missing, False)
+
+
+@skipUnless(_postgres(), 'OrderedFold renderer is PostgreSQL')
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class OrderedFoldMultiHopPathTest(_FoldRuntimeMixin, TransactionTestCase):
+    """Runtime SQL must resolve every accepted multi-hop path to its terminal.
+
+    First-hop-only compares (``wrapper_id`` vs Document/Identity, reused
+    ``of_p_h0`` / ``of_m_h0`` aliases) change authorization when
+    intermediate and terminal keys collide.
+    """
+
+    def _graph(self):
+        User = get_user_model()
+
+        class Identity(models.Model):
+            code = models.CharField(max_length=16, unique=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Document(models.Model):
+            title = models.CharField(max_length=40)
+
+            objects = AuthorizedManager()
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Wrapper(models.Model):
+            document = models.ForeignKey(Document, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Holder(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Ace(models.Model):
+            wrapper = models.ForeignKey(Wrapper, on_delete=models.CASCADE)
+            holder = models.ForeignKey(Holder, on_delete=models.CASCADE)
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Profile(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Card(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Principal(models.Model):
+            profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
+            card = models.ForeignKey(Card, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Person(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Team(models.Model):
+            identity = models.ForeignKey(
+                Identity, to_field='code', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Membership(models.Model):
+            person = models.ForeignKey(Person, on_delete=models.CASCADE)
+            group = models.ForeignKey(Team, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        return (
+            Identity, Permission, Document, Wrapper, Holder, Ace,
+            Profile, Card, Principal, Person, Team, Membership,
+        )
+
+    def _register(self, registry, models):
+        (
+            _Identity, Permission, Document, _Wrapper, _Holder, Ace,
+            _Profile, _Card, Principal, _Person, _Team, Membership,
+        ) = models
+        ace = Ref(Ace)
+        document = Ref(Document)
+        principal = Ref(Principal)
+        member = Ref(Membership)
+        return registry.register_strategy(OrderedFold(
+            content=document,
+            descriptor=document,
+            source=ace,
+            source_descriptor=ace.wrapper.document,
+            order=ace.ace_order,
+            polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+            mask=ace.access_mask,
+            trustee=ace.holder.identity,
+            token=FlatToken(
+                principal=principal,
+                principal_user=principal.profile.user,
+                principal_identity=principal.card.identity,
+                member=member,
+                member_identity=member.person.identity,
+                member_group=member.group.identity,
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+
+    def _force_pk(self, model, pk, **kwargs):
+        row = model(pk=pk, **kwargs)
+        row.save(force_insert=True)
+        return row
+
+    def test_multi_hop_source_descriptor_ignores_colliding_wrapper_pk(self):
+        models_ = self._graph()
+        (
+            Identity, Permission, Document, Wrapper, Holder, Ace,
+            Profile, Card, Principal, Person, Team, Membership,
+        ) = models_
+        User = get_user_model()
+        with _tables(
+            Identity, Permission, Document, Wrapper, Holder, Ace,
+            Profile, Card, Principal, Person, Team, Membership,
+        ):
+            alice = User.objects.create_user(username='alice-mh-src', password='x')
+            alice_sid = Identity.objects.create(code='alice-mh-src')
+            real = Document.objects.create(title='real-src')
+            decoy = Document.objects.create(title='decoy-src')
+            wrapper = self._force_pk(Wrapper, decoy.pk, document=real)
+            holder = Holder.objects.create(identity=alice_sid)
+            profile = Profile.objects.create(user=alice)
+            card = Card.objects.create(identity=alice_sid)
+            Principal.objects.create(profile=profile, card=card)
+            read = _perm(Permission, 'read', Document)
+            Ace.objects.create(
+                wrapper=wrapper, holder=holder, ace_order=0,
+                ace_type=ALLOW, access_mask=1,
+            )
+            registry = TrustsRegistry()
+            self._register(registry, models_)
+            self._agree(registry, alice, read, real, True)
+            self._agree(registry, alice, read, decoy, False)
+
+    def test_multi_hop_source_descriptor_malformed_row_does_not_poison_decoy(self):
+        models_ = self._graph()
+        (
+            Identity, Permission, Document, Wrapper, Holder, Ace,
+            Profile, Card, Principal, Person, Team, Membership,
+        ) = models_
+        User = get_user_model()
+        with _tables(
+            Identity, Permission, Document, Wrapper, Holder, Ace,
+            Profile, Card, Principal, Person, Team, Membership,
+        ):
+            alice = User.objects.create_user(username='alice-mh-poison', password='x')
+            alice_sid = Identity.objects.create(code='alice-mh-poison')
+            victim = Document.objects.create(title='victim')
+            other = Document.objects.create(title='other-poison')
+            holder = Holder.objects.create(identity=alice_sid)
+            profile = Profile.objects.create(user=alice)
+            card = Card.objects.create(identity=alice_sid)
+            Principal.objects.create(profile=profile, card=card)
+            # First-hop wrapper_id == victim.pk would correlate this
+            # negative-mask ACE onto victim; the terminal document is other.
+            poison_wrapper = self._force_pk(Wrapper, victim.pk, document=other)
+            Ace.objects.create(
+                wrapper=poison_wrapper, holder=holder, ace_order=0,
+                ace_type=ALLOW, access_mask=-1,
+            )
+            ok_wrapper = self._force_pk(
+                Wrapper, victim.pk + 1000, document=victim,
+            )
+            Ace.objects.create(
+                wrapper=ok_wrapper, holder=holder, ace_order=1,
+                ace_type=ALLOW, access_mask=1,
+            )
+            read = _perm(Permission, 'read', Document)
+            registry = TrustsRegistry()
+            self._register(registry, models_)
+            self._agree(registry, alice, read, victim, True)
+            self._agree(registry, alice, read, other, False)
+
+    def test_multi_hop_trustee_principal_member_terminals_and_to_field(self):
+        models_ = self._graph()
+        (
+            Identity, Permission, Document, Wrapper, Holder, Ace,
+            Profile, Card, Principal, Person, Team, Membership,
+        ) = models_
+        User = get_user_model()
+        with _tables(
+            Identity, Permission, Document, Wrapper, Holder, Ace,
+            Profile, Card, Principal, Person, Team, Membership,
+        ):
+            alice = User.objects.create_user(username='alice-mh-tok', password='x')
+            bob = User.objects.create_user(username='bob-mh-tok', password='x')
+            alice_sid = Identity.objects.create(code='alice-mh-tok')
+            bob_sid = Identity.objects.create(code='bob-mh-tok')
+            writers = Identity.objects.create(code='writers-mh-tok')
+            doc = Document.objects.create(title='shared-mh')
+            group_doc = Document.objects.create(title='group-mh')
+            wrapper = Wrapper.objects.create(document=doc)
+            group_wrapper = Wrapper.objects.create(document=group_doc)
+
+            # holder.pk == card_bob.pk: first-hop trustee/token FKs collide
+            # while terminal codes (alice vs bob) differ.
+            holder = Holder.objects.create(identity=alice_sid)
+            card_bob = self._force_pk(Card, holder.pk, identity=bob_sid)
+            card_alice = self._force_pk(
+                Card, holder.pk + 1000, identity=alice_sid,
+            )
+
+            # profile.pk == bob.pk: first-hop principal_user would bind bob
+            # to alice's profile.
+            profile_alice = self._force_pk(Profile, bob.pk, user=alice)
+            profile_bob = self._force_pk(
+                Profile, bob.pk + 1000, user=bob,
+            )
+            Principal.objects.create(profile=profile_alice, card=card_alice)
+            Principal.objects.create(profile=profile_bob, card=card_bob)
+
+            # person.pk == team.pk: independent member paths share no alias.
+            team = Team.objects.create(identity=writers)
+            person = self._force_pk(Person, team.pk, identity=alice_sid)
+            Membership.objects.create(person=person, group=team)
+
+            read = _perm(Permission, 'read', Document)
+            Ace.objects.create(
+                wrapper=wrapper, holder=holder, ace_order=0,
+                ace_type=ALLOW, access_mask=1,
+            )
+            writers_holder = Holder.objects.create(identity=writers)
+            Ace.objects.create(
+                wrapper=group_wrapper, holder=writers_holder, ace_order=0,
+                ace_type=ALLOW, access_mask=1,
+            )
+
+            registry = TrustsRegistry()
+            compiled = self._register(registry, models_)
+            self.assertGreater(len(compiled.source_desc_hops), 1)
+            self.assertGreater(len(compiled.trustee_hops), 1)
+            self.assertGreater(len(compiled.principal_user_hops), 1)
+            self.assertGreater(len(compiled.principal_identity_hops), 1)
+            self.assertGreater(len(compiled.member_identity_hops), 1)
+            self.assertGreater(len(compiled.member_group_hops), 1)
+            sql = str(
+                registry.filter_authorized(
+                    Document.objects.all(), alice, read,
+                ).query
+            )
+            for prefix in (
+                'of_sdesc', 'of_strust', 'of_pident', 'of_puser',
+                'of_mident', 'of_mgroup',
+            ):
+                self.assertIn(prefix, sql)
+
+            self._agree(registry, alice, read, doc, True)
+            self._agree(registry, bob, read, doc, False)
+            self._agree(registry, alice, read, group_doc, True)
+            self._agree(registry, bob, read, group_doc, False)
+            Membership.objects.all().delete()
+            self._agree(registry, alice, read, group_doc, False)

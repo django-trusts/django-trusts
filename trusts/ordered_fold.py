@@ -688,80 +688,64 @@ def _pk_attname(model):
     return model._meta.pk.attname
 
 
-def _join_hops(connection, hops, start_alias, start_from=0):
-    """Emit INNER JOINs for hops[start_from:], returning (sql, last_alias)."""
-    parts = []
-    alias = start_alias
-    for index, hop in enumerate(hops[start_from:], start=start_from):
-        next_alias = '%s_h%s' % (start_alias, index)
-        parts.append(
-            'INNER JOIN %s %s ON %s.%s = %s.%s'
-            % (
-                _qn(connection, _table(hop.to_model)),
-                _qn(connection, next_alias),
-                _qn(connection, next_alias),
-                _qn(connection, hop.target),
-                _qn(connection, alias),
-                _qn(connection, hop.attname),
-            )
-        )
-        alias = next_alias
-    return ' '.join(parts), alias
+def _terminal_expr(connection, hops, root_alias, prefix, *, empty_attname=''):
+    """SQL for the stored terminal identity of one forward-single path.
 
-
-def _path_value_sql(connection, hops, root_alias, empty_attname):
-    """SQL for the stored terminal identity of a forward-single path."""
+    Zero hops bind ``root_alias.empty_attname``. One hop is that FK on the
+    root row (the first hop *is* the terminal). Two or more hops are a
+    correlated scalar subquery that walks every intermediate model and
+    selects the last hop's attname. ``prefix`` must be unique among
+    sibling paths so independent multi-hop walks cannot collide.
+    """
     if not hops:
-        return '', '%s.%s' % (
+        return '%s.%s' % (
             _qn(connection, root_alias),
             _qn(connection, empty_attname),
         )
     if len(hops) == 1:
-        return '', '%s.%s' % (
+        return '%s.%s' % (
             _qn(connection, root_alias),
             _qn(connection, hops[0].attname),
         )
-    joins, last_alias = _join_hops(connection, hops[:-1], root_alias)
-    col = '%s.%s' % (
-        _qn(connection, last_alias),
-        _qn(connection, hops[-1].attname),
+    froms = []
+    wheres = []
+    for index, hop in enumerate(hops[:-1]):
+        alias = '%s_%s' % (prefix, index)
+        froms.append('%s %s' % (
+            _qn(connection, _table(hop.to_model)),
+            _qn(connection, alias),
+        ))
+        if index == 0:
+            left_alias = root_alias
+        else:
+            left_alias = '%s_%s' % (prefix, index - 1)
+        wheres.append(
+            '%s.%s = %s.%s'
+            % (
+                _qn(connection, alias),
+                _qn(connection, hop.target),
+                _qn(connection, left_alias),
+                _qn(connection, hop.attname),
+            )
+        )
+    last = hops[-1]
+    last_src = '%s_%s' % (prefix, len(hops) - 2)
+    return '(SELECT %s FROM %s WHERE %s)' % (
+        '%s.%s' % (_qn(connection, last_src), _qn(connection, last.attname)),
+        ', '.join(froms),
+        ' AND '.join(wheres),
     )
-    return joins, col
 
 
 def _content_desc_sql(strategy, compiler, connection):
     alias = compiler.query.get_initial_alias()
-    if not strategy.content_desc_hops:
-        return '%s.%s' % (
-            _qn(connection, alias),
-            _qn(connection, strategy.content_desc_attname),
-        ), ()
-    if len(strategy.content_desc_hops) == 1:
-        return '%s.%s' % (
-            _qn(connection, alias),
-            _qn(connection, strategy.content_desc_hops[0].attname),
-        ), ()
-    hops = strategy.content_desc_hops
-    pk = _pk_attname(strategy.content_model)
-    # Multi-hop descriptor: correlate through a scalar subquery on this row.
-    local_joins, local_last = _join_hops(connection, hops[:-1], 'of_c')
-    sql = (
-        '(SELECT %s FROM %s %s %s WHERE %s.%s = %s.%s)'
-        % (
-            '%s.%s' % (
-                _qn(connection, local_last),
-                _qn(connection, hops[-1].attname),
-            ),
-            _qn(connection, _table(strategy.content_model)),
-            _qn(connection, 'of_c'),
-            local_joins,
-            _qn(connection, 'of_c'),
-            _qn(connection, pk),
-            _qn(connection, alias),
-            _qn(connection, pk),
-        )
-    )
-    return sql, ()
+    return _terminal_expr(
+        connection,
+        strategy.content_desc_hops,
+        alias,
+        'of_cdesc',
+        empty_attname=strategy.content_desc_attname,
+    ), ()
 
 
 def _maskmap_sql(strategy, perm_sql, perm_params, connection):
@@ -821,8 +805,14 @@ def render_ordered_fold_sql(strategy, user, permission, compiler, connection):
     order_col = '%s.%s' % (src, _qn(connection, strategy.order_attname))
     polarity_col = '%s.%s' % (src, _qn(connection, strategy.polarity_attname))
     mask_col = '%s.%s' % (src, _qn(connection, strategy.mask_attname))
-    trustee_col = '%s.%s' % (src, _qn(connection, strategy.trustee_attname))
-    src_desc_col = '%s.%s' % (src, _qn(connection, strategy.source_desc_attname))
+    trustee_col = _terminal_expr(
+        connection, strategy.trustee_hops, 'of_src', 'of_strust',
+        empty_attname=strategy.trustee_attname,
+    )
+    src_desc_col = _terminal_expr(
+        connection, strategy.source_desc_hops, 'of_src', 'of_sdesc',
+        empty_attname=strategy.source_desc_attname,
+    )
 
     token_direct, extra_member, token_params = _token_parts(
         strategy, user_sql, connection,
@@ -910,56 +900,54 @@ def render_ordered_fold_sql(strategy, user, permission, compiler, connection):
 
 
 def _token_parts(strategy, user_sql, connection):
-    ident_joins, ident_col = _path_value_sql(
+    ident_col = _terminal_expr(
         connection,
         strategy.principal_identity_hops,
         'of_p',
-        strategy.principal_identity_attname,
+        'of_pident',
+        empty_attname=strategy.principal_identity_attname,
     )
     if strategy.principal_is_user:
         token_direct = 'SELECT %s AS ident' % user_sql
     else:
-        user_joins, user_col = _path_value_sql(
+        user_col = _terminal_expr(
             connection,
             strategy.principal_user_hops,
             'of_p',
-            strategy.principal_user_attname,
+            'of_puser',
+            empty_attname=strategy.principal_user_attname or strategy.user_bind_attname,
         )
         token_direct = (
-            'SELECT %s AS ident FROM %s %s %s %s WHERE %s = %s'
+            'SELECT %s AS ident FROM %s %s WHERE %s = %s'
             % (
                 ident_col,
                 _qn(connection, _table(strategy.principal_model)),
                 _qn(connection, 'of_p'),
-                ident_joins,
-                user_joins,
                 user_col,
                 user_sql,
             )
         )
     if strategy.member_model is None:
         return token_direct, 'SELECT ident FROM of_token_direct', ()
-    mem_ident_joins, mem_ident_col = _path_value_sql(
+    mem_ident_col = _terminal_expr(
         connection,
         strategy.member_identity_hops,
         'of_m',
-        strategy.member_identity_hops[0].attname,
+        'of_mident',
     )
-    mem_group_joins, mem_group_col = _path_value_sql(
+    mem_group_col = _terminal_expr(
         connection,
         strategy.member_group_hops,
         'of_m',
-        strategy.member_group_hops[0].attname,
+        'of_mgroup',
     )
     member_sql = (
-        'SELECT %s AS ident FROM %s %s %s %s '
+        'SELECT %s AS ident FROM %s %s '
         'WHERE %s IN (SELECT ident FROM of_token_direct)'
         % (
             mem_group_col,
             _qn(connection, _table(strategy.member_model)),
             _qn(connection, 'of_m'),
-            mem_ident_joins,
-            mem_group_joins,
             mem_ident_col,
         )
     )
