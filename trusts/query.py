@@ -14,7 +14,7 @@ from functools import reduce
 from operator import or_
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Exists, Manager, Model, OuterRef, Q, QuerySet
 
 
 def is_active_principal(user):
@@ -167,3 +167,38 @@ def trust_grant_q(user, permission, trust_fk=''):
         }) |
         group_local_grant_exists(user, permission, trust_id_ref)
     )
+
+
+class AuthorizedQuerySet(QuerySet):
+    """Instance-only authorized-row filter. No Django permission codec.
+
+    ``permission`` must be a model instance. Strings and auth.Permission
+    *codenames* raise ``TrustsConfigurationError`` with zero SQL. This
+    method does not parse ``:condition``, does not call
+    ``is_active_principal``, and does not call ``get_permission``.
+
+    Callers that need Django inactivity checks or string permissions wrap
+    this; they do not belong on this class. There is no ``.permitted`` and
+    no ``.get_permission``.
+    """
+
+    def authorized(self, user, permission, extra_q=None):
+        from trusts.apps import kernel_config
+        from trusts.core import TrustsConfigurationError, granted
+
+        if not isinstance(permission, Model):
+            raise TrustsConfigurationError(
+                'permission must be a model instance, not %r.' % (permission,)
+            )
+        granted_q = granted(
+            kernel_config().configured_handles(),
+            self, user, permission, kind='complete',
+        )
+        if granted_q is None:
+            return self.none()
+        if extra_q is not None:
+            granted_q = granted_q & extra_q
+        return self.filter(granted_q).distinct()
+
+
+AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)

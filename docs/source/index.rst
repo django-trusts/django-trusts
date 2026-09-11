@@ -262,6 +262,63 @@ To check permission, simply use Django builtin API::
    def check_permission_to_a_specific_group(request, group_id):
      return request.user.has_perm('app.change_group', Group.objects.get(id=group_id))
 
+
+Generic instance authorization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Hosts that already hold a permission **instance** (not a Django codename
+string) can filter candidate rows with the generic queryset API::
+
+   from trusts.query import AuthorizedManager, AuthorizedQuerySet
+
+   class Repository(models.Model):
+       objects = AuthorizedManager()
+
+   Repository.objects.authorized(account, operation)
+
+``AuthorizedQuerySet.authorized(user, permission, extra_q=None)`` requires
+``permission`` to be a model instance. Strings and auth.Permission
+codenames raise ``TrustsConfigurationError`` with no SQL. The method does
+not parse ``:condition``, does not call ``is_active_principal``, and does
+not call ``get_permission``. ``extra_q`` is an AND overlay on an existing
+grant; it never creates one. There is no ``.permitted`` and no
+``.get_permission`` on this class. Django-permission list filtering
+(``ContentQuerySet.permitted``) stays the documented codec for Trust
+content and is unchanged.
+
+Create-under-scope (filter rows of an **intermediate** model that appears
+on a registered content path) uses ``filter_authorized_scopes`` from
+``trusts.core``::
+
+   from trusts.core import filter_authorized_scopes
+
+   filter_authorized_scopes(
+       Scope.objects.all(), user, permission_instance,
+       content=Payload,
+   )
+
+The queryset model must be a proper prefix node of some applicable
+record's ``content_path`` whose content terminal is ``content``. The
+content terminal itself returns ``none()`` (use ``.authorized()``).
+Unknown terminals, empty handles, and scope models that are not on the
+path return ``none()``. ``permission`` must be an instance. Prefix
+correlation uses the hop's resolved target field (including non-PK
+``to_field`` identities), not an assumed primary key.
+
+``ConditionLookup`` is a tiny protocol bound with
+``TrustsRegistry.set_condition_lookup(lookup)``. Both ``record_for`` and
+``compile_q`` must be present or bind raises ``TrustsConfigurationError``
+(no partial bind). Callables compile to
+``PermissionConditionNotQueryable`` and are never invoked. An unbound
+lookup is the C1 default (instance-only callers; historical ``Content``
+conditions stay in place until a later Zero bind).
+
+``trusts.apps.kernel_config()`` returns the kernel ``trusts.apps.AppConfig``
+by class identity. On this release the label is still ``trusts``, so the
+result is the same object as ``apps.get_app_config('trusts')``. Callers of
+the new APIs should use ``kernel_config()`` rather than hard-requiring the
+string label.
+
 Decorators
 ~~~~~~~~~~
 

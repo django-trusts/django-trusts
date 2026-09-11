@@ -261,5 +261,39 @@ Trust-as-content parent relation. Unregistered models return `none()`.
 Declared Group is a known terminal; create-under-Trust still uses
 `trust_grant_q` on Trust rows.
 
+## Generic public seams (#54 C1)
+
+These additive APIs are the instance-only / metadata-driven surfaces that
+later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
+`filter_by_user_content_perm`, the app label, or the historical compiler.
+
+`AuthorizedQuerySet.authorized(user, permission, extra_q=None)` and
+`AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
+`trusts.query`. `permission` is a model instance. Strings raise
+`TrustsConfigurationError` with zero SQL. The method does not parse
+`:condition`, does not call `is_active_principal`, and does not call
+`get_permission`. `extra_q` is the same AND overlay as `all_match` /
+`instance_match`. There is no `.permitted` and no `.get_permission` on
+this class.
+
+`filter_authorized_scopes(queryset, user, permission, *, content, handles=None)`
+in `trusts.core` filters rows of an intermediate scope model that is a
+**proper prefix** of some applicable `RegisteredRelation.content_path`
+whose content terminal is `content`. It compiles `EXISTS` of root rows
+correlated to `OuterRef` of that hop's resolved target field (the
+related `attname` from `get_path_info()`, including non-PK
+`ForeignKey(..., to_field=...)`) at that node, binds user +
+permission, and ORs applicable records. `queryset.model` equal to the
+content terminal, an unknown terminal, empty handles, or a scope model
+not on the path return `none()`. Core does not import Zero schema models
+(`Trust`, `TrustUserPermission`, `TrustGroup`, …). Live create-under-Trust
+callers stay on `trust_grant_q` until a later codec wrapper.
+
+`ConditionLookup` (`record_for`, `compile_q`) binds with
+`TrustsRegistry.set_condition_lookup`. Missing methods raise
+`TrustsConfigurationError` and do not bind. Unbound is the C1 default.
+`trusts.apps.kernel_config()` returns the kernel `AppConfig` by class
+identity (today the same object as `apps.get_app_config('trusts')`).
+
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

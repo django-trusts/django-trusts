@@ -56,6 +56,12 @@ semantics; issue #85 contributes the Junction-backed Group terminal
 and migrates Group object authorization onto the registered J1 plan;
 issue #92 adds optional `Along` on `register()` and one SQLite
 `GrantReach` renderer for bounded walk-site reachability.
+Issue #54 C1 adds generic public seams
+(`AuthorizedQuerySet.authorized` / `AuthorizedManager`,
+`filter_authorized_scopes`, `ConditionLookup` /
+`set_condition_lookup`, and label-agnostic `kernel_config()`)
+without changing the app label, moving models, or deleting the
+legacy compiler.
 Public signatures and one-path results are
 unchanged.
 The API is not re-exported from `trusts` and does not add a schema or

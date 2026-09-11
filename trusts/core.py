@@ -15,7 +15,8 @@ SQLite backend.
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
 compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
-``common_permissions()``, and configuration/compiler exceptions live here.
+``common_permissions()``, ``filter_authorized_scopes()``,
+``ConditionLookup``, and configuration/compiler exceptions live here.
 """
 
 from dataclasses import dataclass
@@ -162,6 +163,112 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
     if len(parts) == 1:
         return parts[0]
     return reduce(or_, parts)
+
+
+class ConditionLookup(object):
+    """Duck-typed ``:condition`` overlay protocol. Not a registry or store.
+
+    Bind with ``TrustsRegistry.set_condition_lookup``. Core never imports
+    a Zero ``Content`` registry to evaluate conditions. Unbound lookup on
+    an instance-only caller is a no-op.
+
+    ``record_for`` returns the registered record or ``None`` (unregistered
+    codes fail closed as ``AttributeError`` at the caller). ``compile_q``
+    compiles an ``Expr`` to ``Q``. A callable policy must raise
+    ``PermissionConditionNotQueryable`` and must never be invoked.
+    """
+
+    def record_for(self, model, cond_code):
+        raise NotImplementedError
+
+    def compile_q(self, model, perm_string, user):
+        raise NotImplementedError
+
+
+def _scope_prefix_lookups(record, scope_model):
+    """Root-relative lookups to proper prefix nodes matching ``scope_model``.
+
+    A proper prefix is a hop on ``content_path`` whose related model is
+    ``scope_model`` and that is not the content terminal. Each item is
+    ``(root-relative lookup, target attname)``. The attname is the
+    hop's resolved identity (``to_field`` when set), not assumed to
+    be ``pk``. Uses stored path names and ``_meta`` only (zero SQL).
+    """
+    path = record.content_path
+    if not path:
+        return ()
+    current = record.root
+    lookups = []
+    last = len(path) - 1
+    for index, name in enumerate(path):
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            return ()
+        related, target_attname = _resolved_hop(field, 'content', path)
+        if related._meta.concrete_model is scope_model and index != last:
+            lookups.append((_lookup_text(path[:index + 1]), target_attname))
+        current = related
+    return tuple(lookups)
+
+
+def filter_authorized_scopes(queryset, user, permission, *, content, handles=None):
+    """Filter scope-model rows that appear as a proper prefix of ``content``.
+
+    Fail closed unless ``queryset.model`` is a proper prefix node of some
+    applicable record's ``content_path`` whose content terminal is
+    ``content``. Compile ``EXISTS`` of root rows correlated to
+    ``OuterRef`` of that hop's resolved target field (the related
+    ``attname`` from ``get_path_info()``, which need not be ``pk``) at
+    that node, bind user + permission from the same record, and OR
+    applicable records.
+
+    ``queryset.model`` equal to the content terminal returns ``none()``
+    (that path is ``AuthorizedQuerySet.authorized``). Unknown terminal,
+    empty handles, or a scope model not on the path return ``none()``.
+    ``permission`` must be a model instance. Construction of a fail-closed
+    result issues zero SQL; SQL runs only when a compiled predicate is
+    evaluated.
+
+    Noun-blind: this builder does not import or name Zero schema models
+    and does not use ``trust_grant_q`` or a compiler's historical group
+    OR. Group-as-trustee remains a later registered root.
+    """
+    if not isinstance(queryset, QuerySet):
+        raise TrustsConfigurationError(
+            'filter_authorized_scopes requires a QuerySet, not %r.'
+            % (queryset,)
+        )
+    user = _require_instance(user, 'user')
+    permission = _require_instance(permission, 'permission')
+    if handles is None:
+        from trusts.apps import kernel_config
+        handles = kernel_config().configured_handles()
+    if not handles:
+        return queryset.none()
+
+    content_model = _content_model(content)
+    scope_model = queryset.model._meta.concrete_model
+    if scope_model is content_model:
+        return queryset.none()
+
+    parts = []
+    for handle in handles:
+        plan = _plan_for_permission(handle, content, user, permission)
+        for record in plan.records:
+            for lookup, target_attname in _scope_prefix_lookups(
+                record, scope_model,
+            ):
+                inner = record.root._default_manager.filter(**{
+                    record.user_field: user,
+                    record.permission_field: permission,
+                    lookup: OuterRef(target_attname),
+                })
+                parts.append(Exists(inner))
+    if not parts:
+        return queryset.none()
+    granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
+    return queryset.filter(granted_q).distinct()
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete', extra_q=None):
@@ -1447,10 +1554,36 @@ class TrustsRegistry(object):
         self._by_root = {}
         self._order = []
         self._frozen = False
+        self._condition_lookup = None
 
     @property
     def frozen(self):
         return self._frozen
+
+    @property
+    def condition_lookup(self):
+        """Bound ``ConditionLookup``, or ``None`` when unbound."""
+        return self._condition_lookup
+
+    def set_condition_lookup(self, lookup):
+        """Bind a ``ConditionLookup`` on this instance (zero SQL).
+
+        Both ``record_for`` and ``compile_q`` must be callable. A missing
+        method raises ``TrustsConfigurationError`` and does not bind
+        (no partial bind). ``lookup is None`` clears the binding.
+        Methods are not invoked at bind time.
+        """
+        if lookup is None:
+            self._condition_lookup = None
+            return
+        record_for = getattr(lookup, 'record_for', None)
+        compile_q = getattr(lookup, 'compile_q', None)
+        if not callable(record_for) or not callable(compile_q):
+            raise TrustsConfigurationError(
+                'ConditionLookup must provide record_for and compile_q; '
+                'no partial bind.'
+            )
+        self._condition_lookup = lookup
 
     def freeze(self):
         """Seal this instance against further ``register`` writes."""
