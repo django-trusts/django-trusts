@@ -25,7 +25,11 @@ from trusts.authorization import (
     can_manage_group_membership,
     create_team,
 )
-from trusts.models import Trust
+
+
+def _trust_model():
+    from django.apps import apps as django_apps
+    return django_apps.get_model('trusts', 'Trust')
 
 
 def _entity_queryset():
@@ -41,8 +45,6 @@ class SelectUserForm(forms.Form):
 
 
 class NewTeamForm(forms.ModelForm):
-    trust = forms.ModelChoiceField(queryset=Trust.objects.none())
-
     class Meta:
         model = get_group_model()
         fields = ('name',)
@@ -50,10 +52,13 @@ class NewTeamForm(forms.ModelForm):
     def __init__(self, user=None, *args, **kwargs):
         super(NewTeamForm, self).__init__(*args, **kwargs)
         self.user = user
+        Trust = _trust_model()
+        queryset = Trust.objects.none()
         if user is not None:
-            self.fields['trust'].queryset = Trust.objects.filter_by_user_content_perm(
+            queryset = Trust.objects.filter_by_user_content_perm(
                 user, Trust, 'change', exclude_root=True
             )
+        self.fields['trust'] = forms.ModelChoiceField(queryset=queryset)
 
 
 class NewTeamView(CreateView):
@@ -105,7 +110,7 @@ class TeamView(DetailView):
         # full membership-management authority, is required to GET.
         administers_any = any(
             can_administer_trust(request.user, trust)
-            for trust in Trust.objects.filter(groups=group)
+            for trust in _trust_model().objects.filter(groups=group)
         )
         if not administers_any and not can_manage_group_membership(request.user, group):
             return HttpResponseForbidden()

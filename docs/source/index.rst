@@ -54,7 +54,25 @@ Steps:
    ``authenticate`` / ``get_user`` only. That inheritance does not
    confer global permission authority.
 
-3. Add ``trusts`` to ``INSTALLED_APPS`` in ``settings.py``.
+3. Add ``trusts`` to ``INSTALLED_APPS`` in ``settings.py``. After the
+   C2 kernel extraction the kernel app label is ``trusts_core``.
+   Hosts that need the historical 0.x schema (``Trust``, content types,
+   permissions, migrations ``trusts.0001_initial`` /
+   ``trusts.0002_trustgroup``) must also install ``django-trusts-zero``
+   and add the explicit class path::
+
+     INSTALLED_APPS = [
+       ...,
+       'trusts',  # kernel: name=trusts, label=trusts_core
+       'trusts.zero.apps.ZeroConfig',  # schema: name=trusts.zero, label=trusts
+     ]
+
+   Bare ``'trusts'`` alone is the kernel with no concrete models.
+   Bare ``'trusts.zero'`` is forbidden; use ``ZeroConfig``.
+   ``from trusts.models import Trust`` still resolves when Zero is
+   installed (PEP 562 shim). Without Zero that import raises
+   ``ImportError`` naming ``django-trusts-zero``. Canonical imports are
+   ``trusts.zero.models``.
 
 4. Apply migrations::
 
@@ -171,6 +189,7 @@ related-name ``image`` at each hop::
 
    # app/apps.py
    from django.apps import AppConfig
+   from trusts.apps import kernel_config
    from trusts.core import Ref
    from trusts.models import TrustUserPermission
 
@@ -178,10 +197,11 @@ related-name ``image`` at each hop::
        name = 'app'
 
        def ready(self):
-           if getattr(self, 'apps', None) is None or not self.apps.is_installed('trusts'):
+           try:
+               registry = kernel_config(self.apps).configured_backend().registry
+           except LookupError:
                return
            from app.models import Receipt
-           registry = self.apps.get_app_config('trusts').configured_backend().registry
            j = Ref(TrustUserPermission)
            rev = Receipt._meta.get_field('trust').remote_field.get_accessor_name()
            if getattr(self, '_trusts_tup_receipt_image_registry_id', None) is not registry:
@@ -314,10 +334,10 @@ lookup is the C1 default (instance-only callers; historical ``Content``
 conditions stay in place until a later Zero bind).
 
 ``trusts.apps.kernel_config()`` returns the kernel ``trusts.apps.AppConfig``
-by class identity. On this release the label is still ``trusts``, so the
-result is the same object as ``apps.get_app_config('trusts')``. Callers of
-the new APIs should use ``kernel_config()`` rather than hard-requiring the
-string label.
+by class identity. The kernel label is ``trusts_core``. After Zero is
+installed, ``apps.get_app_config('trusts')`` is ``ZeroConfig`` (models,
+not registries). Callers of the kernel store must use ``kernel_config()``
+rather than the string label ``'trusts'``.
 
 Decorators
 ~~~~~~~~~~

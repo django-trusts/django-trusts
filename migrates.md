@@ -1948,9 +1948,80 @@ empty handles / unbound no-op) issues **0 SQL**. Compiled
 - App-label change (`trusts_core`); model or migration move; PEP 562
   `trusts.models` shim
 - Deleting `trust_grant_q` / `HistoricalGroupQueryCompiler`
-- C2, Z1, G1, Windows #17
+- G1, Windows #17
 - Zero `.permitted` / `ContentManager` codec; GH adoption; docs
   restructuring beyond these APIs; examples; admin work
+
+## Changes (#96 C2)
+
+### 47. Kernel app identity extraction (#96 C2)
+
+Paired with approved django-trusts-zero Z1 at
+`41d07f40e676f75389b91219106440932d402b53`. Do not merge C2 or Z1
+alone. Merge order is C2 then Z1 when both are green.
+
+| | |
+| --- | --- |
+| Previous (C1) | Kernel `AppConfig` `name='trusts'` `label='trusts'`. Concrete models in `trusts.models`. Historical migrations `trusts.0001_initial` / `trusts.0002_trustgroup` shipped by the kernel. Registry lookups via `apps.get_app_config('trusts')` (same object as `kernel_config()`). Package Trust-as-content donated from `AppConfig.ready()`. |
+| New (C2) | Kernel `name='trusts'` `label='trusts_core'`. `trusts.models` is a PEP 562 shim (no `Model` subclasses; no Zero import during `import_models`). `__getattr__` loads Zero only for the explicit compatibility-name set; `dir()` / `hasattr()` / unknown names do not import Zero. Historical models, tables, content types, permissions, serialized identities, and loader keys `trusts.0001_initial` / `trusts.0002_trustgroup` are owned by Zero (`ZeroConfig.name='trusts.zero'` `label='trusts'`). `pkgutil.extend_path` on `trusts/__init__.py` so the Zero dist can own `trusts.zero`. Registry, checks, and backends find the kernel by class identity (`kernel_config()`). Package Trust-as-content donation left `AppConfig.ready()`; Zero registers TUP+TGP. |
+| Replacement | 0.x hosts: `INSTALLED_APPS = ['trusts', 'trusts.zero.apps.ZeroConfig']`. Kernel-store access: `kernel_config()` / `kernel_config(apps_registry)`. Canonical models: `trusts.zero.models`. Legacy `from trusts.models import Trust` works **only when Zero is installed**. |
+| Affected | Hosts that listed only `'trusts'` for 0.x schema. Hosts that used `get_app_config('trusts').registry` / `.configured_backend()`. GH-only hosts that imported `trusts.models` model names. |
+| Authorization | No schema or data migration. Grant tables, content-type natural keys, and permission identities are unchanged when Zero is installed. |
+
+Failure behavior: kernel-only populate has no `label='trusts'` and no
+`Trust` model. `import trusts.models` succeeds and does not import
+`trusts.zero`. `from trusts.models import Trust` raises `ImportError`
+naming `django-trusts-zero`. Installing C1 + Z1 remains
+`ImproperlyConfigured` (duplicate label `trusts`) and is unsupported.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures
+- `ContentQuerySet.permitted` signature (Zero) and documented Category /
+  Ticket / Trust results when Zero is installed
+- `filter_by_user_content_perm` / `filter_by_user_perm` signatures
+- Backend path `trusts.backends.TrustModelBackend`
+- Check IDs `trusts.E001`–`E005` / `W001`
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migration **names** (`0001_initial`,
+  `0002_trustgroup`) when Zero is installed
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none is authorized.
+- [ ] For 0.x hosts, add `'trusts.zero.apps.ZeroConfig'` next to `'trusts'`.
+      `'trusts'` alone is kernel-only (`trusts_core`, no schema).
+- [ ] Do not install bare `'trusts.zero'`.
+- [ ] Replace `get_app_config('trusts').registry` /
+      `.configured_backend()` with `kernel_config()`.
+      `get_app_config('trusts')` is Zero after this cutover.
+- [ ] Prefer `from trusts.zero.models import Trust` (canonical). Legacy
+      `from trusts.models import Trust` still works if Zero is installed.
+- [ ] GH-only hosts must not import `trusts.models` model names.
+- [ ] Confirm `makemigrations trusts --check` is quiet and an
+      already-current database has an empty Trusts plan (Zero owns the
+      loader keys).
+- [ ] Leave `trust_grant_q` / `HistoricalGroupQueryCompiler` in the kernel.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Do not merge this C2 head without the paired Z1 head
+      `41d07f40e676f75389b91219106440932d402b53`. Merge C2 then Z1.
+
+## Schema
+
+No change. C2 deletes kernel copies of the historical files; Zero ships
+the same operations under the same loader keys. Already-applied 1.x
+`django_migrations` rows keep matching. Query construction remains lazy.
+
+## Out of scope (not acceptance criteria)
+
+- G1 / GH adoption
+- Windows #17
+- Examples
+- Docs restructuring beyond this cutover
+- Admin extraction
+- Deleting `trust_grant_q` / `HistoricalGroupQueryCompiler`
+
 
 
 

@@ -46,14 +46,23 @@ class TestsConfig(AppConfig):
         if getattr(self, 'apps', None) is None or not self.apps.is_installed('trusts'):
             return
 
-        from tests.models import Category, TestGroupJunction, Ticket
-        from trusts.core import Ref
-        from trusts.models import TrustUserPermission
+        from trusts.apps import kernel_config
+        try:
+            config = kernel_config(self.apps)
+        except LookupError:
+            return
+
+        try:
+            from tests.models import Category, TestGroupJunction, Ticket
+            from trusts.core import Ref
+            from trusts.models import TrustUserPermission
+        except ImportError:
+            return
 
         # Exact handle. With one Trusts path this is the unique registry
         # (``config.registry is handle.registry``). With several, omission
         # fails before writing.
-        backend = self.apps.get_app_config('trusts').configured_backend()
+        backend = config.configured_backend()
         registry = backend.registry
 
         # Instance-local sentinels: one per contribution, identity
@@ -158,6 +167,34 @@ def forget_models(*model_classes):
             if existing is model:
                 app_models.pop(name, None)
     django_apps.clear_cache()
+
+
+def apply_zero_trust_donation(config):
+    """Donate package Trust-as-content the way Zero does on C2.
+
+    Kernel ``ready()`` no longer imports models. Tests that need the
+    historical TUP→Trust declaration on a standalone or swapped store
+    call this instead of expecting ``AppConfig.ready()`` to donate.
+    Mixin-only paths are skipped (C1 package donation rule).
+    """
+    from django.utils.module_loading import import_string
+
+    from trusts.backends import TrustModelBackend
+    from trusts.zero.models import register_zero_relations
+
+    paths = config._configured_trusts_paths()
+    for path in paths:
+        cls = import_string(path)
+        if not issubclass(cls, TrustModelBackend):
+            continue
+        registry = config._ensure(path)
+        register_zero_relations(registry)
+        ids = dict(getattr(config, '_trusts_tup_trust_registry_ids', None) or {})
+        ids[path] = registry
+        config._trusts_tup_trust_registry_ids = ids
+        if len(paths) == 1:
+            config._trusts_tup_trust_registry_id = registry
+    return config
 
 
 def clone_writable_registry(registry):

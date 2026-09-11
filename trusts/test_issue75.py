@@ -18,6 +18,7 @@ from django.test.utils import isolate_apps
 
 from tests.apps import (
     TestsConfig,
+    apply_zero_trust_donation,
     install_writable_registry,
     isolate_live_registry,
     override_apps_ready,
@@ -31,7 +32,7 @@ from tests.backends import (
 )
 import tests as tests_module
 from tests.models import Category, Organization, Ticket
-from trusts.apps import AppConfig as TrustsAppConfig
+from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
 from trusts.backends import (
     HistoricalGroupQueryCompiler,
     TrustModelBackend,
@@ -128,7 +129,7 @@ def _evaluate(handle, queryset, user, permission):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = apps.get_app_config('trusts')
+        self.live = kernel_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -237,7 +238,7 @@ class PathScopedRegistryStoreTest(_RegistryRestoreMixin, SimpleTestCase):
         isolate_live_registry(self.live, isolated, CONCRETE)
         self.assertIs(self.live.registries[CONCRETE], isolated)
         with override_apps_ready(False):
-            self.live.ready()
+            apply_zero_trust_donation(self.live)
         self.assertIs(self.live._trusts_tup_trust_registry_id, isolated)
         self.assertEqual(len(_trust_rows(isolated)), 1)
 
@@ -249,6 +250,7 @@ class PathScopedRegistryStoreTest(_RegistryRestoreMixin, SimpleTestCase):
         first = isolated.registry
         self.assertIs(isolated.registries[CONCRETE], first)
         isolated.ready()
+        apply_zero_trust_donation(isolated)
         self.assertIs(isolated.registry, first)
         self.assertIsNot(isolated.registry, self.live.registry)
         self.assertEqual(len(_trust_rows(isolated.registry)), 1)
@@ -291,7 +293,7 @@ class PathScopedRegistryStoreTest(_RegistryRestoreMixin, SimpleTestCase):
 )
 class IsolatedAppsPathStoreTest(SimpleTestCase):
     def test_isolate_apps_without_trusts_does_not_donate(self):
-        live = apps.get_app_config('trusts')
+        live = kernel_config()
         before = live.registry.records
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
         contributor = TestsConfig('tests', tests_module)
@@ -349,7 +351,7 @@ class ContributionPathTest(_RegistryRestoreMixin, SimpleTestCase):
 
     def test_mixin_only_does_not_receive_package_trust(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
-            self.live.ready()
+            apply_zero_trust_donation(self.live)
             handle_a = self.live.configured_backend(CONCRETE)
             handle_b = self.live.configured_backend(MIXIN)
             self.assertTrue(handle_a.registry.plan_for(Trust).records)
@@ -358,7 +360,7 @@ class ContributionPathTest(_RegistryRestoreMixin, SimpleTestCase):
 
     def test_concrete_subclass_receives_package_trust(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, HOST)):
-            self.live.ready()
+            apply_zero_trust_donation(self.live)
             handle_host = self.live.configured_backend(HOST)
             self.assertEqual(len(_trust_rows(handle_host.registry)), 1)
             handle_a = self.live.configured_backend(CONCRETE)
@@ -367,25 +369,25 @@ class ContributionPathTest(_RegistryRestoreMixin, SimpleTestCase):
 
     def test_contributor_reentry_does_not_duplicate(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, HOST)):
-            self.live.ready()
+            apply_zero_trust_donation(self.live)
             handle_host = self.live.configured_backend(HOST)
             before = handle_host.registry.records
             with patch.object(
                 handle_host.registry, 'register',
                 wraps=handle_host.registry.register,
             ) as register:
-                self.live.ready()
+                apply_zero_trust_donation(self.live)
             register.assert_not_called()
             self.assertEqual(handle_host.registry.records, before)
             self.assertEqual(len(_trust_rows(handle_host.registry)), 1)
 
     def test_host_reentry_after_swapped_host_registry(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, HOST)):
-            self.live.ready()
+            apply_zero_trust_donation(self.live)
             isolated = TrustsRegistry()
             self.live.registries[HOST] = isolated
             with override_apps_ready(False):
-                self.live.ready()
+                apply_zero_trust_donation(self.live)
             self.assertIs(self.live.registries[HOST], isolated)
             self.assertEqual(len(_trust_rows(isolated)), 1)
 
@@ -728,7 +730,7 @@ class CompilerIsolationTest(_RegistryRestoreMixin, TestCase):
             pred = _evaluate(handle, qs, self.carol, self.change)
             self.assertIsNotNone(pred)
             self.assertEqual(_pks(qs.filter(pred)), set())
-            with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+            with patch('trusts.query.trust_grant_q', wraps=trust_grant_q) as grant_q:
                 result = Category.objects.permitted(self.change_code, self.carol)
                 self.assertEqual(_pks(result), set())
             grant_q.assert_not_called()

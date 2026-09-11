@@ -18,10 +18,10 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig, isolate_live_registry
+from tests.apps import TestsConfig, apply_zero_trust_donation, isolate_live_registry
 import tests as tests_module
 from tests.models import Category, Ticket
-from trusts.apps import AppConfig as TrustsAppConfig
+from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
 from trusts.core import (
     Ref,
     RelationPlan,
@@ -75,7 +75,7 @@ class _UnusableContents(object):
 
 class TrustContributionIdempotenceTest(SimpleTestCase):
     def setUp(self):
-        self.live = apps.get_app_config('trusts')
+        self.live = kernel_config()
         self.live_registry = self.live.registry
         self.live_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -86,6 +86,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
         self.live._trusts_tup_trust_registry_id = self.live_sentinel
 
     def test_reenter_same_contributor_ready_is_noop(self):
+        apply_zero_trust_donation(self.live)
         self.assertIs(self.live._trusts_tup_trust_registry_id, self.live_registry)
         before = self.live_registry.records
         with patch.object(
@@ -102,6 +103,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
         config = TrustsAppConfig('trusts', trusts)
         first = config.registry
         config.ready()
+        apply_zero_trust_donation(config)
         self.assertIs(config.registry, first)
         self.assertIs(config._trusts_tup_trust_registry_id, first)
 
@@ -126,6 +128,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
             content=other.trust, user=other.user, permission=other.permission,
         )
         isolated.ready()
+        apply_zero_trust_donation(isolated)
         self.assertIs(isolated._trusts_tup_trust_registry_id, isolated.registry)
         self.assertEqual(len(isolated.registry.records), 2)
         roots = {record.root for record in isolated.registry.records}
@@ -145,13 +148,13 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
             permission=j.entity,
         )
         with self.assertRaises(TrustsConfigurationError):
-            isolated.ready()
+            apply_zero_trust_donation(isolated)
         self.assertIsNone(
             getattr(isolated, '_trusts_tup_trust_registry_id', None)
         )
         self.assertEqual(len(isolated.registry.records), 1)
         with self.assertRaises(TrustsConfigurationError):
-            isolated.ready()
+            apply_zero_trust_donation(isolated)
         self.assertIsNone(
             getattr(isolated, '_trusts_tup_trust_registry_id', None)
         )
@@ -163,6 +166,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
         isolated = TrustsAppConfig('trusts', trusts)
         self.assertEqual(isolated.registry.records, ())
         isolated.ready()
+        apply_zero_trust_donation(isolated)
         self.assertIs(isolated._trusts_tup_trust_registry_id, isolated.registry)
         self.assertIsNot(isolated.registry, self.live_registry)
         self.assertEqual(len(isolated.registry.records), 1)
@@ -180,7 +184,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
             remote, 'get_accessor_name', wraps=remote.get_accessor_name,
         ) as accessor:
             self.assertFalse(hasattr(Content, '_contents'))
-            isolated.ready()
+            apply_zero_trust_donation(isolated)
         accessor.assert_called()
         rev = remote.get_accessor_name()
         self.assertEqual(len(isolated.registry.records), 1)
@@ -195,7 +199,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
     def test_swapped_live_registry_receives_declaration_again(self):
         isolated = TrustsRegistry()
         isolate_live_registry(self.live, isolated)
-        self.live.ready()
+        apply_zero_trust_donation(self.live)
         self.assertIs(self.live._trusts_tup_trust_registry_id, isolated)
         self.assertIs(self.live.registry, isolated)
         tup_trust = [
@@ -214,7 +218,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateTrustContributionTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = apps.get_app_config('trusts').registry
+        live = kernel_config().registry
         tup_trust = [
             record for record in live.records
             if record.root is TrustUserPermission
@@ -234,6 +238,7 @@ class IsolatedAppsDoesNotDonateTrustContributionTest(SimpleTestCase):
         isolated = TrustsAppConfig('trusts', trusts)
         isolated.apps = self.isolated_apps
         isolated.ready()
+        apply_zero_trust_donation(isolated)
         self.assertIs(isolated._trusts_tup_trust_registry_id, isolated.registry)
         self.assertIsNot(isolated.registry, live)
         self.assertEqual(
@@ -390,7 +395,7 @@ class TrustPermittedRegistryTest(TestCase):
             self.assertEqual(list(page), [self.child_a1])
 
     def test_no_tup_rows_deny_without_changing_registration(self):
-        registry = apps.get_app_config('trusts').registry
+        registry = kernel_config().registry
         self.assertTrue(registry.plan_for(Trust).records)
         TrustUserPermission.objects.all().delete()
         self._reload()
@@ -465,7 +470,7 @@ class TrustPermittedRegistryTest(TestCase):
         )
 
     def test_reader_uses_content_exists_not_filter_authorized(self):
-        registry = apps.get_app_config('trusts').registry
+        registry = kernel_config().registry
         plan = registry.plan_for(
             Trust.objects.all(), user=self.carol, permission=self.change,
         )
@@ -478,7 +483,7 @@ class TrustPermittedRegistryTest(TestCase):
         self.assertEqual(exists.call_count, 1)
 
     def test_create_under_trust_stays_on_trust_grant_q(self):
-        with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+        with patch('trusts.query.trust_grant_q', wraps=trust_grant_q) as grant_q:
             pks = _pks(Trust.objects.filter_by_user_content_perm(
                 self.alice, Trust, 'change_trust',
             ))
@@ -490,7 +495,7 @@ class TrustPermittedRegistryTest(TestCase):
         self.assertNotIn(self.child_b.pk, pks)
 
     def test_junction_stays_on_old_path(self):
-        registry = apps.get_app_config('trusts').registry
+        registry = kernel_config().registry
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
         self.assertTrue(registry.plan_for(Ticket).records)

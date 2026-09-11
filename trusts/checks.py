@@ -15,8 +15,11 @@ under ``manage.py check``.
 
 from django.core import checks as django_checks
 
-from trusts.conditions import PermissionConditionError, validate_expression
-from trusts.models import Content, Junction, legacy_permission_callbacks_allowed
+from trusts.conditions import (
+    PermissionConditionError,
+    legacy_permission_callbacks_allowed,
+    validate_expression,
+)
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
@@ -31,6 +34,27 @@ _SILENCE_DOES_NOT_ENABLE_HINT = (
     'has_perm() and .permitted() still validate and fail closed; there is '
     'no fallback to the base grant.'
 )
+
+
+def _trusts_abstract_base(model, name):
+    for base in model.__mro__:
+        meta = getattr(base, '_meta', None)
+        if (
+            meta is not None
+            and meta.abstract
+            and base.__name__ == name
+            and meta.app_label == 'trusts'
+        ):
+            return base
+    return None
+
+
+def _historical_content_class(apps_registry):
+    try:
+        Trust = apps_registry.get_model('trusts', 'Trust')
+    except LookupError:
+        return None
+    return _trusts_abstract_base(Trust, 'Content')
 
 
 def _model_label(model):
@@ -208,10 +232,14 @@ def check_missing_declarations(app_configs, **kwargs):
     """
     from django.apps import apps as django_apps
 
-    if not django_apps.is_installed('trusts'):
+    from trusts.apps import kernel_config
+
+    try:
+        kernel_config()
+    except LookupError:
         return []
 
-    config = django_apps.get_app_config('trusts')
+    config = kernel_config()
     covered = _covered_content_models(config)
     messages = []
     seen = set()
@@ -219,7 +247,7 @@ def check_missing_declarations(app_configs, **kwargs):
     for model in django_apps.get_models():
         if not _is_concrete_model(model):
             continue
-        if issubclass(model, Content):
+        if _trusts_abstract_base(model, 'Content') is not None:
             terminal = model._meta.concrete_model
             if terminal in covered:
                 continue
@@ -235,7 +263,7 @@ def check_missing_declarations(app_configs, **kwargs):
                 id=CHECK_ID_MISSING_DECLARATION,
             ))
             continue
-        if issubclass(model, Junction):
+        if _trusts_abstract_base(model, 'Junction') is not None:
             content_model, error = _junction_content_model(model)
             if error is not None:
                 key = ('junction-malformed', model)
@@ -275,6 +303,11 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Callables are never inspected or invoked. No database queries.
     """
+    from django.apps import apps as django_apps
+
+    Content = _historical_content_class(django_apps)
+    if Content is None:
+        return []
     messages = []
     for model, cond_code, record in Content.iter_permission_conditions():
         if record.expr is not None:
@@ -330,14 +363,16 @@ def check_along_renderer(app_configs, **kwargs):
     from django.db import connections
     from django.db.utils import OperationalError
 
+    from trusts.apps import kernel_config
     from trusts.core import (
         along_connection_supported,
         probe_along_capabilities,
     )
 
-    if not django_apps.is_installed('trusts'):
+    try:
+        config = kernel_config()
+    except LookupError:
         return []
-    config = django_apps.get_app_config('trusts')
     along_records = _live_along_records(config)
     if not along_records:
         return []

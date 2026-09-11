@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from django.apps import AppConfig, apps
+from trusts.apps import kernel_config
 from django.contrib.auth.models import AnonymousUser, Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
@@ -190,7 +191,7 @@ class DependentHostConfig(AppConfig):
             return
         if self.holder_model is None:
             return
-        registry = self.apps.get_app_config('trusts').configured_backend().registry
+        registry = kernel_config(self.apps).configured_backend().registry
         j = Ref(TrustUserPermission)
         donated_image = getattr(self, '_trusts_tup_image_registry_id', None)
         if donated_image is not registry:
@@ -220,7 +221,7 @@ def _new_dependent_host(apps_registry, holder_model):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = apps.get_app_config('trusts')
+        self.live = kernel_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -299,7 +300,7 @@ class LegacyContentRegistryDeletedTest(SimpleTestCase):
             Content.register_content(BareNote)
             self.assertFalse(hasattr(Content, '_contents'))
             self.assertFalse(
-                apps.get_app_config('trusts').registry.plan_for(BareNote).records
+                kernel_config().registry.plan_for(BareNote).records
             )
         finally:
             Content._conditions.clear()
@@ -308,7 +309,7 @@ class LegacyContentRegistryDeletedTest(SimpleTestCase):
 
     def test_class_prepared_does_not_write_a_content_map(self):
         before = dict(Content._conditions)
-        live = apps.get_app_config('trusts').registry
+        live = kernel_config().registry
         try:
             class IsolatedSheet(Content):
                 class Meta:
@@ -336,7 +337,7 @@ class LegacyContentRegistryDeletedTest(SimpleTestCase):
 
     def test_register_junction_does_not_write_a_content_map(self):
         before = dict(Content._conditions)
-        live = apps.get_app_config('trusts').registry
+        live = kernel_config().registry
         group_before = live.plan_for(Group).records
         try:
             class IsolatedJunction(Junction):
@@ -401,7 +402,7 @@ class HistoricalCompilerPreservedTest(SimpleTestCase):
         self.assertIsInstance(
             MixinOnlyBackend.query_compiler, PlanQueryCompiler,
         )
-        handle = apps.get_app_config('trusts').configured_backend()
+        handle = kernel_config().configured_backend()
         self.assertTrue(handle.historical_fallback)
         self.assertIsInstance(handle.compiler, HistoricalGroupQueryCompiler)
 
@@ -511,7 +512,7 @@ class DependentHostContributionTest(_RegistryRestoreMixin, SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateDependentContributionTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = apps.get_app_config('trusts').registry
+        live = kernel_config().registry
         before = live.records
         Receipt, *_rest = _receipt_chain()
         contributor = DependentHostConfig('tests', tests_module)
@@ -732,7 +733,7 @@ class UnknownTerminalFailsClosedTest(_UsersMixin, TestCase):
         self.assertEqual(backend.get_all_permissions(self.alice, {}), set())
         self.assertFalse(backend.has_perm(self.alice, 'auth.change_user', self.alice))
         self.assertFalse(
-            apps.get_app_config('trusts').configured_backend().registry.plan_for(
+            kernel_config().configured_backend().registry.plan_for(
                 User,
             ).records
         )

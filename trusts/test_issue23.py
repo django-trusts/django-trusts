@@ -24,7 +24,13 @@ from trusts.models import (
     TrustUserPermission,
 )
 from trusts.test_issue8 import Issue8FixtureMixin
-from trusts.tests import enable_local_group_grant, reload_test_users
+from trusts.tests import (
+    enable_local_group_grant,
+    grant_group_permission,
+    reload_test_users,
+    revoke_group_permission,
+    set_group_permissions,
+)
 from tests.models import Category
 
 
@@ -67,7 +73,9 @@ class TrustGroupIntersectionTest(Issue8FixtureMixin, TestCase):
         self.org.groups.add(other)
         tg = TrustGroup.objects.get(trust=self.org, group=other)
         with self.assertRaises(ValidationError):
-            tg.grant_permission(self.perm_read)
+            TrustGroupPermission.objects.create(
+                trustgroup=tg, permission=self.perm_read,
+            )
         with connection.cursor() as cursor:
             cursor.execute(
                 'INSERT INTO trusts_trustgrouppermission (trustgroup_id, permission_id) '
@@ -108,7 +116,7 @@ class TrustGroupIntersectionTest(Issue8FixtureMixin, TestCase):
         reload_test_users(self)
         self.assertTrue(self._has_read(self.user, self.content))
 
-        self.org.revoke_group_permission(self.group, self.perm_read)
+        revoke_group_permission(self.org, self.group, self.perm_read)
         reload_test_users(self)
         self.assertFalse(self._has_read(self.user, self.content))
 
@@ -308,14 +316,14 @@ class TrustGroupIntersectionTest(Issue8FixtureMixin, TestCase):
         extra = self._outside_ceiling_perm()
         self._assert_unassociated()
         with self.assertRaises(ValidationError):
-            self.org.grant_group_permission(self.group, extra)
+            grant_group_permission(self.org, self.group, extra)
         self._assert_unassociated()
 
     def test_rejected_set_permissions_does_not_create_association(self):
         extra = self._outside_ceiling_perm()
         self._assert_unassociated()
         with self.assertRaises(ValidationError):
-            self.org.set_group_permissions(self.group, [self.perm_read, extra])
+            set_group_permissions(self.org, self.group, [self.perm_read, extra])
         self._assert_unassociated()
 
     def test_rejected_associate_with_permissions_does_not_create_association(self):
@@ -335,7 +343,7 @@ class TrustGroupIntersectionTest(Issue8FixtureMixin, TestCase):
         extra = self._outside_ceiling_perm()
         self.org.groups.add(self.group)
         with self.assertRaises(ValidationError):
-            self.org.grant_group_permission(self.group, extra)
+            grant_group_permission(self.org, self.group, extra)
         self.assertTrue(TrustGroup.objects.filter(trust=self.org, group=self.group).exists())
         self.assertEqual(
             TrustGroup.objects.get(trust=self.org, group=self.group).permissions.count(),
@@ -345,7 +353,7 @@ class TrustGroupIntersectionTest(Issue8FixtureMixin, TestCase):
     def test_application_api_rejects_outside_ceiling_and_authorization_wraps(self):
         extra = self._outside_ceiling_perm()
         with self.assertRaises(ValidationError):
-            self.org.grant_group_permission(self.group, extra)
+            grant_group_permission(self.org, self.group, extra)
         TrustUserPermission(
             trust=self.org, entity=self.user, permission=self.perm_change
         ).save()
