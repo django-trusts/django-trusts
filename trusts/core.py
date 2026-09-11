@@ -736,8 +736,22 @@ def _resolve_along_edge(walk_model, edge_path):
         if kind == 'single':
             return 'S', field.attname, None, None, None, target
         if kind == 'reverse_o2m':
+            # Reverse PathInfo.target_fields is the related model's PK, not
+            # the concrete self-FK's remote to_field. Identity comes from
+            # the forward FK metadata; the reverse hop still proves the
+            # edge is a self-relation on the walk-site.
             fk = _concrete_fk(field)
-            return 'C', fk.attname, None, None, None, target
+            dest, edge_target = _target_field(fk, 'along', edge_path)
+            if dest is not walk_model:
+                raise TrustsConfigurationError(
+                    'along edge %r must terminate on walk-site model %s, not %s.'
+                    % (
+                        _path_text(edge_path),
+                        walk_model._meta.label,
+                        dest._meta.label,
+                    )
+                )
+            return 'C', fk.attname, None, None, None, edge_target
         raise TrustsConfigurationError(
             'along edge %r is not a supported S/C/E hop.'
             % (_path_text(edge_path),)

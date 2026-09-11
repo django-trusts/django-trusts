@@ -464,6 +464,38 @@ class AlongIdentityRejectionTest(SimpleTestCase):
             )
         self.assertEqual(registry.records, ())
 
+    def test_shape_c_mismatched_to_field_is_rejected(self):
+        User = get_user_model()
+
+        class Site(models.Model):
+            code = models.SlugField(unique=True)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class SiteGrant(models.Model):
+            site = models.ForeignKey(
+                Site, to_field='code', on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        j = Ref(SiteGrant)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register(
+                content=j.site, user=j.user, permission=j.permission,
+                along=Along(j.site.children, bound=4),
+            )
+        self.assertEqual(registry.records, ())
+
 
 class _AlongProjectionMixin(object):
     def _users(self, suffix):
@@ -920,6 +952,55 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             self.assertTrue(ureg.has_permission(alice, ua, read))
             self.assertTrue(ureg.has_permission(alice, ub, read))
             self.assertFalse(ureg.has_permission(alice, uo, read))
+
+    def test_shape_c_non_pk_to_field(self):
+        User = get_user_model()
+
+        class CodedNode(models.Model):
+            code = models.SlugField(unique=True)
+            parent = models.ForeignKey(
+                'self', to_field='code', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class CodedGrant(models.Model):
+            node = models.ForeignKey(
+                CodedNode, to_field='code', on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(CodedNode, CodedGrant):
+            alice = User.objects.create_user(username='alice-c92', password='x')
+            read = _perm('read_c92')
+            root = CodedNode.objects.create(code='root')
+            mid = CodedNode.objects.create(code='mid', parent=root)
+            leaf = CodedNode.objects.create(code='leaf', parent=mid)
+            other = CodedNode.objects.create(code='other')
+            CodedGrant.objects.create(node=leaf, user=alice, permission=read)
+            registry = TrustsRegistry()
+            j = Ref(CodedGrant)
+            rec = registry.register(
+                content=j.node, user=j.user, permission=j.permission,
+                along=Along(j.node.children, bound=8),
+            )
+            self.assertEqual(rec.along.shape, 'C')
+            self.assertEqual(rec.along.walk_ident, 'code')
+            self.assertEqual(rec.along.ident_family, 'text')
+            self.assertEqual(
+                rec.along.parent_attname,
+                CodedNode._meta.get_field('parent').attname,
+            )
+            self.assertTrue(registry.has_permission(alice, leaf, read))
+            self.assertTrue(registry.has_permission(alice, mid, read))
+            self.assertTrue(registry.has_permission(alice, root, read))
+            self.assertFalse(registry.has_permission(alice, other, read))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
