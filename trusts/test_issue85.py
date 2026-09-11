@@ -21,6 +21,7 @@ from django.test.utils import isolate_apps
 from tests.apps import (
     TestsConfig,
     install_writable_registry,
+    isolate_live_registry,
     junction_content_field,
     junction_group_content_ref,
     override_apps_ready,
@@ -219,7 +220,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
 
     def test_category_and_ticket_sentinels_do_not_complete_group(self):
         isolated = TrustsRegistry()
-        self.live_trusts.registry = isolated
+        isolate_live_registry(self.live_trusts, isolated)
         contributor = _new_contributor(apps)
         contributor._trusts_tup_category_registry_id = isolated
         contributor._trusts_tup_ticket_registry_id = isolated
@@ -246,7 +247,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
         isolated.register(
             content=other.group, user=other.user, permission=other.permission,
         )
-        self.live_trusts.registry = isolated
+        isolate_live_registry(self.live_trusts, isolated)
         contributor = _new_contributor(apps)
         with override_apps_ready(False):
             contributor.ready()
@@ -265,7 +266,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
             user=j.permission,
             permission=j.entity,
         )
-        self.live_trusts.registry = isolated
+        isolate_live_registry(self.live_trusts, isolated)
         contributor = _new_contributor(apps)
         with override_apps_ready(False):
             with self.assertRaises(TrustsConfigurationError):
@@ -291,7 +292,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
         new_trusts = TrustsAppConfig('trusts', trusts)
         original = self.live_registry
         try:
-            self.live_trusts.registry = new_trusts.registry
+            isolate_live_registry(self.live_trusts, new_trusts.registry)
             contributor = _new_contributor(apps)
             with override_apps_ready(False):
                 contributor.ready()
@@ -314,7 +315,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
 
     def test_declaration_is_j1_metadata_derived_and_independent_of_contents(self):
         isolated = TrustsRegistry()
-        self.live_trusts.registry = isolated
+        isolate_live_registry(self.live_trusts, isolated)
         contributor = _new_contributor(apps)
         remote = TestGroupJunction._meta.get_field('trust').remote_field
         with patch.object(
@@ -346,7 +347,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
 
     def test_swapped_live_registry_receives_declaration_again(self):
         isolated = TrustsRegistry()
-        self.live_trusts.registry = isolated
+        isolate_live_registry(self.live_trusts, isolated)
         with override_apps_ready(False):
             self.live_contributor.ready()
         self.assertIs(self.live_contributor._trusts_tup_group_registry_id, isolated)

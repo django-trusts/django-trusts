@@ -127,10 +127,13 @@ Supported live access is the AppConfig handle API:
 on first read once **that AppConfig's `self.apps.ready`** is true (after
 `Apps.populate`, not during contributor `ready()`). A newly observed
 configured path is frozen before the handle is returned, so a settings
-change cannot expose a writable late registry. Frozen
-`register()` raises `TrustsConfigurationError` before validation or
-mutation; existing records, plans, compilers, and authorization reads
-stay usable.
+change cannot expose a writable late registry. After readiness, the
+`registry` setter also freezes the replacement before storing it, so a
+caller-held reference cannot mutate the live store. Assignment before
+ready stays writable for contributor setup and freezes on the first
+supported post-populate read. Frozen `register()` raises
+`TrustsConfigurationError` before validation or mutation; existing
+records, plans, compilers, and authorization reads stay usable.
 
 Isolated `TrustsRegistry()` instances are a different surface. They do
 not inspect Django's global readiness, never auto-freeze, and stay

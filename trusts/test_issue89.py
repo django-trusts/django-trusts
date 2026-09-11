@@ -314,6 +314,39 @@ class LiveFreezeLifecycleTest(_RegistryRestoreMixin, SimpleTestCase):
         self.assertIs(self.live.configured_backend().registry, first)
         self.assertTrue(first.frozen)
 
+    def test_late_registry_assignment_freezes_replacement(self):
+        replacement = TrustsRegistry()
+        self.assertFalse(replacement.frozen)
+        before = self.live.registries[CONCRETE].records
+        self.live.registry = replacement
+        self.assertTrue(replacement.frozen)
+        self.assertIs(self.live.registries[CONCRETE], replacement)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            _contribute_category(replacement)
+        self.assertIn('frozen', str(ctx.exception).lower())
+        self.assertEqual(replacement.records, ())
+        self.assertIs(self.live.configured_backend().registry, replacement)
+        self.assertEqual(self.live.registry.records, ())
+        self.assertNotEqual(before, replacement.records)
+
+    def test_assignment_before_ready_stays_writable_then_freezes_on_read(self):
+        replacement = TrustsRegistry()
+        with override_apps_ready(False):
+            self.live.registry = replacement
+            self.assertIs(self.live.registries[CONCRETE], replacement)
+            self.assertFalse(replacement.frozen)
+            _contribute_category(replacement)
+            self.assertFalse(replacement.frozen)
+        self.assertFalse(replacement.frozen)
+        handle = self.live.configured_backend()
+        self.assertIs(handle.registry, replacement)
+        self.assertTrue(replacement.frozen)
+        before = replacement.records
+        with self.assertRaises(TrustsConfigurationError):
+            _contribute_ticket(replacement)
+        self.assertEqual(replacement.records, before)
+        self.assertEqual(len(replacement.plan_for(Category).records), 1)
+
     def test_standalone_appconfig_does_not_auto_freeze(self):
         import trusts
 

@@ -16,7 +16,12 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig, install_writable_registry, override_apps_ready
+from tests.apps import (
+    TestsConfig,
+    install_writable_registry,
+    isolate_live_registry,
+    override_apps_ready,
+)
 from tests.backends import (
     HostTrustModelBackend,
     MalformedCompilerBackend,
@@ -229,7 +234,7 @@ class PathScopedRegistryStoreTest(_RegistryRestoreMixin, SimpleTestCase):
 
     def test_swapped_registry_identity_receives_declaration_again(self):
         isolated = TrustsRegistry()
-        self.live.registry = isolated
+        isolate_live_registry(self.live, isolated, CONCRETE)
         self.assertIs(self.live.registries[CONCRETE], isolated)
         with override_apps_ready(False):
             self.live.ready()

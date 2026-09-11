@@ -172,6 +172,14 @@ class AppConfig(DjangoAppConfig):
                 'registry alias needs exactly one configured Trusts path; '
                 'got %r' % (paths,)
             )
+        # After populate, the compatibility setter is a live surface:
+        # it must not install a writable registry. Freeze the replacement
+        # before storing so a caller-held reference cannot mutate late.
+        # Assignment before ready stays writable for contributor setup.
+        if self._apps_instance_ready():
+            freeze = getattr(value, 'freeze', None)
+            if callable(freeze):
+                freeze()
         self.registries[paths[0]] = value
 
     def _trust_as_content_already_donated(self, path, registry):

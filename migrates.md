@@ -1802,7 +1802,7 @@ creates authorization.
 | | |
 | --- | --- |
 | Previous | Live AppConfig-owned path-scoped registries stayed writable for the process lifetime. A late `register()` after `Apps.populate` could still mutate authorization plans. Isolated `TrustsRegistry()` instances were already independent. |
-| New | `TrustsRegistry.freeze()` / `.frozen` are instance-owned. Supported live handle reads freeze the stored object once that AppConfig's `self.apps.ready` is true. `register()` on that frozen instance raises `TrustsConfigurationError` before validation or mutation and leaves records unchanged. Standalone `TrustsRegistry()` instances stay writable unless explicitly frozen. |
+| New | `TrustsRegistry.freeze()` / `.frozen` are instance-owned. Supported live handle reads freeze the stored object once that AppConfig's `self.apps.ready` is true. The one-path `registry` setter freezes a replacement before storing it after readiness, so a caller-held reference cannot mutate late. Assignment before ready stays writable and freezes on the first supported post-populate read. `register()` on that frozen instance raises `TrustsConfigurationError` before validation or mutation and leaves records unchanged. Standalone `TrustsRegistry()` instances stay writable unless explicitly frozen. |
 | Replacement | Hosts contribute from their own `AppConfig.ready()` through `configured_backend()` / `configured_handles()` / the one-path `registry` alias. Do not use `registries[path]` as a contributor route. |
 | Affected | Late `register()` after populate. Existing declared terminals keep the same authorization results. |
 | Authorization | Frozen plans still project. Undeclared terminals stay false / empty / none. A late write cannot add authorization after freeze. |

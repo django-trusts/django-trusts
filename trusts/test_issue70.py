@@ -18,7 +18,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig
+from tests.apps import TestsConfig, isolate_live_registry
 import tests as tests_module
 from tests.models import Category, Ticket
 from trusts.apps import AppConfig as TrustsAppConfig
@@ -194,7 +194,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
 
     def test_swapped_live_registry_receives_declaration_again(self):
         isolated = TrustsRegistry()
-        self.live.registry = isolated
+        isolate_live_registry(self.live, isolated)
         self.live.ready()
         self.assertIs(self.live._trusts_tup_trust_registry_id, isolated)
         self.assertIs(self.live.registry, isolated)

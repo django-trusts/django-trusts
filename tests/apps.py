@@ -115,6 +115,21 @@ def override_apps_ready(ready, apps_registry=None):
         target.ready = was
 
 
+def isolate_live_registry(config, registry, path=None):
+    """Swap a standalone registry into the live store without freezing.
+
+    Test isolation only. Not a host contributor route. The public
+    ``registry`` setter freezes after ``Apps.ready``; this writes the
+    path-scoped dict directly. The first supported handle read after
+    ready still freezes the stored object.
+    """
+    if path is None:
+        paths = config._configured_trusts_paths()
+        path = paths[0]
+    config.registries[path] = registry
+    return registry
+
+
 def install_writable_registry(config, path, contribute=None):
     """Install a standalone registry on a live path for test isolation.
 

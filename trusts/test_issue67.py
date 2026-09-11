@@ -19,7 +19,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig, override_apps_ready
+from tests.apps import TestsConfig, isolate_live_registry, override_apps_ready
 import tests as tests_module
 from tests.models import Category, Ticket
 from trusts.apps import AppConfig as TrustsAppConfig
@@ -175,7 +175,7 @@ class ContributorIdempotenceTest(SimpleTestCase):
         isolated.register(
             content=other.category, user=other.user, permission=other.permission,
         )
-        self.live_trusts.registry = isolated
+        isolate_live_registry(self.live_trusts, isolated)
         contributor = _new_contributor(apps)
         with override_apps_ready(False):
             contributor.ready()
@@ -197,7 +197,7 @@ class ContributorIdempotenceTest(SimpleTestCase):
             user=j.permission,
             permission=j.entity,
         )
-        self.live_trusts.registry = isolated
+        isolate_live_registry(self.live_trusts, isolated)
         contributor = _new_contributor(apps)
         with override_apps_ready(False):
             with self.assertRaises(TrustsConfigurationError):
@@ -215,7 +215,7 @@ class ContributorIdempotenceTest(SimpleTestCase):
         new_apps = apps
         original = self.live_trusts.registry
         try:
-            self.live_trusts.registry = new_trusts.registry
+            isolate_live_registry(self.live_trusts, new_trusts.registry)
             contributor = _new_contributor(new_apps)
             with override_apps_ready(False):
                 contributor.ready()
