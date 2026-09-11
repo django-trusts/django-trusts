@@ -1036,7 +1036,7 @@ keep the old ``trust_grant_q`` path.
 | | |
 | --- | --- |
 | Previous | ``ContentQuerySet.permitted`` always built the trustee half with ``trust_grant_q(..., trust_fk='trust')``. No package-owned registry. |
-| New | ``trusts.apps.AppConfig`` owns one ``TrustsRegistry``. The test app registers ``TrustUserPermission → Trust ← Category``. For that terminal, ``.permitted`` ORs ``plan.content_exists`` with the existing group predicate on the incoming queryset. Other content models stay on ``trust_grant_q``. |
+| New | ``trusts.apps.AppConfig`` owns one ``TrustsRegistry``. The test app registers ``TrustUserPermission → Trust ← Category``. For that terminal, ``.permitted`` ORs ``plan.content_exists`` with the existing group predicate on the incoming queryset. Ticket, Junction, and other still-unregistered models stay on ``trust_grant_q``. Trust-as-content is §32. |
 | Replacement | Same ``Model.objects.permitted(perm, user)`` call. Results and laziness are unchanged. |
 | Affected | Internal implementation of ``Category`` list filtering only. ``has_perm`` remains on the old backend path. |
 | Authorization | Unchanged results. Group-only rows are not dropped. No schema or migration. |
@@ -1051,9 +1051,27 @@ Migration-bot checklist:
 - [ ] Leave backend ``has_perm`` / ``get_all_permissions`` alone.
 - [ ] Leave package version at ``1.0.0.dev0``.
 
+### 32. Trust-as-content list path uses the registered plan (internal)
+
+| | |
+| --- | --- |
+| Previous | ``Trust.objects.permitted`` used ``trust_grant_q(..., trust_fk='trust')`` because Trust had no plan records. Permission on a child Trust already resolved through its parent. |
+| New | ``trusts.apps.AppConfig.ready()`` registers ``TrustUserPermission → parent Trust ← child Trust`` via Django ``_meta`` (no hard-coded reverse, no ``Content._contents``). The existing ``plan.records`` switch in ``ContentQuerySet.permitted`` lights up. Trustee is ``content_exists``; group stays OR-ed on the original candidate queryset. ``:own`` remains a condition overlay. Create-under-trust ``filter_by_user_content_perm`` stays on ``trust_grant_q`` (this slice does not register the conflicting direct Trust terminal). |
+| Replacement | Same ``Trust.objects.permitted(perm, user)`` call. Results, laziness, and parent-resolution semantics are unchanged. |
+| Affected | Internal implementation of ``Trust`` list filtering only. ``has_perm`` remains on the old backend path. |
+| Authorization | Unchanged results. Group-only rows are not dropped. No schema or migration. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Do not register ``content=j.trust`` beside the parent-reverse path (same-root same-terminal conflict).
+- [ ] Leave ``filter_by_user_content_perm`` on ``trust_grant_q``.
+- [ ] Leave backend ``has_perm`` / ``get_all_permissions`` alone.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
 ## Schema
 
-No change. Child H adds no model and no Django migration. Query
+No change. S1 adds no model and no Django migration. Query
 construction remains lazy.
 
 ## Out of scope (not acceptance criteria)
@@ -1062,8 +1080,9 @@ construction remains lazy.
 - ``Content.is_content`` / ``_contents`` / ``register_content`` /
   ``class_prepared``
 - Conditions as a registry atom; mutation helpers
-- Trust-as-object, Junction, Ticket, Group/Role registrations
+- Junction, Ticket, Group/Role registrations
 - Generic core path semantics; Zero; GH; example #7; Windows #17
+- S2–S8 of #69
 
 
 
