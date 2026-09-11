@@ -36,6 +36,8 @@ class TrustsCompilerError(TrustsConfigurationError):
 class QueryCompiler(object):
     """Duck-typed compiler protocol. Not a registry or store."""
 
+    historical_fallback = False
+
     def complete_exists(self, plan, candidates, user, permission):
         raise NotImplementedError
 
@@ -45,6 +47,8 @@ class QueryCompiler(object):
 
 class PlanQueryCompiler(object):
     """Immutable mixin default: registered plan only, no historical group."""
+
+    historical_fallback = False
 
     def complete_exists(self, plan, candidates, user, permission):
         if not plan.records:
@@ -886,3 +890,12 @@ class BackendHandle:
     path: str
     registry: object
     compiler: object
+
+    @property
+    def historical_fallback(self):
+        """True when this route may use undeclared ``Content._contents`` fallback.
+
+        Noun-blind core does not decide this. The compiler advertises the
+        capability; callers in backends / ``.permitted()`` consult it.
+        """
+        return bool(getattr(self.compiler, 'historical_fallback', False))
