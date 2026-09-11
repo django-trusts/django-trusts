@@ -147,5 +147,15 @@ invocation. The Trusts app contributes Trust-as-content to every
 configured `TrustModelBackend` (or subclass) path; the test app
 contributes Category and Ticket onto the unique handle.
 
+`TrustManager.filter_by_user_content_perm` is a create-under-Trust
+picker, not a content-row filter. Its support gate is
+`any_plan_records`: any configured path with `plan_for(content).records`
+establishes that the terminal is known. The grant remains
+`trust_grant_q` on Trust rows. A declaration on one path does not
+authorize through another path's compiler or `historical_fallback`, and
+the method is not redirected through `filter_authorized(Trust)` or the
+Trust-as-content parent relation. Unregistered models — including
+Junction/Group until S6 — return `none()`.
+
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

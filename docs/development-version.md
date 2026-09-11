@@ -49,7 +49,10 @@ store per configured backend path and aggregates `.permitted()`;
 issue #77 migrates declared-terminal backend `has_perm` / enumeration
 onto the same compiler handles, including registered ordinary
 non-`Content` models, with historical fallback only on the concrete
-compiler capability. Public signatures and one-path results are
+compiler capability; issue #80 moves the
+`filter_by_user_content_perm` support gate onto
+`any_plan_records` while keeping `trust_grant_q` create-under-Trust
+semantics. Public signatures and one-path results are
 unchanged.
 The API is not re-exported from `trusts` and does not add a schema or
 migration. See [core-registry.md](core-registry.md).

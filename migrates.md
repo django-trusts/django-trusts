@@ -1378,15 +1378,39 @@ Migration-bot checklist:
       or register an ``Expr``.
 - [ ] Leave package version at ``1.0.0.dev0``.
 
+### 38. `filter_by_user_content_perm` registration gate (internal)
+
+| | |
+| --- | --- |
+| Previous | ``Trust.objects.filter_by_user_content_perm`` opened when ``Content.is_content_model`` found the argument in ``Content._contents``, then filtered Trust rows with ``trust_grant_q``. Junction-backed Group and any auto-registered Content subclass passed that gate even with no path-scoped declaration. |
+| New | Support is ``any_plan_records(configured_handles(), content)``: any configured Trusts path with ``plan_for(content).records`` establishes that the terminal is known. The grant stays ``trust_grant_q`` on Trust rows (create-under-Trust). Unregistered models return ``none()`` without running the grant query. ``Content._contents``, ``historical_fallback``, and ``filter_authorized(Trust)`` are not consulted. |
+| Replacement | Same ``filter_by_user_content_perm(user, content, perm_name, exclude_root=True)`` signature and documented Category / Ticket / Trust / ``NewTeamForm`` Trust-``change`` callers. |
+| Affected | Internal registration gate only. Junction/Group stay undeclared until S6 and now fail this create-under-Trust picker closed. |
+| Authorization | One-path Category / Ticket / Trust results are unchanged. A declaration on one of several Trusts paths supports the terminal but does not authorize through another path's compiler. Wrong permission, wrong Trust, inactive/anonymous, excluded root, and ``:condition`` behave as before. A proxy of a registered terminal uses the same ``concrete_model`` the plan already selects (same permission identity as the concrete class). |
+
+This is an internal gate migration: public signature, permission identities, and create-under-Trust grant semantics are unchanged. Callers that already pass a registered Category / Ticket / Trust terminal do not change. Hosts that passed an undeclared model (including Junction/Group still listed in ``Content._contents``) now receive ``none()``.
+
+Migration-bot checklist:
+
+- [ ] Keep calling ``filter_by_user_content_perm(user, Model, perm)`` for
+      create-target Trust pickers. Do not switch it to
+      ``filter_authorized(Trust)`` or ``.permitted()`` on Trust-as-content.
+- [ ] Register the content terminal on a configured Trusts path before
+      expecting this picker to list Trusts. ``Content`` subclassing alone
+      is no longer enough.
+- [ ] Do not pass Junction/Group here until S6 declares that terminal.
+- [ ] Do not pass ``:condition`` (still refused before the gate).
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
 ## Schema
 
-No change. This corrective S3b slice adds no model and no Django
-migration.
+No change. This S4 slice adds no model and no Django migration.
 
 ## Out of scope (not acceptance criteria)
 
-- S4 gate migration, S5 grammar extension, S6 Junction/Group
-  declaration, S7 static-registry deletion, S8 freeze/E003
+- S5 grammar extension, S6 Junction/Group declaration, S7
+  static-registry deletion, S8 freeze/E003
 - Callback relocation; condition registry
 - Schema or migration changes
 - Zero, GH, example #7, Windows #17
