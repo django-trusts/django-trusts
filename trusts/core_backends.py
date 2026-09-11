@@ -103,7 +103,11 @@ class TrustModelBackendMixin(object):
         return klass
 
     def _trusts_config(self):
-        from trusts.apps import kernel_config
+        from trusts.apps import implementation_for_class, kernel_config
+
+        owner = implementation_for_class(type(self), required=False)
+        if owner is not None:
+            return owner
         return kernel_config()
 
     def _own_handle(self):

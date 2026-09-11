@@ -12,7 +12,7 @@ import importlib.metadata
 import sys
 from pathlib import Path
 
-EXPECTED_VERSION = '1.0.0.dev1'
+EXPECTED_VERSION = '1.0.0.dev2'
 
 
 def main() -> int:
@@ -67,7 +67,14 @@ def main() -> int:
     import sys as _sys
     import trusts
     import trusts.core_backends as core_backends
-    from trusts.apps import AppConfig, kernel_config
+    from trusts.apps import (
+        AppConfig,
+        TrustsImplementationConfig,
+        implementation_configs,
+        implementation_for_class,
+        implementation_for_path,
+        kernel_config,
+    )
     from trusts.backends import TrustModelBackend, TrustModelBackendMixin
     from trusts.core_backends import (
         TrustModelBackendMixin as CoreTrustModelBackendMixin,
@@ -141,6 +148,19 @@ def main() -> int:
             'trusts.backends.TrustModelBackendMixin is not '
             'trusts.core_backends.TrustModelBackendMixin'
         )
+    if issubclass(AppConfig, TrustsImplementationConfig):
+        raise SystemExit('kernel AppConfig must not be a TrustsImplementationConfig')
+    if not implementation_configs() == ():
+        raise SystemExit('kernel-only wheel must expose no implementation configs')
+    if implementation_for_class(type(TrustModelBackend()), required=False) is not None:
+        raise SystemExit('kernel-only wheel must not own TrustModelBackend')
+    try:
+        implementation_for_path('trusts.backends.TrustModelBackend')
+    except Exception as exc:
+        if 'No implementation owns' not in str(exc):
+            raise SystemExit('unexpected implementation_for_path error: %s' % exc)
+    else:
+        raise SystemExit('implementation_for_path succeeded without an owner')
 
     import trusts.models as models_mod
     try:
@@ -160,6 +180,8 @@ def main() -> int:
     print('TrustModelBackendMixin', TrustModelBackendMixin)
     print('core_backends mixin identity', TrustModelBackendMixin is CoreTrustModelBackendMixin)
     print('kernel_config', config, config.label)
+    print('TrustsImplementationConfig', TrustsImplementationConfig)
+    print('implementation_configs', implementation_configs())
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)

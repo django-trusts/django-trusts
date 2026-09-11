@@ -2372,6 +2372,137 @@ boundary. Existing schema and migration identities stay.
       `41d07f40e676f75389b91219106440932d402b53`, GH-consumer, and the
       Windows consumer unchanged. Do not start Windows cutover.
 
+# Issue #108: Step I implementation-owned registry bridge (1.0.0.dev2)
+
+## Decision
+
+Step I of approved #102 r3–r5. Core adds a reusable
+`TrustsImplementationConfig` helper and exact-path resolvers so a
+future implementation can own registry lifecycle. The generic mixin
+dual-resolves: prefer the registered implementation owner; otherwise
+use the existing real `kernel_config()`. Every transitional kernel and
+legacy surface stays. Package version becomes `1.0.0.dev2`. Pair CI
+stays pinned to raw Zero `2.0.0.dev0` at
+`41d07f40e676f75389b91219106440932d402b53`.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures and configured-kernel results
+- `AUTHENTICATION_BACKENDS = 'trusts.backends.TrustModelBackend'`
+- `from trusts.backends import TrustModelBackend`
+- `from trusts.backends import HistoricalGroupQueryCompiler`
+- `from trusts.backends import TrustModelBackendMixin` (still the
+  #104 same-object alias of `trusts.core_backends.TrustModelBackendMixin`)
+- `kernel_config()` / kernel `trusts.apps.AppConfig`
+- PEP 562 `from trusts.models import Trust` when Zero is installed
+- Product modules, product constants, settings/docs defaults
+- Database schema and Trusts migration names (`0001_initial`,
+  `0002_trustgroup`) when Zero is installed
+
+## Changes
+
+### 51. Additive implementation helper and mixin dual-resolve (#108)
+
+| | |
+| --- | --- |
+| Previous | Mixin `_trusts_config()` always called `kernel_config()`. Registry lifecycle lived only on the kernel `AppConfig`. No public implementation-owner API. Package version `1.0.0.dev1`. |
+| New | `TrustsImplementationConfig` is a library helper (not installed by core). Resolvers: `implementation_configs()`, `implementation_for_path(path)`, `implementation_for_class(cls, required=True)`. Mixin prefers an implementation owner; with no owner it still calls the real `kernel_config()`. Kernel `AppConfig` is not a `TrustsImplementationConfig`. Package version `1.0.0.dev2`. |
+| Replacement | New implementations subclass `TrustsImplementationConfig` and set `trusts_backend_paths`. Existing kernel-only and raw-Zero hosts need no settings change. |
+| Affected | Public lifecycle/resolution API (additive). Mixin resolve order (owner, else kernel). Settings: none required. Data: none. Schema: none. |
+| Authorization | Configured-kernel allow/deny unchanged when no implementation owner is installed. Owner-present execution never consults `kernel_config()`. Missing owner / duplicate owner / ambiguous class-path / empty `trusts_backend_paths` fail before authorization SQL. Missing-kernel exception types stay `LookupError` / `ImportError` from `kernel_config()`. |
+
+Exact new / still-valid signatures:
+
+```python
+from trusts.apps import (
+    TrustsImplementationConfig,
+    implementation_configs,
+    implementation_for_path,
+    implementation_for_class,
+    kernel_config,  # still valid; real transitional kernel accessor
+)
+
+class HostConfig(TrustsImplementationConfig):
+    name = 'myapp'
+    trusts_backend_paths = ('myapp.backends.HostBackend',)
+
+owner = implementation_for_path('myapp.backends.HostBackend', apps_registry=self.apps)
+owner.configured_backend('myapp.backends.HostBackend').registry.register(...)
+
+# Mixin dual-resolve (internal)
+implementation_for_class(type(backend), required=False)  # owner or None
+# None → kernel_config()
+```
+
+Identity that must still hold: `trusts.backends.TrustModelBackendMixin is trusts.core_backends.TrustModelBackendMixin`.
+
+Kernel `AppConfig` remains `type(config) is trusts.apps.AppConfig` and is not an implementation owner. `TrustsImplementationConfig.default` is `False` so `'trusts'` in `INSTALLED_APPS` still selects the kernel config, not the helper.
+
+## Old vs new behavior
+
+| Situation | Old (`1.0.0.dev1` / #107) | New (#108 Step I) |
+| --- | --- | --- |
+| `from trusts.apps import TrustsImplementationConfig` | Name absent | Library helper |
+| `implementation_for_path` / `implementation_for_class` | Absent | Exact-path / exact-class resolvers on one Django `Apps` registry |
+| Mixin `_trusts_config()` with no implementation | `kernel_config()` | Unchanged fallback |
+| Mixin `_trusts_config()` with one owner | N/A | That owner; `kernel_config()` is not called |
+| Mixin `_trusts_config()` with two owners | N/A | `TrustsConfigurationError`; no kernel fallback |
+| `from trusts.backends import TrustModelBackend` | Works | Unchanged |
+| `AUTHENTICATION_BACKENDS = 'trusts.backends.TrustModelBackend'` | Works | Unchanged |
+| `kernel_config()` | Kernel AppConfig | Unchanged |
+| Missing kernel, no owner | `LookupError` / `ImportError` | Unchanged exception types |
+| Package version | `1.0.0.dev1` | `1.0.0.dev2` |
+| Pair pin / Zero / GH | Zero `41d07f40` | Unchanged; no consumer retarget |
+
+## Schema
+
+No change. #108 adds no model, table, migration, app-label, or package
+boundary. Existing schema and migration identities stay. Persisted
+Zero `label='trusts'` is unchanged.
+
+## Out of scope (not acceptance criteria)
+
+- Zero IIa (`ZeroConfig(TrustsImplementationConfig)`, canonical
+  `trusts.zero.backends.TrustModelBackend`, Z0-cap `2.0.0.dev1`)
+- GH IIb retarget
+- Step III library-only cut or `kernel_config()` tombstone
+- Bumping `COMPANION_ZERO_SHA`
+- Windows conversion, Example #7, #17 implementation
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none was added.
+- [ ] Leave `AUTHENTICATION_BACKENDS =
+      'trusts.backends.TrustModelBackend'` in place. Do not retarget
+      Zero or GH in this step.
+- [ ] Leave `from trusts.backends import TrustModelBackend` and
+      `HistoricalGroupQueryCompiler` unchanged.
+- [ ] Confirm `trusts.backends.TrustModelBackendMixin is
+      trusts.core_backends.TrustModelBackendMixin`.
+- [ ] New implementation apps subclass
+      `trusts.apps.TrustsImplementationConfig` and set a non-empty
+      unique `trusts_backend_paths`. Do not install a core
+      `TrustsImplementationConfig` and do not treat kernel
+      `AppConfig` as an implementation owner.
+- [ ] Locate live registry donations. Prefer
+      `implementation_for_path(path, apps_registry=self.apps)` when an
+      implementation owner exists. `kernel_config()` remains the
+      transitional accessor for kernel-only / raw Zero hosts.
+- [ ] Verify configured-kernel `has_perm` / `get_*_permissions` results
+      are unchanged. Anonymous / inactive / `obj is None` stay
+      false/empty. Missing-kernel exception types stay
+      `LookupError` / `ImportError` from `kernel_config()`.
+- [ ] Confirm empty `trusts_backend_paths`, duplicate owners, missing
+      owned path, and same-class two-path listings fail at startup or
+      resolve time before authorization SQL.
+- [ ] Set package version to `1.0.0.dev2`. Do not leave it at
+      `1.0.0.dev1`.
+- [ ] Leave C2 app-label / package boundaries, Zero pin
+      `41d07f40e676f75389b91219106440932d402b53`, GH-consumer, and the
+      Windows consumer unchanged. Do not start Windows cutover or
+      Step IIa / IIb / III.
+
 
 
 

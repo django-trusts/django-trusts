@@ -1,16 +1,52 @@
 from django.apps import AppConfig as DjangoAppConfig
+from django.core.exceptions import ImproperlyConfigured
 
 
-class AppConfig(DjangoAppConfig):
-    name = 'trusts'
-    verbose_name = "Django Trusts Add-in"
-    label = 'trusts_core'
-    # Preserve AutoField if a later kernel model is added. Historical
-    # Trusts PKs live on ZeroConfig (label='trusts').
-    default_auto_field = 'django.db.models.AutoField'
+def _listed_mixin_paths():
+    """Exact AUTHENTICATION_BACKENDS mixin paths, de-duped by string.
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    Imports classes, never ``load_backend()``. Duplicate identical
+    strings collapse to one path. Different strings that resolve to
+    the same class are an ambiguity error.
+    """
+    from django.conf import settings
+    from django.utils.module_loading import import_string
+
+    from trusts.core_backends import TrustModelBackendMixin
+    from trusts.core import TrustsConfigurationError
+
+    listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
+    paths = []
+    class_to_paths = {}
+    for path in listed:
+        if path in paths:
+            continue
+        cls = import_string(path)
+        if not issubclass(cls, TrustModelBackendMixin):
+            continue
+        paths.append(path)
+        class_to_paths.setdefault(cls, []).append(path)
+    ambiguous = [
+        class_paths for class_paths in class_to_paths.values()
+        if len(class_paths) > 1
+    ]
+    if ambiguous:
+        raise TrustsConfigurationError(
+            'Configured Trusts backend class is listed under multiple '
+            'paths: %s.' % (
+                '; '.join(
+                    '%r → %s' % (class_paths[0], class_paths)
+                    for class_paths in ambiguous
+                ),
+            )
+        )
+    return tuple(paths)
+
+
+class _TrustsRegistryOwner(object):
+    """Path-scoped registry store shared by kernel and implementations."""
+
+    def _init_registries(self):
         # Import here: a module-level trusts.core import loads contenttypes
         # models before Apps.populate finishes. Backends may be imported
         # from _configured_trusts_paths; they must not import trusts.models.
@@ -19,44 +55,7 @@ class AppConfig(DjangoAppConfig):
         self.registries = {}
 
     def _configured_trusts_paths(self):
-        """Exact AUTHENTICATION_BACKENDS mixin paths, de-duped by string.
-
-        Imports classes, never ``load_backend()``. Duplicate identical
-        strings collapse to one path. Different strings that resolve to
-        the same class are an ambiguity error.
-        """
-        from django.conf import settings
-        from django.utils.module_loading import import_string
-
-        from trusts.core_backends import TrustModelBackendMixin
-        from trusts.core import TrustsConfigurationError
-
-        listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
-        paths = []
-        class_to_paths = {}
-        for path in listed:
-            if path in paths:
-                continue
-            cls = import_string(path)
-            if not issubclass(cls, TrustModelBackendMixin):
-                continue
-            paths.append(path)
-            class_to_paths.setdefault(cls, []).append(path)
-        ambiguous = [
-            class_paths for class_paths in class_to_paths.values()
-            if len(class_paths) > 1
-        ]
-        if ambiguous:
-            raise TrustsConfigurationError(
-                'Configured Trusts backend class is listed under multiple '
-                'paths: %s.' % (
-                    '; '.join(
-                        '%r → %s' % (class_paths[0], class_paths)
-                        for class_paths in ambiguous
-                    ),
-                )
-            )
-        return tuple(paths)
+        raise NotImplementedError
 
     def _apps_instance_ready(self):
         """True when *this* AppConfig's Apps instance has finished populate.
@@ -182,6 +181,100 @@ class AppConfig(DjangoAppConfig):
                 freeze()
         self.registries[paths[0]] = value
 
+
+class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
+    """Reusable implementation AppConfig helper. Not installed by core.
+
+    Host implementations (Zero, GH, Windows, or a project app) subclass
+    this and declare ``trusts_backend_paths``. Core's kernel
+    ``AppConfig`` is *not* a subclass; ``isinstance`` resolvers skip it.
+    """
+
+    default = False
+    trusts_backend_paths = ()
+
+    def __init__(self, *args, **kwargs):
+        super(TrustsImplementationConfig, self).__init__(*args, **kwargs)
+        self._init_registries()
+
+    def owned_backend_paths(self):
+        return tuple(self.trusts_backend_paths)
+
+    def _configured_trusts_paths(self):
+        owned = set(self.owned_backend_paths())
+        return tuple(
+            path for path in _listed_mixin_paths() if path in owned
+        )
+
+    def _validate_ownership(self):
+        from django.utils.module_loading import import_string
+
+        from trusts.core_backends import TrustModelBackendMixin
+        from trusts.core import TrustsConfigurationError
+
+        owned = self.owned_backend_paths()
+        if not owned:
+            raise ImproperlyConfigured(
+                '%s.trusts_backend_paths must be a non-empty tuple of '
+                'exact AUTHENTICATION_BACKENDS paths.' % type(self).__name__
+            )
+        if len(set(owned)) != len(owned):
+            raise ImproperlyConfigured(
+                '%s.trusts_backend_paths must not repeat a path: %r'
+                % (type(self).__name__, owned)
+            )
+
+        listed = _listed_mixin_paths()
+        listed_set = set(listed)
+        for path in owned:
+            cls = import_string(path)
+            if not issubclass(cls, TrustModelBackendMixin):
+                raise TrustsConfigurationError(
+                    '%s owns %r which is not a TrustModelBackendMixin.'
+                    % (type(self).__name__, path)
+                )
+            if path not in listed_set:
+                raise ImproperlyConfigured(
+                    '%s owns %r but that path is not listed in '
+                    'AUTHENTICATION_BACKENDS.'
+                    % (type(self).__name__, path)
+                )
+
+        apps_registry = getattr(self, 'apps', None)
+        for path in owned:
+            others = [
+                config for config in implementation_configs(apps_registry)
+                if config is not self and path in config.owned_backend_paths()
+            ]
+            if others:
+                raise TrustsConfigurationError(
+                    'Backend path %r has multiple implementation owners: %r'
+                    % (path, [self] + others)
+                )
+
+    def ready(self):
+        self._validate_ownership()
+        for path in self.owned_backend_paths():
+            self._ensure(path)
+        from trusts import checks as _trusts_checks  # noqa: F401
+
+
+class AppConfig(_TrustsRegistryOwner, DjangoAppConfig):
+    name = 'trusts'
+    verbose_name = "Django Trusts Add-in"
+    label = 'trusts_core'
+    default = True
+    # Preserve AutoField if a later kernel model is added. Historical
+    # Trusts PKs live on ZeroConfig (label='trusts').
+    default_auto_field = 'django.db.models.AutoField'
+
+    def __init__(self, *args, **kwargs):
+        super(AppConfig, self).__init__(*args, **kwargs)
+        self._init_registries()
+
+    def _configured_trusts_paths(self):
+        return _listed_mixin_paths()
+
     def ready(self):
         # Auto ModelAdmin registration does not import trusts.models.
         # Concrete Trust/Role admins are owned by Zero when installed.
@@ -226,3 +319,71 @@ def kernel_config(apps_registry=None):
     raise LookupError(
         'Multiple Trusts kernel AppConfig instances: %r' % (matches,)
     )
+
+
+def implementation_configs(apps_registry=None):
+    """Installed ``TrustsImplementationConfig`` instances on one Apps registry.
+
+    Kernel ``AppConfig`` is excluded (it is not a subclass). Optional
+    ``apps_registry`` is an ``Apps`` instance; the default is Django's
+    global registry. Isolated tests pass the isolated Apps.
+    """
+    from django.apps import apps as django_apps
+
+    registry = django_apps if apps_registry is None else apps_registry
+    return tuple(
+        config for config in registry.get_app_configs()
+        if isinstance(config, TrustsImplementationConfig)
+    )
+
+
+def implementation_for_path(path, apps_registry=None):
+    """Return the unique implementation that owns ``path``."""
+    from trusts.core import TrustsConfigurationError
+
+    matches = [
+        config for config in implementation_configs(apps_registry)
+        if path in config.owned_backend_paths()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise TrustsConfigurationError(
+            'No implementation owns backend path %r.' % (path,)
+        )
+    raise TrustsConfigurationError(
+        'Backend path %r has multiple implementation owners: %r'
+        % (path, matches)
+    )
+
+
+def implementation_for_class(cls, apps_registry=None, required=True):
+    """Return the unique implementation that owns ``cls``.
+
+    Ownership is exact class identity of an owned import path
+    (``import_string(path) is cls``). ``required=False`` returns
+    ``None`` when no owner exists so the Step I mixin can fall back to
+    ``kernel_config()``. Duplicate owners always fail loud.
+    """
+    from django.utils.module_loading import import_string
+
+    from trusts.core import TrustsConfigurationError
+
+    matches = []
+    for config in implementation_configs(apps_registry):
+        for path in config.owned_backend_paths():
+            if import_string(path) is cls:
+                if config not in matches:
+                    matches.append(config)
+                break
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise TrustsConfigurationError(
+            '%r has multiple implementation owners: %r' % (cls, matches)
+        )
+    if required:
+        raise TrustsConfigurationError(
+            '%r has no implementation owner.' % (cls,)
+        )
+    return None
