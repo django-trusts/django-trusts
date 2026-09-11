@@ -1823,6 +1823,16 @@ sentinel.
 | Affected | Early diagnostics for undeclared Content/Junction models. Manual dependents such as ReceiptImage / ReceiptImageMeta stay outside E003. |
 | Authorization | E003 never creates a grant. Undeclared manual dependents remain false / empty / none at runtime. |
 
+### 45. Bounded SQLite `Along` reachability
+
+| | |
+| --- | --- |
+| Previous | Registered content correlation was equality at the terminal (`Exists` + `OuterRef`). There was no recursive walk, no `Along`, and no database-tagged renderer check. |
+| New | Optional `Along(ref, bound)` on `TrustsRegistry.register()` stores immutable walk metadata (S/C/E edge, walk-site identity, suffix path). V1 compiles grant-anchored `GrantReach` only for `django.db.backends.sqlite3` with JSON functions and recursive CTEs: one uncorrelated `IN (WITH RECURSIVE …)` per recursive record, depth 0 included, bound `1..64`, identity-level cycle suppression, suffix `EXISTS` from stored path names. Integer, text, and UUID identities are whitelisted; mixed/unsupported identities raise before mutation. `trusts.E005` (`Tags.database`) reports each selected alias that cannot render live Along records. |
+| Replacement | Hosts that need ancestor/descendant (or edge-table) reachability pass `along=Along(...)` at contribution time. Direct registrations stay equality. Unsupported vendors raise `TrustsConfigurationError` at compile; residual SQLite JSON/CTE errors stay database exceptions. |
+| Affected | New Along registrations and `manage.py check --database …`. Existing non-recursive plans, SQL, and results are unchanged. |
+| Authorization | A grant at a walk-site authorizes candidates whose associated walk-site identity is in the bounded reachable set `W`. Conditions still AND-narrow a complete proof and never run on intermediate walk nodes. Direct + recursive records `OR`. |
+
 ## Host AppConfig timing
 
 Contribute during the host `AppConfig.ready()` while `Apps.populate`
@@ -1834,6 +1844,8 @@ no-op against the exact registry already donated to.
 
 Remove AppConfig-owned freezing and the `trusts.E003` check only.
 S1–S7 explicit registrations and static-registry deletion remain.
+To drop Along, omit `along=` and ignore `trusts.E005`; non-recursive
+plans stay valid.
 
 ## Migration-bot checklist
 
@@ -1846,20 +1858,30 @@ S1–S7 explicit registrations and static-registry deletion remain.
 - [ ] Address `trusts.E003` by declaring the Content/Junction terminal.
       Do not expect E003 for arbitrary manual dependents.
 - [ ] Silencing `trusts.E003` does not authorize the missing terminal.
+- [ ] Pass `along=Along(ref, bound)` only when bounded walk-site
+      reachability is intended. `bound` is `1..64`. Identity fields
+      must be one V1 integer, text, or UUID family.
+- [ ] Run `manage.py check --database <alias>` for every alias that
+      will compile Along queries. Bare `manage.py check` does not
+      execute E005 and is not an all-clear.
+- [ ] Silencing `trusts.E005` does not enable a non-sqlite3 renderer.
+- [ ] Do not expect PostgreSQL / MySQL / MariaDB / Oracle Along SQL.
 - [ ] Leave package version at `1.0.0.dev0`.
 
 ## Schema
 
-No change. S8 adds no model and no Django migration. Query
+No change. S8 and #92 add no model and no Django migration. Query
 construction remains lazy. Supported grant / all-match / enumeration
 projections remain **1 SQL**, independent of candidate count. E003
-issues **0 SQL**.
+issues **0 SQL**. E005 issues capability SQL only when Django passes a
+non-empty `databases` list.
 
 ## Out of scope (not acceptance criteria)
 
 - Condition-registry redesign; callback relocation; group/role
   redesign; #54
-- Backend/module extraction; graph/CTE/inheritance feature
+- Backend/module extraction; PostgreSQL / MySQL / MariaDB / Oracle
+  recursive renderers
 - Zero; GH; example #7; Windows #17
 
 

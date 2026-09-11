@@ -1,5 +1,5 @@
 """Django system checks for permission conditions, missing declarations,
-and query compilers.
+query compilers, and Along renderer support.
 
 Model-aware semantic validation (field names, traversal, multi-valued
 relations, operand types) and the legacy-callback policy are reported as
@@ -23,6 +23,7 @@ CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_MISSING_COMPILER = 'trusts.E004'
+CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
@@ -280,4 +281,101 @@ def check_permission_conditions(app_configs, **kwargs):
             messages.extend(_messages_for_expr(model, cond_code, record.expr))
         elif record.func is not None:
             messages.extend(_messages_for_callable(model, cond_code))
+    return messages
+
+
+_E005_HINT = (
+    'Silencing this check ID suppresses only the early diagnostic. '
+    'GrantReach still fail-closes on the actual query connection; '
+    'there is no fallback grant.'
+)
+
+
+def _live_along_records(config):
+    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+
+    found = []
+    try:
+        paths = config._configured_trusts_paths()
+    except TrustsConfigurationError:
+        return found
+    for path in paths:
+        try:
+            handle = config.configured_backend(path)
+        except (TrustsConfigurationError, TrustsCompilerError):
+            continue
+        for record in handle.registry.records:
+            if record.along is not None:
+                found.append(record)
+    return found
+
+
+def _along_engine(connection):
+    return (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
+
+
+@django_checks.register(django_checks.Tags.database)
+def check_along_renderer(app_configs, **kwargs):
+    """Report selected aliases that cannot render live Along records.
+
+    Honors Django's ``databases`` argument exactly. ``None`` or empty
+    opens no connections, executes no SQL, and is not an all-clear.
+    Isolated ``TrustsRegistry()`` instances are not scanned.
+    """
+    databases = kwargs.get('databases')
+    if not databases:
+        return []
+
+    from django.apps import apps as django_apps
+    from django.db import connections
+    from django.db.utils import OperationalError
+
+    from trusts.core import (
+        along_connection_supported,
+        probe_along_capabilities,
+    )
+
+    if not django_apps.is_installed('trusts'):
+        return []
+    config = django_apps.get_app_config('trusts')
+    along_records = _live_along_records(config)
+    if not along_records:
+        return []
+
+    messages = []
+    for alias in databases:
+        connection = connections[alias]
+        engine = _along_engine(connection)
+        vendor = getattr(connection, 'vendor', None)
+        if not along_connection_supported(connection):
+            messages.append(django_checks.Error(
+                'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
+                'Along reachability: Django sqlite3 with JSON functions '
+                'and recursive CTEs is required.'
+                % (alias, engine, vendor),
+                hint=_E005_HINT,
+                obj=None,
+                id=CHECK_ID_ALONG_RENDERER,
+            ))
+            continue
+        try:
+            probe_along_capabilities(connection)
+        except OperationalError as exc:
+            messages.append(django_checks.Error(
+                'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
+                'Along reachability: JSON/recursive capability probe '
+                'failed (%s).' % (alias, engine, vendor, exc),
+                hint=_E005_HINT,
+                obj=None,
+                id=CHECK_ID_ALONG_RENDERER,
+            ))
+        except Exception as exc:
+            messages.append(django_checks.Error(
+                'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
+                'Along reachability: JSON/recursive capability probe '
+                'failed (%s).' % (alias, engine, vendor, exc),
+                hint=_E005_HINT,
+                obj=None,
+                id=CHECK_ID_ALONG_RENDERER,
+            ))
     return messages
