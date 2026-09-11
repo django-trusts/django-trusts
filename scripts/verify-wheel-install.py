@@ -64,7 +64,8 @@ def main() -> int:
     import sys as _sys
     import trusts
     from trusts.apps import AppConfig, kernel_config
-    from trusts.backends import TrustModelBackend
+    from trusts.backends import TrustModelBackend, TrustModelBackendMixin
+    from trusts.core_backends import TrustModelBackendMixin as CoreMixin
     from trusts.core import (
         ConditionLookup,
         Ref,
@@ -116,10 +117,17 @@ def main() -> int:
     else:
         raise SystemExit('legacy Trust import succeeded without Zero: %r' % Trust)
 
+    if TrustModelBackendMixin is not CoreMixin:
+        raise SystemExit(
+            'trusts.backends.TrustModelBackendMixin is not '
+            'trusts.core_backends.TrustModelBackendMixin'
+        )
+
     print('wheel import ok')
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
     print('TrustModelBackend', TrustModelBackend)
+    print('TrustModelBackendMixin', TrustModelBackendMixin, CoreMixin)
     print('kernel_config', config, config.label)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)
     print('filter_authorized_scopes', filter_authorized_scopes)

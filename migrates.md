@@ -2271,8 +2271,108 @@ one SQL statement independent of candidate count.
 - [ ] Leave C2 app-label / package boundaries, Zero, GH-consumer, and
       the Windows consumer unchanged. Do not start Windows cutover.
 
+# Issue #103: generic core_backends mixin boundary (1.0.0.dev0)
 
+## Decision
 
+Step 1 of the approved #102-r2 compatibility staircase. Core adds
+`trusts.core_backends` as the canonical home of generic
+`TrustModelBackendMixin` and default `PlanQueryCompiler` wiring.
+`trusts.backends.TrustModelBackendMixin` is a deprecated alias of the
+exact same object (`is` identity). Historical `TrustModelBackend`,
+`HistoricalGroupQueryCompiler`, the PEP 562 `trusts.models` shim,
+product modules, product constants, settings/docs defaults, Zero, GH,
+and Windows stay unchanged in this step.
 
+Accepted design: #102 r2.
 
+## No change to these public call sites
+
+- `from trusts.backends import TrustModelBackend` (still the historical
+  backend; remains valid in this step)
+- `HistoricalGroupQueryCompiler` import and TrustGroup OR proof
+- `TrustModelBackendMixin.has_perm` / `get_*_permissions` signatures
+  and runtime results
+- `_permission_binding` / `_perm_codes` behavior
+- `AUTHENTICATION_BACKENDS` defaults and docs
+- Zero and GH mixin import sites (still
+  `from trusts.backends import TrustModelBackendMixin`)
+- PEP 562 `trusts.models` shim, product modules, product constants
+- Database schema, app label, package boundary, package version
+  `1.0.0.dev0`
+
+## Changes
+
+### 50. Canonical mixin import (`trusts.core_backends`)
+
+| | |
+| --- | --- |
+| Previous | Generic mixin and `PlanQueryCompiler` default lived only on `trusts.backends.TrustModelBackendMixin`. |
+| New | `from trusts.core_backends import TrustModelBackendMixin`. `trusts.backends.TrustModelBackendMixin is trusts.core_backends.TrustModelBackendMixin`. Mixin default compiler remains `PlanQueryCompiler()`. Historical `TrustModelBackend` still subclasses the mixin and still sets `query_compiler = HistoricalGroupQueryCompiler()`. |
+| Replacement | New import is canonical. Old mixin import is a deprecated alias of the exact same object. Do not change `TrustModelBackend` imports in this step. |
+| Affected | Public mixin import path only. Runtime authorization, settings, and stored identities are unchanged. |
+| Authorization | None. Same mixin object, same method bodies, same compiler defaults. `core_backends` has no TrustGroup SQL or model dependency. |
+
+Exact new import:
+
+```python
+from trusts.core_backends import TrustModelBackendMixin
+```
+
+The historical path remains valid in this step:
+
+```python
+from trusts.backends import TrustModelBackend, TrustModelBackendMixin
+```
+
+Failure behavior: unchanged. Kernel-only populate still has no Trust /
+TrustGroup. Pair against pinned Zero `41d07f40` still uses
+`trusts.backends.TrustModelBackend`. Missing or malformed compilers
+still fail as before.
+
+## Old vs new behavior
+
+| Situation | Old (C2 `3fc61385`) | New (#103 step 1) |
+| --- | --- | --- |
+| `from trusts.core_backends import TrustModelBackendMixin` | Module absent | Canonical mixin + `PlanQueryCompiler` default |
+| `from trusts.backends import TrustModelBackendMixin` | Defines the class | Deprecated alias; `is` the core object |
+| `from trusts.backends import TrustModelBackend` | Historical backend | Unchanged import and compiler |
+| TrustGroup SQL / `HistoricalGroupQueryCompiler` | `trusts.backends` | Still only `trusts.backends` |
+| Zero / GH mixin imports | `trusts.backends` | Unchanged (no retarget in this step) |
+| Windows consumer | Unchanged | Still unchanged |
+
+## Schema
+
+No change. #103 adds no model, table, migration, app-label, or package
+boundary. Existing schema and migration identities stay.
+
+## Out of scope (not acceptance criteria)
+
+- #102 step 2 (Zero/GH retargeting, fail-loud ZeroConfig)
+- #102 step 3 (delete aliases/shims/product modules)
+- Windows conversion
+- Moving `TrustModelBackend` or `HistoricalGroupQueryCompiler`
+- Changing product constants or settings/docs defaults
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none was added.
+- [ ] Locate `TrustModelBackendMixin` imports. Retarget mixin-only
+      imports to `from trusts.core_backends import TrustModelBackendMixin`.
+      Leave `TrustModelBackend` and `HistoricalGroupQueryCompiler`
+      imports on `trusts.backends`.
+- [ ] Verify
+      `trusts.backends.TrustModelBackendMixin is
+      trusts.core_backends.TrustModelBackendMixin`.
+- [ ] Verify old `from trusts.backends import TrustModelBackend` still
+      imports and that listed backends keep the same allow/deny
+      results.
+- [ ] Confirm `trusts.core_backends` has no TrustGroup SQL or model
+      dependency. Do not move the historical group compiler in this
+      step.
+- [ ] Do not retarget Zero or GH in this step. Do not delete
+      `trusts.backends`, product modules, or the PEP 562 shim.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Leave C2 app-label / package boundaries, Zero, GH-consumer, and
+      the Windows consumer unchanged. Do not start Windows cutover.
 
