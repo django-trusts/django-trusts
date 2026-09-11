@@ -841,10 +841,10 @@ def _resolve_permission_in_path(root, path, role, permission_model):
 def _validate_equal(predicate, root):
     left = _require_same_root(predicate.left, root, 'Equal left')
     right = _require_same_root(predicate.right, root, 'Equal right')
-    _left_path, left_model, _left_field, _left_target = _resolve_forward_singles(
+    _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
         root, left._path, 'Equal left',
     )
-    _right_path, right_model, _right_field, _right_target = (
+    _right_path, right_model, _right_field, right_target = (
         _resolve_forward_singles(root, right._path, 'Equal right')
     )
     if left_model is not right_model:
