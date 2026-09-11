@@ -7,7 +7,6 @@ uses the common relation plan. Backend ``has_perm`` and
 tests keep constructing their own ``TrustsRegistry()``.
 """
 
-import inspect
 from unittest.mock import patch
 
 from django.apps import apps
@@ -30,6 +29,7 @@ from trusts.core import (
     TrustsRegistry,
 )
 from trusts.models import (
+    Content,
     Trust,
     TrustUserPermission,
 )
@@ -49,6 +49,28 @@ def _perm(model, codename):
         content_type=ContentType.objects.get_for_model(model),
         codename=codename,
     )
+
+
+class _UnusableContents(object):
+    """Stand-in that fails if the static content registry is read."""
+
+    def __getitem__(self, key):
+        raise AssertionError('Content._contents must not be consulted')
+
+    def __contains__(self, key):
+        raise AssertionError('Content._contents must not be consulted')
+
+    def get(self, *args, **kwargs):
+        raise AssertionError('Content._contents must not be consulted')
+
+    def keys(self):
+        raise AssertionError('Content._contents must not be consulted')
+
+    def values(self):
+        raise AssertionError('Content._contents must not be consulted')
+
+    def items(self):
+        raise AssertionError('Content._contents must not be consulted')
 
 
 class TrustContributionIdempotenceTest(SimpleTestCase):
@@ -148,6 +170,27 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
         self.assertIs(record.root, TrustUserPermission)
         self.assertIs(record.content_model, Trust._meta.concrete_model)
         self.assertEqual(self.live_registry.records, live_before)
+
+    def test_declaration_uses_meta_reverse_not_contents(self):
+        import trusts
+
+        isolated = TrustsAppConfig('trusts', trusts)
+        remote = Trust._meta.get_field('trust').remote_field
+        with patch.object(
+            remote, 'get_accessor_name', wraps=remote.get_accessor_name,
+        ) as accessor:
+            with patch.object(Content, '_contents', _UnusableContents()):
+                isolated.ready()
+        accessor.assert_called()
+        rev = remote.get_accessor_name()
+        self.assertEqual(len(isolated.registry.records), 1)
+        record = isolated.registry.records[0]
+        self.assertIs(record.root, TrustUserPermission)
+        self.assertIs(record.content_model, Trust._meta.concrete_model)
+        self.assertEqual(record.content_field, 'trust__%s' % rev)
+        self.assertEqual(record.user_field, 'entity')
+        self.assertEqual(record.permission_field, 'permission')
+        self.assertNotEqual(record.content_field, 'trust')
 
     def test_swapped_live_registry_receives_declaration_again(self):
         isolated = TrustsRegistry()
@@ -271,25 +314,6 @@ class TrustPermittedRegistryTest(TestCase):
             obj.pk for obj in Trust.objects.all()
             if user.has_perm(perm, obj)
         }
-
-    def test_live_declaration_uses_meta_reverse_not_hardcoded_accessor(self):
-        registry = apps.get_app_config('trusts').registry
-        rev = Trust._meta.get_field('trust').remote_field.get_accessor_name()
-        source = inspect.getsource(TrustsAppConfig.ready)
-        self.assertIn('get_accessor_name', source)
-        self.assertNotIn('trusts_trust_content', source)
-        self.assertNotIn('_contents', source)
-        records = [
-            record for record in registry.plan_for(Trust).records
-            if record.root is TrustUserPermission
-        ]
-        self.assertEqual(len(records), 1)
-        record = records[0]
-        self.assertIs(record.content_model, Trust._meta.concrete_model)
-        self.assertEqual(record.content_field, 'trust__%s' % rev)
-        self.assertEqual(record.user_field, 'entity')
-        self.assertEqual(record.permission_field, 'permission')
-        self.assertNotEqual(record.content_field, 'trust')
 
     def test_alice_tup_grants_sibling_children_on_trust_a_not_b(self):
         qs = Trust.objects.permitted(self.change_code, self.alice)
