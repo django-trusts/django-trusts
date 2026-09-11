@@ -2271,6 +2271,107 @@ one SQL statement independent of candidate count.
 - [ ] Leave C2 app-label / package boundaries, Zero, GH-consumer, and
       the Windows consumer unchanged. Do not start Windows cutover.
 
+# Issue #103: generic `core_backends` boundary (1.0.0.dev0)
+
+## Decision
+
+Step 1 of approved #102-r2. Core adds a canonical generic backend
+import at `trusts.core_backends` without removing or retargeting any
+historical API. `TrustModelBackendMixin` and its default
+`PlanQueryCompiler` wiring move there. `trusts.backends` stays and
+re-exports the exact same mixin object as a deprecated alias.
+`TrustModelBackend`, `HistoricalGroupQueryCompiler`, the PEP 562
+`trusts.models` shim, product modules, product constants,
+settings/docs defaults, Zero, and GH stay unchanged. Pair CI stays
+pinned to Zero `41d07f40e676f75389b91219106440932d402b53`.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures and configured-kernel results
+- `AUTHENTICATION_BACKENDS = 'trusts.backends.TrustModelBackend'`
+- `from trusts.backends import TrustModelBackend`
+- `from trusts.backends import HistoricalGroupQueryCompiler`
+- PEP 562 `from trusts.models import Trust` when Zero is installed
+- Product modules, product constants, settings/docs defaults
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migration names (`0001_initial`,
+  `0002_trustgroup`) when Zero is installed
+
+## Changes
+
+### 50. Additive `trusts.core_backends` mixin import (#103)
+
+| | |
+| --- | --- |
+| Previous | Generic mixin lived only at `trusts.backends.TrustModelBackendMixin` next to `TrustModelBackend` and `HistoricalGroupQueryCompiler`. |
+| New | Canonical import is `from trusts.core_backends import TrustModelBackendMixin`. Default compiler remains `PlanQueryCompiler()` (`historical_fallback` is false). `trusts.backends.TrustModelBackendMixin` is a deprecated alias of the **same object** (`is`). `apps.py` / `checks.py` import the mixin from `trusts.core_backends`. |
+| Replacement | New hosts import the mixin from `trusts.core_backends`. Existing `trusts.backends` mixin imports keep working in this step. Historical backend string stays valid. |
+| Affected | Mixin import path (additive + deprecated alias). Settings: none. Calls: none required. Data: none. Schema: none. |
+| Authorization | Unchanged. Configured-kernel allow/deny, anonymous / inactive / `obj is None` false/empty, and missing-kernel exception types stay as before this extract. TrustGroup SQL stays only on `trusts.backends.HistoricalGroupQueryCompiler`. |
+
+Exact new / still-valid imports:
+
+```python
+from trusts.core_backends import TrustModelBackendMixin  # canonical
+
+from trusts.backends import TrustModelBackendMixin  # deprecated alias; same object
+from trusts.backends import TrustModelBackend  # still valid in this step
+```
+
+Identity that must hold: `trusts.backends.TrustModelBackendMixin is trusts.core_backends.TrustModelBackendMixin`.
+
+## Old vs new behavior
+
+| Situation | Old (C2 `3fc61385`) | New (#103 step 1) |
+| --- | --- | --- |
+| `from trusts.core_backends import TrustModelBackendMixin` | Module absent | Canonical generic mixin |
+| `from trusts.backends import TrustModelBackendMixin` | Mixin class | Deprecated alias; same object |
+| `from trusts.backends import TrustModelBackend` | Works | Unchanged |
+| `AUTHENTICATION_BACKENDS = 'trusts.backends.TrustModelBackend'` | Works | Unchanged |
+| Mixin default compiler | `PlanQueryCompiler` | Unchanged (now owned by `core_backends`) |
+| Concrete TrustGroup SQL in `core_backends` | N/A | None |
+| `from trusts.models import Trust` with Zero | PEP 562 shim | Unchanged |
+| Missing kernel on `has_perm` / `get_*_permissions` | `LookupError` / `ImportError` from `kernel_config()` | Unchanged exception types |
+| Pair pin / Zero / GH | Zero `41d07f40` | Unchanged; no consumer retarget |
+
+## Schema
+
+No change. #103 adds no model, table, migration, app-label, or package
+boundary. Existing schema and migration identities stay.
+
+## Out of scope (not acceptance criteria)
+
+- #102 step 2 (Zero product modules, fail-loud ZeroConfig, GH retarget)
+- #102 step 3 (delete `trusts.backends`, PEP 562 shim, product modules)
+- Bumping `COMPANION_ZERO_SHA`
+- Windows conversion, Example #7, #17 implementation
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none was added.
+- [ ] Locate `TrustModelBackendMixin` imports. Retarget new and
+      consumer code to `from trusts.core_backends import
+      TrustModelBackendMixin`. The `trusts.backends` mixin import
+      remains valid in this step only.
+- [ ] Confirm `trusts.backends.TrustModelBackendMixin is
+      trusts.core_backends.TrustModelBackendMixin`.
+- [ ] Leave `AUTHENTICATION_BACKENDS =
+      'trusts.backends.TrustModelBackend'` in place. Do not retarget
+      Zero or GH in this step.
+- [ ] Leave `from trusts.backends import TrustModelBackend` and
+      `HistoricalGroupQueryCompiler` unchanged.
+- [ ] Verify configured-kernel `has_perm` / `get_*_permissions` results
+      are unchanged. Anonymous / inactive / `obj is None` stay
+      false/empty. Missing-kernel exception types stay
+      `LookupError` / `ImportError` from `kernel_config()`.
+- [ ] Confirm `trusts.core_backends` has no TrustGroup SQL or
+      `HistoricalGroupQueryCompiler`.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Leave C2 app-label / package boundaries, Zero pin
+      `41d07f40e676f75389b91219106440932d402b53`, GH-consumer, and the
+      Windows consumer unchanged. Do not start Windows cutover.
+
 
 
 
