@@ -852,6 +852,18 @@ def _validate_equal(predicate, root):
             'Equal paths must terminate on the same model; got %s and %s.'
             % (left_model._meta.label, right_model._meta.label)
         )
+    # Compiler compares stored FK columns via F(). Distinct unique
+    # fields (``to_field``) on the same model can collide across
+    # objects and fail open if only the terminal model is checked.
+    if left_target != right_target:
+        raise TrustsConfigurationError(
+            'Equal paths must share one resolved comparison field; '
+            'got %s.%s and %s.%s.'
+            % (
+                left_model._meta.label, left_target,
+                right_model._meta.label, right_target,
+            )
+        )
 
 
 def _validate_permission_in(predicate, root, permission_model):

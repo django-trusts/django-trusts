@@ -2057,12 +2057,13 @@ registration spelling. This does not reopen a general rule language.
 | Authorization | A team grant allows only when the requester is a terminal member, the grant row exists, `permission_in` holds for that row's permission, and `Equal` paths align, all on the same root row. Removing any one of those facts denies only that branch. Cross-organization team grants deny. Direct and team roots OR; revoking one valid root preserves the other. Object, queryset/manager, and enumeration agree. Query construction is lazy; supported decisions/listings stay **1 SQL** before pagination. |
 
 Failure behavior: invalid predicate arity or types, mixed-root refs,
-incompatible `Equal` terminals, `permission_in` paths that do not end
-on the registered permission model, extra or intermediate multi-valued
-walks, untyped `condition` values, unregistered / stale / unsupported
-declarations fail closed. Untyped `condition=` still reports that
-`condition` is not supported. Registration and system checks issue
-**0 SQL**.
+incompatible `Equal` terminals or resolved comparison fields (distinct
+`to_field` / PK identities on the same model), `permission_in` paths
+that do not end on the registered permission model, extra or
+intermediate multi-valued walks, untyped `condition` values,
+unregistered / stale / unsupported declarations fail closed. Untyped
+`condition=` still reports that `condition` is not supported.
+Registration and system checks issue **0 SQL**.
 
 ## Old vs new behavior
 
@@ -2101,7 +2102,8 @@ and migration identities stay. Query construction remains lazy.
       more forward singles. Reverse O2M requester paths stay rejected.
       Do not walk extra collections.
 - [ ] `permission_in` refs must terminate on the registered permission
-      model. `Equal` sides must be forward singles to the same model.
+      model. `Equal` sides must be forward singles to the same model
+      and the same resolved comparison field.
 - [ ] Do not pass `Q`, callables, lookup strings, or tuples as
       `condition`. Untyped values still fail closed.
 - [ ] Treat `All` / `Equal` / `permission_in` as AND on one root row.

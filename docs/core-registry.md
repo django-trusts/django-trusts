@@ -94,7 +94,10 @@ registry.register(
 - `All(*predicates)` — AND of one or more `All` / `Equal` /
   `permission_in` nodes
 - `Equal(left, right)` — two root-relative forward single-valued refs
-  that terminate on the same model
+  that terminate on the same model and the same resolved comparison
+  field (`to_field` / PK). Distinct unique fields on that model are
+  rejected at registration (zero SQL) so stored-column `F()` comparison
+  cannot fail open on colliding values
 - `permission_in(*refs)` — each ref is a bounded ceiling path:
   forward singles, at most one intermediate reverse O2M, then a
   terminal M2M or reverse O2M on the registered permission model

@@ -363,10 +363,11 @@ A requester path may be one forward single-valued hop, or zero or more
 forward single-valued hops followed by exactly one terminal many-to-many
 membership hop. Reverse one-to-many requester paths stay rejected.
 ``All``, ``Equal``, and ``permission_in`` are AND-correlated through the
-same permission-bearing row. Object authorization, authorized querysets
-/ managers, and permission enumeration share that plan. Malformed
-arity, types, or paths raise ``TrustsConfigurationError`` at
-registration with zero SQL.
+same permission-bearing row. ``Equal`` sides must share one resolved
+comparison field; distinct unique fields on the same model are
+rejected. Object authorization, authorized querysets / managers, and
+permission enumeration share that plan. Malformed arity, types, or
+paths raise ``TrustsConfigurationError`` at registration with zero SQL.
 
 Decorators
 ~~~~~~~~~~

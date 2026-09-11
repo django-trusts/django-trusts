@@ -165,6 +165,72 @@ def _pks(rows):
     return {row.pk for row in rows}
 
 
+def _to_field_models(*, match):
+    """Same target model; ``match`` shares ``to_field`` or splits slug/code."""
+
+    class Holder(models.Model):
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Site(models.Model):
+        slug = models.SlugField(unique=True)
+        code = models.CharField(max_length=8, unique=True)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Document(models.Model):
+        title = models.CharField(max_length=40)
+
+        objects = AuthorizedManager()
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Action(models.Model):
+        code = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    right_to_field = 'slug' if match else 'code'
+
+    class SiteGrant(models.Model):
+        holder = models.ForeignKey(
+            Holder, related_name='+', on_delete=models.CASCADE,
+        )
+        document = models.ForeignKey(
+            Document, related_name='site_grants', on_delete=models.CASCADE,
+        )
+        action = models.ForeignKey(
+            Action, related_name='+', on_delete=models.CASCADE,
+        )
+        left = models.ForeignKey(
+            Site, related_name='+', on_delete=models.CASCADE, to_field='slug',
+        )
+        right = models.ForeignKey(
+            Site, related_name='+', on_delete=models.CASCADE,
+            to_field=right_to_field,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    return Holder, Site, Document, Action, SiteGrant
+
+
+def _register_site_grant(registry, grant):
+    g = Ref(grant)
+    return registry.register(
+        content=g.document,
+        user=g.holder,
+        permission=g.action,
+        condition=Equal(g.left, g.right),
+    )
+
+
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ClosedPredicateRegistrationTest(TestCase):
     def test_core_exports_closed_predicate_nodes(self):
@@ -259,6 +325,33 @@ class ClosedPredicateRegistrationTest(TestCase):
                 )
         self.assertEqual(registry.records, ())
         self.assertIs(Account._meta.concrete_model, Account)
+
+    def test_equal_rejects_mismatched_to_field_targets_with_zero_sql(self):
+        Holder, Site, Document, Action, SiteGrant = _to_field_models(
+            match=False,
+        )
+        registry = TrustsRegistry()
+        with self.assertNumQueries(0):
+            with self.assertRaisesRegex(
+                TrustsConfigurationError, r'resolved comparison field',
+            ):
+                _register_site_grant(registry, SiteGrant)
+        self.assertEqual(registry.records, ())
+        self.assertIs(Holder._meta.concrete_model, Holder)
+        self.assertIs(Site._meta.concrete_model, Site)
+        self.assertIs(Document._meta.concrete_model, Document)
+        self.assertIs(Action._meta.concrete_model, Action)
+
+    def test_equal_matching_to_field_registers_with_zero_sql(self):
+        _Holder, _Site, Document, _Action, SiteGrant = _to_field_models(
+            match=True,
+        )
+        registry = TrustsRegistry()
+        with self.assertNumQueries(0):
+            record = _register_site_grant(registry, SiteGrant)
+        self.assertEqual(len(registry.records), 1)
+        self.assertIs(record.content_model, Document)
+        self.assertIsInstance(record.condition, Equal)
 
     def test_extra_and_intermediate_multi_valued_walks_rejected(self):
         _models = _gh_models()
@@ -589,3 +682,63 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
             list(empty.permissions_for(self.member, self.repo_a)),
             [],
         )
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):
+    def setUp(self):
+        (
+            self.Holder,
+            self.Site,
+            self.Document,
+            self.Action,
+            self.SiteGrant,
+        ) = _to_field_models(match=True)
+        self._table_cm = _tables(
+            self.Holder,
+            self.Site,
+            self.Document,
+            self.Action,
+            self.SiteGrant,
+        )
+        self._table_cm.__enter__()
+        self.holder = self.Holder.objects.create(name='holder')
+        self.site_a = self.Site.objects.create(slug='alpha', code='a1')
+        self.site_b = self.Site.objects.create(slug='beta', code='b2')
+        self.read = self.Action.objects.create(code='read')
+        self.doc_same = self.Document.objects.create(title='aligned')
+        self.doc_other = self.Document.objects.create(title='split')
+        self.SiteGrant.objects.create(
+            holder=self.holder, document=self.doc_same, action=self.read,
+            left=self.site_a, right=self.site_a,
+        )
+        self.SiteGrant.objects.create(
+            holder=self.holder, document=self.doc_other, action=self.read,
+            left=self.site_a, right=self.site_b,
+        )
+        self.registry = TrustsRegistry()
+        _register_site_grant(self.registry, self.SiteGrant)
+
+    def tearDown(self):
+        self._table_cm.__exit__(None, None, None)
+
+    def test_matching_to_field_same_object_allows_and_split_denies(self):
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                self.registry.has_permission(
+                    self.holder, self.doc_same, self.read,
+                )
+            )
+        with self.assertNumQueries(1):
+            self.assertFalse(
+                self.registry.has_permission(
+                    self.holder, self.doc_other, self.read,
+                )
+            )
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                _pks(self.registry.filter_authorized(
+                    self.Document.objects.all(), self.holder, self.read,
+                )),
+                {self.doc_same.pk},
+            )
