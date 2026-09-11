@@ -2,10 +2,10 @@ from django.apps import apps as django_apps
 from django.db.models import Model, Q, QuerySet, Subquery
 from django.contrib.auth.backends import ModelBackend
 
-from trusts.models import (
-    Content,
-    PermissionConditionNotQueryable,
-    compile_registered_condition_q,
+from trusts.conditions import (
+    PermissionConditionError,
+    PermissionConditionNotQueryable as KernelPermissionConditionNotQueryable,
+    evaluate_registered_expression,
     legacy_permission_callbacks_allowed,
     permission_has_condition,
 )
@@ -13,7 +13,6 @@ from trusts.query import (
     historical_group_grant_exists,
     is_active_principal,
 )
-from trusts.conditions import PermissionConditionError, evaluate_registered_expression
 from trusts.core import (
     PlanQueryCompiler,
     all_match,
@@ -21,6 +20,41 @@ from trusts.core import (
     instance_match,
 )
 from trusts import get_permission_model, utils
+
+
+def _permission_condition_not_queryable():
+    """Zero's class when Trust is installed; otherwise the kernel copy."""
+    try:
+        Trust = django_apps.get_model('trusts', 'Trust')
+    except LookupError:
+        return KernelPermissionConditionNotQueryable
+    import sys
+    cls = getattr(
+        sys.modules.get(Trust.__module__),
+        'PermissionConditionNotQueryable',
+        None,
+    )
+    if cls is None:
+        return KernelPermissionConditionNotQueryable
+    return cls
+
+
+def _historical_content_class():
+    """Abstract Zero ``Content`` via Trust's MRO. Does not import the shim."""
+    try:
+        Trust = django_apps.get_model('trusts', 'Trust')
+    except LookupError:
+        return None
+    for base in Trust.__mro__:
+        meta = getattr(base, '_meta', None)
+        if (
+            meta is not None
+            and meta.abstract
+            and base.__name__ == 'Content'
+            and meta.app_label == 'trusts'
+        ):
+            return base
+    return None
 
 
 class HistoricalGroupQueryCompiler(object):
@@ -93,7 +127,8 @@ class TrustModelBackendMixin(object):
         return klass
 
     def _trusts_config(self):
-        return django_apps.get_app_config('trusts')
+        from trusts.apps import kernel_config
+        return kernel_config()
 
     def _own_handle(self):
         config = self._trusts_config()
@@ -161,7 +196,7 @@ class TrustModelBackendMixin(object):
 
     def permission_condition_met(self, record, user_obj, perm, obj):
         if isinstance(obj, QuerySet) and record.expr is None:
-            raise PermissionConditionNotQueryable(
+            raise _permission_condition_not_queryable()(
                 'ContentQuerySet.permitted does not support permission '
                 'condition on %s. Register an Expr from condition_refs() '
                 'to compile a V1 declarative expression. Callables remain '
@@ -218,8 +253,9 @@ class TrustModelBackendMixin(object):
         ``AttributeError`` as before.
 
         A bound ``ConditionLookup`` is preferred when present. Unbound
-        preserves the historical ``Content`` condition registry. Core
-        does not import Zero models for this overlay.
+        preserves the historical ``Content`` condition registry when Zero
+        is installed (discovered from Trust's MRO; the shim is not
+        imported). Core does not import Zero models for this overlay.
         """
         if not permission_has_condition(permext):
             return None, None
@@ -237,6 +273,12 @@ class TrustModelBackendMixin(object):
             if isinstance(obj, QuerySet):
                 extra_q = lookup.compile_q(obj.model, permext, user_obj)
             return record, extra_q
+        Content = _historical_content_class()
+        if Content is None:
+            raise AttributeError(
+                'Permission condition code "%s" is not associate with model "%s_%s"'
+                % (cond, applabel, modelname)
+            )
         record = Content.get_permission_condition_record(model, cond)
         if record is None:
             raise AttributeError(
@@ -245,6 +287,11 @@ class TrustModelBackendMixin(object):
             )
         extra_q = None
         if isinstance(obj, QuerySet):
+            import sys
+            compile_registered_condition_q = getattr(
+                sys.modules[Content.__module__],
+                'compile_registered_condition_q',
+            )
             extra_q = compile_registered_condition_q(
                 obj.model, permext, user_obj,
             )

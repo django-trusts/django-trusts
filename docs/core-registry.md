@@ -293,7 +293,10 @@ callers stay on `trust_grant_q` until a later codec wrapper.
 `TrustsRegistry.set_condition_lookup`. Missing methods raise
 `TrustsConfigurationError` and do not bind. Unbound is the C1 default.
 `trusts.apps.kernel_config()` returns the kernel `AppConfig` by class
-identity (today the same object as `apps.get_app_config('trusts')`).
+identity. The kernel label is `trusts_core`. After Zero is installed,
+`apps.get_app_config('trusts')` is ZeroConfig (models, not the registry
+store). Callers of the kernel store must use `kernel_config()`, not the
+string label `trusts`.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

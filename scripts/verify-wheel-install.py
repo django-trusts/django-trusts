@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Import-smoke the installed django-trusts wheel from outside the checkout.
 
-This must not be run with the repository root as cwd or on sys.path. A
-passing result means trusts, Trust, and TrustModelBackend were loaded from
-the installed distribution, not the source tree.
+C2 kernel wheel: no Zero, no concrete Trust, label ``trusts_core``.
+This must not be run with the repository root as cwd or on sys.path.
 """
 
 from __future__ import annotations
@@ -39,7 +38,6 @@ def main() -> int:
             resolved = Path(entry).resolve()
         except OSError:
             continue
-        # Only the checkout root can shadow the installed `trusts` package.
         if resolved == checkout:
             leaked.append(entry)
     if leaked:
@@ -63,9 +61,9 @@ def main() -> int:
     import django
     django.setup()
 
+    import sys as _sys
     import trusts
     from trusts.apps import AppConfig, kernel_config
-    from trusts.models import Trust
     from trusts.backends import TrustModelBackend
     from trusts.core import (
         ConditionLookup,
@@ -92,27 +90,44 @@ def main() -> int:
     config = kernel_config()
     if type(config) is not AppConfig:
         raise SystemExit('kernel_config() is not trusts.apps.AppConfig: %r' % (config,))
-    if config is not django_apps.get_app_config('trusts'):
-        raise SystemExit('kernel_config() is not get_app_config("trusts")')
-    if config.label != 'trusts' or config.name != 'trusts':
-        raise SystemExit('C1 kernel name/label must remain trusts: %r/%r' % (
+    if config.label != 'trusts_core' or config.name != 'trusts':
+        raise SystemExit('C2 kernel name/label must be trusts/trusts_core: %r/%r' % (
             config.name, config.label,
         ))
-    if django_apps.get_model('trusts', 'Trust') is not Trust:
-        raise SystemExit('apps.get_model("trusts", "Trust") is not trusts.models.Trust')
+    if list(config.get_models()):
+        raise SystemExit('C2 kernel must expose no concrete models: %r' % (
+            list(config.get_models()),
+        ))
+    try:
+        django_apps.get_app_config('trusts')
+    except LookupError:
+        pass
+    else:
+        raise SystemExit('C2 kernel-only populate must not own label trusts')
+    if 'trusts.zero' in _sys.modules:
+        raise SystemExit('wheel populate imported trusts.zero')
+
+    import trusts.models as models_mod
+    try:
+        from trusts.models import Trust
+    except ImportError as exc:
+        if 'django-trusts-zero' not in str(exc):
+            raise SystemExit('shim ImportError missing documented text: %s' % exc)
+    else:
+        raise SystemExit('legacy Trust import succeeded without Zero: %r' % Trust)
 
     print('wheel import ok')
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
-    print('Trust', Trust)
     print('TrustModelBackend', TrustModelBackend)
-    print('kernel_config', config)
+    print('kernel_config', config, config.label)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
     print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
+    print('models_shim', models_mod)
     return 0
 
 

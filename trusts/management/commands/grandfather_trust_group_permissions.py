@@ -10,7 +10,16 @@ Default mode is ``--dry-run`` (report tuples, write nothing). Pass
 
 from django.core.management.base import BaseCommand, CommandError
 
-from trusts.models import TrustGroup, TrustGroupPermission, get_group_global_ceiling
+
+def _zero_trustgroup():
+    from django.apps import apps as django_apps
+    import sys
+    TrustGroup = django_apps.get_model('trusts', 'TrustGroup')
+    TrustGroupPermission = django_apps.get_model('trusts', 'TrustGroupPermission')
+    helper = getattr(
+        sys.modules[TrustGroup.__module__], 'get_group_global_ceiling',
+    )
+    return TrustGroup, TrustGroupPermission, helper
 
 
 def _perm_code(permission):
@@ -24,6 +33,7 @@ def _perm_code(permission):
 
 def iter_grandfather_tuples():
     """Yield (trust, group, permission) for missing local ceiling copies."""
+    TrustGroup, TrustGroupPermission, get_group_global_ceiling = _zero_trustgroup()
     for trustgroup in TrustGroup.objects.select_related('trust', 'group').order_by('pk'):
         ceiling = get_group_global_ceiling(trustgroup.group)
         existing = set(
@@ -76,6 +86,7 @@ class Command(BaseCommand):
             raise CommandError('Pass only one of --dry-run or --apply.')
 
         tuples = list(iter_grandfather_tuples())
+        TrustGroup, TrustGroupPermission, _ceiling = _zero_trustgroup()
         mode_label = 'dry-run' if (dry_run and not apply) else 'apply'
         self.stdout.write(
             'grandfather_trust_group_permissions mode=%s tuples=%s' % (

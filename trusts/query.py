@@ -13,8 +13,14 @@ ceiling (``Group.permissions`` or role-derived). Incomplete rows deny.
 from functools import reduce
 from operator import or_
 
+from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Exists, Manager, Model, OuterRef, Q, QuerySet
+
+
+def _trust_group_model():
+    """Historical TrustGroup, owned by Zero under ``label='trusts'``."""
+    return django_apps.get_model('trusts', 'TrustGroup')
 
 
 def is_active_principal(user):
@@ -48,7 +54,7 @@ def group_local_grant_exists(user, permission, trust_id_outerref):
     ``trust_id_outerref`` is the outer row's Trust PK column (``pk`` on
     Trust, ``trust_id`` on Content).
     """
-    from trusts.models import TrustGroup
+    TrustGroup = _trust_group_model()
 
     return Exists(
         TrustGroup.objects.filter(
@@ -82,7 +88,7 @@ def _record_group_grant_exists(record, user, permission):
     The EXISTS stays one nest deep so permission ``OuterRef`` depth
     matches Category/Ticket. No static content map.
     """
-    from trusts.models import TrustGroup
+    TrustGroup = _trust_group_model()
 
     try:
         record.content_model._meta.get_field('trust')
@@ -137,7 +143,7 @@ def permission_granted_via_group_exists(user, trusts):
     ``trusts`` is a Trust instance, queryset, or id list. Empty ``trust__in``
     matches nothing.
     """
-    from trusts.models import TrustGroup
+    TrustGroup = _trust_group_model()
 
     return Exists(
         TrustGroup.objects.filter(

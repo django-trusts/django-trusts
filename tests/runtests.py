@@ -11,11 +11,23 @@ from django.test.utils import get_runner
 from django.conf import settings
 
 
+# Kernel-only suite: no Zero, no concrete Trust models. Historical
+# Content/Trust tests stay in the tree for a paired Zero install.
+KERNEL_SUITE = [
+    'trusts.test_issue57',
+    'trusts.test_issue60',
+    'trusts.test_issue65',
+    'trusts.test_issue83',
+    'trusts.test_issue92',
+    'trusts.test_issue96',
+]
+
+
 def runtests():
     django.setup()
     TestRunner = get_runner(settings)
     test_runner = TestRunner(verbosity=1, interactive=False)
-    failures = test_runner.run_tests(['trusts'])
+    failures = test_runner.run_tests(KERNEL_SUITE)
     sys.exit(bool(failures))
 
 

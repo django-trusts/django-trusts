@@ -19,6 +19,7 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.apps import forget_models, isolate_live_registry
+from trusts.apps import kernel_config
 from trusts.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.core import (
     Along,
@@ -1062,7 +1063,7 @@ class AlongRuntimeGateTest(TransactionTestCase):
 class _LiveRegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = apps.get_app_config('trusts')
+        self.live = kernel_config()
         self.saved = dict(self.live.registries)
 
     def tearDown(self):

@@ -46,14 +46,23 @@ class TestsConfig(AppConfig):
         if getattr(self, 'apps', None) is None or not self.apps.is_installed('trusts'):
             return
 
-        from tests.models import Category, TestGroupJunction, Ticket
-        from trusts.core import Ref
-        from trusts.models import TrustUserPermission
+        from trusts.apps import kernel_config
+        try:
+            config = kernel_config(self.apps)
+        except LookupError:
+            return
+
+        try:
+            from tests.models import Category, TestGroupJunction, Ticket
+            from trusts.core import Ref
+            from trusts.models import TrustUserPermission
+        except ImportError:
+            return
 
         # Exact handle. With one Trusts path this is the unique registry
         # (``config.registry is handle.registry``). With several, omission
         # fails before writing.
-        backend = self.apps.get_app_config('trusts').configured_backend()
+        backend = config.configured_backend()
         registry = backend.registry
 
         # Instance-local sentinels: one per contribution, identity

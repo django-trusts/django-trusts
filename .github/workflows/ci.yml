@@ -8,54 +8,99 @@ on:
 permissions:
   contents: read
 
+env:
+  # Approved unmerged Zero Z1. Do not merge C2 or Z1 alone.
+  COMPANION_ZERO_SHA: 41d07f40e676f75389b91219106440932d402b53
+
 jobs:
   tests:
-    name: tests (Python ${{ matrix.python-version }})
+    name: tests kernel-only (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install package and Django 6.1
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "Django>=6.1,<6.2" coverage
-          python -m pip install -e .
-      - name: Authorization tests
-        run: |
-          coverage run -m tests.runtests
-          coverage report
-      - name: Fresh migrate
-        run: python -m django migrate --noinput --settings=tests.settings
-      - name: System checks
-        run: python -m django check --settings=tests.settings
-      - name: Legacy database upgrade
-        run: python scripts/verify-legacy-upgrade.py
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install package and Django 6.1
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "Django>=6.1,<6.2" coverage
+        python -m pip install -e .
+    - name: Kernel-only authorization tests
+      run: |
+        coverage run -m tests.runtests
+        coverage report
+    - name: Fresh migrate (no Trusts schema)
+      run: python -m django migrate --noinput --settings=tests.settings
+    - name: System checks
+      run: python -m django check --settings=tests.settings
+
+  pair-z1:
+    name: pair with approved Z1
+    runs-on: ubuntu-latest
+    env:
+      ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero
+      KERNEL_CHECKOUT: ${{ github.workspace }}
+      TRUSTS_ZERO_SKIP_C2_SHAPE: "1"
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        repository: django-trusts/django-trusts-zero
+        ref: ${{ env.COMPANION_ZERO_SHA }}
+        path: .deps/django-trusts-zero
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install C2 kernel then Z1
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "Django>=6.1,<6.2" coverage
+        python -m pip install -e . --config-settings editable_mode=compat
+        python -m pip install -e .deps/django-trusts-zero --config-settings editable_mode=compat
+    - name: Matrix B pair proofs
+      run: python scripts/verify-pair-zero.py
+    - name: Zero C2-valid tests + fresh install
+      run: |
+        python scripts/run-z1-pair-tests.py
+        cd .deps/django-trusts-zero
+        python scripts/verify-fresh-install.py
 
   package:
     name: package
     runs-on: ubuntu-latest
+    env:
+      ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Build sdist and wheel
-        run: |
-          python -m pip install --upgrade pip build twine
-          python -m build
-          twine check dist/*
-      - name: Install wheel and import from outside the checkout
-        env:
-          PYTHONPATH: ""
-        run: |
-          python -m pip install "Django>=6.1,<6.2"
-          python -m pip install dist/django_trusts-*.whl
-          WORK="$(mktemp -d)"
-          cd "$WORK"
-          python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
+    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        repository: django-trusts/django-trusts-zero
+        ref: ${{ env.COMPANION_ZERO_SHA }}
+        path: .deps/django-trusts-zero
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Build sdist and wheel
+      run: |
+        python -m pip install --upgrade pip build twine
+        python -m pip install "Django>=6.1,<6.2"
+        python -m build
+        twine check dist/*
+    - name: Install kernel wheel and import from outside the checkout
+      env:
+        PYTHONPATH: ""
+      run: |
+        python -m pip install dist/django_trusts-*.whl
+        WORK="$(mktemp -d)"
+        cd "$WORK"
+        python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
+    - name: Companion C2 + Z1 wheels
+      run: |
+        python -m pip install build
+        python -m build --wheel --outdir .deps/django-trusts-zero/dist .deps/django-trusts-zero
+        python scripts/verify-companion-wheels.py

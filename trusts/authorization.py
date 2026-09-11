@@ -20,7 +20,11 @@ from django.core.exceptions import PermissionDenied, ValidationError
 
 from trusts import get_entity_model, get_group_model
 from trusts.query import is_active_principal, trust_grant_q
-from trusts.models import Trust
+
+
+def _trust_model():
+    from django.apps import apps as django_apps
+    return django_apps.get_model('trusts', 'Trust')
 
 
 class AuthorizationDenied(PermissionDenied):
@@ -56,8 +60,8 @@ def has_trust_row_perm(user, trust, perm):
     """
     if not is_active_principal(user) or trust is None:
         return False
-    permission = Trust.objects.get_permission(perm) if isinstance(perm, str) else perm
-    return Trust.objects.filter(pk=trust.pk).filter(
+    permission = _trust_model().objects.get_permission(perm) if isinstance(perm, str) else perm
+    return _trust_model().objects.filter(pk=trust.pk).filter(
         trust_grant_q(user, permission)
     ).exists()
 
@@ -77,7 +81,7 @@ def can_administer_trust(user, trust, via_content=None):
 
 
 def trusts_using_group(group):
-    return Trust.objects.filter(groups=group).distinct()
+    return _trust_model().objects.filter(groups=group).distinct()
 
 
 def can_manage_group_membership(user, group, via_content=None):

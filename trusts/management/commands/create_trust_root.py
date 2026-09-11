@@ -26,5 +26,6 @@ class Command(BaseCommand):
         settlor = getattr(settings, 'TRUSTS_ROOT_SETTLOR', None)
         title = getattr(settings, 'TRUSTS_ROOT_TITLE', 'In Trust We Trust')
 
-        from trusts.models import Trust
+        from django.apps import apps as django_apps
+        Trust = django_apps.get_model('trusts', 'Trust')
         create_root_trust(Trust, pk, settlor, title)

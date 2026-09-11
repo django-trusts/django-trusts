@@ -55,6 +55,34 @@ class PermissionConditionUnsupported(PermissionConditionError):
     """Raised for operations outside the V1 grammar (calls, indexing, arithmetic)."""
 
 
+class PermissionConditionNotQueryable(ValueError):
+    """Raised when a SQL list/create filter cannot compile a ``:condition``.
+
+    Kernel copy for backends/checks that must not import ``trusts.models``.
+    Zero also exposes this name on ``trusts.zero.models`` (and via the
+    ``trusts.models`` shim when Zero is installed).
+    """
+
+
+def permission_has_condition(perm):
+    """True when ``perm`` is a string with a ``:condition`` suffix."""
+    return isinstance(perm, str) and ':' in perm
+
+
+def legacy_permission_callbacks_allowed():
+    """True only when ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is set.
+
+    Read at call time so ``override_settings`` works. Missing or False
+    means registered callables are a system-check error and runtime
+    fail-closed (the callback is never invoked).
+    """
+    from django.conf import settings as django_settings
+
+    return bool(getattr(
+        django_settings, 'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', False
+    ))
+
+
 _BOOLEAN_ERROR_MESSAGE = (
     "Python 'and'/'or'/'not' cannot be used in permission conditions "
     "because they cannot be overloaded; chained comparisons such as "
