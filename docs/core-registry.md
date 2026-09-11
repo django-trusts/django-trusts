@@ -1,8 +1,8 @@
 # TrustsRegistry (internal development primitive)
 
 Additive registration and projection surface for issues #57, #60, #65,
-#83, and the first historical reader in #67. Import from `trusts.core`. This
-slice does **not** re-export a process-global registry from `trusts`.
+#83, #92, and the first historical reader in #67. Import from `trusts.core`.
+This slice does **not** re-export a process-global registry from `trusts`.
 
 `TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
 permission-bearing relation root; attribute access builds a root-relative
@@ -65,6 +65,70 @@ These shapes raise `TrustsConfigurationError` during `register`:
   exactly one `PathInfo` with exactly one target field)
 
 `condition` may be omitted or `None`; any other value is not supported yet.
+
+Optional `Along(ref, bound)` replaces equality at one walk-site with bounded
+grant-anchored reachability. Pass `along=` to `register()`. Validation uses
+`_meta` only (zero SQL) and runs after the frozen check. `bound` is an
+integer in `1..64` (`bool` is rejected). The walk-site is the longest common
+prefix of `along.ref.path` and the content path; remaining Along hops are
+the directed edge; remaining content hops are the suffix.
+
+Edge hops are one of:
+
+```text
+S := one forward single-valued self-hop on the walk-site   (Along(j.node.parent))
+C := one reverse O2M self-hop on the walk-site             (Along(j.node.children))
+E := reverse O2M onto an edge model, then one forward
+     single-valued hop back to the walk-site               (Along(j.node.parent_links.parent))
+```
+
+The same resolved identity field (`get_path_info()[0].target_fields[0]`,
+including non-PK `to_field`) must appear on the grant walk hop and both
+Along edge ends. V1 then admits only one JSON identity family per record:
+
+| Family | `get_internal_type()` |
+| --- | --- |
+| integer | `AutoField`, `BigAutoField`, `SmallAutoField`, `IntegerField`, `BigIntegerField`, `SmallIntegerField`, `PositiveIntegerField`, `PositiveSmallIntegerField`, `PositiveBigIntegerField` |
+| text | `CharField`, `TextField`, `SlugField` (and subclasses that report `CharField`, such as `EmailField`) |
+| uuid | `UUIDField` |
+
+`UUIDField` is a JSON-string carrier but a distinct family from
+`CharField` / `SlugField` / `TextField` (hyphenation collision). Mixed
+families, BLOB/date/decimal/float/boolean/JSON/IP identities, unsupported
+S/C/E edges, empty walk-site/edge, and suffixes that cannot be re-resolved
+from the walk-site via stored names all raise `TrustsConfigurationError`
+before mutation.
+
+V1 compiles `GrantReach` only for Django's `django.db.backends.sqlite3`
+backend with JSON functions and recursive CTEs. The walk is uncorrelated
+with candidate rows: one `IN (WITH RECURSIVE …)` per recursive record,
+generation-level `frontier`/`seen`, identity-level cycle suppression, and a
+final join of JSON values back to the typed walk-model identity column.
+Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
+NULL and dangling hops deny. Direct and recursive registrations `OR`.
+
+A non-empty content suffix compiles a walk-model-rooted `EXISTS` from the
+stored path names (`items__image`, `rows__content`, …). Every S5 suffix
+already accepted by ordinary `register()` is supported; there is no quieter
+Along subset and no reverse-name guessing. When the suffix is exactly one
+reverse O2M/O2O hop whose FK lives on the candidate and targets
+`walk_ident`, the compiler may rewrite to `candidate.<fk> IN W`.
+
+Conditions remain an AND overlay on a complete proof and never run on
+intermediate walk nodes. The same expression drives instance
+authorization, lazy `filter_authorized` before pagination, `all_match`,
+and `permissions` / `common_permissions` (including nested permission
+`OuterRef`). Unsupported vendors raise `TrustsConfigurationError` before
+walk SQL. Residual database errors stay loud and are not remapped to
+`TrustsCompilerError`. Runtime authorization does not repeat the JSON/CTE
+capability probe.
+
+`trusts.E005` (`Tags.database`) reports each selected alias whose live
+Along records cannot render. It honors Django's `databases` argument
+exactly and never falls back to `default`. Absent or empty `databases`
+opens no connections, executes no SQL, and is not an all-clear. Isolated
+`TrustsRegistry()` instances are not scanned. Silencing `trusts.E005`
+hides only the diagnostic.
 
 Each hop's terminal model, complete root-relative lookup
 (`'__'.join(path)`, for example `folder__rows__content`), and outer comparison
@@ -151,6 +215,7 @@ Trusts backends are listed). Trusts does not import or discover
 handle. Coverage on one handle is enough. Manual dependents that are
 neither Content nor Junction are outside E003 and fail closed at
 runtime. The check issues zero SQL and does not register.
+`trusts.E005` is the Along renderer database check described above.
 
 `ContentQuerySet.permitted` is a thin aggregate caller. It ORs each
 applicable handle compiler's complete predicate (`trusts.core.granted`)

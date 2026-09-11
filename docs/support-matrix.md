@@ -31,6 +31,20 @@ with Django 6.1. The `package` job (sdist/wheel build, `twine check`, and
 an out-of-checkout wheel import) runs on **Python 3.12** as a representative
 install of the declared range.
 
+## Database (Along reachability, issue #92)
+
+V1 `Along` / `GrantReach` is claimed only for Django's
+`django.db.backends.sqlite3` engine together with the JSON functions
+`json_array`, `json_group_array`, `json_array_length`, and `json_each`,
+plus `WITH RECURSIVE`. That combination is what CI executes.
+
+This is not a claim for PostgreSQL, MySQL, MariaDB, Oracle, or any other
+vendor. Those engines need a separate renderer and CI proof. Runtime
+compilation on a non-sqlite3 connection raises `TrustsConfigurationError`
+before walk SQL. `trusts.E005` is a database-tagged check over exactly
+the aliases Django passes in `databases`; it is not an all-clear when
+that argument is absent or empty.
+
 ## What is intentionally not declared
 
 - **Django 5.2 LTS** is still in extended support. It was not added to this

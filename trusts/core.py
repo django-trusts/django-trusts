@@ -8,6 +8,10 @@ one correlated relation plan. Three projections change only the
 terminal: permission enumeration, object authorization (SQL ``EXISTS``
 membership over that enumeration), and authorized-content filtering.
 
+Optional ``Along`` replaces equality at one walk-site with bounded
+grant-anchored reachability. V1 compiles that walk only for Django's
+SQLite backend.
+
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
 compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
@@ -20,8 +24,9 @@ from operator import or_
 
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Count, Exists, Model, OuterRef, Q
+from django.db.models import BooleanField, Count, Exists, F, Model, OuterRef, Q
 from django.db.models.base import ModelBase
+from django.db.models.expressions import Expression
 from django.db.models.query import QuerySet
 
 
@@ -584,6 +589,649 @@ class Ref(object):
         return 'Ref(%s).%s' % (self._root.__name__, '.'.join(self._path))
 
 
+class Along(object):
+    """Bounded directed walk that replaces equality at one walk-site.
+
+    ``ref`` names the directed edge from the walk-site. ``bound`` is the
+    maximum hop distance (1..64). Depth 0 is always included.
+    """
+
+    __slots__ = ('ref', 'bound')
+
+    def __init__(self, ref, bound):
+        object.__setattr__(self, 'ref', ref)
+        object.__setattr__(self, 'bound', bound)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('Along is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('Along is immutable.')
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Along)
+            and self.ref == other.ref
+            and self.bound == other.bound
+        )
+
+    def __hash__(self):
+        return hash((self.ref, self.bound))
+
+    def __repr__(self):
+        return 'Along(%r, bound=%r)' % (self.ref, self.bound)
+
+
+@dataclass(frozen=True, slots=True)
+class AlongWalk:
+    """Immutable walk metadata resolved from ``Along`` at ``register()``."""
+
+    bound: int
+    shape: str
+    walk_path: tuple
+    walk_model: type
+    walk_ident: str
+    walk_field: str
+    suffix_path: tuple
+    suffix_field: str
+    ident_family: str
+    parent_attname: str | None
+    edge_model: type | None
+    edge_parent_attname: str | None
+    edge_child_attname: str | None
+    rewrite_attname: str | None
+
+
+_ALONG_BOUND_MIN = 1
+_ALONG_BOUND_MAX = 64
+_DJANGO_SQLITE3 = 'django.db.backends.sqlite3'
+
+_INTEGER_IDENTITY_TYPES = frozenset((
+    'AutoField',
+    'BigAutoField',
+    'SmallAutoField',
+    'IntegerField',
+    'BigIntegerField',
+    'SmallIntegerField',
+    'PositiveIntegerField',
+    'PositiveSmallIntegerField',
+    'PositiveBigIntegerField',
+))
+_TEXT_IDENTITY_TYPES = frozenset((
+    'CharField',
+    'TextField',
+    'SlugField',
+))
+_UUID_IDENTITY_TYPES = frozenset(('UUIDField',))
+
+
+def _common_prefix(left, right):
+    n = 0
+    for a, b in zip(left, right):
+        if a != b:
+            break
+        n += 1
+    return left[:n]
+
+
+def _target_field(field, role, path):
+    """Return ``(related_model, target_field)`` for one hop."""
+    related, attname = _resolved_hop(field, role, path)
+    target = related._meta.get_field(attname)
+    if getattr(target, 'attname', None) != attname:
+        for candidate in related._meta.concrete_fields:
+            if candidate.attname == attname:
+                target = candidate
+                break
+    return related, target
+
+
+def _ident_family(field):
+    kind = field.get_internal_type()
+    if kind in _INTEGER_IDENTITY_TYPES:
+        return 'integer'
+    if kind in _TEXT_IDENTITY_TYPES:
+        return 'text'
+    if kind in _UUID_IDENTITY_TYPES:
+        return 'uuid'
+    raise TrustsConfigurationError(
+        'Along identity field %s (%s) is not a V1 integer, text, or UUID '
+        'JSON identity.' % (field.attname, kind)
+    )
+
+
+def _concrete_fk(field):
+    fk = getattr(field, 'field', None)
+    if (
+        fk is not None
+        and getattr(fk, 'is_relation', False)
+        and getattr(fk, 'concrete', False)
+    ):
+        return fk
+    return field
+
+
+def _resolve_along_edge(walk_model, edge_path):
+    """Return S/C/E metadata for hops from ``walk_model`` along ``edge_path``."""
+    n = len(edge_path)
+    if n == 1:
+        try:
+            field = walk_model._meta.get_field(edge_path[0])
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along path %r refers to missing field %r on %s.'
+                % (_path_text(edge_path), edge_path[0], walk_model._meta.label)
+            )
+        kind = _classify_field(field)
+        related, target = _target_field(field, 'along', edge_path)
+        if related is not walk_model:
+            raise TrustsConfigurationError(
+                'along edge %r must terminate on walk-site model %s, not %s.'
+                % (
+                    _path_text(edge_path),
+                    walk_model._meta.label,
+                    related._meta.label,
+                )
+            )
+        if kind == 'single':
+            return 'S', field.attname, None, None, None, target
+        if kind == 'reverse_o2m':
+            # Reverse PathInfo.target_fields is the related model's PK, not
+            # the concrete self-FK's remote to_field. Identity comes from
+            # the forward FK metadata; the reverse hop still proves the
+            # edge is a self-relation on the walk-site.
+            fk = _concrete_fk(field)
+            dest, edge_target = _target_field(fk, 'along', edge_path)
+            if dest is not walk_model:
+                raise TrustsConfigurationError(
+                    'along edge %r must terminate on walk-site model %s, not %s.'
+                    % (
+                        _path_text(edge_path),
+                        walk_model._meta.label,
+                        dest._meta.label,
+                    )
+                )
+            return 'C', fk.attname, None, None, None, edge_target
+        raise TrustsConfigurationError(
+            'along edge %r is not a supported S/C/E hop.'
+            % (_path_text(edge_path),)
+        )
+    if n == 2:
+        try:
+            reverse = walk_model._meta.get_field(edge_path[0])
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along path %r refers to missing field %r on %s.'
+                % (_path_text(edge_path), edge_path[0], walk_model._meta.label)
+            )
+        if _classify_field(reverse) != 'reverse_o2m':
+            raise TrustsConfigurationError(
+                'along edge %r is not a supported S/C/E hop.'
+                % (_path_text(edge_path),)
+            )
+        edge_model, _edge_pk = _target_field(
+            reverse, 'along', edge_path[:1],
+        )
+        try:
+            forward = edge_model._meta.get_field(edge_path[1])
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along path %r refers to missing field %r on %s.'
+                % (
+                    _path_text(edge_path), edge_path[1],
+                    edge_model._meta.label,
+                )
+            )
+        if _classify_field(forward) != 'single':
+            raise TrustsConfigurationError(
+                'along edge %r is not a supported S/C/E hop.'
+                % (_path_text(edge_path),)
+            )
+        dest, parent_target = _target_field(forward, 'along', edge_path)
+        if dest is not walk_model:
+            raise TrustsConfigurationError(
+                'along edge %r must terminate on walk-site model %s, not %s.'
+                % (
+                    _path_text(edge_path),
+                    walk_model._meta.label,
+                    dest._meta.label,
+                )
+            )
+        child_fk = _concrete_fk(reverse)
+        _child_related, child_target = _target_field(
+            child_fk, 'along', edge_path[:1],
+        )
+        if child_target.attname != parent_target.attname:
+            raise TrustsConfigurationError(
+                'along edge %r mixes identity fields %r and %r.'
+                % (
+                    _path_text(edge_path),
+                    child_target.attname,
+                    parent_target.attname,
+                )
+            )
+        return (
+            'E',
+            None,
+            edge_model,
+            forward.attname,
+            child_fk.attname,
+            parent_target,
+        )
+    raise TrustsConfigurationError(
+        'along edge %r is not a supported S/C/E hop.'
+        % (_path_text(edge_path),)
+    )
+
+
+def _re_resolve_suffix(walk_model, suffix_path, content_model):
+    """Confirm stored suffix names compile from the walk-site model."""
+    if not suffix_path:
+        if walk_model is not content_model:
+            raise TrustsConfigurationError(
+                'along suffix path is empty but the content terminal %s '
+                'is not the walk-site %s.'
+                % (content_model._meta.label, walk_model._meta.label)
+            )
+        return
+    current = walk_model
+    for index, name in enumerate(suffix_path):
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                'along suffix path %r cannot be resolved from %s; '
+                'missing field %r.'
+                % (_path_text(suffix_path), walk_model._meta.label, name)
+            )
+        kind = _classify_field(field)
+        if kind not in _SUFFIX_KINDS:
+            raise TrustsConfigurationError(
+                'along suffix path %r uses unsupported field %r on %s.'
+                % (_path_text(suffix_path), name, current._meta.label)
+            )
+        related, _attname = _resolved_hop(field, 'along suffix', suffix_path)
+        current = related
+    if current is not content_model:
+        raise TrustsConfigurationError(
+            'along suffix path %r from %s terminates on %s, not %s.'
+            % (
+                _path_text(suffix_path),
+                walk_model._meta.label,
+                current._meta.label,
+                content_model._meta.label,
+            )
+        )
+
+
+def _suffix_rewrite_attname(walk_model, suffix_path, content_model, walk_ident):
+    if len(suffix_path) != 1:
+        return None
+    try:
+        field = walk_model._meta.get_field(suffix_path[0])
+    except FieldDoesNotExist:
+        return None
+    if _classify_field(field) not in ('reverse_o2m', 'reverse_o2o'):
+        return None
+    fk = _concrete_fk(field)
+    if fk.model._meta.concrete_model is not content_model:
+        return None
+    _related, target = _target_field(fk, 'along suffix', suffix_path)
+    if target.attname != walk_ident:
+        return None
+    return fk.name
+
+
+def _build_along_walk(root, content_path, content_model, along):
+    along_ref = _require_ref(along.ref, 'along')
+    if along_ref._root is not root:
+        raise TrustsConfigurationError(
+            'along ref must share the registration root %s; got %s.'
+            % (root._meta.label, along_ref._root._meta.label)
+        )
+    bound = along.bound
+    if isinstance(bound, bool) or not isinstance(bound, int):
+        raise TrustsConfigurationError(
+            'Along bound must be an integer in %s..%s.'
+            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
+        )
+    if bound < _ALONG_BOUND_MIN or bound > _ALONG_BOUND_MAX:
+        raise TrustsConfigurationError(
+            'Along bound must be an integer in %s..%s.'
+            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
+        )
+    walk_path = _common_prefix(tuple(along_ref._path), tuple(content_path))
+    edge_path = tuple(along_ref._path[len(walk_path):])
+    suffix_path = tuple(content_path[len(walk_path):])
+    if not walk_path:
+        raise TrustsConfigurationError(
+            'along ref %r and content path %r do not share a walk-site prefix.'
+            % (_path_text(along_ref._path), _path_text(content_path))
+        )
+    if not edge_path:
+        raise TrustsConfigurationError(
+            'along ref %r has no edge hop beyond the walk-site.'
+            % (_path_text(along_ref._path),)
+        )
+    _walk_path, walk_model, walk_field, walk_ident = _resolve_path(
+        root, walk_path, 'along', trailing_reverse=True,
+    )
+    last_walk_name = walk_path[-1]
+    current = root
+    for name in walk_path[:-1]:
+        field = current._meta.get_field(name)
+        current, _att = _resolved_hop(field, 'along', walk_path)
+    grant_hop = current._meta.get_field(last_walk_name)
+    _grant_related, grant_target = _target_field(grant_hop, 'along', walk_path)
+    (
+        shape, parent_attname, edge_model, edge_parent_attname,
+        edge_child_attname, edge_target,
+    ) = _resolve_along_edge(walk_model, edge_path)
+    ident_fields = (grant_target, edge_target)
+    attnames = {field.attname for field in ident_fields}
+    if attnames != {walk_ident}:
+        raise TrustsConfigurationError(
+            'along identity fields must match across the grant walk hop '
+            'and both edge ends; got %s.'
+            % ', '.join(sorted(field.attname for field in ident_fields))
+        )
+    families = {_ident_family(field) for field in ident_fields}
+    if len(families) != 1:
+        raise TrustsConfigurationError(
+            'along identity fields mix JSON families %s.'
+            % ', '.join(sorted(families))
+        )
+    ident_family = families.pop()
+    _re_resolve_suffix(walk_model, suffix_path, content_model)
+    rewrite_attname = _suffix_rewrite_attname(
+        walk_model, suffix_path, content_model, walk_ident,
+    )
+    return AlongWalk(
+        bound=bound,
+        shape=shape,
+        walk_path=tuple(walk_path),
+        walk_model=walk_model,
+        walk_ident=walk_ident,
+        walk_field=walk_field,
+        suffix_path=suffix_path,
+        suffix_field=_lookup_text(suffix_path) if suffix_path else '',
+        ident_family=ident_family,
+        parent_attname=parent_attname,
+        edge_model=edge_model,
+        edge_parent_attname=edge_parent_attname,
+        edge_child_attname=edge_child_attname,
+        rewrite_attname=rewrite_attname,
+    )
+
+
+def along_connection_supported(connection):
+    """True when ``connection`` is Django's sqlite3 backend (no SQL)."""
+    engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
+    return engine == _DJANGO_SQLITE3
+
+
+def probe_along_capabilities(connection):
+    """Execute JSON1 + recursive-CTE capability SQL. Raises on failure."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT json_array(1, 'x'), json_group_array(x), "
+            "json_array_length(json_array(1)) FROM (SELECT 1 AS x)"
+        )
+        cursor.fetchone()
+        cursor.execute("SELECT value FROM json_each('[1]')")
+        cursor.fetchone()
+        cursor.execute(
+            'WITH RECURSIVE t(n) AS ('
+            'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
+            ') SELECT n FROM t'
+        )
+        cursor.fetchone()
+
+
+def _require_sqlite_along_renderer(connection):
+    if along_connection_supported(connection):
+        return
+    engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
+    raise TrustsConfigurationError(
+        'Along reachability requires Django sqlite3 with JSON functions '
+        'and recursive CTEs; got ENGINE=%r vendor=%r alias=%r.'
+        % (
+            engine,
+            getattr(connection, 'vendor', None),
+            getattr(connection, 'alias', None),
+        )
+    )
+
+
+def _neighbor_sql(walk, qn, g, frontier, ident_sql):
+    f = 'f'
+    if walk.shape == 'S':
+        child = qn('child')
+        parent_col = qn(walk.parent_attname)
+        walk_table = qn(walk.walk_model._meta.db_table)
+        frm = (
+            'FROM json_each(%(g)s.%(frontier)s) AS %(f)s '
+            'JOIN %(walk_table)s AS %(child)s '
+            'ON %(child)s.%(parent_col)s = %(f)s.value'
+            % {
+                'g': g, 'frontier': frontier, 'f': f,
+                'walk_table': walk_table, 'child': child,
+                'parent_col': parent_col,
+            }
+        )
+        project = '%s.%s' % (child, ident_sql)
+        return frm, project
+    if walk.shape == 'C':
+        cur = qn('cur')
+        parent = qn('parent')
+        parent_col = qn(walk.parent_attname)
+        walk_table = qn(walk.walk_model._meta.db_table)
+        frm = (
+            'FROM json_each(%(g)s.%(frontier)s) AS %(f)s '
+            'JOIN %(walk_table)s AS %(cur)s '
+            'ON %(cur)s.%(ident)s = %(f)s.value '
+            'JOIN %(walk_table)s AS %(parent)s '
+            'ON %(parent)s.%(ident)s = %(cur)s.%(parent_col)s'
+            % {
+                'g': g, 'frontier': frontier, 'f': f,
+                'walk_table': walk_table, 'cur': cur, 'ident': ident_sql,
+                'parent': parent, 'parent_col': parent_col,
+            }
+        )
+        project = '%s.%s' % (parent, ident_sql)
+        return frm, project
+    if walk.shape == 'E':
+        link = qn('link')
+        edge_table = qn(walk.edge_model._meta.db_table)
+        parent_col = qn(walk.edge_parent_attname)
+        child_col = qn(walk.edge_child_attname)
+        frm = (
+            'FROM json_each(%(g)s.%(frontier)s) AS %(f)s '
+            'JOIN %(edge_table)s AS %(link)s '
+            'ON %(link)s.%(parent_col)s = %(f)s.value'
+            % {
+                'g': g, 'frontier': frontier, 'f': f,
+                'edge_table': edge_table, 'link': link,
+                'parent_col': parent_col,
+            }
+        )
+        project = '%s.%s' % (link, child_col)
+        return frm, project
+    raise TrustsConfigurationError(
+        'Unsupported Along shape %r.' % (walk.shape,)
+    )
+
+
+def _render_reach_sql(walk, seed_sql, seed_params, connection):
+    """Return ``(sql, params)`` for the uncorrelated W membership list."""
+    qn = connection.ops.quote_name
+    gen = qn('gen')
+    g = qn('g')
+    depth = qn('depth')
+    frontier = qn('frontier')
+    seen = qn('seen')
+    ident = qn(walk.walk_ident)
+    ident_alias = qn('ident')
+    walk_table = qn(walk.walk_model._meta.db_table)
+    site = qn('s')
+    j = 'j'
+    seed = qn('seed')
+    arr = qn('arr')
+    frm, project = _neighbor_sql(walk, qn, g, frontier, ident)
+    recursive_frontier = (
+        '(SELECT COALESCE((SELECT json_group_array(DISTINCT %(project)s) '
+        '%(frm)s WHERE %(project)s IS NOT NULL AND %(project)s NOT IN '
+        '(SELECT value FROM json_each(%(g)s.%(seen)s))), \'[]\'))'
+        % {'project': project, 'frm': frm, 'g': g, 'seen': seen}
+    )
+    recursive_seen = (
+        '(SELECT COALESCE((SELECT json_group_array(x) FROM ('
+        'SELECT value AS x FROM json_each(%(g)s.%(seen)s) '
+        'UNION SELECT %(project)s %(frm)s WHERE %(project)s IS NOT NULL'
+        ')), \'[]\'))'
+        % {'g': g, 'seen': seen, 'project': project, 'frm': frm}
+    )
+    sql = (
+        'WITH RECURSIVE %(gen)s(%(depth)s, %(frontier)s, %(seen)s) AS ('
+        'SELECT 0, %(seed)s.%(arr)s, %(seed)s.%(arr)s FROM ('
+        'SELECT COALESCE((SELECT json_group_array(%(ident_alias)s) FROM (%(seed_sql)s) '
+        'AS seed_rows), \'[]\') AS %(arr)s'
+        ') AS %(seed)s '
+        'UNION ALL '
+        'SELECT %(g)s.%(depth)s + 1, %(next_frontier)s, %(next_seen)s '
+        'FROM %(gen)s AS %(g)s '
+        'WHERE %(g)s.%(depth)s < %%s '
+        'AND json_array_length(%(g)s.%(frontier)s) > 0'
+        ') '
+        'SELECT DISTINCT %(site)s.%(ident)s '
+        'FROM %(gen)s, json_each(%(gen)s.%(seen)s) AS %(j)s '
+        'JOIN %(walk_table)s AS %(site)s '
+        'ON %(site)s.%(ident)s = %(j)s.value'
+        % {
+            'gen': gen, 'depth': depth, 'frontier': frontier, 'seen': seen,
+            'seed': seed, 'arr': arr, 'ident_alias': ident_alias,
+            'seed_sql': seed_sql, 'g': g,
+            'next_frontier': recursive_frontier, 'next_seen': recursive_seen,
+            'site': site, 'ident': ident, 'j': j,
+            'walk_table': walk_table,
+        }
+    )
+    return sql, tuple(seed_params) + (walk.bound,)
+
+
+class _IdentInReach(Expression):
+    """Boolean predicate ``alias.ident IN (W)`` compiled on the inner query."""
+
+    def __init__(self, attname, w_sql, w_params):
+        super().__init__(output_field=BooleanField())
+        self.attname = attname
+        self.w_sql = w_sql
+        self.w_params = w_params
+
+    def as_sql(self, compiler, connection):
+        qn = connection.ops.quote_name
+        alias = compiler.query.get_initial_alias()
+        sql = '%s.%s IN (%s)' % (qn(alias), qn(self.attname), self.w_sql)
+        return sql, tuple(self.w_params)
+
+
+class GrantReach(Expression):
+    """Grant-anchored bounded reachability predicate for one recursive record.
+
+    The walk is uncorrelated with candidate rows. One ``IN (WITH RECURSIVE …)``
+    per recursive record. Unsupported vendors raise before walk SQL.
+    """
+
+    filterable = True
+    subquery = True
+
+    def __init__(self, record, user, permission, content=None):
+        super().__init__(output_field=BooleanField())
+        self.record = record
+        self.content = content
+        walk = record.along
+        seed = record.root._default_manager.filter(
+            **{
+                record.user_field: user,
+                record.permission_field: permission,
+                '%s__isnull' % walk.walk_field: False,
+            }
+        ).values(ident=F(walk.walk_field)).distinct()
+        self.seed_query = seed.query.clone()
+        self.seed_query.subquery = True
+        self.lhs = None
+        self.suffix_query = None
+        if content is None:
+            if walk.rewrite_attname:
+                self.lhs = F(walk.rewrite_attname)
+            elif not walk.suffix_path:
+                self.lhs = F(walk.walk_ident)
+            else:
+                self.suffix_query = walk.walk_model._default_manager.filter(
+                    **{walk.suffix_field: OuterRef(record.content_target)}
+                ).query.clone()
+                self.suffix_query.subquery = True
+
+    def copy(self):
+        clone = super().copy()
+        clone.seed_query = clone.seed_query.clone()
+        if clone.suffix_query is not None:
+            clone.suffix_query = clone.suffix_query.clone()
+        return clone
+
+    def get_source_expressions(self):
+        exprs = [self.seed_query]
+        if self.lhs is not None:
+            exprs.append(self.lhs)
+        if self.suffix_query is not None:
+            exprs.append(self.suffix_query)
+        return exprs
+
+    def set_source_expressions(self, exprs):
+        exprs = list(exprs)
+        self.seed_query = exprs.pop(0)
+        if self.lhs is not None:
+            self.lhs = exprs.pop(0)
+        if self.suffix_query is not None:
+            self.suffix_query = exprs.pop(0)
+
+    def as_sql(self, compiler, connection):
+        _require_sqlite_along_renderer(connection)
+        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
+        if seed_sql.startswith('(') and seed_sql.endswith(')'):
+            seed_sql = seed_sql[1:-1]
+        w_sql, w_params = _render_reach_sql(
+            self.record.along, seed_sql, seed_params, connection,
+        )
+        if self.content is not None:
+            return self._bound_content_sql(
+                compiler, connection, w_sql, w_params,
+            )
+        if self.lhs is not None:
+            lhs_sql, lhs_params = compiler.compile(self.lhs)
+            return '%s IN (%s)' % (lhs_sql, w_sql), tuple(lhs_params) + tuple(w_params)
+        inner = self.suffix_query.clone()
+        inner.add_q(Q(_IdentInReach(
+            self.record.along.walk_ident, w_sql, w_params,
+        )))
+        return Exists(inner).as_sql(compiler, connection)
+
+    def _bound_content_sql(self, compiler, connection, w_sql, w_params):
+        walk = self.record.along
+        content = self.content
+        if not walk.suffix_path:
+            inner = walk.walk_model._default_manager.filter(
+                pk=content.pk,
+            ).query.clone()
+        else:
+            inner = walk.walk_model._default_manager.filter(
+                **{walk.suffix_field: content},
+            ).query.clone()
+        inner.subquery = True
+        inner.add_q(Q(_IdentInReach(walk.walk_ident, w_sql, w_params)))
+        return Exists(inner).as_sql(compiler, connection)
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredRelation:
     """Immutable normalized record for one permission-bearing relation.
@@ -607,6 +1255,7 @@ class RegisteredRelation:
     permission_field: str
     permission_target: str
     condition: None = None
+    along: AlongWalk | None = None
 
 
 _BINDING_FIELDS = {
@@ -677,6 +1326,19 @@ class RelationPlan:
     def _correlated_exists(self, terminal_field_attr, **bindings):
         parts = []
         for record in self.records:
+            if record.along is not None:
+                user = bindings['user']
+                if terminal_field_attr == 'content_field':
+                    parts.append(GrantReach(
+                        record, user, bindings['permission'],
+                    ))
+                else:
+                    target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
+                    parts.append(GrantReach(
+                        record, user, OuterRef(target),
+                        content=bindings['content'],
+                    ))
+                continue
             terminal = getattr(record, terminal_field_attr)
             target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
             inner = self._bound_root_qs(record, **bindings).filter(
@@ -810,7 +1472,7 @@ class TrustsRegistry(object):
                 'No registration for %r.' % (getattr(root, '__name__', root),)
             )
 
-    def register(self, *, content, user, permission, condition=None):
+    def register(self, *, content, user, permission, condition=None, along=None):
         """Register one permission-bearing relation from root-relative refs.
 
         Exact duplicate normalized registration raises
@@ -818,6 +1480,10 @@ class TrustsRegistry(object):
         terminal with a different registration is a conflict and also
         raises. The same root may register different content terminals.
         Both error outcomes leave stored records unchanged.
+
+        Optional ``along`` is an ``Along`` that replaces equality at the
+        walk-site with bounded reachability. Along validation uses
+        ``_meta`` only (zero SQL) and runs after the frozen check.
 
         A frozen instance raises ``TrustsConfigurationError`` before
         validation or mutation. This method does not inspect Django's
@@ -830,6 +1496,10 @@ class TrustsRegistry(object):
         if condition is not None:
             raise TrustsConfigurationError(
                 'condition is not supported; omit it or pass None.'
+            )
+        if along is not None and not isinstance(along, Along):
+            raise TrustsConfigurationError(
+                'along must be an Along instance or None, not %r.' % (along,)
             )
 
         content_ref = _require_ref(content, 'content')
@@ -853,6 +1523,11 @@ class TrustsRegistry(object):
         permission_path, permission_model, permission_field, permission_target = (
             _resolve_path(root, permission_ref._path, 'permission')
         )
+        along_walk = None
+        if along is not None:
+            along_walk = _build_along_walk(
+                root, content_path, content_model, along,
+            )
 
         record = RegisteredRelation(
             root=root,
@@ -869,6 +1544,7 @@ class TrustsRegistry(object):
             permission_field=permission_field,
             permission_target=permission_target,
             condition=None,
+            along=along_walk,
         )
 
         existing_rows = self._by_root.get(root)
