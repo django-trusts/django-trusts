@@ -174,8 +174,11 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
         )
         plan = isolated.plan_for(Ticket)
         self.assertEqual(len(plan.records), 2)
-        self.assertEqual(len(_ticket_rows(isolated)), 2)
+        self.assertEqual(len(_ticket_rows(isolated)), 1)
         self.assertEqual(len(_category_rows(isolated)), 1)
+        self.assertTrue(
+            any(record.root is OtherTicketGrant for record in isolated.records)
+        )
 
     def test_conflicting_contribution_fails_closed_without_ticket_sentinel(self):
         isolated = TrustsRegistry()
