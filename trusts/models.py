@@ -302,11 +302,11 @@ class TrustManager(ContentManager):
           compile V1 conditions (unlike ``ContentQuerySet.permitted``).
         - Support gate is ``any_plan_records``: any configured path with
           ``plan_for(content).records`` establishes that the terminal is
-          known. Unregistered models, including Junction/Group until S6
-          and any leftover ``Content._contents`` membership, fail closed.
-          The grant stays ``trust_grant_q`` on Trust rows; it is not
-          ``filter_authorized(Trust)`` and does not use another path's
-          compiler or ``historical_fallback``.
+          known. Unregistered models and leftover ``Content._contents``
+          membership fail closed. Declared Group (S6) is a known
+          terminal; the grant stays ``trust_grant_q`` on Trust rows. It
+          is not ``filter_authorized(Trust)`` and does not use another
+          path's compiler or ``historical_fallback``.
         """
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')

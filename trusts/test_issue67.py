@@ -138,6 +138,7 @@ class ContributorIdempotenceTest(SimpleTestCase):
         self.live_trusts.registry = self.live_registry
         self.live_contributor._trusts_tup_category_registry_id = self.live_registry
         self.live_contributor._trusts_tup_ticket_registry_id = self.live_registry
+        self.live_contributor._trusts_tup_group_registry_id = self.live_registry
 
     def test_reenter_same_contributor_ready_is_noop(self):
         self.assertIs(
@@ -146,6 +147,10 @@ class ContributorIdempotenceTest(SimpleTestCase):
         )
         self.assertIs(
             self.live_contributor._trusts_tup_ticket_registry_id,
+            self.live_registry,
+        )
+        self.assertIs(
+            self.live_contributor._trusts_tup_group_registry_id,
             self.live_registry,
         )
         before = self.live_registry.records
@@ -175,7 +180,8 @@ class ContributorIdempotenceTest(SimpleTestCase):
         contributor.ready()
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_ticket_registry_id, isolated)
-        self.assertEqual(len(isolated.records), 3)
+        self.assertIs(contributor._trusts_tup_group_registry_id, isolated)
+        self.assertEqual(len(isolated.records), 4)
         roots = {record.root for record in isolated.records}
         self.assertEqual(roots, {OtherCategoryGrant, TrustUserPermission})
         plan = isolated.plan_for(Category)
@@ -218,7 +224,11 @@ class ContributorIdempotenceTest(SimpleTestCase):
                 contributor._trusts_tup_ticket_registry_id,
                 new_trusts.registry,
             )
-            self.assertEqual(len(new_trusts.registry.records), 2)
+            self.assertIs(
+                contributor._trusts_tup_group_registry_id,
+                new_trusts.registry,
+            )
+            self.assertEqual(len(new_trusts.registry.records), 3)
             terminals = {
                 record.content_model for record in new_trusts.registry.records
             }
@@ -227,6 +237,7 @@ class ContributorIdempotenceTest(SimpleTestCase):
                 {
                     Category._meta.concrete_model,
                     Ticket._meta.concrete_model,
+                    Group._meta.concrete_model,
                 },
             )
             for record in new_trusts.registry.records:
@@ -262,6 +273,7 @@ class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
         self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
+        self.assertIsNone(getattr(contributor, '_trusts_tup_group_registry_id', None))
         self.assertEqual(
             [
                 record for record in live.records
@@ -445,7 +457,7 @@ class CategoryPermittedRegistryTest(TestCase):
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
         self.assertTrue(registry.plan_for(Ticket).records)
-        self.assertFalse(registry.plan_for(Group).records)
+        self.assertTrue(registry.plan_for(Group).records)
 
         from tests.models import Organization
 

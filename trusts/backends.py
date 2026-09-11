@@ -11,7 +11,7 @@ from trusts.models import (
     permission_has_condition,
 )
 from trusts.query import (
-    group_local_grant_exists,
+    historical_group_grant_exists,
     is_active_principal,
     permission_granted_via_group_exists,
 )
@@ -33,9 +33,11 @@ class HistoricalGroupQueryCompiler(object):
     This compiler remains through S6/S7 until a separately designed
     group-as-trustee relation replaces it.
 
-    ``historical_fallback`` is route behavior: undeclared Junction/Group
+    ``historical_fallback`` is route behavior: still-undeclared terminals
     may use ``Content._contents`` / TUP / TrustGroup only through this
-    concrete compiler. Mixin-only compilers do not inherit it.
+    concrete compiler. Mixin-only compilers do not inherit it. Declared
+    Group uses the registered J1 plan plus this compiler's TrustGroup
+    OR; it does not reach ``_get_trusts`` / ``filter_by_content``.
     """
 
     historical_fallback = True
@@ -44,13 +46,13 @@ class HistoricalGroupQueryCompiler(object):
         if not plan.records:
             return None
         return Q(plan.content_exists(user, permission)) | Q(
-            group_local_grant_exists(user, permission, 'trust_id')
+            historical_group_grant_exists(plan, user, permission)
         )
 
     def group_exists(self, plan, candidates, user, permission):
         if not plan.records:
             return None
-        return Q(group_local_grant_exists(user, permission, 'trust_id'))
+        return Q(historical_group_grant_exists(plan, user, permission))
 
 
 def _permission_binding(perm, model):

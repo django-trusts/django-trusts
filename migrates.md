@@ -1497,6 +1497,121 @@ migration. Query construction remains lazy.
 - Condition-registry work; callback relocation; #54
 - Zero; GH; example #7; Windows #17
 
+---
+
+# Junction-backed Group terminal (issue #85 / S6)
+
+This record covers the S6 host contribution and backend routing change.
+Version remains **1.0.0.dev0**. It closes the #85 / #69 r2 S6 slice:
+explicit `TrustUserPermission → Trust ← Junction → Group` on the
+configured Trusts handle, and Group object authorization on that
+registered plan. It does **not** delete `Content._contents`, freeze
+the registry, or reinterpret Django group membership as a trustee
+route for Category / Ticket / Trust. There is **no schema or Django
+migration change**.
+
+Parent design: #69 r2 (accepted), with the #74 r4 correction that
+Group-as-protected-content does not replace historical group-as-trustee
+authorization. Predecessor #83 / PR #84 merged to `dev` as
+`0a1f7f50dd618b23ab153d475200152eb6682632`.
+
+## Decision
+
+The host/test application owns the Group/Junction contribution in its
+`AppConfig` lifecycle. Trusts does not import or discover host Junction
+or Group models. The Trust→Junction reverse accessor and the
+Junction→content field come from Django `_meta` and the concrete
+Junction contract (`get_content_model()`). The path is the J1 shape
+admitted by S5: forward `trust`, reverse O2M gateway, forward content.
+
+Contribution binds to one exact configured backend handle. Contributor-
+instance + exact-registry sentinels use identity comparison, are set
+only after `register()` succeeds, treat same-instance re-entry as a
+no-op, and contribute again for a new or swapped registry. Omitted,
+ambiguous, or unconfigured paths and malformed contributions fail
+loudly with no partial Group record.
+
+Group is the **protected content terminal through Junction**. Direct
+trustee (`content_exists`) and retained historical TrustGroup grants
+OR on the original candidate queryset under the existing Trust
+ceiling. The TrustGroup EXISTS for Group candidates is derived from
+the registered path / Junction `_meta`, not from `Content._contents`
+and not from a Group/Junction branch in `core.py`. Mixin-only
+backends do not inherit `HistoricalGroupQueryCompiler`.
+
+After this slice, Group `has_perm` / `has_perms` /
+`get_all_permissions` / `get_group_permissions` (instance and
+QuerySet) use the S3 registered relation plan and coordinator. Group
+no longer reaches `_get_trusts` / `filter_by_content`. Those methods
+and the static content registry remain until S7. Still-undeclared
+terminals keep the incremental historical fallback.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures
+- `ContentQuerySet.permitted` signature and documented Category /
+  Ticket / Trust results
+- `filter_by_user_content_perm` signature and create-under-Trust
+  grant (`trust_grant_q` on Trust rows)
+- `Content._contents` / `register_content` / `is_content*` /
+  `filter_by_content` / `_get_trusts` (still present)
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 40. Junction-backed Group uses the registered J1 plan (internal)
+
+| | |
+| --- | --- |
+| Previous | Group object authorization walked `_get_trusts` / `filter_by_content` / `Content._contents`. `filter_by_user_content_perm(user, Group, …)` failed closed because Group had no path-scoped records. |
+| New | The host AppConfig registers `TUP → Trust ← Junction → Group`. Group instance and QuerySet authorization use the registered plan plus the concrete compiler's TrustGroup OR. Mixin-only compilers receive only a contributed plan (trustee), never historical TrustGroup. `obj is None` stays false/empty. Conditions remain overlays. `filter_by_user_content_perm` treats Group as a known terminal; the grant is still `trust_grant_q` on Trust rows. |
+| Replacement | Same `user.has_perm('auth.change_group', group)` / QuerySet / enumeration call sites. Hosts contribute the J1 path from their own `AppConfig.ready()` through `configured_backend()`. |
+| Affected | Internal routing for Group objects. Category, Ticket, and Trust stay on their existing declarations. Junction itself is not a content terminal. |
+| Authorization | Direct trustee and TrustGroup grants on the Junction's Trust still allow. Wrong user, wrong permission, sibling Trust, inactive/anonymous, and `obj is None` still deny. Membership in the protected Group is not a trustee route for other content. No Python per-object loop. |
+
+Failure behavior: omitted/ambiguous `configured_backend()` and
+unconfigured paths raise `TrustsConfigurationError` before writing.
+A conflicting Group registration raises and does not set the Group
+sentinel (no partial Group record). Same-contributor re-entry against
+the same registry object is a no-op.
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Contribute Junction-backed Group from the project `AppConfig`,
+      deriving the reverse accessor and content field from `_meta` /
+      `get_content_model()`. Do not hard-code historical accessor names
+      or read `Content._contents`.
+- [ ] Name the exact Trusts path in `configured_backend(path)` when
+      more than one Trusts backend is listed.
+- [ ] Do not expect Trusts to import or discover host Junction/Group
+      models.
+- [ ] Do not treat Django group membership as a Category/Ticket/Trust
+      trustee route.
+- [ ] A mixin-only Trusts backend still does not inherit historical
+      TrustGroup unless it uses `HistoricalGroupQueryCompiler`.
+- [ ] Leave `Content._contents`, `register_content`, `is_content*`,
+      `filter_by_content`, and `_get_trusts` in place until S7.
+- [ ] Leave package version at `1.0.0.dev0`.
+
+## Schema
+
+No change. S6 adds no model and no Django migration. Query
+construction remains lazy. Group grant / all-match / enumeration
+projections remain **1 SQL**, independent of candidate count.
+
+## Out of scope (not acceptance criteria)
+
+- S7 deletion of `Content._contents`, `register_content`,
+  `is_content*`, `get_content_fieldlookup`, `filter_by_content`,
+  `_get_trusts`, or content signal hooks
+- S8 freeze / E003
+- Condition-registry work; callback relocation; group/role redesign;
+  #54
+- Zero; GH; example #7; Windows #17
+
 
 
 
