@@ -4,6 +4,7 @@ Migrates the trustee half of ``ContentQuerySet.permitted`` for the
 explicitly registered Category terminal. Backend ``has_perm`` stays on
 the old path. Isolated core tests keep constructing their own
 ``TrustsRegistry()``. Trust-as-content is S1 (``test_issue70``).
+Ticket is S2 (``test_issue72``).
 """
 
 import types
@@ -124,6 +125,7 @@ class TrustsRegistryOwnershipTest(SimpleTestCase):
 
         for module in (trusts_apps, core, trusts_models):
             self.assertNotIn('Category', vars(module))
+            self.assertNotIn('Ticket', vars(module))
 
 
 class ContributorIdempotenceTest(SimpleTestCase):
@@ -135,10 +137,15 @@ class ContributorIdempotenceTest(SimpleTestCase):
     def tearDown(self):
         self.live_trusts.registry = self.live_registry
         self.live_contributor._trusts_tup_category_registry_id = self.live_registry
+        self.live_contributor._trusts_tup_ticket_registry_id = self.live_registry
 
     def test_reenter_same_contributor_ready_is_noop(self):
         self.assertIs(
             self.live_contributor._trusts_tup_category_registry_id,
+            self.live_registry,
+        )
+        self.assertIs(
+            self.live_contributor._trusts_tup_ticket_registry_id,
             self.live_registry,
         )
         before = self.live_registry.records
@@ -167,7 +174,8 @@ class ContributorIdempotenceTest(SimpleTestCase):
         contributor = _new_contributor(apps)
         contributor.ready()
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
-        self.assertEqual(len(isolated.records), 2)
+        self.assertIs(contributor._trusts_tup_ticket_registry_id, isolated)
+        self.assertEqual(len(isolated.records), 3)
         roots = {record.root for record in isolated.records}
         self.assertEqual(roots, {OtherCategoryGrant, TrustUserPermission})
         plan = isolated.plan_for(Category)
@@ -206,10 +214,23 @@ class ContributorIdempotenceTest(SimpleTestCase):
                 contributor._trusts_tup_category_registry_id,
                 new_trusts.registry,
             )
-            self.assertEqual(len(new_trusts.registry.records), 1)
-            record = new_trusts.registry.records[0]
-            self.assertIs(record.root, TrustUserPermission)
-            self.assertIs(record.content_model, Category._meta.concrete_model)
+            self.assertIs(
+                contributor._trusts_tup_ticket_registry_id,
+                new_trusts.registry,
+            )
+            self.assertEqual(len(new_trusts.registry.records), 2)
+            terminals = {
+                record.content_model for record in new_trusts.registry.records
+            }
+            self.assertEqual(
+                terminals,
+                {
+                    Category._meta.concrete_model,
+                    Ticket._meta.concrete_model,
+                },
+            )
+            for record in new_trusts.registry.records:
+                self.assertIs(record.root, TrustUserPermission)
         finally:
             self.live_trusts.registry = original
 
@@ -228,12 +249,19 @@ class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
             if record.root is TrustUserPermission
             and record.content_model is Category._meta.concrete_model
         ]
+        tup_ticket = [
+            record for record in live.records
+            if record.root is TrustUserPermission
+            and record.content_model is Ticket._meta.concrete_model
+        ]
         self.assertEqual(len(tup_category), 1)
+        self.assertEqual(len(tup_ticket), 1)
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
+        self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
         self.assertEqual(
             [
                 record for record in live.records
@@ -241,6 +269,14 @@ class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
                 and record.content_model is Category._meta.concrete_model
             ],
             tup_category,
+        )
+        self.assertEqual(
+            [
+                record for record in live.records
+                if record.root is TrustUserPermission
+                and record.content_model is Ticket._meta.concrete_model
+            ],
+            tup_ticket,
         )
 
 
@@ -404,11 +440,11 @@ class CategoryPermittedRegistryTest(TestCase):
             self._direct_pks(conditioned, self.alice),
         )
 
-    def test_unregistered_models_stay_on_old_trust_grant_q_path(self):
+    def test_registered_terminals_skip_trust_grant_q(self):
         registry = apps.get_app_config('trusts').registry
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
-        self.assertFalse(registry.plan_for(Ticket).records)
+        self.assertTrue(registry.plan_for(Ticket).records)
         self.assertFalse(registry.plan_for(Group).records)
 
         from tests.models import Organization
@@ -431,7 +467,7 @@ class CategoryPermittedRegistryTest(TestCase):
             list(Trust.objects.permitted('trusts.change_trust', self.alice))
             self.assertEqual(grant_q.call_count, 0)
             list(Ticket.objects.permitted('trusts_tests.change_ticket', self.alice))
-            self.assertEqual(grant_q.call_count, 1)
+            self.assertEqual(grant_q.call_count, 0)
         self.assertIn(ticket.pk, _pks(
             Ticket.objects.permitted('trusts_tests.change_ticket', self.alice)
         ))

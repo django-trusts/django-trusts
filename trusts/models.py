@@ -189,9 +189,9 @@ class ContentQuerySet(models.QuerySet):
         if not is_active_principal(user):
             return self.none()
         permission = resolve_content_permission(self.model, perm)
-        # Registered terminals (Category, Trust-as-content) take the trustee
-        # half from the package registry. Group stays in this reader and is
-        # OR-ed on the original candidate queryset. Do not
+        # Registered terminals (Category, Trust-as-content, Ticket) take
+        # the trustee half from the package registry. Group stays in this
+        # reader and is OR-ed on the original candidate queryset. Do not
         # filter_authorized(...) then OR group — filtered-out group-only
         # rows cannot be restored. Unregistered models keep trust_grant_q.
         registry = django_apps.get_app_config('trusts').registry
