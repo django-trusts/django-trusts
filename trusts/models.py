@@ -8,7 +8,7 @@ from django.utils.translation import gettext_lazy as _
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
                     get_permission_model, utils
-from trusts.core import granted as aggregate_granted
+from trusts.core import any_plan_records, granted as aggregate_granted
 from trusts.query import (
     is_active_principal,
     trust_grant_q,
@@ -300,6 +300,13 @@ class TrustManager(ContentManager):
         - A ``:condition`` suffix raises ``PermissionConditionNotQueryable``.
           This API filters Trust rows, not content rows, so it does not
           compile V1 conditions (unlike ``ContentQuerySet.permitted``).
+        - Support gate is ``any_plan_records``: any configured path with
+          ``plan_for(content).records`` establishes that the terminal is
+          known. Unregistered models, including Junction/Group until S6
+          and any leftover ``Content._contents`` membership, fail closed.
+          The grant stays ``trust_grant_q`` on Trust rows; it is not
+          ``filter_authorized(Trust)`` and does not use another path's
+          compiler or ``historical_fallback``.
         """
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
@@ -313,9 +320,12 @@ class TrustManager(ContentManager):
         if not isinstance(content, type):
             content = content.__class__
 
-        if not Content.is_content_model(content):
+        handles = django_apps.get_app_config('trusts').configured_handles()
+        if not any_plan_records(handles, content):
             return self.none()
 
+        # plan_for selects by concrete_model; resolve the same terminal.
+        content = getattr(content._meta, 'concrete_model', content)
         permission = resolve_content_permission(content, perm_name)
         qs = self.filter(trust_grant_q(user, permission), **kwargs)
         if exclude_root and ROOT_PK is not None:

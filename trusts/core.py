@@ -10,8 +10,8 @@ membership over that enumeration), and authorized-content filtering.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
-compiler, ``granted()``, ``all_match()``, ``common_permissions()``, and
-configuration/compiler exceptions live here.
+compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
+``common_permissions()``, and configuration/compiler exceptions live here.
 """
 
 from dataclasses import dataclass
@@ -111,6 +111,22 @@ def _plan_for_permission(handle, candidates, user, permission):
             candidates, user=user, permission=permission,
         )
     return handle.registry.plan_for(candidates, user=user)
+
+
+def any_plan_records(handles, content):
+    """True when any handle registry has ``plan_for(content).records``.
+
+    Aggregate **support** gate across configured Trusts paths. A
+    declaration on one path establishes that the content terminal is
+    known; it does not compile a grant and does not authorize through
+    another path's compiler. Empty ``handles`` is False. Does not
+    consult ``historical_fallback`` or historical model names.
+    Construction issues no SQL.
+    """
+    for handle in handles:
+        if handle.registry.plan_for(content).records:
+            return True
+    return False
 
 
 def granted(handles, candidates, user, permission, *, kind='complete'):
