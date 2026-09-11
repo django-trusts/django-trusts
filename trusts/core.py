@@ -30,6 +30,9 @@ registry from ``trusts``. Generic compiler protocol, the default plan
 compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
 ``common_permissions()``, ``filter_authorized_scopes()``,
 ``ConditionLookup``, and configuration/compiler exceptions live here.
+Permission-condition *records* live on each ``TrustsRegistry`` via
+``trusts.conditions.ConditionRegistry``; bind the generic
+``RegistryConditionLookup`` with ``set_condition_lookup``.
 """
 
 from dataclasses import dataclass
@@ -1999,12 +2002,15 @@ class TrustsRegistry(object):
     """
 
     def __init__(self):
+        from trusts.conditions import ConditionRegistry
+
         self._by_root = {}
         self._order = []
         self._strategies = {}
         self._strategy_order = []
         self._frozen = False
         self._condition_lookup = None
+        self.conditions = ConditionRegistry()
 
     @property
     def frozen(self):
@@ -2034,6 +2040,40 @@ class TrustsRegistry(object):
                 'no partial bind.'
             )
         self._condition_lookup = lookup
+
+    def register_permission_condition(self, model, cond_code, condition):
+        """Register a ``:cond_code`` condition on ``model`` for this instance.
+
+        Ordinary registry method for AppConfig / module contribution.
+        Dispatch is by type: an ``Expr`` is queryable policy data; a
+        callable is the object-only escape hatch. Callables are never
+        invoked at registration. ``freeze()`` does not seal this method.
+        """
+        return self.conditions.register_permission_condition(
+            model, cond_code, condition,
+        )
+
+    def get_permission_condition_record(self, model, cond_code):
+        """Return this instance's record for ``(model, cond_code)``, or ``None``."""
+        return self.conditions.get_permission_condition_record(
+            model, cond_code,
+        )
+
+    def iter_permission_conditions(self):
+        """Yield ``(model, cond_code, record)`` registered on this instance."""
+        return self.conditions.iter_permission_conditions()
+
+    def compile_registered_condition_q(self, model, perm, user):
+        """Compile a registered ``:condition`` to ``Q`` from this instance."""
+        return self.conditions.compile_registered_condition_q(
+            model, perm, user,
+        )
+
+    def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
+        """Evaluate a registered condition from this instance against ``obj``."""
+        return self.conditions.evaluate_permission_condition(
+            model, cond_code, user, perm, obj,
+        )
 
     def freeze(self):
         """Seal this instance against further ``register`` / ``register_strategy`` writes."""

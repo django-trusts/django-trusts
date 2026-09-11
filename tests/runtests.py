@@ -13,6 +13,7 @@ from django.conf import settings
 
 # Kernel-only suite: no Zero, no concrete Trust models.
 KERNEL_SUITE = [
+    'trusts.test_issue16',
     'trusts.test_issue57',
     'trusts.test_issue60',
     'trusts.test_issue65',
@@ -35,6 +36,7 @@ KERNEL_SUITE = [
 PAIR_LEGACY_SUITE = [
     'trusts.tests',
     'trusts.test_issue4',
+    'trusts.test_issue16',
     'trusts.test_issue29',
     'trusts.test_issue54',
     'trusts.test_issue57',

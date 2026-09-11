@@ -8,6 +8,11 @@ target, not the canonical representation.
 A callable argument is the legacy object-only predicate. Registration
 dispatches by type and never invokes a callable with symbolic refs.
 
+Permission-condition records live on an instantiable
+``ConditionRegistry`` (also exposed on each ``TrustsRegistry``). There
+is no process-global store: each implementation handle owns its own
+records so owners cannot share or overwrite each other.
+
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
 Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
@@ -67,6 +72,19 @@ class PermissionConditionNotQueryable(ValueError):
 def permission_has_condition(perm):
     """True when ``perm`` is a string with a ``:condition`` suffix."""
     return isinstance(perm, str) and ':' in perm
+
+
+def permission_condition_code(perm):
+    """Return the ``:condition`` suffix, or ``''`` when absent."""
+    if not isinstance(perm, str) or ':' not in perm:
+        return ''
+    if '.' in perm:
+        try:
+            from trusts import utils
+            return utils.parse_perm_code(perm)[3]
+        except ValueError:
+            pass
+    return perm.split(':', 1)[1]
 
 
 def legacy_permission_callbacks_allowed():
@@ -348,7 +366,8 @@ def condition_refs():
     """Return symbolic ``(u, p, o)`` for building a registered ``Expr``.
 
     Combine the refs with ``==`` / ``!=`` / ``&`` / ``|`` and pass the
-    resulting tree to ``Content.register_permission_condition``. These
+    resulting tree to ``TrustsRegistry.register_permission_condition``
+    (or ``ConditionRegistry.register_permission_condition``). These
     objects are policy data, not live principals or content rows.
     """
     return principal_ref(), permission_ref(), object_ref()
@@ -853,3 +872,185 @@ def evaluate_registered_expression(expr, user, perm, obj, model=None):
         klass = obj.model if hasattr(obj, 'model') and not isinstance(obj, Model) else obj.__class__
     validate_expression(expr, klass)
     return evaluate_expression(expr, user, perm, obj, model=klass)
+
+
+def _condition_model_key(model):
+    meta = getattr(model, '_meta', None)
+    if meta is not None:
+        return meta.label
+    return model
+
+
+def _unknown_condition_error(model, cond_code):
+    meta = getattr(model, '_meta', None)
+    if meta is not None:
+        return AttributeError(
+            'Permission condition code "%s" is not associate with model "%s_%s"'
+            % (cond_code, meta.app_label, meta.model_name)
+        )
+    return AttributeError(
+        'Permission condition code "%s" is not associate with model "%s"'
+        % (cond_code, model)
+    )
+
+
+class ConditionRecord(object):
+    """Registered condition: an ``Expr`` tree or a legacy callable.
+
+    ``model`` is retained so a registration can be validated by the
+    system check after all apps have loaded. This record is
+    implementation-neutral: it does not name Zero nouns.
+    """
+
+    __slots__ = ('expr', 'func', 'model')
+
+    def __init__(self, expr=None, func=None, model=None):
+        self.expr = expr
+        self.func = func
+        self.model = model
+
+
+class ConditionRegistry(object):
+    """Per-instance store of permission-condition records.
+
+    Create a new instance per isolated context. There is no
+    process-global singleton. Records are keyed by model identity plus
+    condition code on *this* instance, so two registries never share or
+    overwrite each other.
+
+    Registration dispatches by type and never invokes a callable.
+    Model-aware semantic validation is a system check, not an exception
+    from ``register_permission_condition``.
+    """
+
+    def __init__(self):
+        self._records = {}
+
+    def register_permission_condition(self, model, cond_code, condition):
+        """Register a ``:cond_code`` condition on ``model``.
+
+        Pass an ``Expr`` built from ``condition_refs()`` to opt into V1
+        compile/evaluate. Pass a callable to keep the historical
+        object-only ``has_perm`` path. Dispatch is by type: callables
+        are never invoked with symbolic ``Ref`` arguments.
+
+        Construction-time shape errors (bare non-predicate ``Expr``, a
+        value that is neither ``Expr`` nor callable) still raise here.
+        Model-aware semantic validation is reported by the registered
+        Django system check as ``CheckMessage``s, not raised from this
+        method, so ``SILENCED_SYSTEM_CHECKS`` can filter the diagnostic.
+        """
+        if isinstance(condition, Expr):
+            if not is_predicate(condition):
+                raise PermissionConditionError(
+                    'Registered expression must be a V1 comparison '
+                    '(==, != combined with & / |), not %r.' % (condition,)
+                )
+            record = ConditionRecord(expr=condition, model=model)
+        elif callable(condition):
+            record = ConditionRecord(func=condition, model=model)
+        else:
+            raise TypeError(
+                'register_permission_condition expected an Expr or a '
+                'callable, got %r.' % (type(condition).__name__,)
+            )
+        self._records[(_condition_model_key(model), cond_code)] = record
+        return record
+
+    def get_permission_condition_record(self, model, cond_code):
+        """Return the record for ``(model, cond_code)``, or ``None``."""
+        return self._records.get((_condition_model_key(model), cond_code))
+
+    def iter_permission_conditions(self):
+        """Yield ``(model, cond_code, record)`` for every registration.
+
+        Identity comes from the record so registrations remain
+        validatable without importing extra application modules.
+        """
+        for (_key, cond_code), record in self._records.items():
+            yield record.model, cond_code, record
+
+    def compile_registered_condition_q(self, model, perm, user):
+        """Compile a ``:condition`` suffix to ``Q``, or raise fail-closed.
+
+        Unregistered codes raise ``AttributeError``. Callables raise
+        ``PermissionConditionNotQueryable`` without being invoked.
+        Registered ``Expr`` trees that are not valid V1 fail closed.
+        """
+        cond = permission_condition_code(perm)
+        record = self.get_permission_condition_record(model, cond)
+        if record is None:
+            raise _unknown_condition_error(model, cond)
+        if record.expr is None:
+            label = getattr(getattr(model, '_meta', None), 'label', model)
+            raise PermissionConditionNotQueryable(
+                'Queryable permission conditions do not support '
+                'condition %r on %s. Register an Expr from condition_refs() '
+                'to compile a V1 declarative expression. Callables remain '
+                'object-only via has_perm; queryset compilation refuses them '
+                'so the underlying grant cannot be returned without the '
+                'condition.' % (perm, label)
+            )
+        grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
+        return compile_expression_q(record.expr, model, user, grant)
+
+    def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
+        """Evaluate one registered condition against a real object.
+
+        Unregistered codes raise ``AttributeError``. Callables are
+        invoked only when ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS``
+        is True; otherwise they fail closed without being called.
+        """
+        record = self.get_permission_condition_record(model, cond_code)
+        if record is None:
+            raise _unknown_condition_error(model, cond_code)
+        if record.expr is not None:
+            return evaluate_registered_expression(
+                record.expr, user, perm, obj, model=model,
+            )
+        if record.func is None:
+            raise PermissionConditionError(
+                'Permission condition %r on %s is unbound.'
+                % (cond_code, getattr(getattr(model, '_meta', None), 'label', model))
+            )
+        if not legacy_permission_callbacks_allowed():
+            raise PermissionConditionError(
+                'Callable permission conditions are disabled. Set '
+                'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True to use '
+                'the object-only has_perm path, or register an Expr from '
+                'condition_refs(). Silencing trusts.E002 does not enable '
+                'the callback.'
+            )
+        return record.func(user, perm, obj)
+
+
+from trusts.core import ConditionLookup  # noqa: E402
+
+
+class RegistryConditionLookup(ConditionLookup):
+    """Generic ``ConditionLookup`` over a ``ConditionRegistry``.
+
+    Bind with ``handle.registry.set_condition_lookup(
+    RegistryConditionLookup(handle.registry))``. Accepts a
+    ``ConditionRegistry`` or any object with a ``conditions`` store
+    (a ``TrustsRegistry``). Core never imports Zero nouns.
+    """
+
+    def __init__(self, registry):
+        conditions = getattr(registry, 'conditions', registry)
+        record_for = getattr(conditions, 'get_permission_condition_record', None)
+        compile_q = getattr(conditions, 'compile_registered_condition_q', None)
+        if not callable(record_for) or not callable(compile_q):
+            raise TypeError(
+                'RegistryConditionLookup requires a ConditionRegistry '
+                'or TrustsRegistry, not %r.' % (type(registry).__name__,)
+            )
+        self.conditions = conditions
+
+    def record_for(self, model, cond_code):
+        return self.conditions.get_permission_condition_record(model, cond_code)
+
+    def compile_q(self, model, perm_string, user):
+        return self.conditions.compile_registered_condition_q(
+            model, perm_string, user,
+        )

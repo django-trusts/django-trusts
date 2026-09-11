@@ -297,6 +297,77 @@ def check_missing_declarations(app_configs, **kwargs):
     return messages
 
 
+def _iter_handle_permission_conditions(config):
+    """Yield condition records from one implementation owner's handles."""
+    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+
+    try:
+        paths = config._configured_trusts_paths()
+    except TrustsConfigurationError:
+        return
+    for path in paths:
+        try:
+            handle = config.configured_backend(path)
+        except (TrustsConfigurationError, TrustsCompilerError):
+            continue
+        iter_fn = getattr(handle.registry, 'iter_permission_conditions', None)
+        if callable(iter_fn):
+            yield from iter_fn()
+            continue
+        conditions = getattr(handle.registry, 'conditions', None)
+        if conditions is not None:
+            yield from conditions.iter_permission_conditions()
+
+
+def iter_live_permission_conditions(apps_registry=None):
+    """Yield ``(model, cond_code, record)`` from configured registries.
+
+    Implementation-owned ``TrustsRegistry`` condition stores are the
+    source of truth. When an unmigrated Zero ``Content`` still exposes
+    ``iter_permission_conditions``, those historical records are
+    yielded too so pair CI against older companions keeps coverage.
+    Duplicate ``(id(model), cond_code)`` pairs are skipped.
+    """
+    from django.apps import apps as django_apps
+
+    from trusts.apps import implementation_configs
+
+    seen = set()
+    for config in implementation_configs(apps_registry):
+        for model, cond_code, record in _iter_handle_permission_conditions(config):
+            key = (id(model), cond_code)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield model, cond_code, record
+
+    registry = django_apps if apps_registry is None else apps_registry
+    Content = _historical_content_class(registry)
+    iter_fn = getattr(Content, 'iter_permission_conditions', None)
+    if not callable(iter_fn):
+        return
+    for model, cond_code, record in iter_fn():
+        key = (id(model), cond_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield model, cond_code, record
+
+
+def permission_condition_check_messages(entries):
+    """Build check messages for ``(model, cond_code, record)`` entries.
+
+    Callables are never inspected or invoked.
+    """
+    messages = []
+    for model, cond_code, record in entries:
+        if getattr(record, 'expr', None) is not None:
+            messages.extend(_messages_for_expr(model, cond_code, record.expr))
+        elif getattr(record, 'func', None) is not None:
+            messages.extend(_messages_for_callable(model, cond_code))
+    return messages
+
+
 @django_checks.register(django_checks.Tags.models)
 def check_permission_conditions(app_configs, **kwargs):
     """Validate every registered condition after models are loaded.
@@ -306,18 +377,9 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Callables are never inspected or invoked. No database queries.
     """
-    from django.apps import apps as django_apps
-
-    Content = _historical_content_class(django_apps)
-    if Content is None:
-        return []
-    messages = []
-    for model, cond_code, record in Content.iter_permission_conditions():
-        if record.expr is not None:
-            messages.extend(_messages_for_expr(model, cond_code, record.expr))
-        elif record.func is not None:
-            messages.extend(_messages_for_callable(model, cond_code))
-    return messages
+    return permission_condition_check_messages(
+        iter_live_permission_conditions()
+    )
 
 
 _E005_HINT = (
