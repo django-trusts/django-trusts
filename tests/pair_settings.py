@@ -1,9 +1,9 @@
-"""IIa pair settings for the preserved legacy core suite.
+"""Pair settings for the preserved legacy core suite.
 
-Supported Zero IIa does not list ``'trusts'``. Zero owns
-``label='trusts'`` and the historical test-app migrations that depend
-on ``trusts.0001_initial``. Core is a library; ``kernel_config()`` is a
-tombstone.
+Supported Zero does not list ``'trusts'``. Zero owns ``label='trusts'``
+and the historical test-app migrations that depend on
+``trusts.0001_initial``. Core is a Python library and is absent from
+INSTALLED_APPS.
 """
 from os.path import dirname, join
 
@@ -64,8 +64,3 @@ DATABASES = {
 }
 
 ROOT_URLCONF = 'tests.urls'
-
-# Kernel has no migrations package. Zero owns trusts.0001 / 0002.
-MIGRATION_MODULES = {
-    'trusts_core': None,
-}

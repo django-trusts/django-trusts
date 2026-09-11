@@ -18,7 +18,6 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'trusts',
     'tests.kernel_host.apps.KernelHostConfig',
     'tests.gh_permissions.apps.GhPermissionsConfig',
     'tests.apps.TestsConfig',

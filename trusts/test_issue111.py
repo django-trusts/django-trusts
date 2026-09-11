@@ -1,15 +1,14 @@
-"""#111 Step III: library cutover and failure-only kernel_config tombstone.
+"""#111: library cutover. Core is ``1.0.0.dev3``.
 
-Core is ``1.0.0.dev3``. ``kernel_config()`` always raises
-``ImproperlyConfigured``. Historical concrete imports fail. Supported
-owner paths never call the tombstone. The generic mixin lives only
-on ``trusts.backends``; ``trusts.core_backends`` is gone.
+Core ships no AppConfig, no Django app label, and no ``kernel_config()``.
+Historical concrete imports fail. Supported owners resolve through
+``TrustsImplementationConfig``. The generic mixin lives only on
+``trusts.backends``; ``trusts.core_backends`` is gone.
 """
 
 from unittest.mock import patch
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase, override_settings
 
 import tests as tests_module
@@ -17,14 +16,11 @@ from tests.apps import live_config
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import (
-    KERNEL_CONFIG_TOMBSTONE,
-    AppConfig,
     TrustsImplementationConfig,
     configured_implementation_handles,
     implementation_configs,
     implementation_for_class,
     implementation_for_path,
-    kernel_config,
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.core import TrustsConfigurationError
@@ -63,30 +59,22 @@ def _bind(config_cls, configs=None, ready=True):
     return config
 
 
-class KernelConfigTombstoneTest(SimpleTestCase):
-    def test_every_call_raises_actionable_improperly_configured(self):
-        with self.assertRaises(ImproperlyConfigured) as ctx:
-            kernel_config()
-        self.assertEqual(str(ctx.exception), KERNEL_CONFIG_TOMBSTONE)
-        self.assertIn('2.0.0.dev0', str(ctx.exception))
-        self.assertIn('2.0.0.dev2', str(ctx.exception))
-        self.assertIn('old-code', str(ctx.exception))
-        with self.assertRaises(ImproperlyConfigured):
-            kernel_config(apps)
-        with self.assertRaises(ImproperlyConfigured):
-            kernel_config(apps_registry=apps)
+class LibraryIdentityTest(SimpleTestCase):
+    def test_kernel_config_and_appconfig_are_gone(self):
+        import trusts.apps as apps_mod
 
-    def test_tombstone_is_not_lookup_or_import_error(self):
-        with self.assertRaises(ImproperlyConfigured):
-            kernel_config()
-        try:
-            kernel_config()
-        except LookupError:
-            self.fail('tombstone must not raise LookupError')
-        except ImportError:
-            self.fail('tombstone must not raise ImportError')
-        except ImproperlyConfigured:
-            pass
+        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
+        self.assertFalse(hasattr(apps_mod, 'KERNEL_CONFIG_TOMBSTONE'))
+        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
+        labels = {config.label for config in apps.get_app_configs()}
+        names = {config.name for config in apps.get_app_configs()}
+        self.assertNotIn('trusts', labels)
+        self.assertNotIn('trusts_core', labels)
+        self.assertNotIn('trusts', names)
+        with self.assertRaises(LookupError):
+            apps.get_app_config('trusts')
+        with self.assertRaises(LookupError):
+            apps.get_app_config('trusts_core')
 
 
 class HistoricalImportCutoverTest(SimpleTestCase):
@@ -128,53 +116,46 @@ class HistoricalImportCutoverTest(SimpleTestCase):
             TrustModelBackendMixin.query_compiler.historical_fallback,
         )
 
-    def test_library_appconfig_is_not_an_implementation(self):
-        self.assertFalse(issubclass(AppConfig, TrustsImplementationConfig))
-        config = apps.get_app_config('trusts_core')
-        self.assertIs(type(config), AppConfig)
-        self.assertEqual(config.name, 'trusts')
-        self.assertEqual(list(config.get_models()), [])
-        self.assertFalse(hasattr(config, 'registries'))
+    def test_core_is_not_an_installed_implementation(self):
         self.assertIsInstance(live_config(), TrustsImplementationConfig)
         self.assertIs(type(live_config()), KernelHostConfig)
+        self.assertNotIn(
+            'trusts',
+            {config.name for config in apps.get_app_configs()},
+        )
 
 
-class OwnerNeverCallsTombstoneTest(SimpleTestCase):
-    def test_live_host_owner_never_calls_kernel_config(self):
-        with patch('trusts.apps.kernel_config', wraps=kernel_config) as wrapped:
-            owner = live_config()
-            self.assertIsInstance(owner, TrustsImplementationConfig)
-            handle = owner.configured_backend(HOST_BACKEND)
-            self.assertEqual(handle.path, HOST_BACKEND)
-            backend = HostTrustModelBackend()
-            self.assertIs(backend._trusts_config(), owner)
-            configured_implementation_handles()
-            implementation_for_path(HOST_BACKEND)
-            implementation_for_class(HostTrustModelBackend)
-            wrapped.assert_not_called()
+class OwnerResolutionTest(SimpleTestCase):
+    def test_live_host_owner_resolves(self):
+        owner = live_config()
+        self.assertIsInstance(owner, TrustsImplementationConfig)
+        handle = owner.configured_backend(HOST_BACKEND)
+        self.assertEqual(handle.path, HOST_BACKEND)
+        backend = HostTrustModelBackend()
+        self.assertIs(backend._trusts_config(), owner)
+        configured_implementation_handles()
+        implementation_for_path(HOST_BACKEND)
+        implementation_for_class(HostTrustModelBackend)
+        self.assertIn(owner, implementation_configs())
 
     def test_authorized_and_filter_scopes_use_owners(self):
         from trusts.core import filter_authorized_scopes
         from trusts.query import AuthorizedQuerySet
 
-        with patch('trusts.apps.kernel_config', wraps=kernel_config) as wrapped:
-            handles = configured_implementation_handles()
-            self.assertTrue(handles)
-            self.assertEqual(handles[0].path, HOST_BACKEND)
-            self.assertTrue(issubclass(AuthorizedQuerySet, object))
-            self.assertTrue(callable(filter_authorized_scopes))
-            wrapped.assert_not_called()
+        handles = configured_implementation_handles()
+        self.assertTrue(handles)
+        self.assertEqual(handles[0].path, HOST_BACKEND)
+        self.assertTrue(issubclass(AuthorizedQuerySet, object))
+        self.assertTrue(callable(filter_authorized_scopes))
 
-    def test_missing_owner_is_configuration_error_not_tombstone(self):
+    def test_missing_owner_is_configuration_error(self):
         backend = MixinOnlyBackend()
         with patch('trusts.apps.implementation_configs', return_value=()):
-            with patch('trusts.apps.kernel_config', wraps=kernel_config) as wrapped:
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    backend._trusts_config()
-                self.assertIn('no implementation owner', str(ctx.exception))
-                wrapped.assert_not_called()
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                backend._trusts_config()
+            self.assertIn('no implementation owner', str(ctx.exception))
 
-    def test_owner_present_still_skips_tombstone(self):
+    def test_owner_present_resolves(self):
         owner = _bind(MixinImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
             owner.ready()
@@ -183,6 +164,4 @@ class OwnerNeverCallsTombstoneTest(SimpleTestCase):
                 'trusts.apps.implementation_configs',
                 return_value=(owner,),
             ):
-                with patch('trusts.apps.kernel_config') as kernel:
-                    self.assertIs(backend._trusts_config(), owner)
-                    kernel.assert_not_called()
+                self.assertIs(backend._trusts_config(), owner)

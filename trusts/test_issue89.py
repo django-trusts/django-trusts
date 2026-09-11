@@ -586,7 +586,7 @@ class MissingDeclarationCheckTest(_RegistryRestoreMixin, TestCase):
         with self.assertNumQueries(0):
             out = StringIO()
             err = StringIO()
-            call_command('check', 'trusts', stdout=out, stderr=err)
+            call_command('check', 'trusts_kernel_host', stdout=out, stderr=err)
             subset = out.getvalue() + err.getvalue()
         self.assertNotIn(CHECK_ID_MISSING_DECLARATION, subset)
         trusts_only = [live_config()]

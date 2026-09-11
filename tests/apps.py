@@ -35,8 +35,8 @@ def isolated_owner():
 def live_config(apps_registry=None):
     """The unique installed ``TrustsImplementationConfig``.
 
-    Kernel-only tests get ``KernelHostConfig``. The IIa pair gets
-    ``ZeroConfig``. Does not call ``kernel_config()``.
+    Kernel-only tests get ``KernelHostConfig``. The supported Zero
+    pair gets ``ZeroConfig``.
     """
     from trusts.apps import implementation_configs
     from trusts.core import TrustsConfigurationError
@@ -90,7 +90,7 @@ class TestsConfig(AppConfig):
         # registry that belongs to *this* Apps instance. isolate_apps()
         # constructs a second TestsConfig whose apps registry has no
         # implementation owner; that instance must not donate onto the
-        # live registry. Never call kernel_config().
+        # live registry.
         if getattr(self, 'apps', None) is None:
             return
 

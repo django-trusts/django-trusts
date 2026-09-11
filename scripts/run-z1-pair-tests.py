@@ -3,8 +3,8 @@
 
 Invokes Zero's runner from the Zero checkout so ``tests`` is Zero's
 package. Skips leftover Step I assertions in ``tests.test_appconfig``
-(expects importable kernel ``AppConfig`` and ``kernel_config()`` raising
-``LookupError``). Those leftovers are replaced by core pair proofs.
+(expects a kernel ``AppConfig`` / ``kernel_config()``). Those leftovers
+are replaced by core pair proofs.
 """
 
 from __future__ import annotations

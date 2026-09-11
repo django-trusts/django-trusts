@@ -29,7 +29,6 @@ OVERLAY_PROBE = r'''
 import sys
 from pathlib import Path
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
 
 if not settings.configured:
     settings.configure(
@@ -48,7 +47,7 @@ import django
 django.setup()
 import trusts
 import importlib
-from trusts.apps import kernel_config
+import trusts.apps as trusts_apps
 from trusts.backends import TrustModelBackendMixin
 from trusts.zero.apps import ZeroConfig
 from trusts.zero.models import Trust
@@ -64,12 +63,8 @@ except ModuleNotFoundError:
     pass
 else:
     raise SystemExit("trusts.core_backends still imports")
-try:
-    kernel_config()
-except ImproperlyConfigured as exc:
-    assert "2.0.0.dev0" in str(exc)
-else:
-    raise SystemExit("overlay kernel_config() must be a tombstone")
+if hasattr(trusts_apps, "kernel_config") or hasattr(trusts_apps, "AppConfig"):
+    raise SystemExit("overlay still exposes kernel_config or AppConfig")
 init = Path(trusts.__file__)
 assert init.name == "__init__.py"
 assert (init.parent / "zero" / "apps.py").is_file()

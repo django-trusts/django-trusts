@@ -3,11 +3,9 @@
 The revived Trusts development line is **1.0.0.dev3**. This is a
 development-version mark only. It is not a production 1.0 release, not a PyPI
 publication, and not a claim that the declarative permission model has been
-validated. `1.0.0.dev3` identifies the Step III library cutover and
-failure-only `kernel_config()` tombstone (#111). `1.0.0.dev2` remains the
-merged Step I implementation-owned registry bridge (#108). `1.0.0.dev1`
+validated. `1.0.0.dev3` identifies the library cutover (#111). `1.0.0.dev2`
+remains the merged implementation-owned registry bridge (#108). `1.0.0.dev1`
 remains the merged `trusts.core_backends` checkpoint (#103 / #106).
-Tombstone removal is parked at `1.0.0.dev4`.
 
 ## Why a new major version
 
@@ -37,15 +35,13 @@ API and method changes for the modernization are recorded in
 - No move or replacement of existing tags, including `v0.10.3` and
   `legacy-pre-modernization`
 - No permission-model redesign
-- No `1.0.0.dev4` tombstone removal
 
 ## Internal registration and projection primitive
 
 `trusts.core` keeps an isolated `TrustsRegistry`, root-relative `Ref`,
 and noun-neutral compiler/query machinery. Live registries are owned by
-installed `TrustsImplementationConfig` subclasses (Zero IIa, GH IIb, or a
-project host). `kernel_config()` is a failure-only tombstone.
-The generic mixin lives only at
+installed `TrustsImplementationConfig` subclasses. Core ships no AppConfig
+and no `kernel_config()`. The generic mixin lives only at
 `from trusts.backends import TrustModelBackendMixin`.
 `trusts.core_backends` is gone. Historical concrete models and
 `TrustModelBackend` live under `trusts.zero.*`. See

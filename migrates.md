@@ -2503,53 +2503,52 @@ Zero `label='trusts'` is unchanged.
       Windows consumer unchanged. Do not start Windows cutover or
       Step IIa / IIb / III.
 
-# Issue #111: Step III library cutover (1.0.0.dev3)
+# Issue #111: library cutover (1.0.0.dev3)
 
 ## Decision
 
-Step III of approved #102 r3–r5. Core becomes a library, not an
-installable implementation AppConfig. The transitional kernel registry
-owner and successful `kernel_config()` path are removed. Only the
-approved failure-only `kernel_config(*args, **kwargs)` tombstone remains:
-every call raises actionable `ImproperlyConfigured` explaining that raw
-Zero `2.0.0.dev0` is incompatible and directing users to Zero
-`2.0.0.dev2+` or the capped old-code line
-(`django-trusts-zero==2.0.0.dev1` with `django-trusts==1.0.0.dev2`).
-Historical concrete surfaces leave core. Canonical historical behavior
-is `trusts.zero.*`. The generic mixin lives only at
-`trusts.backends.TrustModelBackendMixin`; `trusts.core_backends` is
-deleted (scope correction at
-https://github.com/django-trusts/django-trusts/issues/111#issuecomment-5639687890).
-Package version becomes `1.0.0.dev3`. Pair CI retargets to exact Zero
-IIa merge `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`.
+`django-trusts==1.0.0.dev3` is a Python library, not an installed
+implementation AppConfig. The transitional core registry owner, core
+`AppConfig`, `trusts_core` label, and `kernel_config()` path are
+removed entirely (`kernel_config` is deleted — there is no failure-only
+compatibility stub). Historical concrete surfaces leave core. Canonical
+historical models and backends live at `trusts.zero.*`. The generic
+mixin lives only at `from trusts.backends import TrustModelBackendMixin`;
+`trusts.core_backends` is deleted with no forwarding alias.
+
+Unpublished Zero `2.0.0.dev*` development snapshots are unsupported
+after this cut and may fail naturally. This release adds no runtime
+compatibility machinery for them.
+
+Package version is `1.0.0.dev3`. Pair CI pins the supported Zero
+companion at `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`.
 
 ## No change to these public call sites
 
 - `User.has_perm` / `User.has_perms` / `get_all_permissions` /
   `get_group_permissions` signatures
-- `from trusts.backends import TrustModelBackendMixin` (sole mixin
-  definition after the #111 scope correction)
+- `from trusts.backends import TrustModelBackendMixin`
 - `TrustsImplementationConfig` and owner resolvers
   (`implementation_configs`, `implementation_for_path`,
   `implementation_for_class`)
 - `trust_grant_q` / `historical_group_grant_exists` on `trusts.query`
 - `AuthorizedQuerySet` / `AuthorizedManager` / `filter_authorized_scopes`
-  (default handles now come from implementation owners)
+  (default handles come from implementation owners)
 - Stored identity: app label `trusts`, Zero migration keys
   `0001_initial` / `0002_trustgroup`, model labels, tables, content
   types, permissions, and rows
 
 ## Changes
 
-### 52. Library cutover and failure-only `kernel_config()` tombstone (#111)
+### 52. Library cutover (#111)
 
 | | |
 | --- | --- |
-| Previous | Core `1.0.0.dev2` still installed a transitional kernel `AppConfig` registry owner. Mixin `_trusts_config()` fell back to real `kernel_config()`. `trusts.models` was a PEP 562 Zero forwarder. `trusts.backends.TrustModelBackend` / `HistoricalGroupQueryCompiler` still lived in core. Pair CI pinned raw Zero `41d07f40`. |
-| New | Core is a library. `AppConfig` is metadata/checks only (`label='trusts_core'`) and is not a registry owner. `kernel_config(*args, **kwargs)` always raises `ImproperlyConfigured` with the raw-Zero `2.0.0.dev0` tombstone text. Mixin / `.authorized` / `filter_authorized_scopes` / system checks resolve implementation owners only. `trusts.models` is inert. Historical backend/compiler imports fail. Package version `1.0.0.dev3`. Pair CI pins Zero IIa `94e0fa10`. |
-| Replacement | Supported hosts install Zero IIa (`trusts.zero.apps.ZeroConfig` + `trusts.zero.backends.TrustModelBackend`) or GH IIb. Do not list `'trusts'` as an implementation. Raw Zero `2.0.0.dev0` must upgrade to `2.0.0.dev2+` or stay on the capped old-code line. Canonical models: `trusts.zero.models`. Canonical historical backend: `trusts.zero.backends.TrustModelBackend`. |
+| Previous | `django-trusts==1.0.0.dev2` still installed a transitional kernel `AppConfig` registry owner. Mixin `_trusts_config()` fell back to a live `kernel_config()`. `trusts.models` forwarded names to Zero. `trusts.backends.TrustModelBackend` / `HistoricalGroupQueryCompiler` still lived in core. |
+| New | Core is a library and is absent from `INSTALLED_APPS`. No core implementation AppConfig or Django app label remains. `kernel_config()` is deleted. Mixin / `.authorized` / `filter_authorized_scopes` / system checks resolve implementation owners only. `trusts.models` is inert. Historical backend/compiler imports fail. Package version `1.0.0.dev3`. Pair CI pins Zero `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`. |
+| Replacement | Supported hosts install `trusts.zero.apps.ZeroConfig` plus `trusts.zero.backends.TrustModelBackend`, or another `TrustsImplementationConfig`. Do not list `'trusts'`. Canonical models: `trusts.zero.models`. Canonical historical backend: `trusts.zero.backends.TrustModelBackend`. |
 | Affected | Live registry owner, `kernel_config()` contract, historical core imports, pair pin, package version. Data: none. Schema: none. Stored identity: unchanged. |
-| Authorization | Owner-present allow/deny unchanged. Missing owner is `TrustsConfigurationError` (not the tombstone). Empty owners fail closed on queryset helpers. Raw Zero `2.0.0.dev0` fails at the tombstone with the actionable message. |
+| Authorization | Owner-present allow/deny unchanged. Missing owner is `TrustsConfigurationError`. Empty owners fail closed on queryset helpers. Unpublished Zero snapshots are unsupported and may fail naturally. |
 
 Exact new / still-valid signatures:
 
@@ -2560,43 +2559,42 @@ from trusts.apps import (
     implementation_configs,
     implementation_for_path,
     implementation_for_class,
-    kernel_config,  # failure-only tombstone
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.zero.models import Trust
 from trusts.zero.backends import TrustModelBackend
 
-# kernel_config() always raises ImproperlyConfigured
 # import trusts.core_backends  → ModuleNotFoundError
+# from trusts.apps import kernel_config  → ImportError
 ```
 
 `from trusts.models import Trust` and `from trusts.backends import TrustModelBackend` fail. There is no forwarding, lazy re-export, or fallback import. `trusts.core_backends` is deleted.
 
 ## Old vs new behavior
 
-| Situation | Old (#108 Step I / `1.0.0.dev2`) | New (#111 Step III / `1.0.0.dev3`) |
+| Situation | Old (`django-trusts==1.0.0.dev2`) | New (`django-trusts==1.0.0.dev3`) |
 | --- | --- | --- |
-| `kernel_config()` | Real kernel `AppConfig` | Failure-only `ImproperlyConfigured` tombstone |
-| Mixin with no owner | `kernel_config()` fallback | `TrustsConfigurationError` (not the tombstone) |
-| Mixin with one owner | That owner | Unchanged; tombstone is not called |
-| `from trusts.models import Trust` | PEP 562 Zero forwarder | Fails; inert module |
+| `kernel_config()` | Live kernel `AppConfig` accessor | Deleted (`ImportError`) |
+| Mixin with no owner | Fell back to `kernel_config()` | `TrustsConfigurationError` |
+| Mixin with one owner | That owner | Unchanged |
+| `from trusts.models import Trust` | Forwarded to Zero when installed | Fails; inert module |
 | `from trusts.backends import TrustModelBackend` | Core historical class | Fails |
-| `from trusts.backends import TrustModelBackendMixin` | Same-object alias of `core_backends` | Sole mixin definition |
-| `from trusts.core_backends import TrustModelBackendMixin` | Canonical mixin | `ModuleNotFoundError` |
-| `from trusts.zero.models import Trust` | Works when Zero installed | Unchanged stored identity |
-| `from trusts.zero.backends import TrustModelBackend` | IIa canonical path | Unchanged |
-| Listing `'trusts'` as implementation | Transitional kernel owner | Library app only; not a registry owner |
-| Pair pin | Raw Zero `41d07f40` | Zero IIa `94e0fa109a8a7a5f53a028438ada899cbc1be1ad` |
+| `from trusts.backends import TrustModelBackendMixin` | Re-export / alias | Sole mixin definition |
+| `from trusts.core_backends import TrustModelBackendMixin` | Transitional mixin host | `ModuleNotFoundError` |
+| `from trusts.zero.models import Trust` | Works when Zero is installed | Unchanged stored identity |
+| `from trusts.zero.backends import TrustModelBackend` | Canonical Zero path | Unchanged |
+| Listing `'trusts'` in `INSTALLED_APPS` | Installed a kernel AppConfig | Unsupported; core is not an app |
+| Pair pin | Earlier unpublished Zero snapshot | `94e0fa109a8a7a5f53a028438ada899cbc1be1ad` |
 | Package version | `1.0.0.dev2` | `1.0.0.dev3` |
-| Raw Zero `2.0.0.dev0` | Still paired / kernel fallback | Hits tombstone with upgrade direction |
+| Unpublished Zero `2.0.0.dev*` | Still treated as a paired line | Unsupported; may fail naturally |
 
 ## Deleted or moved APIs
 
 | API | Old location | New location |
 | --- | --- | --- |
-| Successful `kernel_config()` | `trusts.apps` | Gone; name remains as failure-only tombstone |
-| Kernel `AppConfig` registry owner | `trusts.apps.AppConfig` | Gone; class remains as library metadata |
-| PEP 562 `trusts.models` forwarder | `trusts.models` | Gone; module is inert |
+| `kernel_config()` | `trusts.apps` | Deleted |
+| Core `AppConfig` / `trusts_core` | `trusts.apps.AppConfig` | Deleted |
+| `trusts.models` name forwarder | `trusts.models` | Gone; module is inert |
 | `trusts.backends.TrustModelBackend` | core | `trusts.zero.backends.TrustModelBackend` |
 | `trusts.backends.HistoricalGroupQueryCompiler` | core | `trusts.zero.backends.HistoricalGroupQueryCompiler` |
 | `trusts.core_backends.TrustModelBackendMixin` | transitional mixin host | Deleted. Mixin lives only at `trusts.backends` |
@@ -2609,10 +2607,10 @@ boundary. Persisted Zero `label='trusts'` and loader keys
 
 ## Out of scope (not acceptance criteria)
 
-- `1.0.0.dev4` tombstone removal
+- Zero version normalization to `1.0.0.dev0` and its README rewrite
+- Coordinated project-family README sweep
 - Any new architecture or permission semantics
 - Windows #17, examples, and other adoption work
-- Folding Z0-cap `2.0.0.dev1` into this PR
 
 ## Migration-bot checklist
 
@@ -2635,21 +2633,15 @@ boundary. Persisted Zero `label='trusts'` and loader keys
       forwarding module or alias.
 - [ ] Locate live registry access. Use
       `implementation_for_path` / `implementation_for_class` /
-      `configured_implementation_handles`. Do not call
-      `kernel_config()`.
-- [ ] If `kernel_config()` is still called, expect
-      `ImproperlyConfigured` naming raw Zero `2.0.0.dev0` and pointing
-      at Zero `2.0.0.dev2+` or the capped old-code line. Do not wrap
-      that as `LookupError` / `ImportError`.
+      `configured_implementation_handles`. `kernel_config()` is gone.
 - [ ] Missing-owner mixin / resolver failures must stay
-      `TrustsConfigurationError`, distinct from the tombstone text.
+      `TrustsConfigurationError`.
 - [ ] Confirm stored identity: app label `trusts`, migration keys,
       tables, content types, permissions, and rows are unchanged.
-- [ ] Retarget pair CI to Zero IIa
-      `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`. Do not pair with raw
-      Zero `41d07f40` or Z0-cap.
-- [ ] Delete `trusts.core_backends`. Do not implement `1.0.0.dev4`
-      tombstone removal.
+- [ ] Retarget pair CI to Zero
+      `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`.
+- [ ] Delete `trusts.core_backends`. Do not add runtime compatibility
+      for unpublished Zero `2.0.0.dev*` snapshots.
 - [ ] Leave Windows #17, examples, and other adoption work parked.
 
 

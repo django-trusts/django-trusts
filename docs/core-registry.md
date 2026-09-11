@@ -221,11 +221,11 @@ This slice does not accept codename strings or dotted permission syntax.
 supplied `None` or other non-instance value raises
 `TrustsConfigurationError` and is never omitted from the predicate.
 
-The live store is `trusts.apps.AppConfig.registries[path]`, one
+The live store is `TrustsImplementationConfig.registries[path]`, one
 `TrustsRegistry` per configured Trusts-derived `AUTHENTICATION_BACKENDS`
-path. `ready()` does not replace the store or an existing registry
-object. With one Trusts path, `config.registry` is a compatibility alias
-of that exact object.
+path owned by that implementation. `ready()` does not replace the store
+or an existing registry object. With one Trusts path, `config.registry`
+is a compatibility alias of that exact object.
 
 Supported live access is the AppConfig handle API:
 `configured_backend(path)`, `configured_handles()`, and the one-path
@@ -334,11 +334,13 @@ callers stay on `trust_grant_q` until a later codec wrapper.
 `ConditionLookup` (`record_for`, `compile_q`) binds with
 `TrustsRegistry.set_condition_lookup`. Missing methods raise
 `TrustsConfigurationError` and do not bind. Unbound is the C1 default.
-`trusts.apps.kernel_config()` returns the kernel `AppConfig` by class
-identity. The kernel label is `trusts_core`. After Zero is installed,
-`apps.get_app_config('trusts')` is ZeroConfig (models, not the registry
-store). Callers of the kernel store must use `kernel_config()`, not the
-string label `trusts`.
+Live registries are owned by installed `TrustsImplementationConfig`
+subclasses. Resolve them with `implementation_for_path()`,
+`implementation_for_class()`, or `configured_implementation_handles()`.
+Core ships no AppConfig and no `kernel_config()`. After Zero is
+installed, `apps.get_app_config('trusts')` is ZeroConfig (models and
+that implementation's registry store). Do not list `'trusts'` in
+`INSTALLED_APPS`.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

@@ -25,7 +25,7 @@ from django.test.utils import isolate_apps
 
 from tests.apps import live_config
 from tests.models import Category, Organization, Ticket
-from trusts.apps import AppConfig, kernel_config
+from trusts.apps import TrustsImplementationConfig
 from trusts.zero.backends import HistoricalGroupQueryCompiler
 from trusts.core import (
     ConditionLookup,
@@ -170,22 +170,21 @@ class _UsersMixin(object):
 
 
 class KernelConfigTest(TestCase):
-    def test_live_owner_is_zero_and_kernel_config_is_tombstone(self):
-        from django.core.exceptions import ImproperlyConfigured
+    def test_live_owner_is_zero_and_kernel_config_is_gone(self):
+        import trusts.apps as apps_mod
         from trusts.zero.apps import ZeroConfig
 
         with self.assertNumQueries(0):
             config = live_config()
         zero = apps.get_app_config('trusts')
         self.assertIs(type(config), ZeroConfig)
+        self.assertIsInstance(config, TrustsImplementationConfig)
         self.assertEqual(config.name, 'trusts.zero')
         self.assertEqual(config.label, 'trusts')
         self.assertIs(config, live_config())
         self.assertIs(config, zero)
-        self.assertFalse(issubclass(AppConfig, type(config)))
-        with self.assertRaises(ImproperlyConfigured) as ctx:
-            kernel_config()
-        self.assertIn('2.0.0.dev0', str(ctx.exception))
+        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
+        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
     def test_legacy_helpers_and_compiler_remain_importable(self):
         from trusts.query import (

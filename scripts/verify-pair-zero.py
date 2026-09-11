@@ -99,7 +99,6 @@ def main() -> int:
 
         import django
         from django.apps import apps as django_apps
-        from django.core.exceptions import ImproperlyConfigured
         from django.core.management import call_command
         from django.core.management.base import CommandError
         from django.db import connection
@@ -108,7 +107,7 @@ def main() -> int:
         django.setup()
         call_command('migrate', verbosity=0, interactive=False)
 
-        from trusts.apps import kernel_config
+        import trusts.apps as trusts_apps
         from trusts.backends import TrustModelBackendMixin
         from trusts.zero.apps import ZeroConfig
         from trusts.zero.backends import TrustModelBackend as ZeroBackend
@@ -131,18 +130,12 @@ def main() -> int:
             raise SystemExit('expected Zero label trusts, got %r' % labels)
         if 'trusts_core' in labels:
             raise SystemExit('IIa pair must not install library label trusts_core')
+        if hasattr(trusts_apps, 'kernel_config') or hasattr(trusts_apps, 'AppConfig'):
+            raise SystemExit('core still exposes kernel_config or AppConfig')
 
         zero_config = django_apps.get_app_config('trusts')
         if zero_config.name != 'trusts.zero' or type(zero_config) is not ZeroConfig:
             raise SystemExit('get_app_config("trusts") is not ZeroConfig: %r' % (zero_config,))
-
-        try:
-            kernel_config()
-        except ImproperlyConfigured as exc:
-            if '2.0.0.dev0' not in str(exc):
-                raise SystemExit('tombstone missing raw Zero version: %s' % exc)
-        else:
-            raise SystemExit('kernel_config() succeeded in the IIa pair')
 
         trusts = [m for m in django_apps.get_models() if m.__name__ == 'Trust']
         if len(trusts) != 1:

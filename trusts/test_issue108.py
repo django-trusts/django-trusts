@@ -1,6 +1,6 @@
-"""#108 / #111: implementation-owned registry after the kernel cutover.
+"""#108 / #111: implementation-owned registry after the library cutover.
 
-Helper + owner resolvers stay. ``kernel_config()`` is a tombstone.
+Helper + owner resolvers stay. Core ships no ``kernel_config()``.
 Mixin identity stays. Historical core backend is gone.
 """
 
@@ -16,13 +16,11 @@ from tests.apps import TestsConfig, live_config
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from trusts.apps import (
-    AppConfig,
     TrustsImplementationConfig,
     _listed_mixin_paths,
     implementation_configs,
     implementation_for_class,
     implementation_for_path,
-    kernel_config,
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.core import TrustsConfigurationError, TrustsRegistry
@@ -82,10 +80,12 @@ def _bind(config_cls, configs=None, ready=True):
 
 
 class ImplementationHelperSurfaceTest(SimpleTestCase):
-    def test_kernel_is_not_an_implementation_config(self):
-        self.assertFalse(issubclass(AppConfig, TrustsImplementationConfig))
+    def test_core_is_not_an_implementation_appconfig(self):
+        import trusts.apps as apps_mod
+
+        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
+        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertFalse(TrustsImplementationConfig.default)
-        self.assertTrue(AppConfig.default)
         self.assertIsInstance(live_config(), TrustsImplementationConfig)
         self.assertIn(live_config(), implementation_configs())
 
@@ -106,18 +106,18 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(backends_mod, 'TrustModelBackend'))
         self.assertFalse(hasattr(backends_mod, 'HistoricalGroupQueryCompiler'))
 
-    def test_generic_declarations_import_without_calling_tombstone(self):
+    def test_generic_declarations_import_without_kernel_config(self):
+        import trusts.apps as apps_mod
         from trusts.core import Ref, TrustsRegistry, filter_authorized_scopes
         from trusts.query import AuthorizedManager, AuthorizedQuerySet
 
-        with patch('trusts.apps.kernel_config', wraps=kernel_config) as wrapped:
-            self.assertTrue(callable(filter_authorized_scopes))
-            self.assertTrue(issubclass(AuthorizedQuerySet, object))
-            self.assertTrue(issubclass(AuthorizedManager, object))
-            registry = TrustsRegistry()
-            self.assertEqual(registry.records, ())
-            self.assertIsNotNone(Ref)
-            wrapped.assert_not_called()
+        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
+        self.assertTrue(callable(filter_authorized_scopes))
+        self.assertTrue(issubclass(AuthorizedQuerySet, object))
+        self.assertTrue(issubclass(AuthorizedManager, object))
+        registry = TrustsRegistry()
+        self.assertEqual(registry.records, ())
+        self.assertIsNotNone(Ref)
 
 
 class ImplementationRoutingTest(SimpleTestCase):
@@ -226,16 +226,14 @@ class ImplementationReadyTest(SimpleTestCase):
 
 
 class MixinOwnerResolveTest(SimpleTestCase):
-    def test_owner_absent_is_configuration_error_not_tombstone(self):
+    def test_owner_absent_is_configuration_error(self):
         backend = MixinOnlyBackend()
         with patch('trusts.apps.implementation_configs', return_value=()):
-            with patch('trusts.apps.kernel_config', wraps=kernel_config) as wrapped:
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    backend._trusts_config()
-                self.assertIn('no implementation owner', str(ctx.exception))
-                wrapped.assert_not_called()
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                backend._trusts_config()
+            self.assertIn('no implementation owner', str(ctx.exception))
 
-    def test_owner_present_never_consults_kernel(self):
+    def test_owner_present_resolves(self):
         owner = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
             owner.ready()
@@ -244,15 +242,13 @@ class MixinOwnerResolveTest(SimpleTestCase):
                 'trusts.apps.implementation_configs',
                 return_value=(owner,),
             ):
-                with patch('trusts.apps.kernel_config') as kernel:
-                    config = backend._trusts_config()
-                    self.assertIs(config, owner)
-                    kernel.assert_not_called()
-                    handle = backend._own_handle()
-                    self.assertEqual(handle.path, HOST)
-                    self.assertIs(handle.registry, owner.registries[HOST])
+                config = backend._trusts_config()
+                self.assertIs(config, owner)
+                handle = backend._own_handle()
+                self.assertEqual(handle.path, HOST)
+                self.assertIs(handle.registry, owner.registries[HOST])
 
-    def test_duplicate_owner_does_not_fall_back_to_kernel(self):
+    def test_duplicate_owner_fails_without_fallback(self):
         first = _bind(HostImplConfig)
         second = _bind(HostImplConfig)
         backend = HostTrustModelBackend()
@@ -260,10 +256,8 @@ class MixinOwnerResolveTest(SimpleTestCase):
             'trusts.apps.implementation_configs',
             return_value=(first, second),
         ):
-            with patch('trusts.apps.kernel_config') as kernel:
-                with self.assertRaises(TrustsConfigurationError):
-                    backend._trusts_config()
-                kernel.assert_not_called()
+            with self.assertRaises(TrustsConfigurationError):
+                backend._trusts_config()
 
     def test_live_host_is_the_kernel_suite_owner(self):
         from django.conf import settings

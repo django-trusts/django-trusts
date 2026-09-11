@@ -7,9 +7,8 @@ HOST_BACKEND = 'tests.backends.HostTrustModelBackend'
 class KernelHostConfig(TrustsImplementationConfig):
     """Kernel-only test implementation owner.
 
-    Owns the mixin host backend so KERNEL_SUITE never calls the
-    ``kernel_config()`` tombstone. Pair settings omit this app; Zero IIa
-    is the sole owner there.
+    Owns the mixin host backend for the library-only suite. Pair
+    settings omit this app; supported Zero is the sole owner there.
     """
 
     name = 'tests.kernel_host'

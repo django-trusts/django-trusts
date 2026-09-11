@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Import-smoke the installed django-trusts wheel from outside the checkout.
 
-Step III library wheel: no Zero, no concrete Trust, no implementation
-AppConfig, failure-only ``kernel_config()`` tombstone. This must not be
-run with the repository root as cwd or on sys.path.
+Library wheel: no Zero, no concrete Trust, no implementation AppConfig,
+no Django app label, and no ``kernel_config()``. This must not be run
+with the repository root as cwd or on sys.path.
 """
 
 from __future__ import annotations
@@ -56,7 +56,6 @@ def main() -> int:
         INSTALLED_APPS=[
             'django.contrib.contenttypes',
             'django.contrib.auth',
-            'trusts',
         ],
         DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}},
     )
@@ -67,16 +66,12 @@ def main() -> int:
     import importlib
     import sys as _sys
     import trusts
-    from django.core.exceptions import ImproperlyConfigured
     from trusts.apps import (
-        KERNEL_CONFIG_TOMBSTONE,
-        AppConfig,
         TrustsImplementationConfig,
         configured_implementation_handles,
         implementation_configs,
         implementation_for_class,
         implementation_for_path,
-        kernel_config,
     )
     from trusts.backends import TrustModelBackendMixin
     from trusts.core import (
@@ -101,34 +96,28 @@ def main() -> int:
 
     from django.apps import apps as django_apps
 
-    config = django_apps.get_app_config('trusts_core')
-    if type(config) is not AppConfig:
-        raise SystemExit('library AppConfig is not trusts.apps.AppConfig: %r' % (config,))
-    if config.label != 'trusts_core' or config.name != 'trusts':
-        raise SystemExit('library name/label must be trusts/trusts_core: %r/%r' % (
-            config.name, config.label,
-        ))
-    if list(config.get_models()):
-        raise SystemExit('library must expose no concrete models: %r' % (
-            list(config.get_models()),
-        ))
+    labels = {config.label for config in django_apps.get_app_configs()}
+    names = {config.name for config in django_apps.get_app_configs()}
+    if 'trusts' in labels or 'trusts_core' in labels:
+        raise SystemExit('library-only populate must not install a trusts app label: %r' % labels)
+    if 'trusts' in names:
+        raise SystemExit('library-only populate must not install an app named trusts: %r' % names)
     try:
         django_apps.get_app_config('trusts')
     except LookupError:
         pass
     else:
         raise SystemExit('library-only populate must not own label trusts')
+    try:
+        django_apps.get_app_config('trusts_core')
+    except LookupError:
+        pass
+    else:
+        raise SystemExit('library-only populate must not own label trusts_core')
+    if hasattr(trusts.apps, 'kernel_config') or hasattr(trusts.apps, 'AppConfig'):
+        raise SystemExit('library wheel still exposes kernel_config or AppConfig')
     if 'trusts.zero' in _sys.modules:
         raise SystemExit('wheel populate imported trusts.zero')
-    try:
-        kernel_config()
-    except ImproperlyConfigured as exc:
-        if str(exc) != KERNEL_CONFIG_TOMBSTONE:
-            raise SystemExit('tombstone text mismatch: %s' % exc)
-        if '2.0.0.dev0' not in str(exc):
-            raise SystemExit('tombstone missing raw Zero version: %s' % exc)
-    else:
-        raise SystemExit('kernel_config() succeeded; tombstone required')
     installed_version = importlib.metadata.version('django-trusts')
     if installed_version != EXPECTED_VERSION:
         raise SystemExit(
@@ -152,8 +141,6 @@ def main() -> int:
         pass
     else:
         raise SystemExit('trusts.core_backends still imports from the library wheel')
-    if issubclass(AppConfig, TrustsImplementationConfig):
-        raise SystemExit('library AppConfig must not be a TrustsImplementationConfig')
     if implementation_configs() != ():
         raise SystemExit('library-only wheel must expose no implementation configs')
     if configured_implementation_handles() != ():
@@ -190,8 +177,8 @@ def main() -> int:
     print('trusts.__file__', trusts_file)
     print('trusts.backends', backends_file)
     print('TrustModelBackendMixin', TrustModelBackendMixin)
-    print('library AppConfig', config, config.label)
-    print('kernel_config tombstone ok')
+    print('library apps', sorted(labels))
+    print('kernel_config absent')
     print('TrustsImplementationConfig', TrustsImplementationConfig)
     print('implementation_configs', implementation_configs())
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)

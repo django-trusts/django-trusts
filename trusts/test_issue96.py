@@ -1,42 +1,39 @@
-"""#96 / #111: library app identity after the Step III cutover.
+"""#96 / #111: library identity after the library cutover.
 
-Kernel-only proofs: ``label='trusts_core'``, no concrete models or
-migrations, inert ``trusts.models`` does not import Zero, historical
-model imports fail, GH stub populates without Zero.
-``kernel_config()`` is the failure-only tombstone.
+Kernel-only proofs: core is absent from INSTALLED_APPS, no concrete
+models or migrations, inert ``trusts.models`` does not import Zero,
+historical model imports fail, GH stub populates without Zero.
+``kernel_config()`` and a core AppConfig are gone.
 """
 
 import sys
 from importlib import import_module
 
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.db.migrations.loader import MigrationLoader
 from django.test import SimpleTestCase, TestCase
 
 from tests.gh_permissions.models import Repository
-from trusts.apps import AppConfig, kernel_config
 
 
 class KernelIdentityTest(SimpleTestCase):
-    def test_library_appconfig_keeps_trusts_core_label(self):
-        config = apps.get_app_config('trusts_core')
-        self.assertIs(type(config), AppConfig)
-        self.assertEqual(config.name, 'trusts')
-        self.assertEqual(config.label, 'trusts_core')
+    def test_core_is_not_an_installed_app(self):
+        import trusts.apps as apps_mod
+
+        self.assertFalse(hasattr(apps_mod, 'AppConfig'))
+        self.assertFalse(hasattr(apps_mod, 'kernel_config'))
+        labels = {config.label for config in apps.get_app_configs()}
+        names = {config.name for config in apps.get_app_configs()}
+        self.assertNotIn('trusts', labels)
+        self.assertNotIn('trusts_core', labels)
+        self.assertNotIn('trusts', names)
         with self.assertRaises(LookupError):
             apps.get_app_config('trusts')
-
-    def test_kernel_config_is_failure_only_tombstone(self):
-        with self.assertRaises(ImproperlyConfigured) as ctx:
-            kernel_config()
-        self.assertIn('2.0.0.dev0', str(ctx.exception))
-        self.assertIn('tombstone', str(ctx.exception))
+        with self.assertRaises(LookupError):
+            apps.get_app_config('trusts_core')
 
     def test_kernel_exposes_no_concrete_models(self):
-        config = apps.get_app_config('trusts_core')
-        self.assertEqual(list(config.get_models()), [])
         trusts = [m for m in apps.get_models() if m.__name__ == 'Trust']
         self.assertEqual(trusts, [])
 
@@ -93,5 +90,4 @@ class GhStubWithoutZeroTest(SimpleTestCase):
         )
         self.assertTrue(apps.is_installed('tests.gh_permissions'))
         self.assertNotIn('trusts.zero', sys.modules)
-        config = apps.get_app_config('trusts_core')
-        self.assertEqual(list(config.get_models()), [])
+        self.assertFalse(apps.is_installed('trusts'))
