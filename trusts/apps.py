@@ -28,7 +28,7 @@ class AppConfig(DjangoAppConfig):
         from django.conf import settings
         from django.utils.module_loading import import_string
 
-        from trusts.backends import TrustModelBackendMixin
+        from trusts.core_backends import TrustModelBackendMixin
         from trusts.core import TrustsConfigurationError
 
         listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()

@@ -64,7 +64,10 @@ def main() -> int:
     import sys as _sys
     import trusts
     from trusts.apps import AppConfig, kernel_config
-    from trusts.backends import TrustModelBackend
+    from trusts.backends import TrustModelBackend, TrustModelBackendMixin
+    from trusts.core_backends import (
+        TrustModelBackendMixin as CoreTrustModelBackendMixin,
+    )
     from trusts.core import (
         ConditionLookup,
         Ref,
@@ -106,6 +109,11 @@ def main() -> int:
         raise SystemExit('C2 kernel-only populate must not own label trusts')
     if 'trusts.zero' in _sys.modules:
         raise SystemExit('wheel populate imported trusts.zero')
+    if TrustModelBackendMixin is not CoreTrustModelBackendMixin:
+        raise SystemExit(
+            'trusts.backends.TrustModelBackendMixin is not '
+            'trusts.core_backends.TrustModelBackendMixin'
+        )
 
     import trusts.models as models_mod
     try:
@@ -120,6 +128,8 @@ def main() -> int:
     print('django', django.get_version())
     print('trusts.__file__', trusts_file)
     print('TrustModelBackend', TrustModelBackend)
+    print('TrustModelBackendMixin', TrustModelBackendMixin)
+    print('core_backends mixin identity', TrustModelBackendMixin is CoreTrustModelBackendMixin)
     print('kernel_config', config, config.label)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)
     print('filter_authorized_scopes', filter_authorized_scopes)
