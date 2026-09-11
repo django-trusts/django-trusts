@@ -2643,6 +2643,217 @@ boundary. Persisted Zero `label='trusts'` and loader keys
       machinery for unpublished Zero development snapshots.
 - [ ] Leave Windows #17, examples, and other adoption work parked.
 
+# Zero #16: generic permission-condition registry in core (1.0.0.dev3)
+
+This record covers the core half of
+[django-trusts-zero #16](https://github.com/django-trusts/django-trusts-zero/issues/16).
+Package version stays **1.0.0.dev3**. The sibling Zero PR removes
+`Content` / `Junction` static registration methods, replaces
+`ContentConditionLookup`, and donates `Meta` declarations to the
+configured implementation registry. No model, table, migration-loader
+key, content type, permission row, or stored authorization-data change.
+
+## Decision
+
+Reusable permission-condition records, registration-time shape
+validation, model/code lookup, iteration for system checks, `Expr`
+compile/evaluate, and the
+`TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` fail-closed gate live in
+`trusts.conditions` and on each instantiable `TrustsRegistry`. There is
+no process-global condition store. Records are keyed to the configured
+implementation handle so multiple owners cannot share or overwrite
+each other.
+
+`Meta.permission_conditions` / `Meta.content_permission_conditions` /
+built-in `Trust:own` collection stay Zero-owned. Zero donates those
+declarations onto `handle.registry` and binds
+`RegistryConditionLookup`.
+
+## No change to these public call sites
+
+- `User.has_perm` / `ContentQuerySet.permitted` signatures and
+  fail-closed results
+- `Meta.permission_conditions` and
+  `Meta.content_permission_conditions` (still collected by Zero)
+- Callable opt-in: missing / `False` (default) never invokes a
+  callback; `True` keeps object-only `has_perm` plus `trusts.W001`
+- Package version `1.0.0.dev3`
+- Stored identity: app label `trusts`, Zero migration keys, tables,
+  content types, permissions, and rows
+
+## Changes
+
+### 53. Explicit condition registration moves to the handle registry
+
+| | |
+| --- | --- |
+| Previous | Zero `Content` static methods owned a process-global `_conditions` map. `Junction.register_junction` was a static wrapper. Core already owned `Expr` compile/evaluate and `legacy_permission_callbacks_allowed()`. |
+| New | `TrustsRegistry.register_permission_condition` / `get_permission_condition_record` / `iter_permission_conditions` (and the same methods on `ConditionRegistry`) are the registration APIs. Bind `RegistryConditionLookup(handle.registry)` with `handle.registry.set_condition_lookup(...)`. |
+| Replacement | Call the configured handle registry from AppConfig / module contribution helpers. Do not add forwarding methods on Zero models. |
+| Affected | Explicit `Content.register_permission_condition` callers. `Meta.permission_conditions` behavior is unchanged when Zero donates those tuples. |
+| Authorization | Unchanged. Unknown / malformed / unbound conditions fail closed. Callables stay object-only and are never invoked by checks or queryset compilation. |
+
+Exact old / new imports and calls:
+
+```python
+# Old (Zero model static methods — deleted in the sibling Zero PR)
+from trusts.zero.models import Content, Junction
+from trusts.conditions import condition_refs
+
+u, p, o = condition_refs()
+Content.register_permission_condition(Ticket, 'own', u == o.owner)
+Content.register_content(Ticket)
+record = Content.get_permission_condition_record(Ticket, 'own')
+func = Content.get_permission_condition_func(Ticket, 'own')
+for model, code, record in Content.iter_permission_conditions():
+    ...
+Junction.register_junction(TicketJunction, content_model=Ticket)
+
+# New (core registry APIs; Zero donates Meta declarations here)
+from trusts.conditions import (
+    ConditionRegistry,
+    RegistryConditionLookup,
+    condition_refs,
+)
+from trusts.core import TrustsRegistry
+
+u, p, o = condition_refs()
+registry = handle.registry  # configured implementation TrustsRegistry
+registry.register_permission_condition(Ticket, 'own', u == o.owner)
+record = registry.get_permission_condition_record(Ticket, 'own')
+for model, code, record in registry.iter_permission_conditions():
+    ...
+handle.registry.set_condition_lookup(RegistryConditionLookup(handle.registry))
+
+# Isolated tests / extra owners: a new TrustsRegistry() starts empty
+isolated = TrustsRegistry()
+isolated.register_permission_condition(Ticket, 'own', u == o.owner)
+```
+
+Unchanged `Meta` behavior (Zero still walks these and donates):
+
+```python
+class Ticket(Content):
+    class Meta:
+        permission_conditions = (
+            ('own', u == o.owner),
+        )
+
+class TicketJunction(Junction):
+    class Meta:
+        content_permission_conditions = (
+            ('via_ticket', u == o.owner),
+        )
+```
+
+`Trust:own` remains `u == o.settlor` and is donated once to the
+configured implementation registry.
+
+Unchanged callable opt-in:
+
+```python
+# default / missing / False: trusts.E002 and runtime fail-closed
+# (callback never invoked)
+TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True  # object-only has_perm + W001
+```
+
+Import the gate from core; do not keep a Zero-local copy:
+
+```python
+from trusts.conditions import legacy_permission_callbacks_allowed
+```
+
+## Deleted consumer-facing APIs (sibling Zero PR)
+
+These names are removed from Zero models. Core does not add
+transparent forwarding methods.
+
+| Removed | Replacement |
+| --- | --- |
+| `Content.register_permission_condition` | `handle.registry.register_permission_condition` |
+| `Content.register_content` | Zero AppConfig / module helper that walks `Meta.permission_conditions` and donates |
+| `Content.get_permission_condition_record` | `handle.registry.get_permission_condition_record` |
+| `Content.get_permission_condition_func` | Deleted (no supported caller). Use `record.func` from `get_permission_condition_record` |
+| `Content.iter_permission_conditions` | `handle.registry.iter_permission_conditions` or `trusts.checks.iter_live_permission_conditions` |
+| `Content._conditions` | Per-handle `TrustsRegistry.conditions` (`ConditionRegistry`) |
+| `Junction.register_junction` | Zero helper that walks `Meta.content_permission_conditions` and donates |
+| `ContentConditionLookup` | `trusts.conditions.RegistryConditionLookup` |
+
+## Old vs new behavior
+
+| Situation | Old (Zero-owned `Content._conditions`) | New (core handle registry) |
+| --- | --- | --- |
+| Explicit `register_permission_condition` | `Content.register_permission_condition(...)` | `handle.registry.register_permission_condition(...)` |
+| `Meta.permission_conditions` | Zero walks Meta onto `Content._conditions` | Zero walks Meta onto `handle.registry` (behavior unchanged) |
+| Two implementation owners | One process-global map | Isolated `TrustsRegistry` instances |
+| Repeated test / AppConfig registries | Global `_conditions` leaked unless restored | New `TrustsRegistry()` / `ConditionRegistry()` starts empty |
+| `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` missing / False | Fail closed; callback never invoked | Unchanged |
+| Flag True | Object-only `has_perm` + `trusts.W001` | Unchanged |
+| System checks / queryset compile | Never invoke callables | Unchanged |
+| `ContentConditionLookup` | Zero class bound from `ZeroConfig` | Generic `RegistryConditionLookup` bound the same way |
+| Package version | `1.0.0.dev3` | Unchanged |
+
+## Schema
+
+No change. This slice adds no model, table, migration, app-label, or
+package boundary.
+
+## Sibling Zero PR must keep green
+
+Proofs that require Zero nouns stay on the sibling PR against this
+core HEAD:
+
+- registered `Expr` `has_perm` / `.permitted()` object/list parity
+- `Trust:own`, Content Meta, and Junction Meta register exactly once
+- Zero no longer defines or binds `ContentConditionLookup`
+- no Zero condition-registration `@staticmethod` remains
+
+## Out of scope (not acceptance criteria)
+
+- Moving Zero tests into core (#37 is parked)
+- Reviving `kernel_config()`, a core `AppConfig`, or the tombstone staircase
+- Broader docs / example work
+- Changing public authorization results or stored schema
+
+## Migration-bot checklist
+
+Search the project (and every remaining Zero caller) for every
+removed method and replace it with the core registry API. Do not
+leave a forwarding alias on `Content` or `Junction`.
+
+- [ ] Search for `register_permission_condition` (including
+      `Content.register_permission_condition`). Retarget explicit
+      calls to `handle.registry.register_permission_condition`.
+- [ ] Search for `Content.register_content`. Replace with the Zero
+      AppConfig / module Meta-donation helper.
+- [ ] Search for `get_permission_condition_record`. Retarget to
+      `handle.registry.get_permission_condition_record`.
+- [ ] Search for `get_permission_condition_func`. Delete the call;
+      use `record.func` from `get_permission_condition_record` if a
+      caller still needs the callable.
+- [ ] Search for `iter_permission_conditions`. Retarget to
+      `handle.registry.iter_permission_conditions` or
+      `trusts.checks.iter_live_permission_conditions`.
+- [ ] Search for `Content._conditions`. There is no global map;
+      use the configured handle's `registry.conditions`.
+- [ ] Search for `register_junction` / `Junction.register_junction`.
+      Replace with the Zero Meta-donation helper.
+- [ ] Search for `ContentConditionLookup`. Bind
+      `RegistryConditionLookup(handle.registry)` instead.
+- [ ] Search for `legacy_permission_callbacks_allowed` defined in
+      Zero models. Import it from `trusts.conditions`.
+- [ ] Confirm `Meta.permission_conditions` and
+      `Meta.content_permission_conditions` still register through
+      Zero donation (no host rewrite required for Meta-only apps).
+- [ ] Confirm callable opt-in is unchanged: default fail-closed;
+      `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True` is
+      object-only `has_perm` plus `trusts.W001`.
+- [ ] Confirm checks and queryset compilation never invoke
+      callables.
+- [ ] Do not apply a new Trusts schema or data migration; none was
+      added.
+- [ ] Leave package version at `1.0.0.dev3`.
+
 
 
 
