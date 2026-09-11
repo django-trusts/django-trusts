@@ -2198,9 +2198,10 @@ fields, content/source descriptor identity mismatch, Token identity
 mismatch (`(concrete_model, attname)`, including empty-path binding to
 the trustee’s resolved attname), partial member triads, non-distinct or
 type-incompatible polarity values, empty/duplicate/invalid permission
-natural keys, a permission-model `content_type` field that is not the
-canonical `content_type → ContentType.pk` relation (codename-only
-permission models remain valid), masks that are not positive
+natural keys, a permission-model `content_type` field that is not a concrete
+single-column `content_type → ContentType.pk` foreign key
+(virtual `ForeignObject` relations and non-PK targets are rejected;
+codename-only permission models remain valid), masks that are not positive
 non-boolean ints fitting the source mask field’s signed integer family,
 unsupported vendor, stale or unregistered plan, wrong model, and raw
 integer/string permission at the registry API deny without broadening
@@ -2219,7 +2220,7 @@ even when a consumer schema later adds a nonnegative CHECK.
 | `registry.register_strategy(OrderedFold(...))` | Absent | Closed typed strategy; zero-SQL validation |
 | `registry.register(...)` AnyPath | `EXISTS` | Unchanged SQL and results |
 | Same content terminal AnyPath + OrderedFold | N/A | `TrustsConfigurationError`, zero SQL |
-| Permission `content_type` not `ContentType.pk` | N/A | `TrustsConfigurationError`, zero SQL |
+| Permission `content_type` not concrete `ContentType.pk` | N/A | `TrustsConfigurationError`, zero SQL |
 | Codename-only permission model | N/A | Valid (no `content_type` join) |
 | `.authorized(user, permission_instance)` on OrderedFold content | `none()` (undeclared) | Shared `Allowed` remaining-bits predicate |
 | Raw `int` / `str` permission on registry / `.authorized` | `TrustsConfigurationError` | Unchanged rejection |
@@ -2253,9 +2254,9 @@ one SQL statement independent of candidate count.
       `(concrete_model, attname)` identity, polarity values, and
       permission identities/masks (`MaskEntry` natural keys unique,
       positive, fitting the source mask field). A permission
-      `content_type` field, if present, must be
-      `content_type → ContentType.pk`. Codename-only permission
-      models stay valid.
+      `content_type` field, if present, must be a concrete
+      single-column `content_type → ContentType.pk` foreign key.
+      Codename-only permission models stay valid.
 - [ ] Run `manage.py check` (including `trusts.E006` when live
       OrderedFold strategies exist). Registration and checks issue
       **0 SQL**.

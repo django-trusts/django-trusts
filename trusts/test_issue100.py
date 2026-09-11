@@ -316,6 +316,61 @@ class OrderedFoldRegistrationTest(SimpleTestCase):
             ))
         self.assertEqual(registry.strategies, ())
 
+    def test_virtual_content_type_foreignobject_to_pk_rejected(self):
+        User = get_user_model()
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+            ct_key = models.IntegerField()
+            content_type = models.ForeignObject(
+                ContentType,
+                from_fields=['ct_key'],
+                to_fields=['id'],
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Document(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Ace(models.Model):
+            document = models.ForeignKey(Document, on_delete=models.CASCADE)
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        ace = Ref(Ace)
+        doc = Ref(Document)
+        user = Ref(User)
+        with self.assertRaisesRegex(
+            TrustsConfigurationError, r'concrete single-column',
+        ):
+            registry.register_strategy(OrderedFold(
+                content=doc,
+                descriptor=doc,
+                source=ace,
+                source_descriptor=ace.document,
+                order=ace.ace_order,
+                polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+                mask=ace.access_mask,
+                trustee=ace.user,
+                token=FlatToken(
+                    principal=user, principal_user=user, principal_identity=user,
+                ),
+                domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+            ))
+        self.assertEqual(registry.strategies, ())
+
     def test_frozen_raises_before_strategy_validation(self):
         Permission, Document, Ace = _direct_models()
         registry = TrustsRegistry()

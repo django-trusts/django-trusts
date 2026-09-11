@@ -415,6 +415,12 @@ def _validate_domain(domain, content_model, mask_field):
                 'Permission model %s.content_type must be a single-valued '
                 'foreign key.' % permission_model._meta.label
             )
+        if not getattr(ct, 'concrete', False) or not getattr(ct, 'column', None):
+            raise TrustsConfigurationError(
+                'Permission model %s.content_type must be a concrete '
+                'single-column foreign key to ContentType.pk.'
+                % permission_model._meta.label
+            )
         related, target = _resolved_hop(ct, 'content_type', ('content_type',))
         ct_model = ContentType._meta.concrete_model
         if related is not ct_model or target != ct_model._meta.pk.attname:
