@@ -100,7 +100,6 @@ from django.contrib.auth.models import Permission
 from django.db import models
 
 from trusts.core import Ref
-from trusts.decorators import permission_required
 from trusts.query import AuthorizedManager
 
 class Document(models.Model):
@@ -131,14 +130,13 @@ user.has_perm('trusts_tests.change_document', document)
 Document.objects.authorized(user, change_permission)
 ```
 
-View guard from the same passing test:
+View guard, copied from the passing decorator test:
 
 ```python
-@permission_required(
-    'trusts_tests.change_document',
-    fieldlookups_kwargs={'pk': 'pk'},
-)
-def edit_document(request, pk):
+from trusts.decorators import permission_required
+
+@permission_required('auth.read_group', fieldlookups_kwargs={'pk': 'pk'})
+def view_group(request, pk):
     ...
 ```
 

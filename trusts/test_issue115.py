@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.http import HttpRequest
@@ -147,6 +147,7 @@ class ReadmeExampleAuthorizationTest(TransactionTestCase):
         )
 
     def test_permission_required_guard_uses_has_perms(self):
+        group = Group.objects.create(name='readme-115')
         request = HttpRequest()
         request.user = self.alice
         request.META['SERVER_NAME'] = 'testserver'
@@ -155,16 +156,15 @@ class ReadmeExampleAuthorizationTest(TransactionTestCase):
         has_perms = Mock(return_value=True)
         self.alice.has_perms = has_perms
         decorated = permission_required(
-            'trusts_tests.change_document',
+            'auth.read_group',
             fieldlookups_kwargs={'pk': 'pk'},
         )(mock)
-        response = decorated(request, pk=self.document.pk)
+        response = decorated(request, pk=group.pk)
         self.assertEqual(response, 'ok')
         self.assertTrue(has_perms.called)
-        self.assertEqual(
-            has_perms.call_args[0][0],
-            ('trusts_tests.change_document',),
-        )
+        self.assertEqual(has_perms.call_args[0][0], ('auth.read_group',))
+        items = has_perms.call_args[0][1]
+        self.assertEqual(items.get().pk, group.pk)
 
 
 class ReadmeHostSurfaceTest(SimpleTestCase):
@@ -283,5 +283,9 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         )
         self.assertIn(
             "fieldlookups_kwargs={'pk': 'pk'}",
+            readme,
+        )
+        self.assertIn(
+            "@permission_required('auth.read_group', fieldlookups_kwargs={'pk': 'pk'})",
             readme,
         )
