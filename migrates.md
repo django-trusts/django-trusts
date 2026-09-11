@@ -1009,7 +1009,7 @@ hard-coded. Re-entry is a no-op only when the same contributor
 ``AppConfig`` instance has already donated this declaration to the same
 registry object (instance-local sentinel, set only after ``register()``
 succeeds). Unrelated Category records do not suppress the TUP
-contribution.
+contribution. Ticket is a second independent contribution (§33).
 
 ``ContentQuerySet.permitted`` keeps the public signature and documented
 results. When ``plan_for`` has records, the trustee predicate comes from
@@ -1036,7 +1036,7 @@ keep the old ``trust_grant_q`` path.
 | | |
 | --- | --- |
 | Previous | ``ContentQuerySet.permitted`` always built the trustee half with ``trust_grant_q(..., trust_fk='trust')``. No package-owned registry. |
-| New | ``trusts.apps.AppConfig`` owns one ``TrustsRegistry``. The test app registers ``TrustUserPermission → Trust ← Category``. For that terminal, ``.permitted`` ORs ``plan.content_exists`` with the existing group predicate on the incoming queryset. Ticket, Junction, and other still-unregistered models stay on ``trust_grant_q``. Trust-as-content is §32. |
+| New | ``trusts.apps.AppConfig`` owns one ``TrustsRegistry``. The test app registers ``TrustUserPermission → Trust ← Category``. For that terminal, ``.permitted`` ORs ``plan.content_exists`` with the existing group predicate on the incoming queryset. Junction and other still-unregistered models stay on ``trust_grant_q``. Trust-as-content is §32. Ticket is §33. |
 | Replacement | Same ``Model.objects.permitted(perm, user)`` call. Results and laziness are unchanged. |
 | Affected | Internal implementation of ``Category`` list filtering only. ``has_perm`` remains on the old backend path. |
 | Authorization | Unchanged results. Group-only rows are not dropped. No schema or migration. |
@@ -1080,9 +1080,79 @@ construction remains lazy.
 - ``Content.is_content`` / ``_contents`` / ``register_content`` /
   ``class_prepared``
 - Conditions as a registry atom; mutation helpers
-- Junction, Ticket, Group/Role registrations
+- Junction, Group/Role registrations
 - Generic core path semantics; Zero; GH; example #7; Windows #17
-- S2–S8 of #69
+- S3–S8 of #69 (Ticket is §33)
+
+---
+
+# External Ticket terminal (issue #72)
+
+This record covers the S2 external AppConfig contribution. Version
+remains **1.0.0.dev0**. It closes the #72 slice: a second, independent
+``TrustUserPermission → Trust ← Ticket`` declaration in
+``tests.apps.TestsConfig.ready()`` so ``Ticket.objects.permitted`` uses
+the common relation plan. It does **not** migrate backend enumeration,
+``has_perm``, ``filter_by_user_content_perm``, conditions-as-atom,
+Junction, or Group/Role. There is **no schema or Django migration
+change**.
+
+## Decision
+
+The test application owns the Ticket declaration. Trusts does not import
+or discover ``tests.Ticket``. The reverse hop is taken from Django
+``_meta``, not hard-coded and not from ``Content._contents``. Ticket has
+its own contributor-instance + exact-registry sentinel
+(``_trusts_tup_ticket_registry_id``). Completion is not inferred from
+Category's sentinel or from another record targeting Ticket. Re-entry is
+a no-op only when that sentinel ``is`` the current registry; the
+sentinel is set only after ``register()`` succeeds.
+
+``ContentQuerySet.permitted`` keeps the public signature and documented
+results. Ticket now has ``plan.records``, so the existing switch ORs
+``content_exists`` with the group-local grant on the original candidate
+queryset. ``:meta_own`` and other V1 conditions remain overlays on a
+complete trustee-or-group grant and never create one. Unregistered
+models keep ``trust_grant_q``. Backend ``has_perm`` stays on the old
+path.
+
+### 33. Ticket trustee list path uses the registered plan (internal)
+
+| | |
+| --- | --- |
+| Previous | ``Ticket.objects.permitted`` used ``trust_grant_q(..., trust_fk='trust')`` because Ticket had no plan records. |
+| New | ``TestsConfig.ready()`` registers ``TrustUserPermission → Trust ← Ticket`` via Django ``_meta`` (no hard-coded reverse, no ``Content._contents``). The existing ``plan.records`` switch in ``ContentQuerySet.permitted`` lights up. Trustee is ``content_exists``; group stays OR-ed on the original candidate queryset. ``:meta_own`` remains a condition overlay. Create-under-trust ``filter_by_user_content_perm`` stays on ``trust_grant_q``. |
+| Replacement | Same ``Ticket.objects.permitted(perm, user)`` call. Results, laziness, and V1 condition semantics are unchanged. |
+| Affected | Internal implementation of ``Ticket`` list filtering only. ``has_perm`` remains on the old backend path. |
+| Authorization | Unchanged results. Group-only rows are not dropped. Conditions never create a grant. No schema or migration. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Do not reuse Category's sentinel or infer Ticket completion from
+      ``plan_for(Ticket).records``.
+- [ ] Leave ``filter_by_user_content_perm`` on ``trust_grant_q``.
+- [ ] Leave backend ``has_perm`` / ``get_all_permissions`` alone.
+- [ ] Leave ``Content._conditions`` and its registration/check behavior
+      alone.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. S2 adds no model and no Django migration. Query
+construction remains lazy.
+
+## Out of scope (not acceptance criteria)
+
+- Backend ``get_all_permissions`` / ``has_perm`` / ``get_group_permissions``
+- ``filter_by_user_content_perm`` migration
+- ``Content.is_content`` / ``_contents`` / ``register_content`` /
+  ``class_prepared``
+- Conditions as a registry atom; mutation helpers
+- Junction, Group/Role registrations
+- Path-grammar extension; registry deletion; freeze/check
+- Generic core path semantics; Zero; GH; example #7; Windows #17
+- S3–S8 of #69
 
 
 

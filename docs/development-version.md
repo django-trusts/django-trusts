@@ -43,7 +43,9 @@ API and method changes for the modernization are recorded in
 the trustee half of `ContentQuerySet.permitted` for the explicitly
 registered Category terminal; issue #70 adds the package-owned
 Trust-as-content declaration so `Trust.objects.permitted` uses the same
-plan. Public signature and results are unchanged.
+plan; issue #72 adds the test-app Ticket declaration so
+`Ticket.objects.permitted` uses the same plan. Public signature and
+results are unchanged.
 The API is not re-exported from `trusts` and does not add a schema or
 migration. See [core-registry.md](core-registry.md).
 

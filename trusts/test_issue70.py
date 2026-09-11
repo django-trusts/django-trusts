@@ -220,7 +220,13 @@ class IsolatedAppsDoesNotDonateTrustContributionTest(SimpleTestCase):
             if record.root is TrustUserPermission
             and record.content_model is Trust._meta.concrete_model
         ]
+        tup_ticket = [
+            record for record in live.records
+            if record.root is TrustUserPermission
+            and record.content_model is Ticket._meta.concrete_model
+        ]
         self.assertEqual(len(tup_trust), 1)
+        self.assertEqual(len(tup_ticket), 1)
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
 
         import trusts
@@ -243,6 +249,15 @@ class IsolatedAppsDoesNotDonateTrustContributionTest(SimpleTestCase):
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
+        self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
+        self.assertEqual(
+            [
+                record for record in live.records
+                if record.root is TrustUserPermission
+                and record.content_model is Ticket._meta.concrete_model
+            ],
+            tup_ticket,
+        )
         self.assertEqual(
             [
                 record for record in live.records
@@ -473,11 +488,11 @@ class TrustPermittedRegistryTest(TestCase):
         self.assertNotIn(self.trust_b.pk, pks)
         self.assertNotIn(self.child_b.pk, pks)
 
-    def test_ticket_and_junction_stay_on_old_path(self):
+    def test_junction_stays_on_old_path(self):
         registry = apps.get_app_config('trusts').registry
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
-        self.assertFalse(registry.plan_for(Ticket).records)
+        self.assertTrue(registry.plan_for(Ticket).records)
         self.assertFalse(registry.plan_for(Group).records)
 
     def test_inactive_and_anonymous_remain_empty(self):
