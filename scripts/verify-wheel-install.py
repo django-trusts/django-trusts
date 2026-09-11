@@ -12,7 +12,7 @@ import importlib.metadata
 import sys
 from pathlib import Path
 
-EXPECTED_VERSION = '1.0.0.dev1'
+EXPECTED_VERSION = '1.0.0.dev2'
 
 
 def main() -> int:
@@ -67,7 +67,14 @@ def main() -> int:
     import sys as _sys
     import trusts
     import trusts.core_backends as core_backends
-    from trusts.apps import AppConfig, kernel_config
+    from trusts.apps import (
+        AppConfig,
+        TrustsImplementationConfig,
+        implementation_configs,
+        implementation_for_class,
+        implementation_for_path,
+        kernel_config,
+    )
     from trusts.backends import TrustModelBackend, TrustModelBackendMixin
     from trusts.core_backends import (
         TrustModelBackendMixin as CoreTrustModelBackendMixin,
@@ -141,6 +148,39 @@ def main() -> int:
             'trusts.backends.TrustModelBackendMixin is not '
             'trusts.core_backends.TrustModelBackendMixin'
         )
+    from django.apps import AppConfig as DjangoAppConfig
+
+    if not issubclass(TrustsImplementationConfig, DjangoAppConfig):
+        raise SystemExit(
+            'TrustsImplementationConfig is not a Django AppConfig helper: %r'
+            % (TrustsImplementationConfig,)
+        )
+    if not callable(getattr(TrustsImplementationConfig, 'owned_backend_paths', None)):
+        raise SystemExit('TrustsImplementationConfig is missing owned_backend_paths')
+    if implementation_configs():
+        raise SystemExit(
+            'kernel-only wheel populate must not install an implementation owner'
+        )
+    try:
+        implementation_for_path('trusts.backends.TrustModelBackend')
+    except Exception as exc:
+        if type(exc).__name__ != 'TrustsConfigurationError':
+            raise SystemExit(
+                'implementation_for_path missing-owner must be '
+                'TrustsConfigurationError: %r' % (exc,)
+            )
+    else:
+        raise SystemExit('implementation_for_path succeeded without an owner')
+    try:
+        implementation_for_class(TrustModelBackend)
+    except Exception as exc:
+        if type(exc).__name__ != 'TrustsConfigurationError':
+            raise SystemExit(
+                'implementation_for_class missing-owner must be '
+                'TrustsConfigurationError: %r' % (exc,)
+            )
+    else:
+        raise SystemExit('implementation_for_class succeeded without an owner')
 
     import trusts.models as models_mod
     try:
@@ -159,6 +199,8 @@ def main() -> int:
     print('TrustModelBackend', TrustModelBackend)
     print('TrustModelBackendMixin', TrustModelBackendMixin)
     print('core_backends mixin identity', TrustModelBackendMixin is CoreTrustModelBackendMixin)
+    print('TrustsImplementationConfig', TrustsImplementationConfig)
+    print('implementation_configs', implementation_configs())
     print('kernel_config', config, config.label)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)
     print('filter_authorized_scopes', filter_authorized_scopes)

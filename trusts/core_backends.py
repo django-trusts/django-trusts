@@ -103,8 +103,15 @@ class TrustModelBackendMixin(object):
         return klass
 
     def _trusts_config(self):
-        from trusts.apps import kernel_config
-        return kernel_config()
+        from trusts.apps import implementation_for_class, kernel_config
+        from trusts.core import TrustsConfigurationError
+
+        try:
+            return implementation_for_class(type(self))
+        except TrustsConfigurationError as exc:
+            if getattr(exc, 'reason', None) == 'missing_implementation':
+                return kernel_config()
+            raise
 
     def _own_handle(self):
         config = self._trusts_config()

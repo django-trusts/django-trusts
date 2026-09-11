@@ -1,10 +1,13 @@
-# Development version 1.0.0.dev1
+# Development version 1.0.0.dev2
 
-The revived Trusts development line is **1.0.0.dev1**. This is a
+The revived Trusts development line is **1.0.0.dev2**. This is a
 development-version mark only. It is not a production 1.0 release, not a PyPI
 publication, and not a claim that the declarative permission model has been
-validated. `1.0.0.dev1` identifies the merged `trusts.core_backends`
-boundary (#103 / #106). Older `1.0.0.dev0` artifacts do not.
+validated. `1.0.0.dev2` identifies Step I of the approved #102 r3–r5
+package-boundary staircase: `TrustsImplementationConfig` plus
+implementation-owned registry resolvers and mixin dual-resolve (#108).
+`1.0.0.dev1` remains the merged `trusts.core_backends` checkpoint
+(#103 / #106 / #107). Older `1.0.0.dev0` artifacts do not.
 
 ## Why a new major version
 
@@ -62,7 +65,10 @@ Issue #54 C1 adds generic public seams
 `filter_authorized_scopes`, `ConditionLookup` /
 `set_condition_lookup`, and label-agnostic `kernel_config()`)
 without changing the app label, moving models, or deleting the
-legacy compiler.
+legacy compiler. Issue #108 adds `TrustsImplementationConfig` and
+`implementation_for_path` / `implementation_for_class`; the generic
+mixin prefers a registered implementation owner and otherwise uses
+the transitional `kernel_config()`.
 Public signatures and one-path results are
 unchanged.
 The API is not re-exported from `trusts` and does not add a schema or
@@ -88,8 +94,8 @@ version.
 
 | Location | Role | Value |
 | --- | --- | --- |
-| `pyproject.toml` | Authoritative package metadata | `1.0.0.dev1` |
+| `pyproject.toml` | Authoritative package metadata | `1.0.0.dev2` |
 | `setup.py` | Thin wrapper; no duplicate version field | defers to `pyproject.toml` |
-| `docs/source/conf.py` | Sphinx `version` / `release` | `1.0.0.dev1` |
+| `docs/source/conf.py` | Sphinx `version` / `release` | `1.0.0.dev2` |
 | `trusts/__init__.py` | No `__version__` | unchanged |
 | `docs/legacy-baseline.md`, `docs/legacy/baseline.json` | Historical 0.10.3 record | preserved |

@@ -340,5 +340,17 @@ identity. The kernel label is `trusts_core`. After Zero is installed,
 store). Callers of the kernel store must use `kernel_config()`, not the
 string label `trusts`.
 
+Step I (#108) adds the reusable library helper
+`TrustsImplementationConfig` and resolvers `implementation_configs()`,
+`implementation_for_path(path)`, and `implementation_for_class(cls)`.
+They scan the supplied (or default) Django `Apps` registry; they are
+not a process-global map. Missing, duplicate, ambiguous, or
+class/path-mismatched ownership raises `TrustsConfigurationError`.
+Empty `trusts_backend_paths` raises `ImproperlyConfigured` at
+`ready()`. The generic mixin prefers a registered implementation
+owner and otherwise uses the transitional `kernel_config()`. The
+kernel AppConfig, historical `trusts.backends.TrustModelBackend`, and
+`trusts.core_backends` identity are unchanged.
+
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).
