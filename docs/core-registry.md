@@ -1,7 +1,7 @@
 # TrustsRegistry (internal development primitive)
 
 Additive registration and projection surface for issues #57, #60, #65,
-#83, #92, and the first historical reader in #67. Import from `trusts.core`.
+#83, #92, #98, and the first historical reader in #67. Import from `trusts.core`.
 This slice does **not** re-export a process-global registry from `trusts`.
 
 `TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
@@ -41,13 +41,19 @@ paths is an explicit conflict. Same-root multiple paths to one content
 model are unsupported; this slice does not invent precedence. Different
 roots remain supported.
 
-User and permission refs remain one direct single-valued hop. A content
-path may be that same direct hop, or one or more forward single-valued
-hops, then a reverse one-to-many gateway, then zero to two suffix hops.
-A suffix hop is a forward single-valued, reverse one-to-one, or reverse
+Permission refs remain one direct single-valued hop. A user path may be
+that same direct hop, or zero or more forward single-valued hops followed
+by exactly one terminal many-to-many membership hop (the accepted GH
+`t.team.members` mapping). Reverse one-to-many requester paths stay
+rejected so existing direct-user fail-closed tests remain. A content
+path may be a direct hop, or one or more forward single-valued hops,
+then a reverse one-to-many gateway, then zero to two suffix hops. A
+suffix hop is a forward single-valued, reverse one-to-one, or reverse
 one-to-many relation.
 
 ```text
+user := one forward single-valued
+      | (forward single-valued)*  M2M
 content := (forward single-valued)+  reverse O2M  suffix{0..2}
 suffix hop := forward single-valued | reverse O2O | reverse O2M
 ```
@@ -56,15 +62,48 @@ These shapes raise `TrustsConfigurationError` during `register`:
 
 - reverse relations before the gateway, or a reverse as the only hop
 - reverse one-to-one as the gateway
-- many-to-many
+- many-to-many except as the terminal user membership hop
+- extra or intermediate multi-valued walks on user, content, or
+  predicate paths
 - generic foreign keys/relations
 - more than two hops after the gateway
 - multi-hop all-forward content (no gateway reverse)
+- multi-hop all-forward user without a terminal membership hop
 - arbitrary multi-valued chains
 - composite / multi-column correlation (`get_path_info()` must yield
   exactly one `PathInfo` with exactly one target field)
 
-`condition` may be omitted or `None`; any other value is not supported yet.
+`condition` may be omitted, `None`, or a closed predicate tree exported
+from `trusts.core`:
+
+```python
+from trusts.core import All, Equal, Ref, permission_in
+
+t = Ref(TeamRepoGrant)
+registry.register(
+    content=t.repository,
+    user=t.team.members,
+    permission=t.operation,
+    condition=All(
+        permission_in(t.team.permission_bundles.operations),
+        Equal(t.team.organization, t.repository.organization),
+    ),
+)
+```
+
+- `All(*predicates)` — AND of one or more `All` / `Equal` /
+  `permission_in` nodes
+- `Equal(left, right)` — two root-relative forward single-valued refs
+  that terminate on the same model
+- `permission_in(*refs)` — each ref is a bounded ceiling path:
+  forward singles, at most one intermediate reverse O2M, then a
+  terminal M2M or reverse O2M on the registered permission model
+
+Those predicates compile as an AND overlay on the same
+permission-bearing root row. They do not create a grant. Callables,
+`Q` objects, lookup strings, and tuples are not a condition dialect
+and raise `TrustsConfigurationError` with zero SQL. Untyped values
+still report that `condition` is not supported.
 
 Optional `Along(ref, bound)` replaces equality at one walk-site with bounded
 grant-anchored reachability. Pass `along=` to `register()`. Validation uses
