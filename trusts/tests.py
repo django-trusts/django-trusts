@@ -23,8 +23,10 @@ from django.test import TestCase, TransactionTestCase
 from django.test.client import MULTIPART_CONTENT, Client
 from django.http.request import HttpRequest
 
+from trusts.apps import kernel_config
 from trusts.models import Trust, TrustManager, Content, Junction, \
-                          Role, RolePermission, TrustUserPermission, TrustGroup
+                          Role, RolePermission, TrustUserPermission, TrustGroup, \
+                          TrustGroupPermission
 from trusts.backends import TrustModelBackend
 from trusts.decorators import permission_required, P, K, G, O
 from tests.models import Category, TestGroupJunction
@@ -62,13 +64,77 @@ def enable_local_group_grant(trust, group, *permissions):
     """Associate ``group`` with ``trust`` and enable the given local grants.
 
     Each permission must already be in the group's global ceiling
-    (``Group.permissions`` or a role assigned to the group).
+    (``Group.permissions`` or a role assigned to the group). Z1 removed
+    ``TrustGroup.grant_permission``; write ``TrustGroupPermission`` rows.
     """
     trust.groups.add(group)
     tg = TrustGroup.objects.get(trust=trust, group=group)
     for perm in permissions:
-        tg.grant_permission(perm)
+        TrustGroupPermission.objects.get_or_create(
+            trustgroup=tg, permission=perm,
+        )
     return tg
+
+
+def grant_group_permission(trust, group, permission):
+    """Z1 replacement for ``Trust.grant_group_permission``."""
+    from django.db import transaction
+
+    with transaction.atomic():
+        tg, created = TrustGroup.objects.get_or_create(trust=trust, group=group)
+        TrustGroupPermission.objects.get_or_create(
+            trustgroup=tg, permission=permission,
+        )
+        return tg
+
+
+def set_group_permissions(trust, group, permissions):
+    """Z1 replacement for ``Trust.set_group_permissions``."""
+    from django.db import transaction
+
+    permissions = list(permissions)
+    with transaction.atomic():
+        tg, created = TrustGroup.objects.get_or_create(trust=trust, group=group)
+        TrustGroupPermission.objects.filter(trustgroup=tg).exclude(
+            permission__in=permissions,
+        ).delete()
+        for permission in permissions:
+            TrustGroupPermission.objects.get_or_create(
+                trustgroup=tg, permission=permission,
+            )
+        return tg
+
+
+def revoke_group_permission(trust, group, permission):
+    """Z1 replacement for ``Trust.revoke_group_permission``."""
+    tg = TrustGroup.objects.get(trust=trust, group=group)
+    TrustGroupPermission.objects.filter(
+        trustgroup=tg, permission=permission,
+    ).delete()
+    return tg
+
+
+def grant_content(content, perm, user):
+    """Z1 replacement for ``Content.grant``."""
+    permission = (
+        type(content).objects.get_permission(perm)
+        if isinstance(perm, str) else perm
+    )
+    TrustUserPermission.objects.get_or_create(
+        trust=content.trust, entity=user, permission=permission,
+    )
+
+
+def revoke_content(content, perm, user):
+    """Z1 replacement for ``Content.revoke``."""
+    qs = TrustUserPermission.objects.filter(trust=content.trust, entity=user)
+    if perm is not None:
+        permission = (
+            type(content).objects.get_permission(perm)
+            if isinstance(perm, str) else perm
+        )
+        qs = qs.filter(permission=permission)
+    qs.delete()
 
 
 class TrustTest(TestCase):
@@ -430,7 +496,7 @@ class TrustContentTestMixin(ContentModel):
         self.assertEqual(len(perm), 0)
 
         self.assertFalse(
-            apps.get_app_config('trusts').configured_backend().registry.plan_for(
+            kernel_config().configured_backend().registry.plan_for(
                 type(self.user),
             ).records
         )

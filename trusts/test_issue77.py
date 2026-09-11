@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from django.apps import apps
+from trusts.apps import kernel_config
 from django.contrib.auth.models import AnonymousUser, Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
@@ -78,7 +79,7 @@ def _contribute_category(registry):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = apps.get_app_config('trusts')
+        self.live = kernel_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -568,7 +569,7 @@ class UndeclaredJunctionRemainsHistoricalTest(_UsersMixin, TestCase):
         self._reload()
 
     def test_junction_group_uses_registered_plan(self):
-        handle = apps.get_app_config('trusts').configured_backend()
+        handle = kernel_config().configured_backend()
         self.assertTrue(handle.registry.plan_for(Group).records)
         self.assertFalse(handle.registry.plan_for(TestGroupJunction).records)
         code = 'auth.change_group'
@@ -641,7 +642,7 @@ class CoreCommonPermissionsProjectionTest(_UsersMixin, TestCase):
         self._reload()
 
     def test_plan_and_handle_common_permissions_are_one_sql(self):
-        handle = apps.get_app_config('trusts').configured_backend()
+        handle = kernel_config().configured_backend()
         plan = handle.registry.plan_for(self.cat_a, user=self.alice)
         with self.assertNumQueries(1):
             codes = set(
@@ -807,7 +808,7 @@ class HistoricalFallbackCapabilityTest(_RegistryRestoreMixin, _UsersMixin, TestC
             self.assertFalse(mixin.has_perm(self.alice, self.change_code, qs))
             self.assertEqual(mixin.get_all_permissions(self.alice, qs), set())
             self.assertEqual(mixin.get_group_permissions(self.carol, qs), set())
-            with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+            with patch('trusts.query.trust_grant_q', wraps=trust_grant_q) as grant_q:
                 self.assertFalse(
                     Category.objects.permitted(self.change_code, self.alice).exists()
                 )

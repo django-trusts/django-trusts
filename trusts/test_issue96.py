@@ -63,6 +63,22 @@ class ModelsShimTest(SimpleTestCase):
         self.assertIn("trusts.zero.apps.ZeroConfig", str(ctx.exception))
         self.assertNotIn('trusts.zero', sys.modules)
 
+    def test_dir_hasattr_and_unknown_name_do_not_import_zero(self):
+        self.assertNotIn('trusts.zero', sys.modules)
+        module = import_module('trusts.models')
+        names = dir(module)
+        self.assertIn('Trust', names)
+        self.assertIn('Content', names)
+        self.assertNotIn('trusts.zero', sys.modules)
+        self.assertFalse(hasattr(module, 'anything'))
+        self.assertFalse(hasattr(module, 'NotALegacyModel'))
+        self.assertNotIn('trusts.zero', sys.modules)
+        with self.assertRaises(AttributeError) as ctx:
+            getattr(module, 'NotALegacyModel')
+        self.assertIn('NotALegacyModel', str(ctx.exception))
+        self.assertNotIn('ImportError', type(ctx.exception).__name__)
+        self.assertNotIn('trusts.zero', sys.modules)
+
 
 class GhStubWithoutZeroTest(SimpleTestCase):
     def test_gh_repository_loads_and_zero_stays_unimported(self):

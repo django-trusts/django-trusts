@@ -9,6 +9,7 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.apps import apps
+from trusts.apps import kernel_config
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.checks import Error, Warning as CheckWarning, run_checks
@@ -216,7 +217,7 @@ class PermissionConditionCheckTest(ConditionRegistryIsolationMixin, TestCase):
     def test_app_configs_subset_still_reports_other_apps(self):
         u, p, o = condition_refs()
         Content.register_permission_condition(Ticket, 'typo', u == o.nope)
-        trusts_only = [apps.get_app_config('trusts')]
+        trusts_only = [kernel_config()]
         errors = _messages_with_id(
             check_permission_conditions(app_configs=trusts_only),
             CHECK_ID_INVALID_EXPR,
@@ -324,7 +325,7 @@ class PermissionConditionCheckTest(ConditionRegistryIsolationMixin, TestCase):
     def test_ready_does_not_raise_when_invalid_conditions_are_registered(self):
         u, p, o = condition_refs()
         Content.register_permission_condition(Ticket, 'typo', u == o.nope)
-        apps.get_app_config('trusts').ready()
+        kernel_config().ready()
         errors = _messages_with_id(
             check_permission_conditions(None), CHECK_ID_INVALID_EXPR
         )

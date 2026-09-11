@@ -184,6 +184,9 @@ class ConditionGrammarTest(SimpleTestCase):
 class QueryableConditionTest(TestCase):
     def setUp(self):
         super(QueryableConditionTest, self).setUp()
+        self._saved_conditions = {
+            key: dict(codes) for key, codes in Content._conditions.items()
+        }
         call_command('create_trust_root')
         get_or_create_root_user(self)
         create_test_users(self)
@@ -264,6 +267,13 @@ class QueryableConditionTest(TestCase):
         self.change_editable = 'trusts_tests.change_ticket:editable'
         self.change_own = 'trusts_tests.change_ticket:own'
         self.change_open = 'trusts_tests.change_ticket:open'
+
+    def tearDown(self):
+        Content._conditions.clear()
+        Content._conditions.update({
+            key: dict(codes) for key, codes in self._saved_conditions.items()
+        })
+        super(QueryableConditionTest, self).tearDown()
 
     def _direct_pks(self, perm, user):
         return set(

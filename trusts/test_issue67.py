@@ -22,7 +22,7 @@ from django.test.utils import isolate_apps
 from tests.apps import TestsConfig, isolate_live_registry, override_apps_ready
 import tests as tests_module
 from tests.models import Category, Ticket
-from trusts.apps import AppConfig as TrustsAppConfig
+from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
 from trusts.conditions import condition_refs
 from trusts.core import (
     Ref,
@@ -70,7 +70,7 @@ class TrustsRegistryOwnershipTest(SimpleTestCase):
         config.ready()
         self.assertIs(config.registry, first)
 
-        live = apps.get_app_config('trusts')
+        live = kernel_config()
         before = live.registry
         live.ready()
         self.assertIs(live.registry, before)
@@ -78,14 +78,14 @@ class TrustsRegistryOwnershipTest(SimpleTestCase):
     def test_reader_obtains_registry_via_app_config_not_package_root(self):
         import trusts
 
-        live = apps.get_app_config('trusts').registry
+        live = kernel_config().registry
         self.assertIsInstance(live, TrustsRegistry)
         self.assertIsNone(getattr(trusts, 'registry', None))
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
         self.assertIsNone(getattr(trusts, 'RelationPlan', None))
 
     def test_isolated_core_registries_stay_independent(self):
-        live = apps.get_app_config('trusts').registry
+        live = kernel_config().registry
         isolated = TrustsRegistry()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
@@ -130,7 +130,7 @@ class TrustsRegistryOwnershipTest(SimpleTestCase):
 
 class ContributorIdempotenceTest(SimpleTestCase):
     def setUp(self):
-        self.live_trusts = apps.get_app_config('trusts')
+        self.live_trusts = kernel_config()
         self.live_registry = self.live_trusts.registry
         self.live_contributor = apps.get_app_config('trusts_tests')
 
@@ -257,7 +257,7 @@ class ContributorIdempotenceTest(SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = apps.get_app_config('trusts').registry
+        live = kernel_config().registry
         tup_category = [
             record for record in live.records
             if record.root is TrustUserPermission
@@ -358,7 +358,7 @@ class CategoryPermittedRegistryTest(TestCase):
         }
 
     def test_live_declaration_uses_meta_reverse_not_hardcoded_accessor(self):
-        registry = apps.get_app_config('trusts').registry
+        registry = kernel_config().registry
         rev = Category._meta.get_field('trust').remote_field.get_accessor_name()
         self.assertNotEqual(rev, 'tests_category_content')
         record = registry.plan_for(Category).records[0]
@@ -422,7 +422,7 @@ class CategoryPermittedRegistryTest(TestCase):
             self.assertEqual(list(page), [self.cat_a1])
 
     def test_no_tup_rows_deny_without_changing_registration(self):
-        registry = apps.get_app_config('trusts').registry
+        registry = kernel_config().registry
         self.assertTrue(registry.plan_for(Category).records)
         TrustUserPermission.objects.all().delete()
         self._reload()
@@ -456,7 +456,7 @@ class CategoryPermittedRegistryTest(TestCase):
         )
 
     def test_registered_terminals_skip_trust_grant_q(self):
-        registry = apps.get_app_config('trusts').registry
+        registry = kernel_config().registry
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
         self.assertTrue(registry.plan_for(Ticket).records)
@@ -476,7 +476,7 @@ class CategoryPermittedRegistryTest(TestCase):
         ).save()
         self._reload()
 
-        with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+        with patch('trusts.query.trust_grant_q', wraps=trust_grant_q) as grant_q:
             list(Category.objects.permitted(self.change_code, self.alice))
             self.assertEqual(grant_q.call_count, 0)
             list(Trust.objects.permitted('trusts.change_trust', self.alice))
@@ -488,7 +488,7 @@ class CategoryPermittedRegistryTest(TestCase):
         ))
 
     def test_reader_uses_content_exists_not_filter_authorized(self):
-        registry = apps.get_app_config('trusts').registry
+        registry = kernel_config().registry
         plan = registry.plan_for(
             Category.objects.all(), user=self.carol, permission=self.change,
         )

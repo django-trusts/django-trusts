@@ -10,6 +10,7 @@ assertions.
 from unittest.mock import patch
 
 from django.apps import apps
+from trusts.apps import kernel_config
 from django.contrib.auth.models import AnonymousUser, Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
@@ -116,7 +117,7 @@ class _UnusableContents(object):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = apps.get_app_config('trusts')
+        self.live = kernel_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -272,16 +273,16 @@ class FilterByUserContentPermRegistryGateTest(
         self.alice.is_active = False
         self.alice.save()
         self._reload()
-        with patch('trusts.models.any_plan_records') as gate:
-            with patch('trusts.models.trust_grant_q') as grant_q:
+        with patch('trusts.zero.models.any_plan_records') as gate:
+            with patch('trusts.query.trust_grant_q') as grant_q:
                 self.assertFalse(self._filter(self.alice).exists())
                 self.assertFalse(self._filter(AnonymousUser()).exists())
         gate.assert_not_called()
         grant_q.assert_not_called()
 
     def test_condition_raises_before_gate_or_grant(self):
-        with patch('trusts.models.any_plan_records') as gate:
-            with patch('trusts.models.trust_grant_q') as grant_q:
+        with patch('trusts.zero.models.any_plan_records') as gate:
+            with patch('trusts.query.trust_grant_q') as grant_q:
                 with self.assertRaises(PermissionConditionNotQueryable):
                     self._filter(self.alice, Category, 'add_category:own')
                 with self.assertRaises(PermissionConditionNotQueryable):
@@ -290,14 +291,14 @@ class FilterByUserContentPermRegistryGateTest(
         grant_q.assert_not_called()
 
     def test_unknown_model_is_none_and_does_not_run_grant(self):
-        with patch('trusts.models.trust_grant_q') as grant_q:
+        with patch('trusts.query.trust_grant_q') as grant_q:
             qs = self._filter(self.alice, Organization, 'add')
             self.assertIsInstance(qs, QuerySet)
             self.assertIsNone(qs._result_cache)
             grant_q.assert_not_called()
             with self.assertNumQueries(0):
                 self.assertFalse(qs.exists())
-        with patch('trusts.models.trust_grant_q') as grant_q:
+        with patch('trusts.query.trust_grant_q') as grant_q:
             self.assertFalse(self._filter(self.alice, User, 'add_user').exists())
             grant_q.assert_not_called()
 
@@ -306,7 +307,7 @@ class FilterByUserContentPermRegistryGateTest(
         handle = self.live.configured_backend()
         self.assertTrue(handle.historical_fallback)
         self.assertTrue(handle.registry.plan_for(Group).records)
-        with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+        with patch('trusts.query.trust_grant_q', wraps=trust_grant_q) as grant_q:
             self.assertFalse(
                 self._filter(self.alice, Group, 'change_group').exists()
             )
@@ -316,7 +317,7 @@ class FilterByUserContentPermRegistryGateTest(
             emptied = self.live.configured_backend()
             self.assertFalse(emptied.registry.plan_for(Category).records)
             self.assertTrue(emptied.historical_fallback)
-            with patch('trusts.models.trust_grant_q') as grant_q:
+            with patch('trusts.query.trust_grant_q') as grant_q:
                 qs = self._filter(self.alice, Category, 'add_category')
                 grant_q.assert_not_called()
             self.assertFalse(qs.exists())
@@ -326,7 +327,7 @@ class FilterByUserContentPermRegistryGateTest(
         self.assertFalse(hasattr(Content, '_contents'))
         self.assertFalse(hasattr(Content, 'is_content_model'))
         with patch.object(registry, 'filter_authorized') as filtered:
-            with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+            with patch('trusts.query.trust_grant_q', wraps=trust_grant_q) as grant_q:
                 pks = _pks(self._filter(self.alice))
         filtered.assert_not_called()
         self.assertGreaterEqual(grant_q.call_count, 1)
@@ -387,7 +388,7 @@ class MultiPathCreateUnderTrustGateTest(
                 wraps=handle_b.compiler.complete_exists,
             ) as complete:
                 with patch.object(handle_b.registry, 'filter_authorized') as filtered:
-                    with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+                    with patch('trusts.query.trust_grant_q', wraps=trust_grant_q) as grant_q:
                         qs = Trust.objects.filter_by_user_content_perm(
                             self.alice, Category, 'add_category',
                         )
@@ -421,7 +422,7 @@ class MultiPathCreateUnderTrustGateTest(
                 )),
                 {self.trust_a.pk},
             )
-            with patch('trusts.models.trust_grant_q') as grant_q:
+            with patch('trusts.query.trust_grant_q') as grant_q:
                 self.assertFalse(
                     Trust.objects.filter_by_user_content_perm(
                         self.alice, Organization, 'add',

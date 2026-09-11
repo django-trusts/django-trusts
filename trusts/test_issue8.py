@@ -23,6 +23,7 @@ from trusts.authorization import (
     refuse_group_permission_write,
     revoke_trustee,
 )
+from trusts import utils
 from trusts.models import (
     Content,
     PermissionConditionNotQueryable,
@@ -35,12 +36,18 @@ from trusts.tests import (
     create_test_users,
     enable_local_group_grant,
     get_or_create_root_user,
+    grant_content,
     reload_test_users,
+    revoke_content,
 )
 from tests.models import AutoAdminCategory, AutoAdminJunction, Category, ManualAdminCategory
 
 
 class Issue8FixtureMixin(ContentModelMixin):
+    def _forget_never_condition(self):
+        short = utils.get_short_model_name(Category)
+        Content._conditions.get(short, {}).pop('never', None)
+
     def setUp(self):
         super(Issue8FixtureMixin, self).setUp()
         self.org = Trust(settlor=self.user, trust=Trust.objects.get_root(), title='Org A')
@@ -121,10 +128,10 @@ class PermittedQuerySetTest(Issue8FixtureMixin, TestCase):
 
     def test_grant_and_revoke(self):
         self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), self.content))
-        self.content.grant('change', self.user)
+        grant_content(self.content, 'change', self.user)
         reload_test_users(self)
         self.assertTrue(self.user.has_perm(self.get_perm_code(self.perm_change), self.content))
-        self.content.revoke('change', self.user)
+        revoke_content(self.content, 'change', self.user)
         reload_test_users(self)
         self.assertFalse(self.user.has_perm(self.get_perm_code(self.perm_change), self.content))
 
@@ -138,6 +145,7 @@ class PermittedQuerySetTest(Issue8FixtureMixin, TestCase):
         Content.register_permission_condition(
             Category, 'never', lambda user, perm, obj: False
         )
+        self.addCleanup(self._forget_never_condition)
         TrustUserPermission(
             trust=self.org, entity=self.user, permission=self.perm_read
         ).save()
@@ -227,6 +235,7 @@ class FilterByUserContentPermTest(Issue8FixtureMixin, TestCase):
         Content.register_permission_condition(
             Category, 'never', lambda user, perm, obj: False
         )
+        self.addCleanup(self._forget_never_condition)
         TrustUserPermission(
             trust=self.org, entity=self.user, permission=self.perm_add
         ).save()

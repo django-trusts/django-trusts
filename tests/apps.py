@@ -169,6 +169,34 @@ def forget_models(*model_classes):
     django_apps.clear_cache()
 
 
+def apply_zero_trust_donation(config):
+    """Donate package Trust-as-content the way Zero does on C2.
+
+    Kernel ``ready()`` no longer imports models. Tests that need the
+    historical TUP→Trust declaration on a standalone or swapped store
+    call this instead of expecting ``AppConfig.ready()`` to donate.
+    Mixin-only paths are skipped (C1 package donation rule).
+    """
+    from django.utils.module_loading import import_string
+
+    from trusts.backends import TrustModelBackend
+    from trusts.zero.models import register_zero_relations
+
+    paths = config._configured_trusts_paths()
+    for path in paths:
+        cls = import_string(path)
+        if not issubclass(cls, TrustModelBackend):
+            continue
+        registry = config._ensure(path)
+        register_zero_relations(registry)
+        ids = dict(getattr(config, '_trusts_tup_trust_registry_ids', None) or {})
+        ids[path] = registry
+        config._trusts_tup_trust_registry_ids = ids
+        if len(paths) == 1:
+            config._trusts_tup_trust_registry_id = registry
+    return config
+
+
 def clone_writable_registry(registry):
     """Copy records onto a new unfrozen registry for test isolation."""
     from trusts.core import TrustsRegistry

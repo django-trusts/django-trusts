@@ -64,6 +64,8 @@ jobs:
         python -m pip install -e .deps/django-trusts-zero --config-settings editable_mode=compat
     - name: Matrix B pair proofs
       run: python scripts/verify-pair-zero.py
+    - name: Legacy core suite against C2+Z1
+      run: python scripts/run-core-pair-tests.py
     - name: Zero C2-valid tests + fresh install
       run: |
         python scripts/run-z1-pair-tests.py

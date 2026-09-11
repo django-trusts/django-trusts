@@ -17,14 +17,39 @@ administrative ``change`` on every trust that uses the group.
 """
 
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 
 from trusts import get_entity_model, get_group_model
 from trusts.query import is_active_principal, trust_grant_q
 
 
-def _trust_model():
+def _trusts_model(name):
     from django.apps import apps as django_apps
-    return django_apps.get_model('trusts', 'Trust')
+    return django_apps.get_model('trusts', name)
+
+
+def _trust_model():
+    return _trusts_model('Trust')
+
+
+def _tup_model():
+    return _trusts_model('TrustUserPermission')
+
+
+def _trust_group_model():
+    return _trusts_model('TrustGroup')
+
+
+def _tgp_model():
+    return _trusts_model('TrustGroupPermission')
+
+
+def _permission_for_content(content, perm):
+    if perm is None:
+        return None
+    if isinstance(perm, str):
+        return type(content).objects.get_permission(perm)
+    return perm
 
 
 class AuthorizationDenied(PermissionDenied):
@@ -129,7 +154,10 @@ def grant_trustee(actor, content, user, perm):
     Entity = get_entity_model()
     if not isinstance(user, Entity):
         user = resolve_entity_id(Entity, user)
-    content.grant(perm, user)
+    permission = _permission_for_content(content, perm)
+    _tup_model().objects.get_or_create(
+        trust=content.trust, entity=user, permission=permission,
+    )
     return user
 
 
@@ -145,7 +173,11 @@ def revoke_trustee(actor, content, user, perm=None):
         user = resolve_entity_id(Entity, user, queryset=scope)
     elif not scope.filter(pk=user.pk).exists():
         raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
-    content.revoke(perm, user)
+    qs = _tup_model().objects.filter(trust=content.trust, entity=user)
+    permission = _permission_for_content(content, perm)
+    if permission is not None:
+        qs = qs.filter(permission=permission)
+    qs.delete()
     return user
 
 
@@ -177,9 +209,10 @@ def associate_group_with_trust(actor, content, group, permissions=None):
     group = _resolve_group(group)
     if permissions:
         try:
-            content.trust.set_group_permissions(group, [
-                _resolve_content_perm(content, perm) for perm in permissions
-            ])
+            _set_local_group_permissions(
+                content.trust, group,
+                [_resolve_content_perm(content, perm) for perm in permissions],
+            )
         except ValidationError as exc:
             raise AuthorizationDenied(str(exc))
     else:
@@ -210,7 +243,7 @@ def grant_trust_group_permission(actor, content, group, perm):
         raise AuthorizationDenied('Submitted entity is outside the authorized scope.')
     permission = _resolve_content_perm(content, perm)
     try:
-        content.trust.grant_group_permission(group, permission)
+        _grant_local_group_permission(content.trust, group, permission)
     except ValidationError as exc:
         raise AuthorizationDenied(str(exc))
     return group
@@ -222,7 +255,8 @@ def revoke_trust_group_permission(actor, content, group, perm):
              'change permission is required to revoke team permissions.')
     group = _resolve_group(group, queryset=content.trust.groups.all())
     permission = _resolve_content_perm(content, perm)
-    content.trust.revoke_group_permission(group, permission)
+    tg = _trust_group_model().objects.get(trust=content.trust, group=group)
+    _tgp_model().objects.filter(trustgroup=tg, permission=permission).delete()
     return group
 
 
@@ -233,10 +267,39 @@ def set_trust_group_permissions(actor, content, group, permissions):
     group = _resolve_group(group, queryset=content.trust.groups.all())
     resolved = [_resolve_content_perm(content, perm) for perm in permissions]
     try:
-        content.trust.set_group_permissions(group, resolved)
+        _set_local_group_permissions(content.trust, group, resolved)
     except ValidationError as exc:
         raise AuthorizationDenied(str(exc))
     return group
+
+
+def _grant_local_group_permission(trust, group, permission):
+    """Create a local grant; roll back a new association if it fails."""
+    with transaction.atomic():
+        tg, created = _trust_group_model().objects.get_or_create(
+            trust=trust, group=group,
+        )
+        _tgp_model().objects.get_or_create(
+            trustgroup=tg, permission=permission,
+        )
+        return tg
+
+
+def _set_local_group_permissions(trust, group, permissions):
+    """Replace local grants; roll back a new association if any grant fails."""
+    permissions = list(permissions)
+    with transaction.atomic():
+        tg, created = _trust_group_model().objects.get_or_create(
+            trust=trust, group=group,
+        )
+        _tgp_model().objects.filter(trustgroup=tg).exclude(
+            permission__in=permissions,
+        ).delete()
+        for permission in permissions:
+            _tgp_model().objects.get_or_create(
+                trustgroup=tg, permission=permission,
+            )
+        return tg
 
 
 def refuse_group_permission_write():

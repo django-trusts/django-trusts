@@ -31,7 +31,7 @@ from tests.models import (
     TestGroupJunction,
     Ticket,
 )
-from trusts.apps import AppConfig as TrustsAppConfig
+from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
 from trusts.checks import (
     CHECK_ID_MISSING_DECLARATION,
     CHECK_ID_LEGACY_CALLBACK_WARNING,
@@ -113,7 +113,7 @@ def _forget_leftover_detectable_models():
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = apps.get_app_config('trusts')
+        self.live = kernel_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -357,7 +357,9 @@ class LiveFreezeLifecycleTest(_RegistryRestoreMixin, SimpleTestCase):
         isolated.ready()
         self.assertIs(isolated.registry, first)
         self.assertFalse(first.frozen)
-        self.assertTrue(first.plan_for(Trust).records)
+        # C2: Trust-as-content is donated by Zero onto the live kernel
+        # store, not by a standalone AppConfig.ready().
+        self.assertFalse(first.plan_for(Trust).records)
 
 
 class SentinelAfterFreezeTest(_RegistryRestoreMixin, SimpleTestCase):
@@ -413,12 +415,10 @@ class SentinelAfterFreezeTest(_RegistryRestoreMixin, SimpleTestCase):
         isolated = install_writable_registry(self.live, CONCRETE)
         self.live.configured_backend()
         self.assertTrue(isolated.frozen)
-        with self.assertRaises(TrustsConfigurationError):
-            self.live.ready()
-        self.assertIsNot(
-            getattr(self.live, '_trusts_tup_trust_registry_id', None),
-            isolated,
-        )
+        # C2 kernel ready() does not donate Trust-as-content (Zero does
+        # that on the live store during populate). Re-entry must not
+        # mutate the frozen replacement.
+        self.live.ready()
         self.assertFalse(isolated.plan_for(Trust).records)
 
 
@@ -588,7 +588,7 @@ class MissingDeclarationCheckTest(_RegistryRestoreMixin, TestCase):
             call_command('check', 'trusts', stdout=out, stderr=err)
             subset = out.getvalue() + err.getvalue()
         self.assertNotIn(CHECK_ID_MISSING_DECLARATION, subset)
-        trusts_only = [apps.get_app_config('trusts')]
+        trusts_only = [kernel_config()]
         with self.assertNumQueries(0):
             subset_messages = check_missing_declarations(app_configs=trusts_only)
         self.assertEqual(_e003(subset_messages), [])

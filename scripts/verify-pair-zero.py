@@ -138,6 +138,17 @@ def main() -> int:
         if django_apps.get_model('trusts', 'Trust') is not ZeroTrust:
             raise SystemExit('get_model("trusts", "Trust") is not Zero Trust')
 
+        import trusts.models as models_mod
+        if 'NotALegacyModel' in dir(models_mod):
+            raise SystemExit('dir(trusts.models) leaked a non-compat name')
+        if hasattr(models_mod, 'NotALegacyModel') or hasattr(models_mod, 'anything'):
+            raise SystemExit('hasattr on unknown name must be False')
+        try:
+            getattr(models_mod, 'NotALegacyModel')
+        except AttributeError:
+            pass
+        else:
+            raise SystemExit('unknown shim name must raise AttributeError')
         from trusts.models import Trust as ShimTrust
         if ShimTrust is not ZeroTrust:
             raise SystemExit('trusts.models.Trust is not the Zero class')

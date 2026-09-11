@@ -39,13 +39,12 @@ from trusts.models import (
     PermissionConditionNotQueryable,
     Trust,
     TrustUserPermission,
-    trust_grant_q,
 )
 from trusts.query import (
     AuthorizedManager,
     AuthorizedQuerySet,
     is_active_principal,
-    trust_grant_q as query_trust_grant_q,
+    trust_grant_q,
 )
 from trusts.tests import (
     enable_local_group_grant,
@@ -170,15 +169,17 @@ class _UsersMixin(object):
 
 
 class KernelConfigTest(TestCase):
-    def test_kernel_config_is_today_s_trusts_appconfig(self):
+    def test_kernel_config_is_class_identity_not_zero_label(self):
         with self.assertNumQueries(0):
             config = kernel_config()
-        live = apps.get_app_config('trusts')
-        self.assertIs(config, live)
+        zero = apps.get_app_config('trusts')
         self.assertIs(type(config), AppConfig)
         self.assertEqual(config.name, 'trusts')
-        self.assertEqual(config.label, 'trusts')
+        self.assertEqual(config.label, 'trusts_core')
         self.assertIs(config, kernel_config())
+        self.assertIsNot(config, zero)
+        self.assertEqual(zero.name, 'trusts.zero')
+        self.assertEqual(zero.label, 'trusts')
 
     def test_legacy_helpers_and_compiler_remain_importable(self):
         from trusts.query import (
@@ -192,16 +193,15 @@ class KernelConfigTest(TestCase):
         self.assertTrue(getattr(HistoricalGroupQueryCompiler(), 'historical_fallback', False))
 
 
-class LegacyMatrixATest(TestCase):
-    def test_core_alone_still_populates_trusts_label_and_migrations(self):
+class LegacyMatrixBPairTest(TestCase):
+    def test_pair_zero_owns_trusts_label_and_migration_keys(self):
         config = kernel_config()
-        self.assertIs(config, apps.get_app_config('trusts'))
         self.assertEqual(config.name, 'trusts')
-        self.assertEqual(config.label, 'trusts')
+        self.assertEqual(config.label, 'trusts_core')
+        self.assertIsNot(config, apps.get_app_config('trusts'))
         self.assertIs(apps.get_model('trusts', 'Trust'), Trust)
         self.assertTrue(apps.is_installed('trusts'))
-        self.assertFalse(apps.is_installed('trusts.zero'))
-        self.assertNotIn('trusts.zero', sys.modules)
+        self.assertTrue(apps.is_installed('trusts.zero'))
         loader = MigrationLoader(connection)
         keys = {
             key for key in loader.disk_migrations
@@ -212,9 +212,9 @@ class LegacyMatrixATest(TestCase):
             {('trusts', '0001_initial'), ('trusts', '0002_trustgroup')},
         )
         initial = loader.disk_migrations[('trusts', '0001_initial')]
-        self.assertTrue(initial.__module__.startswith('trusts.migrations'))
+        self.assertTrue(initial.__module__.startswith('trusts.zero.migrations'))
         group = loader.disk_migrations[('trusts', '0002_trustgroup')]
-        self.assertTrue(group.__module__.startswith('trusts.migrations'))
+        self.assertTrue(group.__module__.startswith('trusts.zero.migrations'))
         self.assertTrue(
             Trust.objects.filter(pk=Trust.objects.get_root().pk).exists()
         )
@@ -309,8 +309,12 @@ class ConditionLookupBackendAdapterTest(_UsersMixin, TestCase):
         self.handle.registry.set_condition_lookup(self.saved_lookup)
         super().tearDown()
 
-    def test_unbound_preserves_content_condition_registry(self):
-        self.assertIsNone(self.handle.registry.condition_lookup)
+    def test_zero_binds_content_condition_lookup(self):
+        from trusts.zero.models import ContentConditionLookup
+
+        self.assertIsInstance(
+            self.handle.registry.condition_lookup, ContentConditionLookup,
+        )
         with self.assertRaises(AttributeError):
             self.alice.has_perm('trusts_tests.read_category:missing', self.cat_a)
 
@@ -339,7 +343,8 @@ class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(AuthorizedManager, 'permitted'))
         self.assertFalse(hasattr(AuthorizedManager, 'get_permission'))
         self.assertTrue(issubclass(ContentQuerySet, QuerySet))
-        self.assertFalse(issubclass(ContentQuerySet, AuthorizedQuerySet))
+        self.assertTrue(issubclass(ContentQuerySet, AuthorizedQuerySet))
+        self.assertTrue(hasattr(ContentQuerySet, 'permitted'))
         self.assertTrue(hasattr(AuthorizedManager, 'authorized'))
         self.assertFalse(hasattr(AuthorizedManager, 'permitted'))
         self.assertFalse(hasattr(AuthorizedManager, 'get_permission'))
@@ -398,11 +403,9 @@ class AuthorizedQuerySetLiveTest(_UsersMixin, TestCase):
         self.alice.save()
         self._reload()
         with patch('trusts.query.is_active_principal') as active:
-            with patch('trusts.models.is_active_principal') as models_active:
-                with patch.object(Category.objects, 'get_permission') as get_perm:
-                    pks = _pks(_authorized(Category, self.alice, self.read))
+            with patch.object(Category.objects, 'get_permission') as get_perm:
+                pks = _pks(_authorized(Category, self.alice, self.read))
         active.assert_not_called()
-        models_active.assert_not_called()
         get_perm.assert_not_called()
         self.assertEqual(pks, {self.cat_a.pk})
 
@@ -723,7 +726,6 @@ class FilterAuthorizedScopesLiveTest(_UsersMixin, TestCase):
             )
 
     def test_legacy_create_under_trust_path_is_unchanged(self):
-        self.assertIs(query_trust_grant_q, trust_grant_q)
         pks = _pks(Trust.objects.filter_by_user_content_perm(
             self.alice, Category, 'add_category',
         ))
