@@ -301,7 +301,9 @@ The queryset model must be a proper prefix node of some applicable
 record's ``content_path`` whose content terminal is ``content``. The
 content terminal itself returns ``none()`` (use ``.authorized()``).
 Unknown terminals, empty handles, and scope models that are not on the
-path return ``none()``. ``permission`` must be an instance.
+path return ``none()``. ``permission`` must be an instance. Prefix
+correlation uses the hop's resolved target field (including non-PK
+``to_field`` identities), not an assumed primary key.
 
 ``ConditionLookup`` is a tiny protocol bound with
 ``TrustsRegistry.set_condition_lookup(lookup)``. Both ``record_for`` and

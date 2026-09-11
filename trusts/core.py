@@ -189,8 +189,10 @@ def _scope_prefix_lookups(record, scope_model):
     """Root-relative lookups to proper prefix nodes matching ``scope_model``.
 
     A proper prefix is a hop on ``content_path`` whose related model is
-    ``scope_model`` and that is not the content terminal. Uses stored
-    path names and ``_meta`` only (zero SQL).
+    ``scope_model`` and that is not the content terminal. Each item is
+    ``(root-relative lookup, target attname)``. The attname is the
+    hop's resolved identity (``to_field`` when set), not assumed to
+    be ``pk``. Uses stored path names and ``_meta`` only (zero SQL).
     """
     path = record.content_path
     if not path:
@@ -203,9 +205,9 @@ def _scope_prefix_lookups(record, scope_model):
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
             return ()
-        related, _target = _resolved_hop(field, 'content', path)
+        related, target_attname = _resolved_hop(field, 'content', path)
         if related._meta.concrete_model is scope_model and index != last:
-            lookups.append(_lookup_text(path[:index + 1]))
+            lookups.append((_lookup_text(path[:index + 1]), target_attname))
         current = related
     return tuple(lookups)
 
@@ -216,8 +218,10 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     Fail closed unless ``queryset.model`` is a proper prefix node of some
     applicable record's ``content_path`` whose content terminal is
     ``content``. Compile ``EXISTS`` of root rows correlated to
-    ``OuterRef(queryset.pk)`` at that node, bind user + permission from
-    the same record, and OR applicable records.
+    ``OuterRef`` of that hop's resolved target field (the related
+    ``attname`` from ``get_path_info()``, which need not be ``pk``) at
+    that node, bind user + permission from the same record, and OR
+    applicable records.
 
     ``queryset.model`` equal to the content terminal returns ``none()``
     (that path is ``AuthorizedQuerySet.authorized``). Unknown terminal,
@@ -248,16 +252,17 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     if scope_model is content_model:
         return queryset.none()
 
-    pk_attname = queryset.model._meta.pk.attname
     parts = []
     for handle in handles:
         plan = _plan_for_permission(handle, content, user, permission)
         for record in plan.records:
-            for lookup in _scope_prefix_lookups(record, scope_model):
+            for lookup, target_attname in _scope_prefix_lookups(
+                record, scope_model,
+            ):
                 inner = record.root._default_manager.filter(**{
                     record.user_field: user,
                     record.permission_field: permission,
-                    lookup: OuterRef(pk_attname),
+                    lookup: OuterRef(target_attname),
                 })
                 parts.append(Exists(inner))
     if not parts:

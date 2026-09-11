@@ -280,7 +280,9 @@ this class.
 in `trusts.core` filters rows of an intermediate scope model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. It compiles `EXISTS` of root rows
-correlated to `OuterRef(queryset.pk)` at that node, binds user +
+correlated to `OuterRef` of that hop's resolved target field (the
+related `attname` from `get_path_info()`, including non-PK
+`ForeignKey(..., to_field=...)`) at that node, binds user +
 permission, and ORs applicable records. `queryset.model` equal to the
 content terminal, an unknown terminal, empty handles, or a scope model
 not on the path return `none()`. Core does not import Zero schema models

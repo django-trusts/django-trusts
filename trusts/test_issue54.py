@@ -563,6 +563,98 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         )
 
 
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
+    """Grant → Scope(slug) ← Row → Payload. Prefix identity is not pk."""
+
+    def test_non_pk_to_field_prefix_returns_authorized_scope(self):
+        User = get_user_model()
+
+        class Scope(models.Model):
+            slug = models.SlugField(unique=True)
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Payload(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Row(models.Model):
+            scope = models.ForeignKey(
+                Scope, related_name='rows', on_delete=models.CASCADE,
+            )
+            content = models.ForeignKey(
+                Payload, related_name='rows', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Grant(models.Model):
+            scope = models.ForeignKey(
+                Scope, to_field='slug', on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Scope, Payload, Row, Grant):
+            registry = TrustsRegistry()
+            j = Ref(Grant)
+            record = registry.register(
+                content=j.scope.rows.content,
+                user=j.user,
+                permission=j.permission,
+            )
+            self.assertEqual(record.content_path[0], 'scope')
+            self.assertNotEqual(record.content_target, 'slug')
+
+            alice = User.objects.create_user(username='c1-tf-alice', password='x')
+            bob = User.objects.create_user(username='c1-tf-bob', password='x')
+            ct, _created = ContentType.objects.get_or_create(
+                app_label='trusts_tests', model='payload',
+            )
+            add, _created = Permission.objects.get_or_create(
+                content_type=ct,
+                codename='add_payload_tf',
+                defaults={'name': 'add payload tf'},
+            )
+            scope_a = Scope.objects.create(slug='alpha', title='A')
+            scope_b = Scope.objects.create(slug='beta', title='B')
+            self.assertNotEqual(scope_a.pk, 'alpha')
+            self.assertNotEqual(scope_b.pk, 'beta')
+            payload = Payload.objects.create(title='P')
+            Row.objects.create(scope=scope_a, content=payload)
+            Grant.objects.create(scope=scope_a, user=alice, permission=add)
+
+            handle = _Handle(registry)
+            qs = filter_authorized_scopes(
+                Scope.objects.order_by('pk'), alice, add,
+                content=Payload, handles=(handle,),
+            )
+            self.assertIsInstance(qs, QuerySet)
+            self.assertIsNone(qs._result_cache)
+            sql = str(qs.query).lower()
+            self.assertIn('exists', sql)
+            self.assertIn('slug', sql)
+            with self.assertNumQueries(1):
+                pks = _pks(qs)
+            self.assertEqual(pks, {scope_a.pk})
+            self.assertNotIn(scope_b.pk, pks)
+            self.assertFalse(
+                filter_authorized_scopes(
+                    Scope.objects.all(), bob, add,
+                    content=Payload, handles=(handle,),
+                ).exists()
+            )
+
+
 class FilterAuthorizedScopesLiveTest(_UsersMixin, TestCase):
     def setUp(self):
         super().setUp()
