@@ -1,4 +1,5 @@
-"""Django system checks for permission conditions and query compilers.
+"""Django system checks for permission conditions, missing declarations,
+and query compilers.
 
 Model-aware semantic validation (field names, traversal, multi-valued
 relations, operand types) and the legacy-callback policy are reported as
@@ -15,11 +16,12 @@ under ``manage.py check``.
 from django.core import checks as django_checks
 
 from trusts.conditions import PermissionConditionError, validate_expression
-from trusts.models import Content, legacy_permission_callbacks_allowed
+from trusts.models import Content, Junction, legacy_permission_callbacks_allowed
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
+CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
 
@@ -87,10 +89,9 @@ def check_query_compilers(app_configs, **kwargs):
     """Every Trusts-derived AUTHENTICATION_BACKENDS path must be query-capable.
 
     Imports listed mixin classes and resolves ``query_compiler`` without
-    constructing a backend instance. Zero SQL. ``trusts.E003`` stays
-    reserved for S8 freeze. Silencing ``trusts.E004`` hides only this
-    diagnostic; ``ContentQuerySet.permitted()`` still raises and does
-    not fall back or omit the broken route.
+    constructing a backend instance. Zero SQL. Silencing ``trusts.E004``
+    hides only this diagnostic; ``ContentQuerySet.permitted()`` still
+    raises and does not fall back or omit the broken route.
     """
     from django.conf import settings
     from django.utils.module_loading import import_string
@@ -124,6 +125,143 @@ def check_query_compilers(app_configs, **kwargs):
                 obj=cls,
                 id=CHECK_ID_MISSING_COMPILER,
             ))
+    return messages
+
+
+_E003_HINT = (
+    'Contribute an explicit AppConfig Ref on the intended exact backend '
+    'path. Silencing trusts.E003 suppresses only this diagnostic; it '
+    'never creates authorization.'
+)
+
+
+def _is_concrete_model(model):
+    opts = getattr(model, '_meta', None)
+    if opts is None:
+        return False
+    return not opts.abstract and not opts.proxy
+
+
+def _covered_content_models(config):
+    """Content terminals that already have a plan record on any valid handle.
+
+    Path-scoped: coverage on one configured valid Trusts handle is
+    enough. Does not register, does not invent union authority, and
+    does not require every backend to hold the declaration.
+    """
+    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+
+    covered = set()
+    try:
+        paths = config._configured_trusts_paths()
+    except TrustsConfigurationError:
+        return covered
+    for path in paths:
+        try:
+            handle = config.configured_backend(path)
+        except (TrustsConfigurationError, TrustsCompilerError):
+            continue
+        for record in handle.registry.records:
+            covered.add(record.content_model)
+    return covered
+
+
+def _junction_content_model(model):
+    """Return the Junction content model or a CheckMessage for a bad contract."""
+    try:
+        content_model = model.get_content_model()
+    except Exception as exc:
+        return None, django_checks.Error(
+            'Junction %s has a malformed content-model contract: %s'
+            % (_model_label(model), exc),
+            hint=_E003_HINT,
+            obj=model,
+            id=CHECK_ID_MISSING_DECLARATION,
+        )
+    opts = getattr(content_model, '_meta', None)
+    if opts is None:
+        return None, django_checks.Error(
+            'Junction %s has a malformed content-model contract: '
+            'get_content_model() did not return a Django model.'
+            % _model_label(model),
+            hint=_E003_HINT,
+            obj=model,
+            id=CHECK_ID_MISSING_DECLARATION,
+        )
+    return opts.concrete_model, None
+
+
+@django_checks.register(django_checks.Tags.models)
+def check_missing_declarations(app_configs, **kwargs):
+    """Report structurally detectable missing Content/Junction declarations.
+
+    Walks already-loaded models from the default Apps registry. Does not
+    import host modules, does not call ``registry.register``, and issues
+    zero SQL. ``app_configs`` is ignored so a subset
+    ``manage.py check trusts`` still reports project models. Abstract
+    and proxy models are excluded. Manual dependents that are neither
+    Content nor Junction are outside this domain.
+
+    Silencing ``trusts.E003`` hides only this diagnostic; undeclared
+    terminals still fail closed at runtime.
+    """
+    from django.apps import apps as django_apps
+
+    if not django_apps.is_installed('trusts'):
+        return []
+
+    config = django_apps.get_app_config('trusts')
+    covered = _covered_content_models(config)
+    messages = []
+    seen = set()
+
+    for model in django_apps.get_models():
+        if not _is_concrete_model(model):
+            continue
+        if issubclass(model, Content):
+            terminal = model._meta.concrete_model
+            if terminal in covered:
+                continue
+            key = ('content', model)
+            if key in seen:
+                continue
+            seen.add(key)
+            messages.append(django_checks.Error(
+                'Content model %s has no covering relation-plan record '
+                'on any configured Trusts handle.' % _model_label(model),
+                hint=_E003_HINT,
+                obj=model,
+                id=CHECK_ID_MISSING_DECLARATION,
+            ))
+            continue
+        if issubclass(model, Junction):
+            content_model, error = _junction_content_model(model)
+            if error is not None:
+                key = ('junction-malformed', model)
+                if key in seen:
+                    continue
+                seen.add(key)
+                messages.append(error)
+                continue
+            if content_model in covered:
+                continue
+            key = ('junction', model)
+            if key in seen:
+                continue
+            seen.add(key)
+            messages.append(django_checks.Error(
+                'Junction %s targets %s, which has no covering '
+                'relation-plan record on any configured Trusts handle.'
+                % (_model_label(model), _model_label(content_model)),
+                hint=_E003_HINT,
+                obj=model,
+                id=CHECK_ID_MISSING_DECLARATION,
+            ))
+
+    messages.sort(key=lambda message: (
+        getattr(getattr(message.obj, '_meta', None), 'label', ''),
+        message.msg,
+    ))
     return messages
 
 

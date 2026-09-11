@@ -22,6 +22,7 @@ from tests.apps import (
     TestsConfig,
     junction_content_field,
     junction_group_content_ref,
+    override_apps_ready,
 )
 from tests.backends import MixinOnlyBackend
 import tests as tests_module
@@ -221,7 +222,8 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
         contributor = _new_contributor(apps)
         contributor._trusts_tup_category_registry_id = isolated
         contributor._trusts_tup_ticket_registry_id = isolated
-        contributor.ready()
+        with override_apps_ready(False):
+            contributor.ready()
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_ticket_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_group_registry_id, isolated)
@@ -245,7 +247,8 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
         )
         self.live_trusts.registry = isolated
         contributor = _new_contributor(apps)
-        contributor.ready()
+        with override_apps_ready(False):
+            contributor.ready()
         self.assertIs(contributor._trusts_tup_group_registry_id, isolated)
         roots = {record.root for record in isolated.records}
         self.assertEqual(roots, {OtherGroupGrant, TrustUserPermission})
@@ -263,8 +266,9 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
         )
         self.live_trusts.registry = isolated
         contributor = _new_contributor(apps)
-        with self.assertRaises(TrustsConfigurationError):
-            contributor.ready()
+        with override_apps_ready(False):
+            with self.assertRaises(TrustsConfigurationError):
+                contributor.ready()
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_ticket_registry_id, isolated)
         self.assertIsNone(
@@ -272,8 +276,9 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
         )
         self.assertEqual(len(isolated.records), 3)
         self.assertEqual(len(_group_rows(isolated)), 1)
-        with self.assertRaises(TrustsConfigurationError):
-            contributor.ready()
+        with override_apps_ready(False):
+            with self.assertRaises(TrustsConfigurationError):
+                contributor.ready()
         self.assertIsNone(
             getattr(contributor, '_trusts_tup_group_registry_id', None)
         )
@@ -287,7 +292,8 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
         try:
             self.live_trusts.registry = new_trusts.registry
             contributor = _new_contributor(apps)
-            contributor.ready()
+            with override_apps_ready(False):
+                contributor.ready()
             self.assertIs(contributor._trusts_tup_group_registry_id, new_trusts.registry)
             terminals = {
                 record.content_model for record in new_trusts.registry.records
@@ -318,7 +324,8 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
                 wraps=TestGroupJunction.get_content_model,
             ) as content_model:
                 self.assertFalse(hasattr(Content, '_contents'))
-                contributor.ready()
+                with override_apps_ready(False):
+                    contributor.ready()
         accessor.assert_called()
         content_model.assert_called()
         rev, content_name, lookup = _j1_lookup()
@@ -339,7 +346,8 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
     def test_swapped_live_registry_receives_declaration_again(self):
         isolated = TrustsRegistry()
         self.live_trusts.registry = isolated
-        self.live_contributor.ready()
+        with override_apps_ready(False):
+            self.live_contributor.ready()
         self.assertIs(self.live_contributor._trusts_tup_group_registry_id, isolated)
         self.assertEqual(len(_group_rows(isolated)), 1)
         self.assertEqual(len(_category_rows(isolated)), 1)

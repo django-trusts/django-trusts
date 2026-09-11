@@ -772,11 +772,27 @@ class TrustsRegistry(object):
     singleton in this slice. ``register`` performs zero SQL. Projection
     methods compile one shared plan from stored records. One root may
     store several records when they terminate on different content models.
+
+    Frozen state is instance-owned. ``freeze()`` is idempotent.
+    ``register`` on that exact frozen instance raises
+    ``TrustsConfigurationError`` before validation or mutation. Existing
+    records, plans, compilers, and authorization reads stay usable.
+    A standalone ``TrustsRegistry()`` never inspects Django readiness
+    and never auto-freezes.
     """
 
     def __init__(self):
         self._by_root = {}
         self._order = []
+        self._frozen = False
+
+    @property
+    def frozen(self):
+        return self._frozen
+
+    def freeze(self):
+        """Seal this instance against further ``register`` writes."""
+        self._frozen = True
 
     @property
     def records(self):
@@ -802,7 +818,15 @@ class TrustsRegistry(object):
         terminal with a different registration is a conflict and also
         raises. The same root may register different content terminals.
         Both error outcomes leave stored records unchanged.
+
+        A frozen instance raises ``TrustsConfigurationError`` before
+        validation or mutation. This method does not inspect Django's
+        global ``apps.ready``.
         """
+        if self._frozen:
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
         if condition is not None:
             raise TrustsConfigurationError(
                 'condition is not supported; omit it or pass None.'

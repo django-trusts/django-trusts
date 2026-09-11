@@ -58,6 +58,18 @@ class AppConfig(DjangoAppConfig):
             )
         return tuple(paths)
 
+    def _apps_instance_ready(self):
+        """True when *this* AppConfig's Apps instance has finished populate.
+
+        Uses ``self.apps.ready``, not Django's global ``apps`` object and
+        not ``apps_ready``. A manually constructed AppConfig with no
+        bound Apps stays unready. During ``Apps.populate`` phase 3,
+        contributor ``ready()`` methods run while this flag is still
+        false.
+        """
+        apps_registry = getattr(self, 'apps', None)
+        return bool(apps_registry is not None and apps_registry.ready)
+
     def _ensure(self, path):
         from trusts.core import TrustsRegistry
 
@@ -65,11 +77,20 @@ class AppConfig(DjangoAppConfig):
             self.registries[path] = TrustsRegistry()
         return self.registries[path]
 
+    def _exposed_registry(self, path):
+        """Return the stored registry; freeze on first live read after ready."""
+        registry = self._ensure(path)
+        if self._apps_instance_ready():
+            registry.freeze()
+        return registry
+
     def configured_backend(self, path=None):
         """Return a handle for one exact configured Trusts path.
 
         With one Trusts path, ``path`` may be omitted. With zero or
         several, omission fails loud. An unconfigured path fails loud.
+        After this AppConfig's Apps instance is ready, the stored
+        registry is frozen before the handle is returned.
         """
         from django.utils.module_loading import import_string
 
@@ -90,7 +111,7 @@ class AppConfig(DjangoAppConfig):
         cls = import_string(path)
         return BackendHandle(
             path=path,
-            registry=self._ensure(path),
+            registry=self._exposed_registry(path),
             compiler=compiler_for_class(cls),
         )
 
@@ -139,7 +160,7 @@ class AppConfig(DjangoAppConfig):
                 'registry alias needs exactly one configured Trusts path; '
                 'got %r' % (paths,)
             )
-        return self._ensure(paths[0])
+        return self._exposed_registry(paths[0])
 
     @registry.setter
     def registry(self, value):
@@ -197,7 +218,9 @@ class AppConfig(DjangoAppConfig):
         from trusts import checks as _trusts_checks  # noqa: F401
 
         # S3a: ensure one registry per configured Trusts path. Re-entry
-        # must not replace self.registries or any stored object.
+        # must not replace self.registries or any stored object. Freeze
+        # is applied by the supported handle surfaces after this Apps
+        # instance is ready, not by replacing stored objects here.
         paths = self._configured_trusts_paths()
         for path in paths:
             self._ensure(path)

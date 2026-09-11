@@ -16,7 +16,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig
+from tests.apps import TestsConfig, install_writable_registry, override_apps_ready
 from tests.backends import (
     HostTrustModelBackend,
     MalformedCompilerBackend,
@@ -231,7 +231,8 @@ class PathScopedRegistryStoreTest(_RegistryRestoreMixin, SimpleTestCase):
         isolated = TrustsRegistry()
         self.live.registry = isolated
         self.assertIs(self.live.registries[CONCRETE], isolated)
-        self.live.ready()
+        with override_apps_ready(False):
+            self.live.ready()
         self.assertIs(self.live._trusts_tup_trust_registry_id, isolated)
         self.assertEqual(len(_trust_rows(isolated)), 1)
 
@@ -306,9 +307,9 @@ class IsolatedAppsPathStoreTest(SimpleTestCase):
 class ContributionPathTest(_RegistryRestoreMixin, SimpleTestCase):
     def test_explicit_path_contribution_writes_one_registry(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
+            mixin = install_writable_registry(self.live, MIXIN)
+            _contribute_category(mixin)
             handle_b = self.live.configured_backend(MIXIN)
-            self.assertEqual(_category_rows(handle_b.registry), [])
-            _contribute_category(handle_b.registry)
             self.assertEqual(len(_category_rows(handle_b.registry)), 1)
             handle_a = self.live.configured_backend(CONCRETE)
             self.assertEqual(len(_category_rows(handle_a.registry)), 1)
@@ -378,7 +379,8 @@ class ContributionPathTest(_RegistryRestoreMixin, SimpleTestCase):
             self.live.ready()
             isolated = TrustsRegistry()
             self.live.registries[HOST] = isolated
-            self.live.ready()
+            with override_apps_ready(False):
+                self.live.ready()
             self.assertIs(self.live.registries[HOST], isolated)
             self.assertEqual(len(_trust_rows(isolated)), 1)
 
@@ -418,8 +420,8 @@ class CompilerProtocolTest(_RegistryRestoreMixin, SimpleTestCase):
 
     def test_raising_compiler_propagates(self):
         with override_settings(AUTHENTICATION_BACKENDS=(RAISING,)):
+            install_writable_registry(self.live, RAISING, _contribute_category)
             handle = self.live.configured_backend()
-            _contribute_category(handle.registry)
             with self.assertRaises(RuntimeError) as ctx:
                 granted(
                     (handle,), Category, User(),
@@ -557,8 +559,8 @@ class TwoPathAuthorizationTest(_RegistryRestoreMixin, TestCase):
         self._reload()
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
             self.live.registries[CONCRETE] = TrustsRegistry()
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             handle_a = self.live.configured_backend(CONCRETE)
             self.assertFalse(handle_a.registry.plan_for(Category).records)
             self.assertTrue(handle_b.registry.plan_for(Category).records)
@@ -574,8 +576,8 @@ class TwoPathAuthorizationTest(_RegistryRestoreMixin, TestCase):
 
     def test_grant_through_neither(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             self.assertFalse(
                 Category.objects.permitted(self.change_code, self.alice).exists()
             )
@@ -590,8 +592,8 @@ class TwoPathAuthorizationTest(_RegistryRestoreMixin, TestCase):
         enable_local_group_grant(self.trust_b, alice_group, self.change)
         self._reload()
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             handle_a = self.live.configured_backend(CONCRETE)
             qs = Category.objects.all()
             pred_a = _evaluate(handle_a, qs, self.alice, self.change)
@@ -620,8 +622,8 @@ class TwoPathAuthorizationTest(_RegistryRestoreMixin, TestCase):
         self.change.group_set.remove(self.carol_group)
         self._reload()
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             qs = Category.objects.all()
             handle_a = self.live.configured_backend(CONCRETE)
             pred_a = _evaluate(handle_a, qs, self.carol, self.change)
@@ -646,11 +648,10 @@ class TwoPathAuthorizationTest(_RegistryRestoreMixin, TestCase):
         ).save()
         self._reload()
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
-            self.live.registries[CONCRETE] = TrustsRegistry()
+            install_writable_registry(self.live, CONCRETE, _contribute_category)
+            install_writable_registry(self.live, MIXIN, _contribute_ticket)
             handle_a = self.live.configured_backend(CONCRETE)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_a.registry)
-            _contribute_ticket(handle_b.registry)
             self.assertTrue(handle_a.registry.plan_for(Category).records)
             self.assertFalse(handle_a.registry.plan_for(Ticket).records)
             self.assertFalse(handle_b.registry.plan_for(Category).records)
@@ -698,8 +699,8 @@ class CompilerIsolationTest(_RegistryRestoreMixin, TestCase):
             TrustUserPermission.objects.filter(entity=self.carol).exists()
         )
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             handle_a = self.live.configured_backend(CONCRETE)
             qs = Category.objects.all()
             pred_a = _evaluate(handle_a, qs, self.carol, self.change)
@@ -714,8 +715,8 @@ class CompilerIsolationTest(_RegistryRestoreMixin, TestCase):
 
     def test_mixin_only_alone_denies_historical_group(self):
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle = self.live.configured_backend()
-            _contribute_category(handle.registry)
             self.assertIsInstance(handle.compiler, PlanQueryCompiler)
             self.assertFalse(handle.registry.plan_for(Trust).records)
             qs = Category.objects.all()
@@ -729,8 +730,8 @@ class CompilerIsolationTest(_RegistryRestoreMixin, TestCase):
 
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         with override_settings(AUTHENTICATION_BACKENDS=(RAISING,)):
+            install_writable_registry(self.live, RAISING, _contribute_category)
             handle = self.live.configured_backend()
-            _contribute_category(handle.registry)
             with self.assertRaises(RuntimeError):
                 list(Category.objects.permitted(self.change_code, self.carol))
 

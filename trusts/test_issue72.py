@@ -19,7 +19,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig
+from tests.apps import TestsConfig, override_apps_ready
 import tests as tests_module
 from tests.models import Category, Organization, Ticket
 from trusts.apps import AppConfig as TrustsAppConfig
@@ -153,7 +153,8 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
         self.live_trusts.registry = isolated
         contributor = _new_contributor(apps)
         contributor._trusts_tup_category_registry_id = isolated
-        contributor.ready()
+        with override_apps_ready(False):
+            contributor.ready()
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_ticket_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_group_registry_id, isolated)
@@ -176,7 +177,8 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
         )
         self.live_trusts.registry = isolated
         contributor = _new_contributor(apps)
-        contributor.ready()
+        with override_apps_ready(False):
+            contributor.ready()
         self.assertIs(contributor._trusts_tup_ticket_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
         self.assertIs(contributor._trusts_tup_group_registry_id, isolated)
@@ -203,16 +205,18 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
         )
         self.live_trusts.registry = isolated
         contributor = _new_contributor(apps)
-        with self.assertRaises(TrustsConfigurationError):
-            contributor.ready()
+        with override_apps_ready(False):
+            with self.assertRaises(TrustsConfigurationError):
+                contributor.ready()
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
         self.assertIsNone(
             getattr(contributor, '_trusts_tup_ticket_registry_id', None)
         )
         self.assertEqual(len(isolated.records), 2)
         self.assertEqual(len(_category_rows(isolated)), 1)
-        with self.assertRaises(TrustsConfigurationError):
-            contributor.ready()
+        with override_apps_ready(False):
+            with self.assertRaises(TrustsConfigurationError):
+                contributor.ready()
         self.assertIs(contributor._trusts_tup_category_registry_id, isolated)
         self.assertIsNone(
             getattr(contributor, '_trusts_tup_ticket_registry_id', None)
@@ -228,7 +232,8 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
         try:
             self.live_trusts.registry = new_trusts.registry
             contributor = _new_contributor(apps)
-            contributor.ready()
+            with override_apps_ready(False):
+                contributor.ready()
             self.assertIs(
                 contributor._trusts_tup_ticket_registry_id,
                 new_trusts.registry,
@@ -269,7 +274,8 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
         with patch.object(
             remote, 'get_accessor_name', wraps=remote.get_accessor_name,
         ) as accessor:
-            contributor.ready()
+            with override_apps_ready(False):
+                contributor.ready()
         accessor.assert_called()
         rev = remote.get_accessor_name()
         self.assertEqual(len(_ticket_rows(isolated)), 1)
@@ -285,7 +291,8 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
     def test_swapped_live_registry_receives_declaration_again(self):
         isolated = TrustsRegistry()
         self.live_trusts.registry = isolated
-        self.live_contributor.ready()
+        with override_apps_ready(False):
+            self.live_contributor.ready()
         self.assertIs(self.live_contributor._trusts_tup_ticket_registry_id, isolated)
         self.assertIs(
             self.live_contributor._trusts_tup_category_registry_id, isolated,
