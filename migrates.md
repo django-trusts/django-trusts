@@ -2113,6 +2113,164 @@ and migration identities stay. Query construction remains lazy.
 - [ ] Leave C2 app-label / package boundaries and the Zero
       compatibility baseline unchanged.
 
+# Issue #100: bounded ordered remaining-bits strategy (1.0.0.dev0)
+
+## Decision
+
+Public C2 adds a closed typed `register_strategy(OrderedFold(...))`
+path beside unchanged `TrustsRegistry.register(...)` AnyPath
+`EXISTS`. Core owns zero-SQL validation, strategy selection, PostgreSQL
+remaining-bits compilation, and the shared `Allowed` predicate used by
+object decision, authorized queryset/manager filtering, enumeration,
+and `all_match`. Consumers supply ordinary models, refs, polarity
+values, permission identities/masks, and direct plus optional one-level
+flat membership metadata. This is the isolated core slice of #100.
+The preserved Windows consumer is unchanged.
+
+Accepted design: #17 r4–r6
+(`5637401976`, `5637471681`, `5637518133`, `5637550664`).
+
+## No change to these public call sites
+
+- `TrustsRegistry.register(...)` signature, AnyPath SQL, and results
+- `AuthorizedQuerySet.authorized(user, permission, extra_q=None)`
+  signature (still a permission **instance**; strings/ints still
+  `TrustsConfigurationError` with zero SQL)
+- `has_permission` / `filter_authorized` / `permissions_for` /
+  `plan_for` signatures
+- `TrustModelBackendMixin.has_perm` / `get_*_permissions` signatures
+  (still dotted codes; `_permission_binding` / `_perm_codes` unchanged)
+- `granted` / `instance_match` / `all_match` signatures
+- `filter_authorized_scopes` (AnyPath prefixes only; OrderedFold
+  content has no prefix and returns `none()`)
+- Existing AnyPath call sites require **no** changes
+- Database schema, app label, package boundary, Zero, GH-consumer,
+  Windows-consumer, and package version `1.0.0.dev0`
+
+## Changes
+
+### 49. Closed OrderedFold strategy (#100)
+
+| | |
+| --- | --- |
+| Previous | One content terminal used only `register()` AnyPath `EXISTS`. There was no ordered remaining-bits plan, no `PermissionMaskDomain`, and no Token applicability IR. |
+| New | `from trusts.core import FlatToken, MaskEntry, OrderedFold, PermissionMaskDomain, PolarityMap, Ref`. `registry.register_strategy(OrderedFold(content=, descriptor=, source=, source_descriptor=, order=, polarity=PolarityMap(field, allow_value=, deny_value=), mask=, trustee=, token=FlatToken(principal=, principal_user=, principal_identity=, member=None, member_identity=None, member_group=None), domain=PermissionMaskDomain(permission_model, (MaskEntry(action, mask), ...))))`. Registration-time `_meta` validation is zero SQL. One content terminal may use AnyPath xor one OrderedFold; conflicting registration fails with zero SQL. Independent complete roots/backends still boolean-OR `Allowed`; an OrderedFold deny remains local. |
+| Replacement | Hosts that need ordered remaining-bits register `OrderedFold` on public C2. Do not add consumer raw SQL, a compiler callback, a `Q`/lookup dialect, an arbitrary callable, a stored procedure, a public raw-mask permission API, or an inheritance/graph slot. Ordinary AnyPath registrations stay valid. |
+| Affected | New public names and `register_strategy`. Existing `register()` records, SQL, and results are unchanged. Content terminals that use OrderedFold become legal `.authorized()` / registry projection targets through the compiled `Allowed` predicate. |
+| Authorization | Fold applicable rows in stable `(order, source.pk)` order: allow does `remaining &= ~source_mask`; deny intersecting remaining bits denies; stop on deny or `remaining == 0`; allow iff not denied and remaining is zero. A multi-bit permission is one declared identity with one mask seed. Before Token/applicability filtering, any correlated source row with NULL/unknown polarity, NULL order/mask/trustee, or a negative mask gates denial for that candidate policy set (including a malformed row for another trustee). Zero source masks are legal no-ops. Missing/null descriptor and an empty applicable bag deny a nonzero request. `source_descriptor`, `trustee`, and Token `principal_*` / `member_*` paths are forward singles; runtime SQL compares each path's **terminal** resolved identity (not the first FK) and uses collision-safe aliases or scalar subqueries so independent multi-hop walks cannot collide. |
+
+Exact new imports and signatures:
+
+```python
+from trusts.core import (
+    FlatToken,
+    MaskEntry,
+    OrderedFold,
+    PermissionMaskDomain,
+    PolarityMap,
+    Ref,
+    TrustsRegistry,
+)
+
+registry = TrustsRegistry()
+registry.register_strategy(OrderedFold(
+    content=doc,                 # empty-path Ref(ContentModel)
+    descriptor=doc,              # empty path or forward singles
+    source=ace,                  # empty-path Ref(SourceModel)
+    source_descriptor=ace.document,
+    order=ace.ace_order,
+    polarity=PolarityMap(ace.ace_type, allow_value=1, deny_value=2),
+    mask=ace.access_mask,
+    trustee=ace.user,
+    token=FlatToken(
+        principal=user, principal_user=user, principal_identity=user,
+    ),
+    domain=PermissionMaskDomain(Permission, (
+        MaskEntry('read', 0x1),
+        MaskEntry('write', 0x2),
+        MaskEntry('readwrite', 0x3),
+    )),
+))
+```
+
+Failure behavior: malformed path shapes, nullable configured source
+fields, content/source descriptor identity mismatch, Token identity
+mismatch (`(concrete_model, attname)`, including empty-path binding to
+the trustee’s resolved attname), partial member triads, non-distinct or
+type-incompatible polarity values, empty/duplicate/invalid permission
+natural keys, a permission-model `content_type` field that is not a concrete
+single-column `content_type → ContentType.pk` foreign key
+(virtual `ForeignObject` relations and non-PK targets are rejected;
+codename-only permission models remain valid), masks that are not positive
+non-boolean ints fitting the source mask field’s signed integer family,
+unsupported vendor, stale or unregistered plan, wrong model, and raw
+integer/string permission at the registry API deny without broadening
+access. PostgreSQL is the
+first OrderedFold renderer (`connection.vendor == 'postgresql'`). Other
+vendors raise `TrustsConfigurationError` before fold SQL. Existing
+AnyPath backend support is unchanged. Registration and system checks
+(`trusts.E006` vendor gate) issue **0 SQL**. Runtime gating is required
+even when a consumer schema later adds a nonnegative CHECK.
+
+## Old vs new behavior
+
+| Situation | Old (C2 `595e2f9f`) | New (#100) |
+| --- | --- | --- |
+| `from trusts.core import OrderedFold, PermissionMaskDomain, MaskEntry, PolarityMap, FlatToken` | Names absent | Exported closed types |
+| `registry.register_strategy(OrderedFold(...))` | Absent | Closed typed strategy; zero-SQL validation |
+| `registry.register(...)` AnyPath | `EXISTS` | Unchanged SQL and results |
+| Same content terminal AnyPath + OrderedFold | N/A | `TrustsConfigurationError`, zero SQL |
+| Permission `content_type` not concrete `ContentType.pk` | N/A | `TrustsConfigurationError`, zero SQL |
+| Codename-only permission model | N/A | Valid (no `content_type` join) |
+| `.authorized(user, permission_instance)` on OrderedFold content | `none()` (undeclared) | Shared `Allowed` remaining-bits predicate |
+| Raw `int` / `str` permission on registry / `.authorized` | `TrustsConfigurationError` | Unchanged rejection |
+| Independent backends | Boolean OR | Unchanged OR; OrderedFold deny stays local |
+| Non-PostgreSQL OrderedFold evaluate | N/A | Fail closed before fold SQL |
+| Windows / GH / Zero consumers | Unchanged | Still unchanged in this PR |
+
+## Schema
+
+No change. #100 adds no model, table, migration, app-label, or package
+boundary. Existing schema and migration identities stay. Query
+construction remains lazy. Each supported decision or listing remains
+one SQL statement independent of candidate count.
+
+## Out of scope (not acceptance criteria)
+
+- Windows consumer cutover
+- Inherited ACEs, parent walks, propagation/protection flags
+- Creator-owner substitution, owner pre-grants, host oracle
+- Browser badges, Example #7, admin, broad docs, NIST
+- Complete-Windows claims
+- Public raw-mask permission API
+- Consumer SQL bag, callback compiler, or general expression dialect
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none was added.
+- [ ] Locate `register_strategy` / `OrderedFold` registrations. Existing
+      AnyPath `register(...)` call sites require no changes.
+- [ ] Verify models, forward-single paths, Token
+      `(concrete_model, attname)` identity, polarity values, and
+      permission identities/masks (`MaskEntry` natural keys unique,
+      positive, fitting the source mask field). A permission
+      `content_type` field, if present, must be a concrete
+      single-column `content_type → ContentType.pk` foreign key.
+      Codename-only permission models stay valid.
+- [ ] Run `manage.py check` (including `trusts.E006` when live
+      OrderedFold strategies exist). Registration and checks issue
+      **0 SQL**.
+- [ ] Confirm PostgreSQL for OrderedFold evaluate. Other vendors must
+      fail closed before fold SQL. AnyPath backends stay unchanged.
+- [ ] Test object / listing / enumeration / `all_match` parity on the
+      same `Allowed` predicate. Paginate only after `.authorized(...)`
+      / `filter_authorized`.
+- [ ] Do not pass raw masks, dotted strings, SQL, `Q`, callables, or
+      compiler callbacks into the registry API.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Leave C2 app-label / package boundaries, Zero, GH-consumer, and
+      the Windows consumer unchanged. Do not start Windows cutover.
+
 
 
 

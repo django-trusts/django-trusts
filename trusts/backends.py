@@ -74,6 +74,8 @@ class HistoricalGroupQueryCompiler(object):
     historical_fallback = True
 
     def complete_exists(self, plan, candidates, user, permission):
+        if getattr(plan, 'strategy', None) is not None:
+            return plan.content_exists(user, permission)
         if not plan.records:
             return None
         return Q(plan.content_exists(user, permission)) | Q(
@@ -81,6 +83,8 @@ class HistoricalGroupQueryCompiler(object):
         )
 
     def group_exists(self, plan, candidates, user, permission):
+        if getattr(plan, 'strategy', None) is not None:
+            return None
         if not plan.records:
             return None
         return Q(historical_group_grant_exists(plan, user, permission))
