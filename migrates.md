@@ -1612,6 +1612,127 @@ projections remain **1 SQL**, independent of candidate count.
   #54
 - Zero; GH; example #7; Windows #17
 
+---
+
+# Delete the legacy static content registry (issue #87 / S7)
+
+This record covers the S7 deletion of the static content-model map
+and its remaining readers/writers. Version remains **1.0.0.dev0**.
+It closes the #87 / #69 r2 S7 slice. Category, Ticket, Trust, Group,
+and both documented dependent-content levels are authorized only
+through explicit path-scoped contributions. The condition registry
+and the concrete `HistoricalGroupQueryCompiler` remain. There is
+**no schema or Django migration change**.
+
+Parent design: #69 r2 (accepted). Predecessor #85 / PR #86 merged to
+`dev` as `28c8876c436d197b365e2fc5d9029241a989cee6`.
+
+## Decision
+
+The process-global `Content._contents` model→fieldlookup map is gone.
+Supported terminals are recognized only through exact configured
+backend-handle registries. Hosts declare dependents in their own
+`AppConfig.ready()` with bounded S5 `Ref` paths. Trusts does not
+import, discover, or infer undeclared models.
+
+Unknown or undeclared terminals fail closed: object `has_perm` is
+false, enumeration is empty, and QuerySet authorization is
+none/false. There is no renamed process-global model→path map, no
+model-name branch, no implicit discovery, and no historical
+`_get_trusts` / `filter_by_content` fallback.
+
+`HistoricalGroupQueryCompiler` still ORs registered-plan trustee
+proofs with historical TrustGroup grants for declared terminals.
+Registering Group as protected content does not replace Django Group
+membership as the historical trustee path for Category / Ticket /
+Trust. Mixin-only compilers still do not inherit that TrustGroup OR.
+`historical_fallback` identifies the concrete compiler; it does not
+reopen a static content map.
+
+Condition declarations remain overlays on an existing relational
+grant. `Meta.permission_conditions`, Junction
+`content_permission_conditions`, `Content._conditions`, getters,
+iteration, system checks, Ticket `meta_own`, Trust `own`, and
+current callback behavior are unchanged.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures
+- `ContentQuerySet.permitted` signature and documented Category /
+  Ticket / Trust results
+- `filter_by_user_content_perm` / `filter_by_user_perm` signatures
+  and create-under-Trust grant (`trust_grant_q` on Trust rows)
+- `Content.register_permission_condition` and condition lookup APIs
+- `HistoricalGroupQueryCompiler` complete / group proofs for
+  declared terminals
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 41. Static content map and its readers/writers are deleted
+
+| | |
+| --- | --- |
+| Previous | `Content._contents` plus `register_content` / `is_content*` / `get_content_fieldlookup` auto-published every concrete Content/Junction terminal. Backend `_get_trusts` and `TrustManager.filter_by_content` resolved object→Trust through that map. Undeclared Content subclasses still authorized through the concrete `historical_fallback` route. RST Inheritance composed field lookups with `register_content`. |
+| New | Those APIs and the content-map half of `class_prepared` / `Junction.register_junction` are gone. `Content.register_content` and `Junction.register_junction` walk Meta condition options only. Terminals are known only when an exact configured handle has `plan_for(model).records`. Undeclared terminals fail closed and never reach a content-map fallback. Both documented dependent levels are explicit AppConfig `Ref` contributions (`getattr(j.trust, rev).image` and `.image.image`). |
+| Replacement | Host `AppConfig.ready()` → `configured_backend().registry.register(...)` with a bounded S5 `Ref`. Same `user.has_perm` / QuerySet / `.permitted` / `filter_by_user_content_perm` call sites. |
+| Affected | Internal discovery and the deleted helpers. Registered Category / Ticket / Trust / Group authorization is unchanged. Manual dependents that were only in `_contents` must be declared. |
+| Authorization | Declared terminals keep trustee \| TrustGroup allow/deny, mixed-scope denial, direct vs group-only split, inactive/anonymous/`obj=None` denial, and one-SQL grant / all-match / enumeration. Undeclared terminals are false / empty / none. Conditions still cannot create a grant. |
+
+Failure behavior: omitted/ambiguous `configured_backend()` still raises
+`TrustsConfigurationError` before writing. A conflicting contribution
+still raises without setting that contribution's sentinel. Same-
+contributor re-entry against the same registry object is a no-op.
+`isolate_apps` without `trusts` still does not donate.
+
+### 42. Removed APIs (direct migration)
+
+| Removed | Caller migration |
+| --- | --- |
+| `Content._contents` | Do not read or write a process-global model→path map. Ask `configured_backend().registry.plan_for(model).records`. |
+| `Content.register_content(model, fieldlookup)` | Declare the terminal in the host `AppConfig` with `Ref`. The remaining `register_content(model)` walks `Meta.permission_conditions` only. |
+| `Content.is_content_model` / `Content.is_content` | `bool(handle.registry.plan_for(obj).records)` on the exact configured handle. Absence is fail-closed, not a fallback. |
+| `Content.get_content_fieldlookup` | No replacement API. Dependents use `getattr(j.trust, reverse).…` from Django `_meta`. |
+| `TrustManager.filter_by_content` | Not a public authorization API. Object checks use `has_perm` / the registered plan. |
+| `TrustModelBackend._get_trusts` | Gone. Instance and QuerySet authorization use compiler handles. |
+| Content-map half of `Junction.register_junction` / `register_content_junction` | Junction-backed terminals are host `Ref` contributions (S6). The signal still registers Junction `content_permission_conditions`. |
+| Module-level `Content.register_content(Trust)` | Trust-as-content stays the package `AppConfig` contribution. Trust `:own` stays a Meta condition. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Delete project reads/writes of `Content._contents`,
+      `is_content_model`, `is_content`, `get_content_fieldlookup`,
+      `filter_by_content`, and `_get_trusts`.
+- [ ] Replace every `Content.register_content(model, fieldlookup)`
+      content registration with an AppConfig `Ref` contribution on
+      `configured_backend()`. Keep Meta `permission_conditions` as
+      condition overlays.
+- [ ] Declare both documented dependent levels if the project used
+      ReceiptImage / ReceiptImageMeta-style fieldlookup chaining.
+- [ ] Treat undeclared terminals as fail-closed. Do not expect
+      `class_prepared` or Content subclassing to authorize a model.
+- [ ] Do not invent a replacement model→path map, model-name branch,
+      or implicit discovery helper.
+- [ ] Do not treat Django group membership as a Category/Ticket/Trust
+      trustee route, and do not drop `HistoricalGroupQueryCompiler`.
+- [ ] Leave package version at `1.0.0.dev0`.
+
+## Schema
+
+No change. S7 adds no model and no Django migration. Query
+construction remains lazy. Supported grant / all-match / enumeration
+projections remain **1 SQL**, independent of candidate count.
+
+## Out of scope (not acceptance criteria)
+
+- S8 registry freeze / E003
+- Condition-registry redesign; callback relocation; group/role
+  redesign; #54
+- Zero; GH; example #7; Windows #17
+
 
 
 

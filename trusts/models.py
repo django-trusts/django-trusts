@@ -192,23 +192,16 @@ class ContentQuerySet(models.QuerySet):
         # Thin aggregate caller: resolve the principal and permission,
         # OR each applicable handle compiler's complete predicate, then
         # apply the unchanged condition overlay. Do not factor
-        # trustee/group/ceiling fragments across paths. Unregistered on
-        # every path keeps trust_grant_q only when a concrete compiler
-        # advertises historical_fallback.
+        # trustee/group/ceiling fragments across paths. Unknown or
+        # undeclared terminals fail closed (empty). Compilers may still
+        # advertise historical_fallback for mixin isolation; that flag
+        # does not reopen a static content map.
         handles = django_apps.get_app_config('trusts').configured_handles()
         granted = aggregate_granted(
             handles, self, user, permission, kind='complete',
         )
         if granted is None:
-            # Historical trust_grant_q is concrete-compiler route
-            # behavior, not a default for every inapplicable mixin.
-            if (
-                Content.is_content_model(self.model)
-                and any(handle.historical_fallback for handle in handles)
-            ):
-                granted = trust_grant_q(user, permission, trust_fk='trust')
-            else:
-                return self.none()
+            return self.none()
         if condition_q is None:
             return self.filter(granted).distinct()
         return self.filter(granted & condition_q).distinct()
@@ -248,28 +241,6 @@ class TrustManager(ContentManager):
     def get_root(self):
         return self.get(pk=ROOT_PK)
 
-    def filter_by_content(self, obj):
-        if isinstance(obj, models.QuerySet):
-            klass = obj.model
-            is_qs = True
-        else:
-            klass = obj.__class__
-            is_qs = False
-
-        if Content.is_content_model(klass):
-            fieldlookup = Content.get_content_fieldlookup(klass)
-            if fieldlookup is None:
-                fieldlookup = '%s_content' % utils.get_short_model_name_lower(klass).replace('.', '_')
-
-            filters = {}
-            if is_qs:
-                filters['%s__in' % fieldlookup] = obj
-            else:
-                filters[fieldlookup] = obj
-            return self.filter(**filters).distinct()
-
-        return self.none()
-
     def filter_by_user_perm(self, user, **kwargs):
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
@@ -289,8 +260,7 @@ class TrustManager(ContentManager):
           are not queried. ``#9`` did that accidentally.
         - Settlor identity is not a grant. Use ``has_perm(..., :own)`` for
           settlor-only operations (not this queryset).
-        - ``fieldlookup`` from ``Content.get_content_fieldlookup`` is unused:
-          this API filters Trust rows by grants, not by existing content
+        - This API filters Trust rows by grants, not by existing content
           rows. A Trust with no content yet can still be a create target.
         - Inactive / anonymous principals yield an empty queryset.
         - ``exclude_root=True`` drops ``TRUSTS_ROOT_PK`` (typical for
@@ -302,11 +272,10 @@ class TrustManager(ContentManager):
           compile V1 conditions (unlike ``ContentQuerySet.permitted``).
         - Support gate is ``any_plan_records``: any configured path with
           ``plan_for(content).records`` establishes that the terminal is
-          known. Unregistered models and leftover ``Content._contents``
-          membership fail closed. Declared Group (S6) is a known
-          terminal; the grant stays ``trust_grant_q`` on Trust rows. It
-          is not ``filter_authorized(Trust)`` and does not use another
-          path's compiler or ``historical_fallback``.
+          known. Undeclared models fail closed. Declared Group is a
+          known terminal; the grant stays ``trust_grant_q`` on Trust
+          rows. It is not ``filter_authorized(Trust)`` and does not use
+          another path's compiler or ``historical_fallback``.
         """
         if 'group__user' in kwargs:
             raise TypeError('"%s" are invalid keyword arguments' % 'group__user')
@@ -365,11 +334,24 @@ class ReadonlyFieldsMixin(object):
                         raise ValidationError('Field "%s" is readonly.' % 'trust')
 
 
+def _register_meta_permission_conditions(klass):
+    """Walk ``Meta.permission_conditions`` onto the condition registry."""
+    if hasattr(klass._meta, 'permission_conditions'):
+        for permcond, condition in klass._meta.permission_conditions:
+            Content.register_permission_condition(klass, permcond, condition)
+
+
+def _register_junction_content_permission_conditions(klass):
+    """Walk Junction ``Meta.content_permission_conditions``."""
+    if hasattr(klass._meta, 'content_permission_conditions'):
+        for permcond, condition in klass._meta.content_permission_conditions:
+            Content.register_permission_condition(klass, permcond, condition)
+
+
 class Content(ReadonlyFieldsMixin, models.Model):
     trust = models.ForeignKey('trusts.Trust', related_name='%(app_label)s_%(class)s_content',
                 default=ROOT_PK, null=False, blank=False, on_delete=models.CASCADE)
     objects = ContentManager()
-    _contents = {}
     _conditions = {}
 
     class Meta:
@@ -430,41 +412,13 @@ class Content(ReadonlyFieldsMixin, models.Model):
         Content._conditions[short_name][cond_code] = record
 
     @staticmethod
-    def register_content(klass, fieldlookup=None):
-        short_name = utils.get_short_model_name(klass)
-        if fieldlookup is None:
-            content_model_fields = [f for f in klass._meta.fields if f.remote_field is not None and f.name == 'trust']
-            if len(content_model_fields) != 1:
-                raise AttributeError('Expect "trust" field in model %s.' % short_name)
-        Content._contents[short_name] = fieldlookup
+    def register_content(klass):
+        """Register Meta ``permission_conditions`` for ``klass``.
 
-        if hasattr(klass._meta, 'permission_conditions'):
-            for permcond, condition in klass._meta.permission_conditions:
-                Content.register_permission_condition(klass, permcond, condition)
-
-    @staticmethod
-    def is_content_model(klass):
-        short_name = utils.get_short_model_name(klass)
-        if short_name in Content._contents.keys():
-            return True
-        return False
-
-    @staticmethod
-    def get_content_fieldlookup(klass):
-        short_name = utils.get_short_model_name(klass)
-        if short_name in Content._contents.keys():
-            return Content._contents[short_name]
-        return None
-
-    @staticmethod
-    def is_content(obj):
-        if isinstance(obj, models.QuerySet):
-            klass = obj.model
-            is_qs = True
-        else:
-            klass = obj.__class__
-            is_qs = False
-        return Content.is_content_model(klass)
+        Content-terminal declaration is an explicit AppConfig ``Ref``
+        contribution. This method does not publish a model→path map.
+        """
+        _register_meta_permission_conditions(klass)
 
     @staticmethod
     def get_permission_condition_record(klass, cond_code):
@@ -492,6 +446,22 @@ class Content(ReadonlyFieldsMixin, models.Model):
         for codes in Content._conditions.values():
             for cond_code, record in codes.items():
                 yield record.model, cond_code, record
+
+
+def register_content_junction(sender, **kwargs):
+    """``class_prepared`` condition walk. Does not write a content map.
+
+    Connected before ``Trust`` so ``:own`` registers from this hook.
+    ``Junction`` is resolved at call time because it is defined later.
+    """
+    if sender._meta.proxy or sender._meta.abstract:
+        return
+    junction = globals().get('Junction')
+    if junction is not None and issubclass(sender, junction):
+        junction.register_junction(sender)
+    elif issubclass(sender, Content):
+        Content.register_content(sender)
+signals.class_prepared.connect(register_content_junction)
 
 
 class Trust(Content):
@@ -554,7 +524,6 @@ class Trust(Content):
     def __str__(self):
         settlor_str = ' of %s' % str(self.settlor) if self.settlor is not None else ''
         return 'Trust[%s]: "%s"' % (self.id, self.title)
-Content.register_content(Trust)
 
 
 class Role(models.Model):
@@ -768,10 +737,13 @@ class Junction(ReadonlyFieldsMixin, models.Model):
 
     @staticmethod
     def register_junction(klass, content_model=None):
-        Content.register_content(klass.get_content_model(), klass.get_fieldlookup())
-        if hasattr(klass._meta, 'content_permission_conditions'):
-            for permcond, condition in klass._meta.content_permission_conditions:
-                Content.register_permission_condition(klass, permcond, condition)
+        """Register Junction ``content_permission_conditions`` only.
+
+        Content-terminal declaration is an explicit AppConfig ``Ref``
+        contribution. This method does not publish a model→path map.
+        ``content_model`` is unused and retained for call-site compatibility.
+        """
+        _register_junction_content_permission_conditions(klass)
 
     @classmethod
     def get_content_model(cls):
@@ -784,15 +756,3 @@ class Junction(ReadonlyFieldsMixin, models.Model):
     @classmethod
     def get_fieldlookup(cls):
         return '%s__content' % utils.get_short_model_name_lower(cls).replace('.', '_')
-
-
-def register_content_junction(sender, **kwargs):
-    # Proxy subclasses share the concrete table and must not overwrite the
-    # content/junction fieldlookup registered for that table.
-    if sender._meta.proxy or sender._meta.abstract:
-        return
-    if issubclass(sender, Junction):
-        Junction.register_junction(sender)
-    elif issubclass(sender, Content):
-        Content.register_content(sender)
-signals.class_prepared.connect(register_content_junction)

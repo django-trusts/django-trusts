@@ -5,7 +5,7 @@ def junction_content_field(junction_model):
     """Return the Junction→content field from the concrete Junction contract.
 
     Uses ``get_content_model()`` plus Django ``_meta``. Does not consult
-    ``Content._contents``, hard-code ``content``, or guess reverse names.
+    a static content map, hard-code ``content``, or guess reverse names.
     """
     from trusts.core import TrustsConfigurationError
 

@@ -956,9 +956,10 @@ class BackendHandle:
 
     @property
     def historical_fallback(self):
-        """True when this route may use undeclared ``Content._contents`` fallback.
+        """True when this route uses ``HistoricalGroupQueryCompiler``.
 
-        Noun-blind core does not decide this. The compiler advertises the
-        capability; callers in backends / ``.permitted()`` consult it.
+        Noun-blind core does not decide this. The flag identifies the
+        concrete compiler for mixin isolation. It does not reopen a
+        static content map; undeclared terminals fail closed.
         """
         return bool(getattr(self.compiler, 'historical_fallback', False))

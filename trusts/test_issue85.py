@@ -317,8 +317,8 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
                 TestGroupJunction, 'get_content_model',
                 wraps=TestGroupJunction.get_content_model,
             ) as content_model:
-                with patch.object(Content, '_contents', _UnusableContents()):
-                    contributor.ready()
+                self.assertFalse(hasattr(Content, '_contents'))
+                contributor.ready()
         accessor.assert_called()
         content_model.assert_called()
         rev, content_name, lookup = _j1_lookup()
@@ -550,26 +550,19 @@ class GroupAuthorizationRegistryTest(_UsersMixin, TestCase):
         self.assertEqual(anon.get_all_permissions(self.group_a1), set())
 
     def test_group_does_not_reach_get_trusts_or_filter_by_content(self):
+        self.assertFalse(hasattr(TrustModelBackend, '_get_trusts'))
+        self.assertFalse(hasattr(Trust.objects, 'filter_by_content'))
         qs = Group.objects.filter(pk=self.group_a1.pk)
-        with patch.object(
-            TrustModelBackend, '_get_trusts', wraps=TrustModelBackend._get_trusts,
-        ) as get_trusts:
-            with patch.object(
-                Trust.objects, 'filter_by_content',
-                wraps=Trust.objects.filter_by_content,
-            ) as filtered:
-                self.assertTrue(self.alice.has_perm(self.change_code, self.group_a1))
-                self.assertTrue(self.alice.has_perm(self.change_code, qs))
-                self.assertIn(
-                    self.change_code,
-                    self.alice.get_all_permissions(self.group_a1),
-                )
-                self.assertIn(
-                    self.change_code,
-                    self.carol.get_group_permissions(self.group_a1),
-                )
-        get_trusts.assert_not_called()
-        filtered.assert_not_called()
+        self.assertTrue(self.alice.has_perm(self.change_code, self.group_a1))
+        self.assertTrue(self.alice.has_perm(self.change_code, qs))
+        self.assertIn(
+            self.change_code,
+            self.alice.get_all_permissions(self.group_a1),
+        )
+        self.assertIn(
+            self.change_code,
+            self.carol.get_group_permissions(self.group_a1),
+        )
 
     def test_category_ticket_trust_unchanged(self):
         self.assertTrue(self.alice.has_perm(self.cat_code, self.cat_a))

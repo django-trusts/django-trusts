@@ -5,7 +5,6 @@ from django.contrib.auth.backends import ModelBackend
 from trusts.models import (
     Content,
     PermissionConditionNotQueryable,
-    Trust,
     compile_registered_condition_q,
     legacy_permission_callbacks_allowed,
     permission_has_condition,
@@ -13,7 +12,6 @@ from trusts.models import (
 from trusts.query import (
     historical_group_grant_exists,
     is_active_principal,
-    permission_granted_via_group_exists,
 )
 from trusts.conditions import PermissionConditionError, evaluate_registered_expression
 from trusts.core import (
@@ -26,18 +24,17 @@ from trusts import get_permission_model, utils
 
 
 class HistoricalGroupQueryCompiler(object):
-    """Transitional complete proof: registered plan OR historical TrustGroup.
+    """Complete proof: registered plan OR historical TrustGroup.
 
     #69 S6 registers Group as protected content through Junction. It does
     not register group membership as a trustee route for Category/Ticket.
-    This compiler remains through S6/S7 until a separately designed
+    This compiler remains through S7 until a separately designed
     group-as-trustee relation replaces it.
 
-    ``historical_fallback`` is route behavior: still-undeclared terminals
-    may use ``Content._contents`` / TUP / TrustGroup only through this
-    concrete compiler. Mixin-only compilers do not inherit it. Declared
-    Group uses the registered J1 plan plus this compiler's TrustGroup
-    OR; it does not reach ``_get_trusts`` / ``filter_by_content``.
+    ``historical_fallback`` identifies this concrete compiler for mixin
+    isolation. It does not reopen a static content map. Unknown or
+    undeclared terminals fail closed. Declared Category / Ticket / Trust
+    / Group use the registered plan plus this compiler's TrustGroup OR.
     """
 
     historical_fallback = True
@@ -88,26 +85,6 @@ class TrustModelBackendMixin(object):
     perm_model = get_permission_model()
 
     @staticmethod
-    def _get_perm_code(perm):
-        return '%s.%s' % (
-            perm.content_type.app_label, perm.codename
-        )
-
-    @staticmethod
-    def _get_trusts(obj):
-        if not Content.is_content(obj):
-            return []
-
-        trusts = Trust.objects.filter_by_content(obj)
-        if trusts is None:
-            return []
-
-        if not hasattr(trusts, '__iter__'):
-            trusts = [trusts]
-
-        return trusts
-
-    @staticmethod
     def _get_class(obj):
         if isinstance(obj, QuerySet):
             klass = obj.model
@@ -136,76 +113,18 @@ class TrustModelBackendMixin(object):
             setattr(user_obj, '_trust_perm_cache', dict())
         return getattr(user_obj, '_trust_perm_cache')
 
-    def _historical_group_permissions(self, user_obj, obj):
-        if not Content.is_content(obj):
-            return set()
-        trusts = self._get_trusts(obj)
-        if not trusts:
-            return set()
-        return _perm_codes(
-            self.perm_model.objects.filter(
-                permission_granted_via_group_exists(user_obj, trusts)
-            )
-        )
-
-    def _historical_all_permissions(self, user_obj, obj):
-        self._ensure_perm_cache(user_obj)
-        perm_cache = getattr(user_obj, '_trust_perm_cache')
-
-        trusts = self._get_trusts(obj)
-        if len(trusts):
-            all_perms = []
-            for trust in trusts:
-                if trust.pk not in perm_cache.keys():
-                    trust_perm = set([self._get_perm_code(p) for p in
-                        self.perm_model.objects.filter(
-                            Q(trustentities__trust=trust, trustentities__entity=user_obj) |
-                            permission_granted_via_group_exists(user_obj, trust)
-                        )
-                    ])
-
-                    perm_cache[trust.pk] = trust_perm
-                else:
-                    trust_perm = perm_cache[trust.pk]
-
-                all_perms.append(trust_perm)
-            return set.intersection(*all_perms)
-        return set()
-
-    def _collection_may_use_historical_fallback(self, obj):
-        """Historical fallback is a concrete-compiler capability, not Content membership."""
-        if not Content.is_content(obj):
-            return False
-        return any(
-            handle.historical_fallback
-            for handle in self._trusts_config().configured_handles()
-        )
-
-    def _instance_may_use_historical_fallback(self, obj):
-        if not Content.is_content(obj):
-            return False
-        return self._own_handle().historical_fallback
-
     def _collection_permissions(self, user_obj, obj, *, kind):
         handles = self._trusts_config().configured_handles()
         qs = common_permissions(handles, obj, user_obj, kind=kind)
         if qs is None:
-            if not self._collection_may_use_historical_fallback(obj):
-                return set()
-            if kind == 'group':
-                return self._historical_group_permissions(user_obj, obj)
-            return self._historical_all_permissions(user_obj, obj)
+            return set()
         return _perm_codes(qs)
 
     def _instance_permissions(self, user_obj, obj, *, kind):
         handle = self._own_handle()
         qs = common_permissions((handle,), obj, user_obj, kind=kind)
         if qs is None:
-            if not self._instance_may_use_historical_fallback(obj):
-                return set()
-            if kind == 'group':
-                return self._historical_group_permissions(user_obj, obj)
-            return self._historical_all_permissions(user_obj, obj)
+            return set()
         return _perm_codes(qs)
 
     def get_group_permissions(self, user_obj, obj=None):
@@ -308,9 +227,7 @@ class TrustModelBackendMixin(object):
             handles, obj, user_obj, binding, kind='complete', extra_q=extra_q,
         )
         if matched is None:
-            if not self._collection_may_use_historical_fallback(obj):
-                return False
-            return perm in self._historical_all_permissions(user_obj, obj)
+            return False
         return matched
 
     def _instance_has_perm(self, user_obj, perm, obj, extra_q=None):
@@ -320,9 +237,7 @@ class TrustModelBackendMixin(object):
             handle, obj, user_obj, binding, kind='complete', extra_q=extra_q,
         )
         if matched is None:
-            if not self._instance_may_use_historical_fallback(obj):
-                return False
-            return perm in self._historical_all_permissions(user_obj, obj)
+            return False
         return matched
 
     def has_perm(self, user_obj, permext, obj=None):

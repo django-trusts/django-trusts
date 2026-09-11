@@ -571,14 +571,11 @@ class UndeclaredJunctionRemainsHistoricalTest(_UsersMixin, TestCase):
         self.assertTrue(handle.registry.plan_for(Group).records)
         self.assertFalse(handle.registry.plan_for(TestGroupJunction).records)
         code = 'auth.change_group'
-        with patch.object(
-            TrustModelBackend, '_get_trusts', wraps=TrustModelBackend._get_trusts,
-        ) as get_trusts:
-            self.assertTrue(self.alice.has_perm(code, self.group))
-            self.assertFalse(self.bob.has_perm(code, self.group))
-            qs = Group.objects.filter(pk=self.group.pk)
-            self.assertTrue(self.alice.has_perm(code, qs))
-        get_trusts.assert_not_called()
+        self.assertFalse(hasattr(TrustModelBackend, '_get_trusts'))
+        self.assertTrue(self.alice.has_perm(code, self.group))
+        self.assertFalse(self.bob.has_perm(code, self.group))
+        qs = Group.objects.filter(pk=self.group.pk)
+        self.assertTrue(self.alice.has_perm(code, qs))
 
 
 class CompilerFailureTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
@@ -716,8 +713,8 @@ class RegisteredOrdinaryModelTest(_RegistryRestoreMixin, _UsersMixin, Transactio
             self._make_users('memo')
             memo = Memo.objects.create(title='note')
             other = Memo.objects.create(title='other')
-            self.assertFalse(Content.is_content(memo))
-            self.assertFalse(Content.is_content_model(Memo))
+            self.assertFalse(hasattr(Content, 'is_content'))
+            self.assertFalse(hasattr(Content, 'is_content_model'))
             ct = ContentType.objects.get_for_model(Memo)
             change, _created = Permission.objects.get_or_create(
                 content_type=ct,
@@ -787,7 +784,7 @@ class HistoricalFallbackCapabilityTest(_RegistryRestoreMixin, _UsersMixin, TestC
             self.assertFalse(mixin.historical_fallback)
 
     def test_mixin_only_no_plan_denies_tup_and_trustgroup(self):
-        self.assertTrue(Content.is_content(self.cat_a))
+        self.assertFalse(hasattr(Content, 'is_content'))
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
             handle = self.live.configured_backend()
             self.assertFalse(handle.registry.plan_for(Category).records)
@@ -816,33 +813,32 @@ class HistoricalFallbackCapabilityTest(_RegistryRestoreMixin, _UsersMixin, TestC
                 )
             grant_q.assert_not_called()
 
-    def test_concrete_no_plan_still_authorizes_undeclared_content(self):
+    def test_concrete_no_plan_fails_closed_for_undeclared_content(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE,)):
             self._empty_plans(CONCRETE)
             handle = self.live.configured_backend()
             self.assertFalse(handle.registry.plan_for(Category).records)
             self.assertTrue(handle.historical_fallback)
+            self.assertFalse(hasattr(TrustModelBackend, '_get_trusts'))
             concrete = TrustModelBackend()
-            self.assertTrue(concrete.has_perm(self.alice, self.change_code, self.cat_a))
-            self.assertTrue(concrete.has_perm(self.carol, self.change_code, self.cat_a))
-            self.assertIn(
-                self.change_code,
-                concrete.get_all_permissions(self.alice, self.cat_a),
+            self.assertFalse(concrete.has_perm(self.alice, self.change_code, self.cat_a))
+            self.assertFalse(concrete.has_perm(self.carol, self.change_code, self.cat_a))
+            self.assertEqual(
+                concrete.get_all_permissions(self.alice, self.cat_a), set(),
             )
-            self.assertIn(
-                self.change_code,
-                concrete.get_group_permissions(self.carol, self.cat_a),
+            self.assertEqual(
+                concrete.get_group_permissions(self.carol, self.cat_a), set(),
             )
             qs = Category.objects.filter(pk=self.cat_a.pk)
-            self.assertTrue(concrete.has_perm(self.alice, self.change_code, qs))
-            self.assertTrue(
+            self.assertFalse(concrete.has_perm(self.alice, self.change_code, qs))
+            self.assertFalse(
                 Category.objects.permitted(self.change_code, self.alice).exists()
             )
-            self.assertTrue(
+            self.assertFalse(
                 Category.objects.permitted(self.change_code, self.carol).exists()
             )
 
-    def test_inapplicable_mixin_neither_adds_nor_suppresses_concrete_fallback(self):
+    def test_inapplicable_mixin_neither_adds_nor_reopens_deleted_fallback(self):
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN, CONCRETE)):
             self._empty_plans(MIXIN, CONCRETE)
             mixin_handle = self.live.configured_backend(MIXIN)
@@ -854,25 +850,24 @@ class HistoricalFallbackCapabilityTest(_RegistryRestoreMixin, _UsersMixin, TestC
             mixin = MixinOnlyBackend()
             concrete = TrustModelBackend()
             self.assertFalse(mixin.has_perm(self.alice, self.change_code, self.cat_a))
-            self.assertTrue(concrete.has_perm(self.alice, self.change_code, self.cat_a))
-            self.assertTrue(self.alice.has_perm(self.change_code, self.cat_a))
+            self.assertFalse(concrete.has_perm(self.alice, self.change_code, self.cat_a))
+            self.assertFalse(self.alice.has_perm(self.change_code, self.cat_a))
             self.assertEqual(mixin.get_all_permissions(self.alice, self.cat_a), set())
-            self.assertIn(
-                self.change_code,
-                concrete.get_all_permissions(self.alice, self.cat_a),
+            self.assertEqual(
+                concrete.get_all_permissions(self.alice, self.cat_a), set(),
             )
             qs = Category.objects.filter(pk=self.cat_a.pk)
             self.assertTrue(mixin._is_collection_coordinator())
-            self.assertTrue(mixin.has_perm(self.alice, self.change_code, qs))
+            self.assertFalse(mixin.has_perm(self.alice, self.change_code, qs))
             with self.assertNumQueries(0):
                 self.assertFalse(concrete.has_perm(self.alice, self.change_code, qs))
-            self.assertTrue(self.alice.has_perm(self.change_code, qs))
-            self.assertIn(self.change_code, mixin.get_all_permissions(self.alice, qs))
+            self.assertFalse(self.alice.has_perm(self.change_code, qs))
+            self.assertEqual(mixin.get_all_permissions(self.alice, qs), set())
             self.assertEqual(concrete.get_all_permissions(self.alice, qs), set())
-            self.assertTrue(
+            self.assertFalse(
                 Category.objects.permitted(self.change_code, self.alice).exists()
             )
-            self.assertTrue(
+            self.assertFalse(
                 Category.objects.permitted(self.change_code, self.carol).exists()
             )
 

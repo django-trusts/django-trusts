@@ -131,32 +131,32 @@ and then applies the unchanged condition overlay. Concrete
 `TrustModelBackend` routes keep the transitional historical TrustGroup
 compiler; mixin-only routes receive only their registered-plan proof.
 Public signature and documented one-path results are unchanged.
-Unregistered-on-every-path models keep `trust_grant_q` only when a
-configured compiler advertises `historical_fallback` (the concrete
-historical group compiler). Mixin-only or otherwise inapplicable routes
-do not inherit `Content._contents` / TUP / TrustGroup.
+Unknown or undeclared terminals fail closed (empty / false / none).
+`historical_fallback` identifies the concrete
+`HistoricalGroupQueryCompiler` for mixin isolation; it does not reopen
+a static content map. Mixin-only routes receive only their registered
+plan proof.
 
-Declared Category, Ticket, Trust, and any other registered content
-model — including ordinary non-`Content` models — use the same handle
-and compiler for backend `has_perm` / `get_all_permissions` /
-`get_group_permissions`. An instance consults that backend's handle
-first; `Content.is_content` only decides whether the concrete historical
-fallback is available after the handle is inapplicable. A QuerySet is
-coordinated by the first configured Trusts path: one aggregate
-all-match / common-permission query; other Trusts backends return
-false/empty with no SQL. `obj is None` is false/empty on a Trusts
-backend; hosts that want global Django permissions list
+Declared Category, Ticket, Trust, Group, documented dependents, and
+any other registered content model — including ordinary non-`Content`
+models — use the same handle and compiler for backend `has_perm` /
+`get_all_permissions` / `get_group_permissions`. An instance consults
+that backend's handle first. A QuerySet is coordinated by the first
+configured Trusts path: one aggregate all-match / common-permission
+query; other Trusts backends return false/empty with no SQL.
+`obj is None` is false/empty on a Trusts backend; hosts that want
+global Django permissions list
 `django.contrib.auth.backends.ModelBackend` separately. Declared
 Junction-backed Group uses the registered J1 plan and the concrete
-compiler's TrustGroup OR; it does not reach `_get_trusts` /
-`filter_by_content`. Still-undeclared terminals stay on the historical
-`_contents` path through the concrete compiler capability. QuerySet
-plus a legacy callable condition raises
+compiler's TrustGroup OR. Group-as-protected-content does not replace
+Django Group membership as the historical trustee path for Category /
+Ticket / Trust. QuerySet plus a legacy callable condition raises
 `PermissionConditionNotQueryable` before candidate SQL or callback
 invocation. The Trusts app contributes Trust-as-content to every
 configured `TrustModelBackend` (or subclass) path; the test app
 contributes Category, Ticket, and Junction-backed Group onto the
-unique handle.
+unique handle. Hosts contribute documented dependents from their own
+`AppConfig`.
 
 `TrustManager.filter_by_user_content_perm` is a create-under-Trust
 picker, not a content-row filter. Its support gate is
