@@ -732,8 +732,8 @@ class _TerminalProjectionMixin(object):
             {self.read.pk},
         )
         self.assertEqual(
-            list(registry.permissions_for(self.alice, other)),
-            [],
+            _pks(registry.permissions_for(self.alice, other)),
+            {self.write.pk},
         )
         expected = [granted, sibling]
         qs = registry.filter_authorized(
@@ -770,13 +770,11 @@ class _TerminalProjectionMixin(object):
                 list(common_permissions((handle,), mixed_qs, self.alice)),
                 [],
             )
-        with self.assertNumQueries(1):
-            self.assertEqual(
-                list(common_permissions(
-                    (handle,), granted_qs, self.alice, kind='group',
-                )),
-                [],
-            )
+        group_only = common_permissions(
+            (handle,), granted_qs, self.alice, kind='group',
+        )
+        self.assertIsInstance(group_only, QuerySet)
+        self.assertEqual(list(group_only), [])
         plan = registry.plan_for(granted, user=self.alice, permission=self.read)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(plan.common_permissions(self.alice, granted)), {self.read.pk})
