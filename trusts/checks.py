@@ -1,5 +1,5 @@
 """Django system checks for permission conditions, missing declarations,
-query compilers, and Along renderer support.
+query compilers, Along renderer support, and OrderedFold renderer support.
 
 Model-aware semantic validation (field names, traversal, multi-valued
 relations, operand types) and the legacy-callback policy are reported as
@@ -27,6 +27,7 @@ CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
+CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'
 CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
@@ -188,6 +189,8 @@ def _covered_content_models(config):
             continue
         for record in handle.registry.records:
             covered.add(record.content_model)
+        for strategy in getattr(handle.registry, 'strategies', ()):
+            covered.add(strategy.content_model)
     return covered
 
 
@@ -413,4 +416,72 @@ def check_along_renderer(app_configs, **kwargs):
                 obj=None,
                 id=CHECK_ID_ALONG_RENDERER,
             ))
+    return messages
+
+
+_E006_HINT = (
+    'Silencing this check ID suppresses only the early diagnostic. '
+    'OrderedFold still fail-closes on the actual query connection; '
+    'there is no fallback grant.'
+)
+
+
+def _live_ordered_fold_strategies(config):
+    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+
+    found = []
+    try:
+        paths = config._configured_trusts_paths()
+    except TrustsConfigurationError:
+        return found
+    for path in paths:
+        try:
+            handle = config.configured_backend(path)
+        except (TrustsConfigurationError, TrustsCompilerError):
+            continue
+        found.extend(getattr(handle.registry, 'strategies', ()))
+    return found
+
+
+@django_checks.register(django_checks.Tags.database)
+def check_ordered_fold_renderer(app_configs, **kwargs):
+    """Report selected aliases that cannot render live OrderedFold plans.
+
+    Honors Django's ``databases`` argument exactly. ``None`` or empty
+    opens no connections, executes no SQL, and is not an all-clear.
+    Isolated ``TrustsRegistry()`` instances are not scanned. The vendor
+    gate uses connection metadata only (zero SQL).
+    """
+    databases = kwargs.get('databases')
+    if not databases:
+        return []
+
+    from django.db import connections
+
+    from trusts.apps import kernel_config
+    from trusts.core import ordered_fold_connection_supported
+
+    try:
+        config = kernel_config()
+    except LookupError:
+        return []
+    strategies = _live_ordered_fold_strategies(config)
+    if not strategies:
+        return []
+
+    messages = []
+    for alias in databases:
+        connection = connections[alias]
+        engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
+        vendor = getattr(connection, 'vendor', None)
+        if ordered_fold_connection_supported(connection):
+            continue
+        messages.append(django_checks.Error(
+            'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
+            'OrderedFold remaining-bits: PostgreSQL is required.'
+            % (alias, engine, vendor),
+            hint=_E006_HINT,
+            obj=None,
+            id=CHECK_ID_ORDERED_FOLD_RENDERER,
+        ))
     return messages

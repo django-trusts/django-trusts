@@ -18,6 +18,13 @@ exactly one terminal M2M membership hop after zero or more forward
 single-valued hops. Validation is registration-time ``_meta`` only
 (zero SQL).
 
+``register_strategy(OrderedFold(...))`` is a parallel closed family.
+Ordinary ``register()`` stays the AnyPath ``EXISTS`` fast path. One
+content terminal may use AnyPath xor one OrderedFold. The first
+OrderedFold renderer is PostgreSQL; other vendors fail closed before
+fold SQL. Import ``OrderedFold``, ``PermissionMaskDomain``,
+``MaskEntry``, ``PolarityMap``, and ``FlatToken`` from ``trusts.core``.
+
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
 compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
@@ -63,6 +70,8 @@ class PlanQueryCompiler(object):
     historical_fallback = False
 
     def complete_exists(self, plan, candidates, user, permission):
+        if getattr(plan, 'strategy', None) is not None:
+            return plan.content_exists(user, permission)
         if not plan.records:
             return None
         return plan.content_exists(user, permission)
@@ -136,7 +145,8 @@ def any_plan_records(handles, content):
     Construction issues no SQL.
     """
     for handle in handles:
-        if handle.registry.plan_for(content).records:
+        plan = handle.registry.plan_for(content)
+        if plan.records or getattr(plan, 'strategy', None) is not None:
             return True
     return False
 
@@ -325,7 +335,7 @@ def common_permissions(handles, candidates, user, *, kind='complete'):
     applicable = False
     for handle in handles:
         plan = handle.registry.plan_for(candidates, user=user)
-        if plan.records:
+        if plan.records or getattr(plan, 'strategy', None) is not None:
             applicable = True
             if plan.permission_model is not None:
                 if permission_model is None:
@@ -1838,6 +1848,7 @@ class RelationPlan:
 
     records: tuple
     permission_model: type | None = None
+    strategy: object | None = None
 
     def _bound_root_qs(self, record, **bindings):
         return _bind_record_qs(record, **bindings)
@@ -1883,6 +1894,9 @@ class RelationPlan:
         """
         user = _require_instance(user, 'user')
         permission = _bind_terminal(permission, 'permission')
+        if self.strategy is not None:
+            from trusts.ordered_fold import OrderedFoldAllowed
+            return OrderedFoldAllowed(self.strategy, user, permission)
         if not self.records:
             return None
         return self._correlated_exists(
@@ -1897,7 +1911,10 @@ class RelationPlan:
         compiler, not this plan-only projection.
         """
         user = _require_instance(user, 'user')
-        if not self.records or self.permission_model is None:
+        if (
+            (not self.records and self.strategy is None)
+            or self.permission_model is None
+        ):
             if self.permission_model is None:
                 return ()
             return self.permission_model._default_manager.none()
@@ -1915,6 +1932,17 @@ class RelationPlan:
         """Distinct permission rows for ``(user, content)``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
+        if self.strategy is not None and self.permission_model is not None:
+            exists = self.content_exists(user, OuterRef('pk'))
+            if exists is None:
+                return self.permission_model._default_manager.none()
+            return self.permission_model._default_manager.filter(
+                Exists(
+                    content._meta.concrete_model._default_manager.filter(
+                        pk=content.pk,
+                    ).filter(exists)
+                )
+            ).distinct()
         if not self.records or self.permission_model is None:
             return ()
         exists = self._correlated_exists(
@@ -1927,9 +1955,16 @@ class RelationPlan:
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
-        if not self.records or self.permission_model is None:
-            return False
         if permission._meta.concrete_model is not self.permission_model:
+            return False
+        if self.strategy is not None:
+            exists = self.content_exists(user, permission)
+            if exists is None:
+                return False
+            return content._meta.concrete_model._default_manager.filter(
+                pk=content.pk,
+            ).filter(exists).exists()
+        if not self.records or self.permission_model is None:
             return False
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
@@ -1954,10 +1989,11 @@ class TrustsRegistry(object):
     methods compile one shared plan from stored records. One root may
     store several records when they terminate on different content models.
 
-    Frozen state is instance-owned. ``freeze()`` is idempotent.
-    ``register`` on that exact frozen instance raises
-    ``TrustsConfigurationError`` before validation or mutation. Existing
-    records, plans, compilers, and authorization reads stay usable.
+        Frozen state is instance-owned. ``freeze()`` is idempotent.
+        ``register`` and ``register_strategy`` on that exact frozen instance
+        raise ``TrustsConfigurationError`` before validation or mutation.
+        Existing records, plans, compilers, and authorization reads stay
+        usable.
     A standalone ``TrustsRegistry()`` never inspects Django readiness
     and never auto-freezes.
     """
@@ -1965,6 +2001,8 @@ class TrustsRegistry(object):
     def __init__(self):
         self._by_root = {}
         self._order = []
+        self._strategies = {}
+        self._strategy_order = []
         self._frozen = False
         self._condition_lookup = None
 
@@ -1998,12 +2036,16 @@ class TrustsRegistry(object):
         self._condition_lookup = lookup
 
     def freeze(self):
-        """Seal this instance against further ``register`` writes."""
+        """Seal this instance against further ``register`` / ``register_strategy`` writes."""
         self._frozen = True
 
     @property
     def records(self):
         return tuple(self._order)
+
+    @property
+    def strategies(self):
+        return tuple(self._strategy_order)
 
     def records_for_root(self, root):
         """Insertion-ordered records registered for ``root``.
@@ -2062,6 +2104,12 @@ class TrustsRegistry(object):
         content_path, content_model, content_field, content_target = _resolve_path(
             root, content_ref._path, 'content', trailing_reverse=True,
         )
+        if content_model in self._strategies:
+            raise TrustsConfigurationError(
+                'Content terminal %s already has an OrderedFold strategy; '
+                'AnyPath and OrderedFold cannot share one terminal.'
+                % content_model._meta.label
+            )
         user_path, user_model, user_field, user_target = _resolve_path(
             root, user_ref._path, 'user', terminal_membership=True,
         )
@@ -2117,6 +2165,37 @@ class TrustsRegistry(object):
         self._order.append(record)
         return record
 
+    def register_strategy(self, strategy):
+        """Register one closed OrderedFold plan. Zero SQL.
+
+        Frozen instances raise before validation or mutation. One content
+        terminal may use AnyPath xor one OrderedFold. Conflicting
+        registration leaves stored records and strategies unchanged.
+        """
+        if self._frozen:
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        from trusts.ordered_fold import validate_ordered_fold
+
+        compiled = validate_ordered_fold(strategy)
+        content_model = compiled.content_model
+        if content_model in self._strategies:
+            raise TrustsConfigurationError(
+                'Conflicting OrderedFold registration for content terminal '
+                '%s.' % content_model._meta.label
+            )
+        for record in self._order:
+            if record.content_model is content_model:
+                raise TrustsConfigurationError(
+                    'Content terminal %s already has an AnyPath registration; '
+                    'AnyPath and OrderedFold cannot share one terminal.'
+                    % content_model._meta.label
+                )
+        self._strategies[content_model] = compiled
+        self._strategy_order.append(compiled)
+        return compiled
+
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
         for record in self._order:
@@ -2149,6 +2228,22 @@ class TrustsRegistry(object):
                 _require_instance(permission, 'permission')
             )
 
+        strategy = self._strategies.get(content_model)
+        if strategy is not None:
+            if user_model is not None and user_model is not strategy.user_model:
+                strategy = None
+            if (
+                permission_model is not None
+                and permission_model is not strategy.permission_model
+            ):
+                strategy = None
+            if strategy is not None:
+                return RelationPlan(
+                    records=(),
+                    permission_model=strategy.permission_model,
+                    strategy=strategy,
+                )
+
         records = self._records_for(content_model, user_model, permission_model)
         if records:
             models = {record.permission_model for record in records}
@@ -2159,7 +2254,9 @@ class TrustsRegistry(object):
                     % ', '.join(sorted(model._meta.label for model in models))
                 )
             permission_model = models.pop()
-        return RelationPlan(records=records, permission_model=permission_model)
+        return RelationPlan(
+            records=records, permission_model=permission_model,
+        )
 
     def permissions_for(self, user, content):
         """Distinct permission rows granted to ``user`` on ``content``."""
@@ -2209,3 +2306,15 @@ class BackendHandle:
         static content map; undeclared terminals fail closed.
         """
         return bool(getattr(self.compiler, 'historical_fallback', False))
+
+
+from trusts.ordered_fold import (  # noqa: E402
+    FlatToken,
+    MaskEntry,
+    OrderedFold,
+    OrderedFoldAllowed,
+    PermissionMaskDomain,
+    PolarityMap,
+    RegisteredStrategy,
+    ordered_fold_connection_supported,
+)

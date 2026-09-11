@@ -39,6 +39,43 @@ jobs:
     - name: System checks
       run: python -m django check --settings=tests.settings
 
+  tests-orderedfold-pg:
+    name: tests OrderedFold PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trusts
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TRUSTS_TEST_DATABASE: postgresql
+      TRUSTS_PG_NAME: trusts
+      TRUSTS_PG_USER: postgres
+      TRUSTS_PG_PASSWORD: postgres
+      TRUSTS_PG_HOST: 127.0.0.1
+      TRUSTS_PG_PORT: 5432
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install package, Django 6.1, and psycopg
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "Django>=6.1,<6.2" "psycopg[binary]" coverage
+        python -m pip install -e .
+    - name: OrderedFold PostgreSQL regressions
+      run: python -m tests.runtests trusts.test_issue100
+
   pair-z1:
     name: pair with approved Z1
     runs-on: ubuntu-latest
