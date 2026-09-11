@@ -33,17 +33,22 @@ def isolated_owner():
 
 
 def live_config(apps_registry=None):
-    """The unique installed ``TrustsImplementationConfig``.
+    """The kernel-host or unique installed ``TrustsImplementationConfig``.
 
-    Kernel-only tests get ``KernelHostConfig``. The supported Zero
-    pair gets ``ZeroConfig``.
+    Kernel-only tests prefer ``KernelHostConfig`` when the README
+    consumer is also installed. The supported Zero pair still has
+    exactly one owner (``ZeroConfig``).
     """
+    from tests.kernel_host.apps import KernelHostConfig
     from trusts.apps import implementation_configs
     from trusts.core import TrustsConfigurationError
 
     configs = implementation_configs(apps_registry)
     if len(configs) == 1:
         return configs[0]
+    hosts = [config for config in configs if type(config) is KernelHostConfig]
+    if len(hosts) == 1:
+        return hosts[0]
     raise TrustsConfigurationError(
         'live_config() needs exactly one implementation owner; got %r'
         % (configs,)

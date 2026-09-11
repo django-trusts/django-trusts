@@ -13,3 +13,6 @@ INSTALLED_APPS = (
     'tests.kernel_host.apps.KernelHostConfig',
     'tests.fold_apps.FoldTestsConfig',
 )
+AUTHENTICATION_BACKENDS = (
+    'tests.backends.HostTrustModelBackend',
+)

@@ -19,6 +19,7 @@ INSTALLED_APPS = (
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'tests.kernel_host.apps.KernelHostConfig',
+    'tests.myapp.apps.DocumentConfig',
     'tests.gh_permissions.apps.GhPermissionsConfig',
     'tests.apps.TestsConfig',
 )
@@ -26,10 +27,12 @@ INSTALLED_APPS = (
 # Test-app migrations depend on trusts.0001_initial (Zero-owned after C2).
 MIGRATION_MODULES = {
     'trusts_tests': None,
+    'myapp': None,
 }
 
 AUTHENTICATION_BACKENDS = (
     'tests.backends.HostTrustModelBackend',
+    'tests.myapp.backends.DocumentBackend',
 )
 
 MIDDLEWARE = (
