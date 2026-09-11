@@ -19,6 +19,7 @@ from trusts.checks import (
     CHECK_ID_LEGACY_CALLBACK,
     CHECK_ID_LEGACY_CALLBACK_WARNING,
     check_permission_conditions,
+    iter_live_permission_conditions,
     permission_condition_check_messages,
 )
 from trusts.conditions import (
@@ -400,3 +401,48 @@ class ConditionRegistryCheckTest(SimpleTestCase):
             messages = check_permission_conditions(None)
         errors = [m for m in messages if m.id == CHECK_ID_INVALID_EXPR]
         self.assertTrue(any("'typo'" in m.msg for m in errors))
+
+    def test_two_owners_same_model_code_both_validated(self):
+        Note, _Memo = _note_models()
+        u, _p, o = condition_refs()
+        owner_a = TrustsRegistry()
+        owner_b = TrustsRegistry()
+        owner_a.register_permission_condition(Note, 'own', u == o.owner)
+        owner_b.register_permission_condition(Note, 'own', u == o.nope)
+
+        class _Handle(object):
+            def __init__(self, store):
+                self.registry = store
+
+        class _Config(object):
+            def __init__(self, store, path):
+                self._store = store
+                self._path = path
+
+            def _configured_trusts_paths(self):
+                return (self._path,)
+
+            def configured_backend(self, path=None):
+                return _Handle(self._store)
+
+        configs = (
+            _Config(owner_a, 'tests.backends.HostTrustModelBackend'),
+            _Config(owner_b, 'tests.backends.MixinOnlyBackend'),
+        )
+        with patch(
+            'trusts.apps.implementation_configs', return_value=configs,
+        ):
+            live = list(iter_live_permission_conditions())
+            messages = check_permission_conditions(None)
+        own_rows = [
+            record for model, code, record in live
+            if model is Note and code == 'own'
+        ]
+        self.assertEqual(len(own_rows), 2)
+        self.assertEqual(len({id(record.expr) for record in own_rows}), 2)
+        errors = [m for m in messages if m.id == CHECK_ID_INVALID_EXPR]
+        self.assertTrue(any("'own'" in m.msg and 'nope' in m.msg for m in errors))
+        self.assertTrue(
+            any(m.obj is Note for m in errors),
+            'invalid owner B record must still be reported',
+        )

@@ -323,22 +323,24 @@ def iter_live_permission_conditions(apps_registry=None):
     """Yield ``(model, cond_code, record)`` from configured registries.
 
     Implementation-owned ``TrustsRegistry`` condition stores are the
-    source of truth. When an unmigrated Zero ``Content`` still exposes
-    ``iter_permission_conditions``, those historical records are
-    yielded too so pair CI against older companions keeps coverage.
-    Duplicate ``(id(model), cond_code)`` pairs are skipped.
+    source of truth. Every configured owner/registry record is
+    preserved: the same model/code on two owners is two records, and
+    both are validated. The only skip is the transitional Zero
+    ``Content`` fallback when that iterator returns a record object
+    already yielded from a handle registry (same record identity, not
+    merely the same model/code).
     """
     from django.apps import apps as django_apps
 
     from trusts.apps import implementation_configs
 
-    seen = set()
+    seen_records = set()
     for config in implementation_configs(apps_registry):
         for model, cond_code, record in _iter_handle_permission_conditions(config):
-            key = (id(model), cond_code)
-            if key in seen:
+            marker = id(record)
+            if marker in seen_records:
                 continue
-            seen.add(key)
+            seen_records.add(marker)
             yield model, cond_code, record
 
     registry = django_apps if apps_registry is None else apps_registry
@@ -347,10 +349,10 @@ def iter_live_permission_conditions(apps_registry=None):
     if not callable(iter_fn):
         return
     for model, cond_code, record in iter_fn():
-        key = (id(model), cond_code)
-        if key in seen:
+        marker = id(record)
+        if marker in seen_records:
             continue
-        seen.add(key)
+        seen_records.add(marker)
         yield model, cond_code, record
 
 
