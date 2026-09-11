@@ -49,6 +49,10 @@ def _check_metadata(meta_text: str, origin: str) -> None:
         raise SystemExit('%s long description is not the user README' % origin)
     if "Do **not** list `'trusts'` in `INSTALLED_APPS`" not in description:
         raise SystemExit('%s long description missing INSTALLED_APPS warning' % origin)
+    if 'pip install django-trusts' in description:
+        raise SystemExit('%s long description still has a bare PyPI install' % origin)
+    if 'BeeDesk, Inc., 2015–2026 (BSD-2-Clause)' not in description:
+        raise SystemExit('%s long description missing BeeDesk 2015–2026 notice' % origin)
     for needle in FORBIDDEN_LONG_DESC:
         if needle in description:
             raise SystemExit(

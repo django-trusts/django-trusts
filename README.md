@@ -43,47 +43,61 @@ rows that an implementation defines.
 
 ## Install
 
-```bash
-pip install django-trusts
-```
-
 This is a development release of the 1.x line, not a declared stable
 1.0, and not a published PyPI release. Install from a local checkout
-or a built sdist/wheel until a stable tag exists.
+or a built sdist/wheel:
+
+```
+python -m pip install "Django>=6.1,<6.2"
+python -m pip install .
+```
 
 Requires **Python 3.12–3.14** and **Django 6.1**. See
 [docs/support-matrix.md](docs/support-matrix.md).
 
 ## Configure
 
-These imports and settings match the project's verified test
-configuration. A real implementation substitutes its own app module,
-`TrustsImplementationConfig` subclass, and mixin backend path.
+The worked example is the `tests.myapp` consumer in this tree. Every
+import and settings path below is that module.
 
 ```python
 from django.contrib.auth.backends import ModelBackend
 
 from trusts.apps import TrustsImplementationConfig
 from trusts.backends import TrustModelBackendMixin
+from trusts.core import Ref
 
-HOST_BACKEND = 'tests.backends.HostTrustModelBackend'
+DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
 
-class HostTrustModelBackend(TrustModelBackendMixin, ModelBackend):
+class DocumentBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
-class KernelHostConfig(TrustsImplementationConfig):
-    name = 'tests.kernel_host'
-    label = 'trusts_kernel_host'
-    trusts_backend_paths = (HOST_BACKEND,)
+class DocumentConfig(TrustsImplementationConfig):
+    name = 'tests.myapp'
+    label = 'myapp'
+    trusts_backend_paths = (DOCUMENT_BACKEND,)
+
+    def ready(self):
+        super().ready()
+        from tests.myapp.models import DocumentGrant
+
+        handle = self.configured_backend()
+        registry = handle.registry
+        j = Ref(DocumentGrant)
+        registry.register(
+            content=j.document,
+            user=j.user,
+            permission=j.permission,
+        )
 
 INSTALLED_APPS = (
     'django.contrib.contenttypes',
     'django.contrib.auth',
-    'tests.kernel_host.apps.KernelHostConfig',
+    'tests.myapp.apps.DocumentConfig',
 )
 AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend',
-    'tests.backends.HostTrustModelBackend',
+    'tests.myapp.backends.DocumentBackend',
 )
 ```
 
@@ -91,15 +105,14 @@ Do not add `'trusts'` to `INSTALLED_APPS`.
 
 ## Declare and authorize
 
-Ordinary application-owned models plus one `Ref` registration. Grant
-mutation happens through those models; core has no generic grant/revoke
-workflow.
+Ordinary application-owned models plus the `Ref` registration above.
+Grant mutation happens through those models; core has no generic
+grant/revoke workflow.
 
 ```python
 from django.contrib.auth.models import Permission
 from django.db import models
 
-from trusts.core import Ref
 from trusts.query import AuthorizedManager
 
 class Document(models.Model):
@@ -107,7 +120,7 @@ class Document(models.Model):
     objects = AuthorizedManager()
 
     class Meta:
-        app_label = 'trusts_tests'
+        app_label = 'myapp'
 
 class DocumentGrant(models.Model):
     document = models.ForeignKey(Document, on_delete=models.CASCADE)
@@ -115,29 +128,23 @@ class DocumentGrant(models.Model):
     permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
     class Meta:
-        app_label = 'trusts_tests'
+        app_label = 'myapp'
 
-j = Ref(DocumentGrant)
-registry.register(
-    content=j.document,
-    user=j.user,
-    permission=j.permission,
-)
 DocumentGrant.objects.create(
     document=document, user=user, permission=change_permission,
 )
-user.has_perm('trusts_tests.change_document', document)
+user.has_perm('myapp.change_document', document)
 Document.objects.authorized(user, change_permission)
 ```
 
-View guard, copied from the passing decorator test:
+View guard for the same permission:
 
 ```python
 from trusts.decorators import permission_required
 
-@permission_required('auth.read_group', fieldlookups_kwargs={'pk': 'pk'})
-def view_group(request, pk):
-    ...
+@permission_required('myapp.change_document', fieldlookups_kwargs={'pk': 'pk'})
+def edit_document(request, pk):
+    return 'ok'
 ```
 
 ## Documentation
@@ -151,4 +158,4 @@ def view_group(request, pk):
 
 Contributor and build history lives in [DEV.md](DEV.md).
 
-Licensed under the BSD 2-Clause License. Copyright BeeDesk, Inc.
+Copyright BeeDesk, Inc., 2015–2026 (BSD-2-Clause).
