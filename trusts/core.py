@@ -12,6 +12,12 @@ Optional ``Along`` replaces equality at one walk-site with bounded
 grant-anchored reachability. V1 compiles that walk only for Django's
 SQLite backend.
 
+Closed predicate nodes ``All``, ``Equal``, and ``permission_in`` are an
+AND overlay on one permission-bearing root. A requester path may end in
+exactly one terminal M2M membership hop after zero or more forward
+single-valued hops. Validation is registration-time ``_meta`` only
+(zero SQL).
+
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
 compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
@@ -259,11 +265,9 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
             for lookup, target_attname in _scope_prefix_lookups(
                 record, scope_model,
             ):
-                inner = record.root._default_manager.filter(**{
-                    record.user_field: user,
-                    record.permission_field: permission,
-                    lookup: OuterRef(target_attname),
-                })
+                inner = _bind_record_qs(
+                    record, user=user, permission=permission,
+                ).filter(**{lookup: OuterRef(target_attname)})
                 parts.append(Exists(inner))
     if not parts:
         return queryset.none()
@@ -488,14 +492,47 @@ _SUFFIX_KINDS = frozenset(('single', 'reverse_o2o', 'reverse_o2m'))
 _SUFFIX_MAX = 2
 
 
-def _resolve_path(root, path, role, *, trailing_reverse=False):
+def _resolve_m2m_terminal(field, role, path):
+    """Resolve a terminal many-to-many hop without ``get_path_info()``.
+
+    M2M path information is two joins (through table + target). Membership
+    correlation uses the related model and its primary key only.
+    """
+    _materialize_related_model(field)
+    related = getattr(field, 'related_model', None)
+    if not _is_model_class(related):
+        remote = getattr(field, 'remote_field', None)
+        model = getattr(remote, 'model', None) if remote is not None else None
+        if _is_model_class(model):
+            related = model
+    if not _is_model_class(related):
+        raise TrustsConfigurationError(
+            '%s path %r does not terminate on a model.'
+            % (role, _path_text(path))
+        )
+    related = related._meta.concrete_model
+    pk = related._meta.pk
+    attname = getattr(pk, 'attname', None)
+    if not attname:
+        raise TrustsConfigurationError(
+            '%s path %r does not expose one supported target field.'
+            % (role, _path_text(path))
+        )
+    return related, attname
+
+
+def _resolve_path(root, path, role, *, trailing_reverse=False,
+                  terminal_membership=False):
     """Validate a root-relative path and return lookup metadata.
 
-    User and permission paths remain one direct single-valued hop.
-    A content path may be that same direct hop, or one or more forward
-    single-valued hops, then a reverse one-to-many gateway, then zero
-    to two suffix hops. A suffix hop is a forward single-valued,
-    reverse one-to-one, or reverse one-to-many relation.
+    Permission paths remain one direct single-valued hop. A user path
+    may be that same direct hop, or zero or more forward single-valued
+    hops followed by exactly one terminal M2M membership hop. Reverse
+    one-to-many requester paths stay rejected. A content path may be a
+    direct hop, or one or more forward single-valued hops, then a
+    reverse one-to-many gateway, then zero to two suffix hops. A suffix
+    hop is a forward single-valued, reverse one-to-one, or reverse
+    one-to-many relation.
     """
     if not path:
         raise TrustsConfigurationError(
@@ -507,6 +544,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False):
     related = None
     target_attname = None
     gateway_index = None
+    last_kind = None
     n = len(path)
 
     for index, name in enumerate(path):
@@ -520,6 +558,10 @@ def _resolve_path(root, path, role, *, trailing_reverse=False):
             )
 
         kind = _classify_field(field)
+        last_kind = kind
+        if terminal_membership and is_last and kind == 'm2m':
+            related, target_attname = _resolve_m2m_terminal(field, role, path)
+            break
         if kind == 'scalar':
             raise TrustsConfigurationError(
                 '%s path %r traverses scalar field %r on %s; only '
@@ -618,17 +660,20 @@ def _resolve_path(root, path, role, *, trailing_reverse=False):
             current = related
 
     if n != 1 and gateway_index is None:
-        if trailing_reverse:
+        if terminal_membership and last_kind == 'm2m':
+            pass
+        elif trailing_reverse:
             raise TrustsConfigurationError(
                 '%s path %r is not a direct single-valued relation or a '
                 'forward path ending in one reverse one-to-many.'
                 % (role, _path_text(path))
             )
-        raise TrustsConfigurationError(
-            '%s path %r is not a direct single-valued relation; only '
-            'direct paths are supported.'
-            % (role, _path_text(path))
-        )
+        else:
+            raise TrustsConfigurationError(
+                '%s path %r is not a direct single-valued relation; only '
+                'direct paths are supported.'
+                % (role, _path_text(path))
+            )
     return tuple(path), related, _lookup_text(path), target_attname
 
 
@@ -638,6 +683,272 @@ def _require_ref(value, role):
             '%s must be a root-relative Ref, not %r.' % (role, value)
         )
     return value
+
+
+def _require_same_root(ref, root, role):
+    ref = _require_ref(ref, role)
+    if ref._root is not root:
+        raise TrustsConfigurationError(
+            '%s must share the registration root %s; got %s.'
+            % (role, root._meta.label, ref._root._meta.label)
+        )
+    return ref
+
+
+def _resolve_forward_singles(root, path, role):
+    """One or more forward single-valued hops. No multi-valued walks."""
+    if not path:
+        raise TrustsConfigurationError(
+            '%s must be a non-empty root-relative path from %s.'
+            % (role, root._meta.label)
+        )
+    current = root
+    related = None
+    target_attname = None
+    n = len(path)
+    for index, name in enumerate(path):
+        is_last = index == n - 1
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                '%s path %r refers to missing field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        kind = _classify_field(field)
+        if kind == 'scalar':
+            raise TrustsConfigurationError(
+                '%s path %r traverses scalar field %r on %s; only '
+                'single-valued relations are supported.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind in ('m2m', 'reverse_o2m', 'reverse', 'reverse_o2o'):
+            raise TrustsConfigurationError(
+                '%s path %r uses extra or intermediate multi-valued '
+                'field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind == 'gfk':
+            raise TrustsConfigurationError(
+                '%s path %r uses a generic foreign key %r on %s; generic '
+                'foreign keys are not supported.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind != 'single':
+            raise TrustsConfigurationError(
+                '%s path %r uses unsupported field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        related, target_attname = _resolved_hop(field, role, path)
+        if not is_last:
+            current = related
+    return tuple(path), related, _lookup_text(path), target_attname
+
+
+def _resolve_permission_in_path(root, path, role, permission_model):
+    """Bounded ceiling path: forward singles, optional reverse O2M, terminal membership."""
+    if not path:
+        raise TrustsConfigurationError(
+            '%s must be a non-empty root-relative path from %s.'
+            % (role, root._meta.label)
+        )
+    current = root
+    related = None
+    target_attname = None
+    intermediate_multi = False
+    n = len(path)
+    for index, name in enumerate(path):
+        is_last = index == n - 1
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                '%s path %r refers to missing field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        kind = _classify_field(field)
+        if kind == 'scalar':
+            raise TrustsConfigurationError(
+                '%s path %r traverses scalar field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind == 'gfk':
+            raise TrustsConfigurationError(
+                '%s path %r uses a generic foreign key %r on %s; generic '
+                'foreign keys are not supported.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind == 'single':
+            if intermediate_multi:
+                raise TrustsConfigurationError(
+                    '%s path %r uses extra or intermediate multi-valued '
+                    'walks; single-valued hops cannot follow a collection.'
+                    % (role, _path_text(path))
+                )
+            if is_last:
+                raise TrustsConfigurationError(
+                    '%s path %r must terminate on a multi-valued '
+                    'membership hop.'
+                    % (role, _path_text(path))
+                )
+            related, target_attname = _resolved_hop(field, role, path)
+            current = related
+            continue
+        if kind == 'reverse_o2m' and not is_last:
+            if intermediate_multi:
+                raise TrustsConfigurationError(
+                    '%s path %r uses extra or intermediate multi-valued '
+                    'field %r on %s.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            intermediate_multi = True
+            related, target_attname = _resolved_hop(field, role, path)
+            current = related
+            continue
+        if kind in ('m2m', 'reverse_o2m') and is_last:
+            if kind == 'm2m':
+                related, target_attname = _resolve_m2m_terminal(
+                    field, role, path,
+                )
+            else:
+                related, target_attname = _resolved_hop(field, role, path)
+            if related is not permission_model:
+                raise TrustsConfigurationError(
+                    '%s path %r terminates on %s, not the registered '
+                    'permission model %s.'
+                    % (
+                        role, _path_text(path), related._meta.label,
+                        permission_model._meta.label,
+                    )
+                )
+            return tuple(path), related, _lookup_text(path), target_attname
+        if kind in ('m2m', 'reverse_o2m', 'reverse', 'reverse_o2o'):
+            raise TrustsConfigurationError(
+                '%s path %r uses extra or intermediate multi-valued '
+                'field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        raise TrustsConfigurationError(
+            '%s path %r uses unsupported field %r on %s.'
+            % (role, _path_text(path), name, current._meta.label)
+        )
+    raise TrustsConfigurationError(
+        '%s path %r must terminate on a multi-valued membership hop.'
+        % (role, _path_text(path))
+    )
+
+
+def _validate_equal(predicate, root):
+    left = _require_same_root(predicate.left, root, 'Equal left')
+    right = _require_same_root(predicate.right, root, 'Equal right')
+    _left_path, left_model, _left_field, left_target = _resolve_forward_singles(
+        root, left._path, 'Equal left',
+    )
+    _right_path, right_model, _right_field, right_target = (
+        _resolve_forward_singles(root, right._path, 'Equal right')
+    )
+    if left_model is not right_model:
+        raise TrustsConfigurationError(
+            'Equal paths must terminate on the same model; got %s and %s.'
+            % (left_model._meta.label, right_model._meta.label)
+        )
+    # Compiler compares stored FK columns via F(). Distinct unique
+    # fields (``to_field``) on the same model can collide across
+    # objects and fail open if only the terminal model is checked.
+    if left_target != right_target:
+        raise TrustsConfigurationError(
+            'Equal paths must share one resolved comparison field; '
+            'got %s.%s and %s.%s.'
+            % (
+                left_model._meta.label, left_target,
+                right_model._meta.label, right_target,
+            )
+        )
+
+
+def _validate_permission_in(predicate, root, permission_model):
+    if not predicate.refs:
+        raise TrustsConfigurationError(
+            'permission_in requires one or more refs.'
+        )
+    for ref in predicate.refs:
+        bound = _require_same_root(ref, root, 'permission_in')
+        _resolve_permission_in_path(
+            root, bound._path, 'permission_in', permission_model,
+        )
+
+
+def _validate_condition(condition, root, permission_model):
+    """Registration-time ``_meta`` validation. Zero SQL. None is a no-op."""
+    if condition is None:
+        return None
+    if isinstance(condition, All):
+        if not condition.predicates:
+            raise TrustsConfigurationError(
+                'All requires one or more predicates.'
+            )
+        for predicate in condition.predicates:
+            _validate_condition(predicate, root, permission_model)
+        return condition
+    if isinstance(condition, Equal):
+        _validate_equal(condition, root)
+        return condition
+    if isinstance(condition, PermissionIn):
+        _validate_permission_in(condition, root, permission_model)
+        return condition
+    raise TrustsConfigurationError(
+        'condition is not supported; omit it or pass None.'
+    )
+
+
+def _compile_predicate(node, record):
+    if node is None:
+        return None
+    if isinstance(node, All):
+        parts = [
+            _compile_predicate(predicate, record)
+            for predicate in node.predicates
+        ]
+        parts = [part for part in parts if part is not None]
+        if not parts:
+            return None
+        compiled = parts[0]
+        for part in parts[1:]:
+            compiled &= part
+        return compiled
+    if isinstance(node, Equal):
+        return Q(**{
+            _lookup_text(node.left._path): F(_lookup_text(node.right._path)),
+        })
+    if isinstance(node, PermissionIn):
+        compiled = Q()
+        for ref in node.refs:
+            compiled &= Q(**{
+                _lookup_text(ref._path): F(record.permission_field),
+            })
+        return compiled
+    raise TrustsConfigurationError(
+        'condition is not supported; omit it or pass None.'
+    )
+
+
+def _apply_condition(record, queryset):
+    compiled = _compile_predicate(record.condition, record)
+    if compiled is None:
+        return queryset
+    return queryset.filter(compiled)
+
+
+def _bind_record_qs(record, **bindings):
+    """Root rows bound to terminals, with the registered condition AND overlay."""
+    filters = {}
+    for role, value in bindings.items():
+        filters[getattr(record, _BINDING_FIELDS[role])] = _bind_terminal(
+            value, role,
+        )
+    return _apply_condition(
+        record, record.root._default_manager.filter(**filters),
+    )
 
 
 class Ref(object):
@@ -727,6 +1038,114 @@ class Along(object):
 
     def __repr__(self):
         return 'Along(%r, bound=%r)' % (self.ref, self.bound)
+
+
+class Equal(object):
+    """Closed equality of two root-relative single-valued refs."""
+
+    __slots__ = ('left', 'right')
+
+    def __init__(self, left, right):
+        if not isinstance(left, Ref) or not isinstance(right, Ref):
+            raise TrustsConfigurationError(
+                'Equal left and right must be root-relative Refs, not %r '
+                'and %r.' % (left, right)
+            )
+        object.__setattr__(self, 'left', left)
+        object.__setattr__(self, 'right', right)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('Equal is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('Equal is immutable.')
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Equal)
+            and self.left == other.left
+            and self.right == other.right
+        )
+
+    def __hash__(self):
+        return hash((Equal, self.left, self.right))
+
+    def __repr__(self):
+        return 'Equal(%r, %r)' % (self.left, self.right)
+
+
+class PermissionIn(object):
+    """Closed membership of the registered permission in one or more refs."""
+
+    __slots__ = ('refs',)
+
+    def __init__(self, *refs):
+        if not refs:
+            raise TrustsConfigurationError(
+                'permission_in requires one or more refs.'
+            )
+        for ref in refs:
+            if not isinstance(ref, Ref):
+                raise TrustsConfigurationError(
+                    'permission_in refs must be root-relative Refs, not %r.'
+                    % (ref,)
+                )
+        object.__setattr__(self, 'refs', refs)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('permission_in is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('permission_in is immutable.')
+
+    def __eq__(self, other):
+        return isinstance(other, PermissionIn) and self.refs == other.refs
+
+    def __hash__(self):
+        return hash((PermissionIn, self.refs))
+
+    def __repr__(self):
+        return 'permission_in(%s)' % ', '.join(repr(ref) for ref in self.refs)
+
+
+permission_in = PermissionIn
+
+
+class All(object):
+    """Closed AND of one or more typed predicate nodes."""
+
+    __slots__ = ('predicates',)
+
+    def __init__(self, *predicates):
+        if not predicates:
+            raise TrustsConfigurationError(
+                'All requires one or more predicates.'
+            )
+        for predicate in predicates:
+            if not isinstance(predicate, (All, Equal, PermissionIn)):
+                raise TrustsConfigurationError(
+                    'All predicates must be All, Equal, or permission_in '
+                    'nodes, not %r.' % (predicate,)
+                )
+        object.__setattr__(self, 'predicates', predicates)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('All is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('All is immutable.')
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, All)
+            and self.predicates == other.predicates
+        )
+
+    def __hash__(self):
+        return hash((All, self.predicates))
+
+    def __repr__(self):
+        return 'All(%s)' % ', '.join(repr(pred) for pred in self.predicates)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1257,12 +1676,10 @@ class GrantReach(Expression):
         self.record = record
         self.content = content
         walk = record.along
-        seed = record.root._default_manager.filter(
-            **{
-                record.user_field: user,
-                record.permission_field: permission,
-                '%s__isnull' % walk.walk_field: False,
-            }
+        seed = _bind_record_qs(
+            record, user=user, permission=permission,
+        ).filter(
+            **{'%s__isnull' % walk.walk_field: False}
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -1361,7 +1778,7 @@ class RegisteredRelation:
     permission_model: type
     permission_field: str
     permission_target: str
-    condition: None = None
+    condition: object | None = None
     along: AlongWalk | None = None
 
 
@@ -1423,12 +1840,7 @@ class RelationPlan:
     permission_model: type | None = None
 
     def _bound_root_qs(self, record, **bindings):
-        filters = {}
-        for role, value in bindings.items():
-            filters[getattr(record, _BINDING_FIELDS[role])] = _bind_terminal(
-                value, role,
-            )
-        return record.root._default_manager.filter(**filters)
+        return _bind_record_qs(record, **bindings)
 
     def _correlated_exists(self, terminal_field_attr, **bindings):
         parts = []
@@ -1618,6 +2030,10 @@ class TrustsRegistry(object):
         walk-site with bounded reachability. Along validation uses
         ``_meta`` only (zero SQL) and runs after the frozen check.
 
+        Optional ``condition`` is a closed predicate tree (``All``,
+        ``Equal``, ``permission_in``) compiled as an AND overlay on the
+        same root row. Validation uses ``_meta`` only (zero SQL).
+
         A frozen instance raises ``TrustsConfigurationError`` before
         validation or mutation. This method does not inspect Django's
         global ``apps.ready``.
@@ -1625,10 +2041,6 @@ class TrustsRegistry(object):
         if self._frozen:
             raise TrustsConfigurationError(
                 'Cannot register on a frozen TrustsRegistry.'
-            )
-        if condition is not None:
-            raise TrustsConfigurationError(
-                'condition is not supported; omit it or pass None.'
             )
         if along is not None and not isinstance(along, Along):
             raise TrustsConfigurationError(
@@ -1651,7 +2063,7 @@ class TrustsRegistry(object):
             root, content_ref._path, 'content', trailing_reverse=True,
         )
         user_path, user_model, user_field, user_target = _resolve_path(
-            root, user_ref._path, 'user'
+            root, user_ref._path, 'user', terminal_membership=True,
         )
         permission_path, permission_model, permission_field, permission_target = (
             _resolve_path(root, permission_ref._path, 'permission')
@@ -1661,6 +2073,7 @@ class TrustsRegistry(object):
             along_walk = _build_along_walk(
                 root, content_path, content_model, along,
             )
+        condition = _validate_condition(condition, root, permission_model)
 
         record = RegisteredRelation(
             root=root,
@@ -1676,7 +2089,7 @@ class TrustsRegistry(object):
             permission_model=permission_model,
             permission_field=permission_field,
             permission_target=permission_target,
-            condition=None,
+            condition=condition,
             along=along_walk,
         )
 

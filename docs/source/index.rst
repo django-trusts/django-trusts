@@ -339,6 +339,36 @@ installed, ``apps.get_app_config('trusts')`` is ``ZeroConfig`` (models,
 not registries). Callers of the kernel store must use ``kernel_config()``
 rather than the string label ``'trusts'``.
 
+Closed registry predicates
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``TrustsRegistry.register`` accepts an optional closed predicate tree
+from ``trusts.core``. This is not the historical ``Expr`` /
+``:condition`` codec and is not a general ``Q`` dialect::
+
+   from trusts.core import All, Equal, Ref, permission_in
+
+   t = Ref(TeamRepoGrant)
+   registry.register(
+       content=t.repository,
+       user=t.team.members,
+       permission=t.operation,
+       condition=All(
+           permission_in(t.team.permission_bundles.operations),
+           Equal(t.team.organization, t.repository.organization),
+       ),
+   )
+
+A requester path may be one forward single-valued hop, or zero or more
+forward single-valued hops followed by exactly one terminal many-to-many
+membership hop. Reverse one-to-many requester paths stay rejected.
+``All``, ``Equal``, and ``permission_in`` are AND-correlated through the
+same permission-bearing row. ``Equal`` sides must share one resolved
+comparison field; distinct unique fields on the same model are
+rejected. Object authorization, authorized querysets / managers, and
+permission enumeration share that plan. Malformed arity, types, or
+paths raise ``TrustsConfigurationError`` at registration with zero SQL.
+
 Decorators
 ~~~~~~~~~~
 

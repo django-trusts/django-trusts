@@ -2022,6 +2022,98 @@ the same operations under the same loader keys. Already-applied 1.x
 - Admin extraction
 - Deleting `trust_grant_q` / `HistoricalGroupQueryCompiler`
 
+# Issue #98: closed predicates and terminal membership paths (1.0.0.dev0)
+
+## Decision
+
+Public C2 `TrustsRegistry.register` now accepts the closed predicate
+nodes required by the accepted GH team mapping, and a requester path
+may end in exactly one membership hop. Core owns validation,
+correlation, compilation, object / queryset / enumeration agreement,
+and fail-closed behavior. Hosts own ordinary models and the
+registration spelling. This does not reopen a general rule language.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures
+- `ContentQuerySet.permitted` / `filter_by_user_content_perm`
+- Historical `Expr` / `:condition` / `ConditionLookup` codec
+- Existing one-hop user / permission registrations without `condition`
+- `Along` reachability, app label `trusts_core`, package version
+  `1.0.0.dev0`
+- Database schema and Trusts migration names
+
+## Changes
+
+### 48. Closed predicates and terminal membership (#98)
+
+| | |
+| --- | --- |
+| Previous | `condition=` other than `None` raised `TrustsConfigurationError` (`condition is not supported`). User and permission refs were one direct single-valued hop. M2M and reverse O2M requester paths were rejected. `All` / `Equal` / `permission_in` were absent from `trusts.core`. |
+| New | `from trusts.core import All, Equal, Ref, permission_in`. `All(*predicates)`, `Equal(left, right)`, and `permission_in(*refs)` are immutable closed nodes. Registration-time `_meta` validation is zero SQL. A user path may be one forward single-valued hop, or `(forward single)*` then exactly one terminal M2M membership hop (`t.team.members`). Reverse O2M requester paths stay rejected. Predicates compile as an AND overlay on the same permission-bearing root row (membership, bundle ceiling, organization alignment). Multiple complete registered roots still OR-compose. |
+| Replacement | Team-style hosts register the accepted spelling on public C2. Do not add a consumer-local `Q`, lookup-string, tuple, or callable dialect. Direct three-FK registrations stay valid without `condition`. |
+| Affected | New public names and the requester-path grammar. Existing no-condition registrations, SQL, and results are unchanged. |
+| Authorization | A team grant allows only when the requester is a terminal member, the grant row exists, `permission_in` holds for that row's permission, and `Equal` paths align, all on the same root row. Removing any one of those facts denies only that branch. Cross-organization team grants deny. Direct and team roots OR; revoking one valid root preserves the other. Object, queryset/manager, and enumeration agree. Query construction is lazy; supported decisions/listings stay **1 SQL** before pagination. |
+
+Failure behavior: invalid predicate arity or types, mixed-root refs,
+incompatible `Equal` terminals or resolved comparison fields (distinct
+`to_field` / PK identities on the same model), `permission_in` paths
+that do not end on the registered permission model, extra or
+intermediate multi-valued walks, untyped `condition` values,
+unregistered / stale / unsupported declarations fail closed. Untyped
+`condition=` still reports that `condition` is not supported.
+Registration and system checks issue **0 SQL**.
+
+## Old vs new behavior
+
+| Situation | Old (C2 `db5a41ed`) | New (#98) |
+| --- | --- | --- |
+| `from trusts.core import All, Equal, permission_in` | Names absent | Exported closed nodes |
+| `user=t.team.members` | Rejected (M2M) | Terminal membership hop |
+| `condition=All(...)` | Rejected | AND overlay on the same root row |
+| `condition=object()` | Rejected (`not supported`) | Unchanged rejection |
+| Direct `user=d.account` with `condition=None` | Registered | Unchanged |
+| Content-path M2M / extra multi-valued walks | Rejected | Still rejected |
+| Two complete roots on one content terminal | OR | Unchanged OR; predicates stay AND inside one root |
+
+## Schema
+
+No change. #98 adds no model and no Django migration. Existing schema
+and migration identities stay. Query construction remains lazy.
+
+## Out of scope (not acceptance criteria)
+
+- General callable, `Q`, lookup-string, tuple, or unrestricted
+  expression dialect
+- Arbitrary-depth or repeated multi-valued traversal
+- Zero model/schema changes
+- GH consumer changes beyond the paired acceptance spelling
+- Windows #17, examples, broad docs restructuring, admin
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none was added.
+- [ ] Import `All`, `Equal`, and `permission_in` from `trusts.core` only
+      when a closed predicate overlay is intended.
+- [ ] Keep direct three-FK registrations unchanged; omit `condition` or
+      pass `None`.
+- [ ] Requester membership is exactly one terminal M2M after zero or
+      more forward singles. Reverse O2M requester paths stay rejected.
+      Do not walk extra collections.
+- [ ] `permission_in` refs must terminate on the registered permission
+      model. `Equal` sides must be forward singles to the same model
+      and the same resolved comparison field.
+- [ ] Do not pass `Q`, callables, lookup strings, or tuples as
+      `condition`. Untyped values still fail closed.
+- [ ] Treat `All` / `Equal` / `permission_in` as AND on one root row.
+      Independent roots still OR.
+- [ ] Paginate only after `.authorized(...)` / `filter_authorized`.
+- [ ] Leave package version at `1.0.0.dev0`.
+- [ ] Leave C2 app-label / package boundaries and the Zero
+      compatibility baseline unchanged.
+
+
 
 
 
