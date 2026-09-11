@@ -1,7 +1,7 @@
 # TrustsRegistry (internal development primitive)
 
 Additive registration and projection surface for issues #57, #60, #65,
-and the first historical reader in #67. Import from `trusts.core`. This
+#83, and the first historical reader in #67. Import from `trusts.core`. This
 slice does **not** re-export a process-global registry from `trusts`.
 
 `TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
@@ -43,16 +43,23 @@ roots remain supported.
 
 User and permission refs remain one direct single-valued hop. A content
 path may be that same direct hop, or one or more forward single-valued
-hops followed by exactly one final reverse one-to-many hop.
+hops, then a reverse one-to-many gateway, then zero to two suffix hops.
+A suffix hop is a forward single-valued, reverse one-to-one, or reverse
+one-to-many relation.
+
+```text
+content := (forward single-valued)+  reverse O2M  suffix{0..2}
+suffix hop := forward single-valued | reverse O2O | reverse O2M
+```
 
 These shapes raise `TrustsConfigurationError` during `register`:
 
-- reverse relations before the final hop, or a reverse as the only hop
-- reverse one-to-one
+- reverse relations before the gateway, or a reverse as the only hop
+- reverse one-to-one as the gateway
 - many-to-many
 - generic foreign keys/relations
-- anything after the final reverse hop
-- multi-hop all-forward content (no trailing reverse)
+- more than two hops after the gateway
+- multi-hop all-forward content (no gateway reverse)
 - arbitrary multi-valued chains
 - composite / multi-column correlation (`get_path_info()` must yield
   exactly one `PathInfo` with exactly one target field)
@@ -60,7 +67,7 @@ These shapes raise `TrustsConfigurationError` during `register`:
 `condition` may be omitted or `None`; any other value is not supported yet.
 
 Each hop's terminal model, complete root-relative lookup
-(`'__'.join(path)`, for example `folder__documents`), and outer comparison
+(`'__'.join(path)`, for example `folder__rows__content`), and outer comparison
 field come from resolved path metadata. Correlation does not assume `pk`,
 does not assume the terminal field lives on the root, and does not
 hand-code forward versus reverse identity. A non-primary

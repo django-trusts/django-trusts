@@ -1415,6 +1415,88 @@ No change. This S4 slice adds no model and no Django migration.
 - Schema or migration changes
 - Zero, GH, example #7, Windows #17
 
+---
+
+# Bounded Ref dependent-content grammar (issue #83)
+
+This record covers the additive ``trusts.core`` content-path grammar
+extension. Version remains **1.0.0.dev0**. It closes the #83 / #69 r2
+S5 slice (isolated mocks only). It does **not** contribute
+Group/Junction, delete ``Content._contents``, freeze the registry, or
+change authorization results. There is **no schema or Django migration
+change**.
+
+## Decision
+
+A content ``Ref`` path may still be the existing direct single-valued
+hop. It may also be one or more forward single-valued hops, then a
+reverse one-to-many **gateway**, then zero, one, or two suffix hops.
+A suffix hop is a forward single-valued, reverse one-to-one, or reverse
+one-to-many relation. User and permission paths stay one direct
+single-valued hop. Bindings and ``EXISTS`` still use the complete
+``'__'.join(path)`` lookup and the last hop's single ``PathInfo``
+target field, including ``to_field``.
+
+This is the smallest generic rule that represents Junction (forward →
+reverse O2M → forward) and both documented dependent-content depths.
+Core stays noun-blind: no Trust, Content, Junction, Receipt, Group, or
+other historical-noun branch.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``User.has_perms`` / ``ContentQuerySet.permitted``
+  signatures
+- ``Content`` / ``Junction`` registration, ``class_prepared`` dispatch,
+  and ``Content._contents``
+- Authentication-backend composition and undeclared-terminal fallbacks
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 39. Content paths may continue past the reverse O2M gateway (new, additive)
+
+| | |
+| --- | --- |
+| Previous (#65 / §30) | Content was a direct single-valued hop or ``(forward single-valued)+`` then exactly one final reverse one-to-many. Anything after that reverse was rejected, including Junction's trailing forward and both documented dependent suffix depths. |
+| New | Content is that same direct hop, or ``(forward single-valued)+ reverse O2M suffix{0..2}``. The first reverse is the gateway and must be reverse O2M after at least one forward hop. Each suffix hop is forward single-valued, reverse O2O, or reverse O2M. Zero suffixes preserve every #65 trailing-reverse registration. One suffix expresses Junction and the first documented dependent level. Two suffixes express the second documented dependent level, including reverse O2M, reverse O2O, and parent-held forward encodings. |
+| Replacement | None for existing callers. Isolated ``register`` / ``plan_for`` / projection call sites stay the same. Register a gateway-plus-suffix path when the terminal is one or two hops past the first reverse. |
+| Affected | Isolated ``trusts.core`` development callers. Direct one-hop and trailing-reverse registrations keep the same lookup and #64 target-field ``OuterRef``. |
+| Authorization | Unchanged for historical Trusts. Object authorization, aggregate QuerySet all-match, and ``common_permissions`` use the stored full lookup. Direct versus group-only contribution stays a compiler concern, not a Python per-object loop. No schema or migration. |
+
+Rejected during ``register`` (zero SQL, no partial record): reverse
+before the gateway, including a reverse-only path; reverse O2O as the
+gateway; many-to-many; generic foreign keys; suffix depth greater than
+two; all-forward multi-hop content; composite / multi-column targets;
+implicit reverse-name guessing; arbitrary getters; executable path
+components; mixed roots; and the existing #57/#65 duplicate/conflict
+cases.
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Import ``TrustsRegistry`` / ``RelationPlan`` from ``trusts.core``, not ``trusts``.
+- [ ] Direct and trailing-reverse content paths stay valid; do not rewrite them.
+- [ ] Register Junction / documented dependents only after S6 / S7. This
+      slice extends the grammar; it does not contribute those terminals.
+- [ ] Leave ``Content._contents``, ``register_content``, and
+      ``Junction.register_junction`` in place.
+- [ ] Leave undeclared-terminal incremental fallbacks in place.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. The bounded dependent-content grammar adds no model and no
+migration. Query construction remains lazy.
+
+## Out of scope (not acceptance criteria)
+
+- S6 Group/Junction contribution or backend migration
+- S7 static-registry deletion
+- S8 freeze / E003
+- Condition-registry work; callback relocation; #54
+- Zero; GH; example #7; Windows #17
+
 
 
 
