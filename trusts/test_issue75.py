@@ -138,6 +138,9 @@ class _RegistryRestoreMixin(object):
         self.saved_ticket_sentinel = getattr(
             self.live_contributor, '_trusts_tup_ticket_registry_id', None
         )
+        self.saved_group_sentinel = getattr(
+            self.live_contributor, '_trusts_tup_group_registry_id', None
+        )
 
     def tearDown(self):
         self.live.registries.clear()
@@ -153,6 +156,9 @@ class _RegistryRestoreMixin(object):
         )
         self.live_contributor._trusts_tup_ticket_registry_id = (
             self.saved_ticket_sentinel
+        )
+        self.live_contributor._trusts_tup_group_registry_id = (
+            self.saved_group_sentinel
         )
         super().tearDown()
 
@@ -291,6 +297,9 @@ class IsolatedAppsPathStoreTest(SimpleTestCase):
         self.assertIsNone(
             getattr(contributor, '_trusts_tup_ticket_registry_id', None)
         )
+        self.assertIsNone(
+            getattr(contributor, '_trusts_tup_group_registry_id', None)
+        )
         self.assertEqual(live.registry.records, before)
 
 
@@ -317,15 +326,20 @@ class ContributionPathTest(_RegistryRestoreMixin, SimpleTestCase):
             self.assertIsNone(
                 getattr(contributor, '_trusts_tup_category_registry_id', None)
             )
+            self.assertIsNone(
+                getattr(contributor, '_trusts_tup_group_registry_id', None)
+            )
 
     def test_no_mixin_fan_out(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
             handle_b = self.live.configured_backend(MIXIN)
             self.assertFalse(handle_b.registry.plan_for(Category).records)
             self.assertFalse(handle_b.registry.plan_for(Ticket).records)
+            self.assertFalse(handle_b.registry.plan_for(Group).records)
             handle_a = self.live.configured_backend(CONCRETE)
             self.assertTrue(handle_a.registry.plan_for(Category).records)
             self.assertTrue(handle_a.registry.plan_for(Ticket).records)
+            self.assertTrue(handle_a.registry.plan_for(Group).records)
 
     def test_mixin_only_does_not_receive_package_trust(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):

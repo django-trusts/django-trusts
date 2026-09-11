@@ -146,13 +146,17 @@ coordinated by the first configured Trusts path: one aggregate
 all-match / common-permission query; other Trusts backends return
 false/empty with no SQL. `obj is None` is false/empty on a Trusts
 backend; hosts that want global Django permissions list
-`django.contrib.auth.backends.ModelBackend` separately. Junction/Group
-stay on the historical `_contents` path through the concrete compiler
-capability. QuerySet plus a legacy callable condition raises
+`django.contrib.auth.backends.ModelBackend` separately. Declared
+Junction-backed Group uses the registered J1 plan and the concrete
+compiler's TrustGroup OR; it does not reach `_get_trusts` /
+`filter_by_content`. Still-undeclared terminals stay on the historical
+`_contents` path through the concrete compiler capability. QuerySet
+plus a legacy callable condition raises
 `PermissionConditionNotQueryable` before candidate SQL or callback
 invocation. The Trusts app contributes Trust-as-content to every
 configured `TrustModelBackend` (or subclass) path; the test app
-contributes Category and Ticket onto the unique handle.
+contributes Category, Ticket, and Junction-backed Group onto the
+unique handle.
 
 `TrustManager.filter_by_user_content_perm` is a create-under-Trust
 picker, not a content-row filter. Its support gate is
@@ -161,8 +165,9 @@ establishes that the terminal is known. The grant remains
 `trust_grant_q` on Trust rows. A declaration on one path does not
 authorize through another path's compiler or `historical_fallback`, and
 the method is not redirected through `filter_authorized(Trust)` or the
-Trust-as-content parent relation. Unregistered models — including
-Junction/Group until S6 — return `none()`.
+Trust-as-content parent relation. Unregistered models return `none()`.
+Declared Group is a known terminal; create-under-Trust still uses
+`trust_grant_q` on Trust rows.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

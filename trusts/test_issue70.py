@@ -250,6 +250,7 @@ class IsolatedAppsDoesNotDonateTrustContributionTest(SimpleTestCase):
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
         self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
+        self.assertIsNone(getattr(contributor, '_trusts_tup_group_registry_id', None))
         self.assertEqual(
             [
                 record for record in live.records
@@ -493,7 +494,7 @@ class TrustPermittedRegistryTest(TestCase):
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
         self.assertTrue(registry.plan_for(Ticket).records)
-        self.assertFalse(registry.plan_for(Group).records)
+        self.assertTrue(registry.plan_for(Group).records)
 
     def test_inactive_and_anonymous_remain_empty(self):
         self.alice.is_active = False

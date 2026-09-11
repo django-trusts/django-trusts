@@ -130,6 +130,9 @@ class _RegistryRestoreMixin(object):
         self.saved_ticket_sentinel = getattr(
             self.live_contributor, '_trusts_tup_ticket_registry_id', None
         )
+        self.saved_group_sentinel = getattr(
+            self.live_contributor, '_trusts_tup_group_registry_id', None
+        )
 
     def tearDown(self):
         self.live.registries.clear()
@@ -145,6 +148,9 @@ class _RegistryRestoreMixin(object):
         )
         self.live_contributor._trusts_tup_ticket_registry_id = (
             self.saved_ticket_sentinel
+        )
+        self.live_contributor._trusts_tup_group_registry_id = (
+            self.saved_group_sentinel
         )
         super().tearDown()
 
@@ -294,17 +300,17 @@ class FilterByUserContentPermRegistryGateTest(
             self.assertFalse(self._filter(self.alice, User, 'add_user').exists())
             grant_q.assert_not_called()
 
-    def test_unregistered_junction_and_emptied_content_do_not_use_fallback(self):
+    def test_declared_group_opens_the_gate_emptied_content_does_not_use_fallback(self):
         self.assertTrue(Content.is_content_model(Group))
         self.assertTrue(Content.is_content_model(Category))
         handle = self.live.configured_backend()
         self.assertTrue(handle.historical_fallback)
-        self.assertFalse(handle.registry.plan_for(Group).records)
-        with patch('trusts.models.trust_grant_q') as grant_q:
+        self.assertTrue(handle.registry.plan_for(Group).records)
+        with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
             self.assertFalse(
                 self._filter(self.alice, Group, 'change_group').exists()
             )
-            grant_q.assert_not_called()
+            self.assertGreaterEqual(grant_q.call_count, 1)
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE,)):
             self.live.registries[CONCRETE] = TrustsRegistry()
             emptied = self.live.configured_backend()

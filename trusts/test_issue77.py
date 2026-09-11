@@ -92,6 +92,9 @@ class _RegistryRestoreMixin(object):
         self.saved_ticket_sentinel = getattr(
             self.live_contributor, '_trusts_tup_ticket_registry_id', None
         )
+        self.saved_group_sentinel = getattr(
+            self.live_contributor, '_trusts_tup_group_registry_id', None
+        )
 
     def tearDown(self):
         self.live.registries.clear()
@@ -107,6 +110,9 @@ class _RegistryRestoreMixin(object):
         )
         self.live_contributor._trusts_tup_ticket_registry_id = (
             self.saved_ticket_sentinel
+        )
+        self.live_contributor._trusts_tup_group_registry_id = (
+            self.saved_group_sentinel
         )
         super().tearDown()
 
@@ -560,15 +566,19 @@ class UndeclaredJunctionRemainsHistoricalTest(_UsersMixin, TestCase):
         ).save()
         self._reload()
 
-    def test_junction_group_stays_on_historical_path(self):
+    def test_junction_group_uses_registered_plan(self):
         handle = apps.get_app_config('trusts').configured_backend()
-        self.assertFalse(handle.registry.plan_for(Group).records)
+        self.assertTrue(handle.registry.plan_for(Group).records)
         self.assertFalse(handle.registry.plan_for(TestGroupJunction).records)
         code = 'auth.change_group'
-        self.assertTrue(self.alice.has_perm(code, self.group))
-        self.assertFalse(self.bob.has_perm(code, self.group))
-        qs = Group.objects.filter(pk=self.group.pk)
-        self.assertTrue(self.alice.has_perm(code, qs))
+        with patch.object(
+            TrustModelBackend, '_get_trusts', wraps=TrustModelBackend._get_trusts,
+        ) as get_trusts:
+            self.assertTrue(self.alice.has_perm(code, self.group))
+            self.assertFalse(self.bob.has_perm(code, self.group))
+            qs = Group.objects.filter(pk=self.group.pk)
+            self.assertTrue(self.alice.has_perm(code, qs))
+        get_trusts.assert_not_called()
 
 
 class CompilerFailureTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
@@ -886,23 +896,23 @@ class MixedPathUndeclaredJunctionTest(_RegistryRestoreMixin, _UsersMixin, TestCa
         self._reload()
         self.code = 'auth.change_group'
 
-    def test_concrete_still_authorizes_undeclared_junction_group(self):
+    def test_concrete_authorizes_declared_junction_group(self):
         handle = self.live.configured_backend()
-        self.assertFalse(handle.registry.plan_for(Group).records)
+        self.assertTrue(handle.registry.plan_for(Group).records)
         self.assertTrue(handle.historical_fallback)
         self.assertTrue(self.alice.has_perm(self.code, self.group))
         self.assertFalse(self.bob.has_perm(self.code, self.group))
         qs = Group.objects.filter(pk=self.group.pk)
         self.assertTrue(self.alice.has_perm(self.code, qs))
 
-    def test_mixin_does_not_add_or_suppress_junction_fallback(self):
+    def test_mixin_does_not_add_or_suppress_junction_plan(self):
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN, CONCRETE)):
             mixin = MixinOnlyBackend()
             concrete = TrustModelBackend()
             self.assertFalse(
                 self.live.configured_backend(MIXIN).registry.plan_for(Group).records
             )
-            self.assertFalse(
+            self.assertTrue(
                 self.live.configured_backend(CONCRETE).registry.plan_for(Group).records
             )
             self.assertFalse(mixin.has_perm(self.alice, self.code, self.group))
