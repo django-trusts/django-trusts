@@ -22,6 +22,7 @@ KERNEL_SUITE = [
     'trusts.test_issue98',
     'trusts.test_issue100',
     'trusts.test_issue103',
+    'trusts.test_issue108',
 ]
 
 # C1 ran ``run_tests(['trusts'])``. Pair re-runs that full package except
@@ -51,6 +52,7 @@ PAIR_LEGACY_SUITE = [
     'trusts.test_issue98',
     'trusts.test_issue100',
     'trusts.test_issue103',
+    'trusts.test_issue108',
 ]
 
 
