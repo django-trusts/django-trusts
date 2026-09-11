@@ -47,8 +47,10 @@ plan; issue #72 adds the test-app Ticket declaration so
 `Ticket.objects.permitted` uses the same plan; issue #75 scopes that
 store per configured backend path and aggregates `.permitted()`;
 issue #77 migrates declared-terminal backend `has_perm` / enumeration
-onto the same compiler handles. Public signatures and one-path results
-are unchanged.
+onto the same compiler handles, including registered ordinary
+non-`Content` models, with historical fallback only on the concrete
+compiler capability. Public signatures and one-path results are
+unchanged.
 The API is not re-exported from `trusts` and does not add a schema or
 migration. See [core-registry.md](core-registry.md).
 

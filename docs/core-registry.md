@@ -124,20 +124,28 @@ and then applies the unchanged condition overlay. Concrete
 `TrustModelBackend` routes keep the transitional historical TrustGroup
 compiler; mixin-only routes receive only their registered-plan proof.
 Public signature and documented one-path results are unchanged.
-Unregistered-on-every-path models keep `trust_grant_q`.
+Unregistered-on-every-path models keep `trust_grant_q` only when a
+configured compiler advertises `historical_fallback` (the concrete
+historical group compiler). Mixin-only or otherwise inapplicable routes
+do not inherit `Content._contents` / TUP / TrustGroup.
 
-Declared Category, Ticket, and Trust backend `has_perm` /
-`get_all_permissions` / `get_group_permissions` use the same handle and
-compiler. An instance evaluates that backend's handle only. A QuerySet
-is coordinated by the first configured Trusts path: one aggregate
+Declared Category, Ticket, Trust, and any other registered content
+model — including ordinary non-`Content` models — use the same handle
+and compiler for backend `has_perm` / `get_all_permissions` /
+`get_group_permissions`. An instance consults that backend's handle
+first; `Content.is_content` only decides whether the concrete historical
+fallback is available after the handle is inapplicable. A QuerySet is
+coordinated by the first configured Trusts path: one aggregate
 all-match / common-permission query; other Trusts backends return
 false/empty with no SQL. `obj is None` is false/empty on a Trusts
 backend; hosts that want global Django permissions list
 `django.contrib.auth.backends.ModelBackend` separately. Junction/Group
-stay on the historical `_contents` path. The Trusts app contributes
-Trust-as-content to every configured `TrustModelBackend` (or subclass)
-path; the test app contributes Category and Ticket onto the unique
-handle.
+stay on the historical `_contents` path through the concrete compiler
+capability. QuerySet plus a legacy callable condition raises
+`PermissionConditionNotQueryable` before candidate SQL or callback
+invocation. The Trusts app contributes Trust-as-content to every
+configured `TrustModelBackend` (or subclass) path; the test app
+contributes Category and Ticket onto the unique handle.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

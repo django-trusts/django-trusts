@@ -1,9 +1,10 @@
 from django.apps import apps as django_apps
-from django.db.models import Q, QuerySet, Subquery
+from django.db.models import Model, Q, QuerySet, Subquery
 from django.contrib.auth.backends import ModelBackend
 
 from trusts.models import (
     Content,
+    PermissionConditionNotQueryable,
     Trust,
     compile_registered_condition_q,
     legacy_permission_callbacks_allowed,
@@ -31,7 +32,13 @@ class HistoricalGroupQueryCompiler(object):
     not register group membership as a trustee route for Category/Ticket.
     This compiler remains through S6/S7 until a separately designed
     group-as-trustee relation replaces it.
+
+    ``historical_fallback`` is route behavior: undeclared Junction/Group
+    may use ``Content._contents`` / TUP / TrustGroup only through this
+    concrete compiler. Mixin-only compilers do not inherit it.
     """
+
+    historical_fallback = True
 
     def complete_exists(self, plan, candidates, user, permission):
         if not plan.records:
@@ -163,10 +170,26 @@ class TrustModelBackendMixin(object):
             return set.intersection(*all_perms)
         return set()
 
+    def _collection_may_use_historical_fallback(self, obj):
+        """Historical fallback is a concrete-compiler capability, not Content membership."""
+        if not Content.is_content(obj):
+            return False
+        return any(
+            handle.historical_fallback
+            for handle in self._trusts_config().configured_handles()
+        )
+
+    def _instance_may_use_historical_fallback(self, obj):
+        if not Content.is_content(obj):
+            return False
+        return self._own_handle().historical_fallback
+
     def _collection_permissions(self, user_obj, obj, *, kind):
         handles = self._trusts_config().configured_handles()
         qs = common_permissions(handles, obj, user_obj, kind=kind)
         if qs is None:
+            if not self._collection_may_use_historical_fallback(obj):
+                return set()
             if kind == 'group':
                 return self._historical_group_permissions(user_obj, obj)
             return self._historical_all_permissions(user_obj, obj)
@@ -176,6 +199,8 @@ class TrustModelBackendMixin(object):
         handle = self._own_handle()
         qs = common_permissions((handle,), obj, user_obj, kind=kind)
         if qs is None:
+            if not self._instance_may_use_historical_fallback(obj):
+                return set()
             if kind == 'group':
                 return self._historical_group_permissions(user_obj, obj)
             return self._historical_all_permissions(user_obj, obj)
@@ -194,9 +219,9 @@ class TrustModelBackendMixin(object):
                 return set()
             return self._collection_permissions(user_obj, obj, kind='group')
 
-        if Content.is_content(obj):
-            return self._instance_permissions(user_obj, obj, kind='group')
-        return set()
+        if not isinstance(obj, Model):
+            return set()
+        return self._instance_permissions(user_obj, obj, kind='group')
 
     def get_all_permissions(self, user_obj, obj=None):
         if obj is None or not is_active_principal(user_obj):
@@ -209,11 +234,20 @@ class TrustModelBackendMixin(object):
                 return set()
             return self._collection_permissions(user_obj, obj, kind='complete')
 
-        if Content.is_content(obj):
-            return self._instance_permissions(user_obj, obj, kind='complete')
-        return set()
+        if not isinstance(obj, Model):
+            return set()
+        return self._instance_permissions(user_obj, obj, kind='complete')
 
     def permission_condition_met(self, record, user_obj, perm, obj):
+        if isinstance(obj, QuerySet) and record.expr is None:
+            raise PermissionConditionNotQueryable(
+                'ContentQuerySet.permitted does not support permission '
+                'condition on %s. Register an Expr from condition_refs() '
+                'to compile a V1 declarative expression. Callables remain '
+                'object-only via has_perm; this queryset API refuses them so '
+                'the underlying grant cannot be returned without the '
+                'condition.' % obj.model._meta.label
+            )
         if isinstance(obj, QuerySet):
             objs = obj.all()
             model = obj.model
@@ -245,8 +279,9 @@ class TrustModelBackendMixin(object):
         """Return (record, extra_q) for a ``:condition`` suffix.
 
         An ``Expr`` on a QuerySet compiles to SQL (AND overlay). Callables
-        stay on the documented object-only path. Unregistered codes raise
-        the same ``AttributeError`` as before.
+        on a QuerySet raise ``PermissionConditionNotQueryable`` before
+        any candidate SQL or callback. Unregistered codes raise the same
+        ``AttributeError`` as before.
         """
         if not permission_has_condition(permext):
             return None, None
@@ -258,7 +293,7 @@ class TrustModelBackendMixin(object):
                 % (cond, applabel, modelname)
             )
         extra_q = None
-        if record.expr is not None and isinstance(obj, QuerySet):
+        if isinstance(obj, QuerySet):
             extra_q = compile_registered_condition_q(
                 obj.model, permext, user_obj,
             )
@@ -271,6 +306,8 @@ class TrustModelBackendMixin(object):
             handles, obj, user_obj, binding, kind='complete', extra_q=extra_q,
         )
         if matched is None:
+            if not self._collection_may_use_historical_fallback(obj):
+                return False
             return perm in self._historical_all_permissions(user_obj, obj)
         return matched
 
@@ -281,6 +318,8 @@ class TrustModelBackendMixin(object):
             handle, obj, user_obj, binding, kind='complete', extra_q=extra_q,
         )
         if matched is None:
+            if not self._instance_may_use_historical_fallback(obj):
+                return False
             return perm in self._historical_all_permissions(user_obj, obj)
         return matched
 
@@ -291,7 +330,7 @@ class TrustModelBackendMixin(object):
         if isinstance(obj, QuerySet) and not self._is_collection_coordinator():
             return False
 
-        if not isinstance(obj, QuerySet) and not Content.is_content(obj):
+        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
 
         record, extra_q = self._condition_overlay(permext, obj, user_obj)

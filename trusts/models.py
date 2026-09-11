@@ -193,13 +193,22 @@ class ContentQuerySet(models.QuerySet):
         # OR each applicable handle compiler's complete predicate, then
         # apply the unchanged condition overlay. Do not factor
         # trustee/group/ceiling fragments across paths. Unregistered on
-        # every path keeps the transitional trust_grant_q fallback.
+        # every path keeps trust_grant_q only when a concrete compiler
+        # advertises historical_fallback.
         handles = django_apps.get_app_config('trusts').configured_handles()
         granted = aggregate_granted(
             handles, self, user, permission, kind='complete',
         )
         if granted is None:
-            granted = trust_grant_q(user, permission, trust_fk='trust')
+            # Historical trust_grant_q is concrete-compiler route
+            # behavior, not a default for every inapplicable mixin.
+            if (
+                Content.is_content_model(self.model)
+                and any(handle.historical_fallback for handle in handles)
+            ):
+                granted = trust_grant_q(user, permission, trust_fk='trust')
+            else:
+                return self.none()
         if condition_q is None:
             return self.filter(granted).distinct()
         return self.filter(granted & condition_q).distinct()

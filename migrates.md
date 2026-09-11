@@ -1190,7 +1190,8 @@ applicable handle compiler's **complete** predicate, then the unchanged
 condition overlay. Built-in concrete routes keep historical group-only
 grants. Mixin-only routes receive only their registered-plan proof. If
 every route is inapplicable, the transitional ``trust_grant_q`` fallback
-remains.
+remains only when a configured compiler advertises
+``historical_fallback``.
 
 ## No change to these public call sites
 
@@ -1354,9 +1355,33 @@ Migration-bot checklist:
       alone (later slices).
 - [ ] Leave package version at ``1.0.0.dev0``.
 
+### 37. Historical fallback is a concrete-compiler capability (internal)
+
+| | |
+| --- | --- |
+| Previous (#78) | Instance ``has_perm`` / enumeration gated non-QuerySet objects through ``Content.is_content`` before the handle. ``None`` from the aggregate always called ``_historical_*`` / ``trust_grant_q``. QuerySet plus a callable condition ran SQL, then iterated ``obj.all()`` to invoke the callback. |
+| New | An instance consults the owning handle/compiler first. ``Content.is_content`` only decides whether the **concrete historical fallback** is available after that handle is inapplicable. ``historical_fallback`` is advertised on ``HistoricalGroupQueryCompiler`` / ``BackendHandle``; mixin-only compilers do not inherit ``Content._contents``, TUP, or TrustGroup. Junction/Group fallback stays on the concrete route during transition. QuerySet plus a callable raises ``PermissionConditionNotQueryable`` before candidate SQL or callback invocation. The enabled single-object callback path is unchanged. |
+| Replacement | Same ``has_perm`` / ``has_perms`` / ``get_*_permissions`` / ``.permitted`` call sites. Register an ordinary (non-``Content``) model on the path-scoped registry to authorize it; do not expect ``Content._contents`` membership. |
+| Affected | Internal routing for registered non-``Content`` models, mixin-only hosts, and QuerySet ``:condition`` callables. |
+| Authorization | A mixin-only install with no plan cannot authorize from leftover TUP / TrustGroup rows. A concrete ``TrustModelBackend`` still authorizes undeclared Junction/Group. An inapplicable mixin route neither adds nor suppresses the concrete route's fallback. QuerySet authorization still has no Python per-object loop. |
+
+Migration-bot checklist:
+
+- [ ] Do not expect ``user.has_perm(perm, obj)`` to deny a registered
+      ordinary model merely because it is absent from ``Content._contents``.
+- [ ] A mixin-only Trusts backend still does not inherit historical
+      ``TrustGroup`` / TUP fallback when no plan applies, including
+      ``.permitted()``.
+- [ ] Leave Junction/Group on the concrete historical route until S6.
+- [ ] Do not call ``has_perm`` / ``has_perms`` with a QuerySet and a
+      callable ``:condition``; catch ``PermissionConditionNotQueryable``
+      or register an ``Expr``.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
 ## Schema
 
-No change. S3b adds no model and no Django migration.
+No change. This corrective S3b slice adds no model and no Django
+migration.
 
 ## Out of scope (not acceptance criteria)
 
