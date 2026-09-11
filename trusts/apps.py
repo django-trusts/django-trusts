@@ -190,6 +190,7 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
     ``AppConfig`` is *not* a subclass; ``isinstance`` resolvers skip it.
     """
 
+    default = False
     trusts_backend_paths = ()
 
     def __init__(self, *args, **kwargs):
@@ -262,6 +263,7 @@ class AppConfig(_TrustsRegistryOwner, DjangoAppConfig):
     name = 'trusts'
     verbose_name = "Django Trusts Add-in"
     label = 'trusts_core'
+    default = True
     # Preserve AutoField if a later kernel model is added. Historical
     # Trusts PKs live on ZeroConfig (label='trusts').
     default_auto_field = 'django.db.models.AutoField'

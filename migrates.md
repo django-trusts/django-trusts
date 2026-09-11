@@ -2437,7 +2437,7 @@ implementation_for_class(type(backend), required=False)  # owner or None
 
 Identity that must still hold: `trusts.backends.TrustModelBackendMixin is trusts.core_backends.TrustModelBackendMixin`.
 
-Kernel `AppConfig` remains `type(config) is trusts.apps.AppConfig` and is not an implementation owner.
+Kernel `AppConfig` remains `type(config) is trusts.apps.AppConfig` and is not an implementation owner. `TrustsImplementationConfig.default` is `False` so `'trusts'` in `INSTALLED_APPS` still selects the kernel config, not the helper.
 
 ## Old vs new behavior
 

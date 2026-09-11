@@ -93,6 +93,8 @@ def _bind(config_cls, configs=None, ready=True):
 class ImplementationHelperSurfaceTest(SimpleTestCase):
     def test_kernel_is_not_an_implementation_config(self):
         self.assertFalse(issubclass(AppConfig, TrustsImplementationConfig))
+        self.assertFalse(TrustsImplementationConfig.default)
+        self.assertTrue(AppConfig.default)
         self.assertFalse(isinstance(kernel_config(), TrustsImplementationConfig))
         self.assertEqual(implementation_configs(), ())
 
