@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
@@ -155,6 +156,165 @@ class OrderedFoldRegistrationTest(SimpleTestCase):
         self.assertIs(compiled.permission_model, Permission)
         self.assertEqual(compiled.identity_attname, get_user_model()._meta.pk.attname)
         self.assertTrue(compiled.principal_is_user)
+        self.assertFalse(compiled.has_content_type)
+
+    def test_canonical_content_type_pk_permission_registers(self):
+        User = get_user_model()
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+            content_type = models.ForeignKey(
+                ContentType, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Document(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Ace(models.Model):
+            document = models.ForeignKey(Document, on_delete=models.CASCADE)
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        ace = Ref(Ace)
+        doc = Ref(Document)
+        user = Ref(User)
+        compiled = registry.register_strategy(OrderedFold(
+            content=doc,
+            descriptor=doc,
+            source=ace,
+            source_descriptor=ace.document,
+            order=ace.ace_order,
+            polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+            mask=ace.access_mask,
+            trustee=ace.user,
+            token=FlatToken(
+                principal=user, principal_user=user, principal_identity=user,
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+        self.assertTrue(compiled.has_content_type)
+
+    def test_unrelated_content_type_fk_rejected(self):
+        User = get_user_model()
+
+        class Other(models.Model):
+            name = models.CharField(max_length=16)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+            content_type = models.ForeignKey(Other, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Document(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Ace(models.Model):
+            document = models.ForeignKey(Document, on_delete=models.CASCADE)
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        ace = Ref(Ace)
+        doc = Ref(Document)
+        user = Ref(User)
+        with self.assertRaisesRegex(
+            TrustsConfigurationError, r'content_type.*ContentType',
+        ):
+            registry.register_strategy(OrderedFold(
+                content=doc,
+                descriptor=doc,
+                source=ace,
+                source_descriptor=ace.document,
+                order=ace.ace_order,
+                polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+                mask=ace.access_mask,
+                trustee=ace.user,
+                token=FlatToken(
+                    principal=user, principal_user=user, principal_identity=user,
+                ),
+                domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+            ))
+        self.assertEqual(registry.strategies, ())
+
+    def test_content_type_non_pk_to_field_rejected(self):
+        User = get_user_model()
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+            ct_key = models.CharField(max_length=100)
+            content_type = models.ForeignObject(
+                ContentType,
+                from_fields=['ct_key'],
+                to_fields=['app_label'],
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Document(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Ace(models.Model):
+            document = models.ForeignKey(Document, on_delete=models.CASCADE)
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        ace = Ref(Ace)
+        doc = Ref(Document)
+        user = Ref(User)
+        with self.assertRaisesRegex(
+            TrustsConfigurationError, r'content_type.*ContentType',
+        ):
+            registry.register_strategy(OrderedFold(
+                content=doc,
+                descriptor=doc,
+                source=ace,
+                source_descriptor=ace.document,
+                order=ace.ace_order,
+                polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+                mask=ace.access_mask,
+                trustee=ace.user,
+                token=FlatToken(
+                    principal=user, principal_user=user, principal_identity=user,
+                ),
+                domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+            ))
+        self.assertEqual(registry.strategies, ())
 
     def test_frozen_raises_before_strategy_validation(self):
         Permission, Document, Ace = _direct_models()

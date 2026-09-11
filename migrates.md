@@ -2198,10 +2198,13 @@ fields, content/source descriptor identity mismatch, Token identity
 mismatch (`(concrete_model, attname)`, including empty-path binding to
 the trustee’s resolved attname), partial member triads, non-distinct or
 type-incompatible polarity values, empty/duplicate/invalid permission
-natural keys, masks that are not positive non-boolean ints fitting the
-source mask field’s signed integer family, unsupported vendor, stale or
-unregistered plan, wrong model, and raw integer/string permission at
-the registry API deny without broadening access. PostgreSQL is the
+natural keys, a permission-model `content_type` field that is not the
+canonical `content_type → ContentType.pk` relation (codename-only
+permission models remain valid), masks that are not positive
+non-boolean ints fitting the source mask field’s signed integer family,
+unsupported vendor, stale or unregistered plan, wrong model, and raw
+integer/string permission at the registry API deny without broadening
+access. PostgreSQL is the
 first OrderedFold renderer (`connection.vendor == 'postgresql'`). Other
 vendors raise `TrustsConfigurationError` before fold SQL. Existing
 AnyPath backend support is unchanged. Registration and system checks
@@ -2247,7 +2250,10 @@ one SQL statement independent of candidate count.
 - [ ] Verify models, forward-single paths, Token
       `(concrete_model, attname)` identity, polarity values, and
       permission identities/masks (`MaskEntry` natural keys unique,
-      positive, fitting the source mask field).
+      positive, fitting the source mask field). A permission
+      `content_type` field, if present, must be
+      `content_type → ContentType.pk`. Codename-only permission
+      models stay valid.
 - [ ] Run `manage.py check` (including `trusts.E006` when live
       OrderedFold strategies exist). Registration and checks issue
       **0 SQL**.

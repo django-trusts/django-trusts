@@ -369,7 +369,13 @@ def _compatible_polarity(field, value, role):
 
 
 def _validate_domain(domain, content_model, mask_field):
-    from trusts.core import TrustsConfigurationError, _classify_field
+    from django.contrib.contenttypes.models import ContentType
+
+    from trusts.core import (
+        TrustsConfigurationError,
+        _classify_field,
+        _resolved_hop,
+    )
 
     if not isinstance(domain, PermissionMaskDomain):
         raise TrustsConfigurationError(
@@ -408,6 +414,20 @@ def _validate_domain(domain, content_model, mask_field):
             raise TrustsConfigurationError(
                 'Permission model %s.content_type must be a single-valued '
                 'foreign key.' % permission_model._meta.label
+            )
+        related, target = _resolved_hop(ct, 'content_type', ('content_type',))
+        ct_model = ContentType._meta.concrete_model
+        if related is not ct_model or target != ct_model._meta.pk.attname:
+            raise TrustsConfigurationError(
+                'Permission model %s.content_type must be a foreign key '
+                'to %s.%s; got %s.%s.'
+                % (
+                    permission_model._meta.label,
+                    ct_model._meta.label,
+                    ct_model._meta.pk.attname,
+                    related._meta.label,
+                    target,
+                )
             )
         has_content_type = True
     entries = domain.entries
