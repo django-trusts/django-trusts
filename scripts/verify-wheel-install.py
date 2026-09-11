@@ -171,6 +171,51 @@ def main() -> int:
     if hasattr(models_mod, 'Trust') or 'Trust' in dir(models_mod):
         raise SystemExit('inert trusts.models still exposes Trust')
 
+    meta = importlib.metadata.metadata('django-trusts')
+    summary = meta['Summary']
+    if 'multiple organizations' in summary or 'settlor' in summary:
+        raise SystemExit('wheel summary still describes the removed concrete product: %r' % summary)
+    if 'Implementation-neutral' not in summary:
+        raise SystemExit('wheel summary is not the library description: %r' % summary)
+    long_description = meta.get('Description') or ''
+    if 'non-standalone Python dependency' not in long_description:
+        raise SystemExit('wheel long description is not the user README')
+    stale_readme = (
+        'settlor',
+        'trustee',
+        'kernel_config',
+        'trusts.core_backends',
+        'multiple organizations',
+        'Step I',
+        '1.0.0.dev1',
+    )
+    stale_hits = [needle for needle in stale_readme if needle in long_description]
+    if stale_hits:
+        raise SystemExit('wheel long description still has stale copy: %s' % stale_hits)
+    if meta.get('License-Expression', '') not in ('BSD-2-Clause', ''):
+        if 'BSD' not in (meta.get('License') or ''):
+            raise SystemExit('wheel license metadata is not BSD-2-Clause: %r' % dict(meta))
+
+    dist = importlib.metadata.distribution('django-trusts')
+    license_text = ''
+    for file in dist.files or ():
+        name = str(file)
+        if name.endswith('LICENSE') or name.endswith('LICENSE.txt'):
+            license_text = file.locate().read_text()
+            break
+    if not license_text:
+        for candidate in (
+            Path(trusts_file).parents[2] / 'LICENSE',
+            Path(trusts_file).parents[3] / 'LICENSE',
+        ):
+            if candidate.is_file():
+                license_text = candidate.read_text()
+                break
+    if 'Copyright (c) 2015-2026, BeeDesk, Inc.' not in license_text:
+        raise SystemExit('installed LICENSE is not BeeDesk 2015-2026: %r' % license_text[:120])
+    if 'and contributors' in license_text.split('THIS SOFTWARE')[0]:
+        raise SystemExit('installed LICENSE added contributors to the notice')
+
     print('wheel import ok')
     print('django', django.get_version())
     print('django-trusts', installed_version)
@@ -188,6 +233,9 @@ def main() -> int:
     print('TQ', TQ)
     print('condition_refs', condition_refs)
     print('models_inert', models_mod)
+    print('summary', summary)
+    print('long_description_from_readme', True)
+    print('license_notice', '2015-2026 BeeDesk')
     return 0
 
 
