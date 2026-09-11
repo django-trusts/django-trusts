@@ -266,6 +266,10 @@ class MixinOwnerResolveTest(SimpleTestCase):
                 kernel.assert_not_called()
 
     def test_live_host_is_the_kernel_suite_owner(self):
+        from django.conf import settings
+
+        if HOST_BACKEND not in (getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()):
+            self.skipTest('kernel-only host path is not listed on the IIa pair')
         owner = live_config()
         self.assertEqual(implementation_for_path(HOST_BACKEND), owner)
         self.assertIs(

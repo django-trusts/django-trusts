@@ -104,6 +104,13 @@ class _TrustsRegistryOwner(object):
                 )
             path = paths[0]
         elif path not in paths:
+            apps_registry = getattr(self, 'apps', None)
+            try:
+                other = implementation_for_path(path, apps_registry)
+            except TrustsConfigurationError:
+                other = None
+            if other is not None and other is not self:
+                return other.configured_backend(path)
             raise TrustsConfigurationError(
                 '%r is not a configured Trusts backend' % (path,)
             )

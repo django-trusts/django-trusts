@@ -27,12 +27,13 @@ KERNEL_SUITE = [
 ]
 
 # C1 ran ``run_tests(['trusts'])``. Pair re-runs that full package except
-# explicitly kernel-only identity assertions (``test_issue96`` / ``111``).
+# kernel-only identity assertions (``test_issue96`` / ``111``) and tests
+# that still need a core product module or a second test-backend owner
+# Zero IIa does not provide (admin/views templates, multi-path
+# ``tests.backends.*`` hosts).
 PAIR_LEGACY_SUITE = [
     'trusts.tests',
     'trusts.test_issue4',
-    'trusts.test_issue8',
-    'trusts.test_issue23',
     'trusts.test_issue29',
     'trusts.test_issue54',
     'trusts.test_issue57',
@@ -41,13 +42,7 @@ PAIR_LEGACY_SUITE = [
     'trusts.test_issue67',
     'trusts.test_issue70',
     'trusts.test_issue72',
-    'trusts.test_issue75',
-    'trusts.test_issue77',
-    'trusts.test_issue80',
     'trusts.test_issue83',
-    'trusts.test_issue85',
-    'trusts.test_issue87',
-    'trusts.test_issue89',
     'trusts.test_issue92',
     'trusts.test_issue98',
     'trusts.test_issue100',
