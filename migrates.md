@@ -2304,11 +2304,11 @@ pinned to Zero `41d07f40e676f75389b91219106440932d402b53`.
 
 | | |
 | --- | --- |
-| Previous | Generic mixin lived only at `trusts.backends.TrustModelBackendMixin` next to `TrustModelBackend` and `HistoricalGroupQueryCompiler`. Missing kernel raised raw `LookupError` / `ImportError` from `kernel_config()`. |
-| New | Canonical import is `from trusts.core_backends import TrustModelBackendMixin`. Default compiler remains `PlanQueryCompiler()` (`historical_fallback` is false). `trusts.backends.TrustModelBackendMixin` is a deprecated alias of the **same object** (`is`). `apps.py` / `checks.py` import the mixin from `trusts.core_backends`. Missing kernel at request time is `TrustsConfigurationError` (never ordinary `False` / `set()`). |
+| Previous | Generic mixin lived only at `trusts.backends.TrustModelBackendMixin` next to `TrustModelBackend` and `HistoricalGroupQueryCompiler`. |
+| New | Canonical import is `from trusts.core_backends import TrustModelBackendMixin`. Default compiler remains `PlanQueryCompiler()` (`historical_fallback` is false). `trusts.backends.TrustModelBackendMixin` is a deprecated alias of the **same object** (`is`). `apps.py` / `checks.py` import the mixin from `trusts.core_backends`. |
 | Replacement | New hosts import the mixin from `trusts.core_backends`. Existing `trusts.backends` mixin imports keep working in this step. Historical backend string stays valid. |
 | Affected | Mixin import path (additive + deprecated alias). Settings: none. Calls: none required. Data: none. Schema: none. |
-| Authorization | Configured-kernel allow/deny is unchanged. Anonymous / inactive / `obj is None` stay false/empty. Missing kernel package or missing kernel AppConfig raises `TrustsConfigurationError` instead of `LookupError` / `ImportError` or a silent deny. TrustGroup SQL stays only on `trusts.backends.HistoricalGroupQueryCompiler`. |
+| Authorization | Unchanged. Configured-kernel allow/deny, anonymous / inactive / `obj is None` false/empty, and missing-kernel exception types stay as before this extract. TrustGroup SQL stays only on `trusts.backends.HistoricalGroupQueryCompiler`. |
 
 Exact new / still-valid imports:
 
@@ -2321,11 +2321,6 @@ from trusts.backends import TrustModelBackend  # still valid in this step
 
 Identity that must hold: `trusts.backends.TrustModelBackendMixin is trusts.core_backends.TrustModelBackendMixin`.
 
-Request-time missing-kernel messages:
-
-- package absence (`ImportError`): `django-trusts distribution is not installed` plus `pip install django-trusts` and `'trusts'`
-- missing AppConfig (`LookupError`): `kernel AppConfig is not in INSTALLED_APPS` plus `'trusts'` and `trusts.zero.apps.ZeroConfig`
-
 ## Old vs new behavior
 
 | Situation | Old (C2 `3fc61385`) | New (#103 step 1) |
@@ -2337,7 +2332,7 @@ Request-time missing-kernel messages:
 | Mixin default compiler | `PlanQueryCompiler` | Unchanged (now owned by `core_backends`) |
 | Concrete TrustGroup SQL in `core_backends` | N/A | None |
 | `from trusts.models import Trust` with Zero | PEP 562 shim | Unchanged |
-| Missing kernel on `has_perm` / `get_*_permissions` | `LookupError` / `ImportError` | `TrustsConfigurationError`, not `False` / `set()` |
+| Missing kernel on `has_perm` / `get_*_permissions` | `LookupError` / `ImportError` from `kernel_config()` | Unchanged exception types |
 | Pair pin / Zero / GH | Zero `41d07f40` | Unchanged; no consumer retarget |
 
 ## Schema
@@ -2368,9 +2363,8 @@ boundary. Existing schema and migration identities stay.
       `HistoricalGroupQueryCompiler` unchanged.
 - [ ] Verify configured-kernel `has_perm` / `get_*_permissions` results
       are unchanged. Anonymous / inactive / `obj is None` stay
-      false/empty.
-- [ ] Verify missing kernel raises `TrustsConfigurationError`, not a
-      silent deny.
+      false/empty. Missing-kernel exception types stay
+      `LookupError` / `ImportError` from `kernel_config()`.
 - [ ] Confirm `trusts.core_backends` has no TrustGroup SQL or
       `HistoricalGroupQueryCompiler`.
 - [ ] Leave package version at `1.0.0.dev0`.

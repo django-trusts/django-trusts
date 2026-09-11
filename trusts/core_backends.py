@@ -20,7 +20,6 @@ from trusts.query import (
 )
 from trusts.core import (
     PlanQueryCompiler,
-    TrustsConfigurationError,
     all_match,
     common_permissions,
     instance_match,
@@ -104,20 +103,8 @@ class TrustModelBackendMixin(object):
         return klass
 
     def _trusts_config(self):
-        try:
-            from trusts.apps import kernel_config
-            return kernel_config()
-        except ImportError as exc:
-            raise TrustsConfigurationError(
-                "django-trusts distribution is not installed. "
-                "pip install django-trusts and add 'trusts' to INSTALLED_APPS."
-            ) from exc
-        except LookupError as exc:
-            raise TrustsConfigurationError(
-                "kernel AppConfig is not in INSTALLED_APPS. "
-                "Add 'trusts' and 'trusts.zero.apps.ZeroConfig' to "
-                "INSTALLED_APPS. (%s)" % exc
-            ) from exc
+        from trusts.apps import kernel_config
+        return kernel_config()
 
     def _own_handle(self):
         config = self._trusts_config()
