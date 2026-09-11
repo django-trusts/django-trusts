@@ -326,19 +326,21 @@ class AlongRegistrationTest(SimpleTestCase):
             self.assertIs(registry.records[0], first)
 
     def test_registration_is_zero_sql(self):
+        # SimpleTestCase forbids database connections. Completing Along
+        # register here is the zero-SQL proof; a query would raise
+        # DatabaseOperationForbidden.
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
         registry = TrustsRegistry()
         j = Ref(Grant)
-        with self.assertNumQueries(0):
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent, bound=16),
+        )
+        with self.assertRaises(TrustsConfigurationError):
             registry.register(
                 content=j.node, user=j.user, permission=j.permission,
-                along=Along(j.node.parent, bound=16),
+                along=Along(j.node.parent, bound=0),
             )
-            with self.assertRaises(TrustsConfigurationError):
-                registry.register(
-                    content=j.node, user=j.user, permission=j.permission,
-                    along=Along(j.node.parent, bound=0),
-                )
 
     def test_bound_64_is_accepted(self):
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
