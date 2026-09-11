@@ -51,6 +51,25 @@ from trusts.tests import (
 CONCRETE = 'trusts.backends.TrustModelBackend'
 MIXIN = 'tests.backends.MixinOnlyBackend'
 _u, _p, _o = condition_refs()
+_IMPORT_CONDITIONS = {
+    name: dict(codes) for name, codes in Content._conditions.items()
+}
+
+
+def _restore_conditions(snapshot):
+    Content._conditions.clear()
+    for name, codes in snapshot.items():
+        Content._conditions[name] = dict(codes)
+
+
+class _ConditionIsolationMixin(object):
+    def setUp(self):
+        super().setUp()
+        _restore_conditions(_IMPORT_CONDITIONS)
+
+    def tearDown(self):
+        _restore_conditions(_IMPORT_CONDITIONS)
+        super().tearDown()
 
 
 def _pks(qs):
@@ -342,7 +361,7 @@ class LegacyContentRegistryDeletedTest(SimpleTestCase):
             Content._conditions.update(before)
 
 
-class ConditionRegistryPreservedTest(TestCase):
+class ConditionRegistryPreservedTest(_ConditionIsolationMixin, TestCase):
     def test_trust_own_and_ticket_meta_own_remain(self):
         own = Content.get_permission_condition_record(Trust, 'own')
         self.assertIsNotNone(own)
