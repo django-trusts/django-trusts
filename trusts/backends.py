@@ -196,6 +196,19 @@ class TrustModelBackendMixin(object):
             )
         return all([record.func(user_obj, perm, o) for o in objs])
 
+    def _bound_condition_lookup(self, obj):
+        """Bound ``ConditionLookup`` on the coordinating / own registry.
+
+        Unbound (the C1 default) is ``None`` so instance-only callers and
+        the historical ``Content`` condition store keep current behavior.
+        """
+        if isinstance(obj, QuerySet):
+            handles = self._trusts_config().configured_handles()
+            if not handles:
+                return None
+            return handles[0].registry.condition_lookup
+        return self._own_handle().registry.condition_lookup
+
     def _condition_overlay(self, permext, obj, user_obj):
         """Return (record, extra_q) for a ``:condition`` suffix.
 
@@ -203,11 +216,28 @@ class TrustModelBackendMixin(object):
         on a QuerySet raise ``PermissionConditionNotQueryable`` before
         any candidate SQL or callback. Unregistered codes raise the same
         ``AttributeError`` as before.
+
+        A bound ``ConditionLookup`` is preferred when present. Unbound
+        preserves the historical ``Content`` condition registry. Core
+        does not import Zero models for this overlay.
         """
         if not permission_has_condition(permext):
             return None, None
         applabel, modelname, action, cond = utils.parse_perm_code(permext)
-        record = Content.get_permission_condition_record(self._get_class(obj), cond)
+        model = self._get_class(obj)
+        lookup = self._bound_condition_lookup(obj)
+        if lookup is not None:
+            record = lookup.record_for(model, cond)
+            if record is None:
+                raise AttributeError(
+                    'Permission condition code "%s" is not associate with model "%s_%s"'
+                    % (cond, applabel, modelname)
+                )
+            extra_q = None
+            if isinstance(obj, QuerySet):
+                extra_q = lookup.compile_q(obj.model, permext, user_obj)
+            return record, extra_q
+        record = Content.get_permission_condition_record(model, cond)
         if record is None:
             raise AttributeError(
                 'Permission condition code "%s" is not associate with model "%s_%s"'

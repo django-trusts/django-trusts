@@ -243,3 +243,26 @@ class AppConfig(DjangoAppConfig):
             cls = import_string(path)
             if issubclass(cls, TrustModelBackend):
                 self._donate_package_trust_as_content(path)
+
+
+def kernel_config():
+    """Return the kernel ``trusts.apps.AppConfig`` by class identity.
+
+    Does not hard-require the string label ``'trusts'``. On C1 that label
+    is still ``trusts``, so this returns the same object as
+    ``apps.get_app_config('trusts')``. Later retargets keep this helper
+    and change only the label.
+    """
+    from django.apps import apps as django_apps
+
+    matches = [
+        config for config in django_apps.get_app_configs()
+        if type(config) is AppConfig
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise LookupError('No installed Trusts kernel AppConfig.')
+    raise LookupError(
+        'Multiple Trusts kernel AppConfig instances: %r' % (matches,)
+    )

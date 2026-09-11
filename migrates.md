@@ -1884,6 +1884,74 @@ non-empty `databases` list.
   recursive renderers
 - Zero; GH; example #7; Windows #17
 
+## Changes (#54 C1)
+
+### 46. Generic public seams (#54 C1)
+
+| | |
+| --- | --- |
+| Previous | Content list filtering was `ContentQuerySet.permitted(perm, user)` (Django permission codec: inactivity, string/` :condition` parse, `get_permission`). Create-under-Trust was `Trust.objects.filter_by_user_content_perm` via `trust_grant_q`. Condition overlay imported `trusts.models.Content`. Registry access used `apps.get_app_config('trusts')`. |
+| New | Additive generic seams, same historical APIs unchanged: `AuthorizedQuerySet.authorized(user, permission, extra_q=None)` / `AuthorizedManager` (`trusts.query`); `filter_authorized_scopes(queryset, user, permission, *, content, handles=None)` (`trusts.core`); `ConditionLookup` + `TrustsRegistry.set_condition_lookup`; `trusts.apps.kernel_config()`. App label remains `trusts`. Models, migrations, `trust_grant_q`, and `HistoricalGroupQueryCompiler` stay. No Zero import on kernel paths. |
+| Replacement | Instance-only hosts call `.authorized(user, permission_instance)` or `registry.filter_authorized`. Create-under-scope hosts that already have a permission instance call `filter_authorized_scopes`. Zero's later `.permitted` / `filter_by_user_content_perm` codecs wrap these. `kernel_config()` is the label-agnostic kernel accessor (today identical to `get_app_config('trusts')`). |
+| Affected | New public names only. Existing `permitted` / `has_perm` / `filter_by_user_content_perm` call sites are unchanged. |
+| Authorization | `.authorized` uses `granted(...)` on configured handles (complete proof, including the live historical TrustGroup compiler). `filter_authorized_scopes` is registered-relation prefix `EXISTS` only (no historical TrustGroup OR). Wrong permission type is `TrustsConfigurationError` with **0 SQL**. Unknown prefix / empty handles / content-terminal queryset / unbound instance-only lookup fail closed. `extra_q` never creates a grant. |
+
+Failure behavior: string / non-instance `permission` raises before SQL.
+Missing `ConditionLookup` methods raise `TrustsConfigurationError` and
+leave any previous binding unchanged (no partial bind). Unregistered
+condition codes stay `AttributeError`. Callables stay
+`PermissionConditionNotQueryable` and are never invoked.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures
+- `ContentQuerySet.permitted` signature and documented Category /
+  Ticket / Trust results
+- `filter_by_user_content_perm` / `filter_by_user_perm` signatures
+  and create-under-Trust grant (`trust_grant_q` on Trust rows)
+- Condition registry APIs (`Content.register_permission_condition`)
+  and E001/E002/W001/E003/E004/E005 checks
+- `trusts.apps.AppConfig` `name='trusts'` / `label='trusts'`
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Do not change `INSTALLED_APPS` from `'trusts'` on this C1 head.
+- [ ] Do not import `trusts.zero`. Zero is not a C1 dependency.
+- [ ] Instance-only list filtering: `AuthorizedManager` /
+      `.authorized(user, permission_instance)`. Do not attach
+      `.permitted` or `.get_permission` to that manager.
+- [ ] Django-permission codec callers keep `Content.objects.permitted(perm, user)`
+      and `Model.objects.get_permission(...)`.
+- [ ] Create-under-Trust stays `Trust.objects.filter_by_user_content_perm`
+      on this head. `filter_authorized_scopes` is the generic prefix
+      projection for hosts that already hold a permission instance.
+- [ ] Bind `ConditionLookup` only from a later Zero `AppConfig.ready()`.
+      Unbound C1 overlay keeps the historical `Content` condition store.
+- [ ] Prefer `kernel_config()` for new kernel-store access. Existing
+      `get_app_config('trusts')` still works while the label is `trusts`.
+- [ ] Leave `trust_grant_q` / `HistoricalGroupQueryCompiler` in place.
+- [ ] Leave package version at `1.0.0.dev0`.
+
+## Schema
+
+No change. C1 adds no model and no Django migration. Query construction
+remains lazy. Fail-closed construction (wrong type / unknown prefix /
+empty handles / unbound no-op) issues **0 SQL**. Compiled
+`.authorized` / `filter_authorized_scopes` evaluations stay **1 SQL**.
+
+## Out of scope (not acceptance criteria)
+
+- App-label change (`trusts_core`); model or migration move; PEP 562
+  `trusts.models` shim
+- Deleting `trust_grant_q` / `HistoricalGroupQueryCompiler`
+- C2, Z1, G1, Windows #17
+- Zero `.permitted` / `ContentManager` codec; GH adoption; docs
+  restructuring beyond these APIs; examples; admin work
+
 
 
 
