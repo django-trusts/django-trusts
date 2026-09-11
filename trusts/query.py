@@ -1,7 +1,7 @@
 """SQL grant filters shared by list APIs and trust-row checks.
 
 These expressions JOIN the same trustee / TrustGroup / ceiling tables
-that ``TrustModelBackend.get_all_permissions`` reads. Callers must apply
+that Trusts group/trustee proofs read. Callers must apply
 them on a QuerySet (then paginate). They are not Python predicates.
 
 Group-derived access is fail-closed. A group permission matches only when

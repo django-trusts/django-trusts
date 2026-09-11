@@ -1250,6 +1250,122 @@ construction remains lazy. Evaluated ``.permitted()`` and ``[:n]`` remain
   callback relocation
 - Schema or migration changes
 
+---
+
+# Backend authorization on compiler handles (issue #77 / S3b)
+
+This record covers the S3b backend migration. Version remains
+**1.0.0.dev0**. There is **no schema or Django migration change**.
+``Content._conditions`` and the legacy baseline are preserved.
+
+Parent design: #74 r4, accepted. Predecessor #75 / PR #76 merged to
+``dev`` as ``d7a96e9d735eeb26d7c776981fc7e288d13e6b9a``.
+
+## Decision
+
+Declared Category, Ticket, and Trust terminals use the same path-scoped
+handle and class-owned compiler contract as ``.permitted()``. A
+disposable backend instance resolves its configured path through the
+AppConfig handle and never stores declarations or routing state.
+
+- **Instance:** that backend evaluates **its own handle only**. Django
+  supplies OR/union across configured backends.
+- **QuerySet:** the first configured Trusts-derived path (exact strings
+  de-duplicated) is the sole collection coordinator. It aggregates every
+  applicable complete proof once. Other Trusts backends return
+  false/empty for the collection with **0 SQL**.
+- **Undeclared** terminals, including Junction/Group in this slice, stay
+  on the historical ``Content._contents`` / ``_get_trusts`` fallback.
+  There is no second model→path map.
+- ``HistoricalGroupQueryCompiler`` remains. S6 registers Group as
+  protected content; it does not replace group-as-trustee authorization.
+
+``_trust_perm_cache`` remains a documented user-object attribute.
+Reload / ``delattr`` stay safe. Registered terminals do not read or
+write Trust-pk entries; the cache is not a second authorization source.
+Undeclared historical enumeration may still write Trust-pk keys.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``User.has_perms`` signatures
+- ``ContentQuerySet.permitted`` signature and documented one-path results
+- ``Content._conditions`` / ``register_permission_condition`` /
+  callable ``has_perm``
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 35. Trusts ``obj is None`` is false/empty; ModelBackend is opt-in
+
+| | |
+| --- | --- |
+| Previous | ``TrustModelBackendMixin`` called ``ModelBackend`` through ``super()`` when ``obj is None`` or the user was anonymous. A host that listed only ``trusts.backends.TrustModelBackend`` inherited global Django user/group permissions from that MRO. |
+| New | A Trusts backend contributes ``False`` / empty permissions when ``obj is None``. It does not call ``ModelBackend`` permission methods through ``super()``. ``TrustModelBackend`` still subclasses ``ModelBackend`` for ``authenticate`` / ``get_user`` only. That inheritance does **not** confer global permission authority. |
+| Replacement | Hosts that want ordinary global Django permissions must list ``django.contrib.auth.backends.ModelBackend`` (or another global backend) **alongside** Trusts. Django OR/union then supplies model-level ``has_perm`` / enumeration. Trusts still answers object and QuerySet calls. A model-level ``Permission`` row never becomes a Trust object grant. |
+| Affected | ``has_perm`` / ``has_perms`` / ``get_all_permissions`` / ``get_group_permissions`` with ``obj is None``. Object-grant signatures are unchanged. |
+| Authorization | Trusts-only installs no longer grant global Django permissions. ``ModelBackend`` + Trusts restores those globals without turning them into object grants. Superuser short-circuit remains Django ``User`` / ``PermissionsMixin``, not Trusts SQL. Anonymous and inactive principals stay denied. |
+
+Migration-bot checklist:
+
+- [ ] If the project listed only ``trusts.backends.TrustModelBackend`` and
+      relied on inherited model-level ``has_perm()`` / ``get_all_permissions()``
+      (no ``obj``), add ``django.contrib.auth.backends.ModelBackend`` (or
+      another global backend) to ``AUTHENTICATION_BACKENDS``.
+- [ ] Confirm ``user.has_perm('app.perm', obj)`` still uses Trusts object
+      proofs and that a global ``Permission`` row does not grant that
+      object.
+- [ ] Confirm ``user.has_perm('app.perm')`` (no ``obj``) is now False on a
+      Trusts-only backend and True again after adding ``ModelBackend``
+      when the user has that global permission.
+- [ ] Do not call ``super().has_perm`` / ``get_all_permissions`` /
+      ``get_group_permissions`` from a Trusts mixin expecting ModelBackend
+      globals.
+- [ ] Reload the user, or ``delattr(user, '_trust_perm_cache')``, after
+      grant changes. Registered terminals do not use Trust-pk cache
+      entries as an authorization source.
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Leave ``Content._conditions`` and callable ``has_perm`` behavior
+      alone.
+- [ ] Do not delete ``HistoricalGroupQueryCompiler`` in S6.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+### 36. Declared-terminal backend authorization uses the compiler handle (internal)
+
+| | |
+| --- | --- |
+| Previous | ``has_perm`` / ``get_all_permissions`` / ``get_group_permissions`` walked ``_get_trusts`` / ``Content._contents`` and, for ``obj is None``, ``ModelBackend.super()``. QuerySet answers were per-backend intersections that Django then OR/unioned (``(∀C A) OR (∀C B)``). |
+| New | Declared Category / Ticket / Trust terminals use the path-scoped registry and the class-owned compiler. Instance calls evaluate that backend's handle only. QuerySet calls are coordinated once: SQL all-match of the aggregate complete proof, and common-permission enumeration is the intersection across every candidate of that same predicate. ``get_group_permissions`` uses group-only complete proofs; trustee grants do not leak into that surface. |
+| Replacement | Same ``user.has_perm(perm, obj)`` / ``has_perms`` / ``get_*_permissions`` calls. QuerySet authorization remains a Trusts extension (all-match, not a Python per-object loop). |
+| Affected | Internal backend routing for already-declared terminals. Junction/Group stay on the historical path. |
+| Authorization | One-path results for Category / Ticket / Trust are unchanged. Two Trusts paths: Django OR of per-object complete proofs; QuerySet ``has_perm`` / common enumeration use the aggregate predicate so split coverage (A grants C1, B grants C2) is granted. A failed ceiling on one path cannot borrow another path's trustee/group fragment. Mixin-only compilers never inherit ``TrustGroup``. |
+
+Migration-bot checklist:
+
+- [ ] No call-site change for ``has_perm`` / ``has_perms`` / enumeration
+      on declared terminals.
+- [ ] Hosts with several Trusts-derived backends keep naming the exact
+      path when contributing. QuerySet authorization is coordinated by
+      the first configured Trusts path.
+- [ ] Do not silence ``trusts.E004`` expecting ``has_perm`` to skip a
+      broken compiler.
+- [ ] Leave undeclared Junction/Group on the historical path.
+- [ ] Leave ``filter_by_user_content_perm`` and ``Content._contents``
+      alone (later slices).
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. S3b adds no model and no Django migration.
+
+## Out of scope (not acceptance criteria)
+
+- S4 gate migration, S5 grammar extension, S6 Junction/Group
+  declaration, S7 static-registry deletion, S8 freeze/E003
+- Callback relocation; condition registry
+- Schema or migration changes
+- Zero, GH, example #7, Windows #17
+
 
 
 

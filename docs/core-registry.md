@@ -124,10 +124,20 @@ and then applies the unchanged condition overlay. Concrete
 `TrustModelBackend` routes keep the transitional historical TrustGroup
 compiler; mixin-only routes receive only their registered-plan proof.
 Public signature and documented one-path results are unchanged.
-Unregistered-on-every-path models keep `trust_grant_q`. Backend
-`has_perm` is not migrated. The Trusts app contributes Trust-as-content
-to every configured `TrustModelBackend` (or subclass) path; the test app
-contributes Category and Ticket onto the unique handle.
+Unregistered-on-every-path models keep `trust_grant_q`.
+
+Declared Category, Ticket, and Trust backend `has_perm` /
+`get_all_permissions` / `get_group_permissions` use the same handle and
+compiler. An instance evaluates that backend's handle only. A QuerySet
+is coordinated by the first configured Trusts path: one aggregate
+all-match / common-permission query; other Trusts backends return
+false/empty with no SQL. `obj is None` is false/empty on a Trusts
+backend; hosts that want global Django permissions list
+`django.contrib.auth.backends.ModelBackend` separately. Junction/Group
+stay on the historical `_contents` path. The Trusts app contributes
+Trust-as-content to every configured `TrustModelBackend` (or subclass)
+path; the test app contributes Category and Ticket onto the unique
+handle.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

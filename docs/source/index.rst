@@ -15,11 +15,11 @@ Introduction
 
 A ``trust`` associates content with a ``settlor`` and grants permissions to specific users (``trustees``) or groups. The settlor identifies the entity under whose trust the content is held; django-trusts does not require the settlor to be the content's creator and does not automatically grant the settlor permissions. Content can be an instance of a ``Content`` subclass or an existing model connected through a junction table. A single trust can cover multiple content objects so their permission settings can be maintained together. Django's built-in ``Group`` model is supported and can define reusable permissions for groups of users.
 
-``django-trusts`` also strives to be a **scalable** solution. Trust and grant resolution uses database queries, and the implementation minimizes database hits. Permissions are cached per ``trust`` on the user object. Permission checks can be made against an individual content object or a ``QuerySet``.
+``django-trusts`` also strives to be a **scalable** solution. Trust and grant resolution uses database queries, and the implementation minimizes database hits. Permission checks can be made against an individual content object or a ``QuerySet``.
 
 .. warning::
 
-   The per-trust permission cache is not automatically invalidated when grants, group membership, local TrustGroup permissions, or roles change. Reload the user object, or explicitly remove its ``_trust_perm_cache`` attribute, before making further permission checks with the same user instance.
+   The documented ``_trust_perm_cache`` attribute is not automatically invalidated when grants, group membership, local TrustGroup permissions, or roles change. Reload the user object, or explicitly remove its ``_trust_perm_cache`` attribute, before making further permission checks with the same user instance. Registered terminals authorize from the compiler; do not treat the cache as a second authorization source.
 
 ``django-trusts`` supports Django's built-in user permission methods, ``has_perm()`` and ``has_perms()``.
 
@@ -39,11 +39,20 @@ Steps:
 
      python -m pip install django-trusts
 
-2. Set ``AUTHENTICATION_BACKENDS`` in ``settings.py``::
+2. Set ``AUTHENTICATION_BACKENDS`` in ``settings.py``. Trusts answers
+   object and QuerySet permission checks. It contributes ``False`` /
+   empty permissions when ``obj is None``. Hosts that also want ordinary
+   global Django permissions must list ``ModelBackend`` (or another
+   global backend) separately::
 
    AUTHENTICATION_BACKENDS = (
+     'django.contrib.auth.backends.ModelBackend',
      'trusts.backends.TrustModelBackend',
    )
+
+   ``TrustModelBackend`` still subclasses ``ModelBackend`` for
+   ``authenticate`` / ``get_user`` only. That inheritance does not
+   confer global permission authority.
 
 3. Add ``trusts`` to ``INSTALLED_APPS`` in ``settings.py``.
 
