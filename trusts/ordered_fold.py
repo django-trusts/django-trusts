@@ -869,7 +869,7 @@ def render_ordered_fold_sql(strategy, user, permission, compiler, connection):
         'ROW_NUMBER() OVER (ORDER BY ord, pk) AS rn FROM applicable'
         '), '
         'scan AS ('
-        'SELECT 0::integer AS step, '
+        'SELECT 0::bigint AS step, '
         '(SELECT mask FROM requested)::bigint AS remaining, '
         'FALSE AS denied '
         'UNION ALL '

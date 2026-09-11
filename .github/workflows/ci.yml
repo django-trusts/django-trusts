@@ -74,6 +74,8 @@ jobs:
         python -m pip install "Django>=6.1,<6.2" "psycopg[binary]" coverage
         python -m pip install -e .
     - name: OrderedFold PostgreSQL regressions
+      env:
+        DJANGO_SETTINGS_MODULE: tests.fold_settings
       run: python -m tests.runtests trusts.test_issue100
 
   pair-z1:

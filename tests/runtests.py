@@ -61,4 +61,4 @@ def runtests(suite=None):
 
 
 if __name__ == '__main__':
-    runtests()
+    runtests(sys.argv[1:] or None)
