@@ -1,82 +1,156 @@
-Django Trusts
--------------
+# django-trusts
 
-[![Docs](https://readthedocs.org/projects/django-trusts/badge/)](http://django-trusts.readthedocs.org) [![CI](https://github.com/django-trusts/django-trusts/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/django-trusts/django-trusts/actions/workflows/ci.yml)
+`django-trusts` is a **non-standalone Python dependency** for applications
+and packages that define their own declarative Django authorization
+implementation.
 
-Django authorization add-on for multiple organizations and object-level permission settings
+Core supplies no concrete permission schema, no Trust / Content / Group /
+ACL / organization / role models, no generic grant editor, and no Django
+`AppConfig`. Do **not** list `'trusts'` in `INSTALLED_APPS`. The consumer
+implementation owns its `TrustsImplementationConfig`, backend path,
+models, and persisted policy facts.
 
-Introduction
-------------
+## Which package?
 
-``django-trusts`` is a add-on to Django's builtin authorization. It strives to be a **minimal** implementation, adding only a single concept, ``trust``, to enable maintainable per-object permission settings for a django project that hosts users of multiple organizations  with a single user namespace.
+- Seeking or upgrading from django-trusts 0.x concrete Trust/Content
+  behavior → [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
+- Studying persisted organization / team / repository relationships →
+  [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions)
+- Building a new permission implementation → continue here
 
-A ``trust`` is a relationship whereby content access is permitted by the creator [``settlor``] to specific user(s) [``trustee`` (s)] or ``group`` (s). Content can be an instance of a `Content` subclass, or of an existing model via a junction table. Access to multiple content can be permitted by a single ``trust`` for maintainable permssion settings. Django's builtin model, `group`, is supported and can be used to define reusuable permissions for a ``group`` of ``user``'s.
+A forthcoming Windows ordered-policy example will show explicit
+allow/deny rows. That reference implementation is not complete on the
+final core API yet.
 
-``django-trusts`` also strives to be a **scalable** solution. Permissions checking is offloaded to the database by design, and the implementation minimizes database hits. Permissions are cached per ``trust`` for the lifecycle of ``request user``. If a project's request lifecycle resolves most checked content to one or few ``trusts``, which should be very typically the case, this design should be a winner in term of performance. Permissions checking is done against an individual content or a ``QuerySet``.
+## Principles
 
-``django-trusts`` supports Django's builtins User models ``has_perm()`` / ``has_perms()`` and does not provides any in-addition.
+- **Minimal** — ordinary Django models plus compact declarations
+- **Declarative** — relationship paths name where user, permission, and
+  protected content meet
+- **Persisted truth** — authorization derives from stored relational
+  state, not transient application guesses
+- **Database-first** — object decisions and authorized querysets share
+  compiled policy; supported work is pushed into one SQL query before
+  pagination
+- **Fail closed** — malformed, unsupported, or missing policy cannot
+  become a grant
+- **Implementation-neutral** — core does not impose one permission schema
 
-Read more: http://django-trusts.readthedocs.org/en/latest/
+This is not an object-permission store. A grant may be implied by
+persisted organization relationships rather than requiring one
+permission row per user/object, or it may come from explicit policy
+rows that an implementation defines.
 
-Supported versions
-------------------
+## Install
 
-The `1.0.0.dev3` development line requires **Python 3.12–3.14** and **Django 6.1**.
-Sources checked on 2026-09-07 and the rationale are in
+```bash
+pip install django-trusts
+```
+
+This is a development release of the 1.x line, not a declared stable
+1.0, and not a published PyPI release. Install from a local checkout
+or a built sdist/wheel until a stable tag exists.
+
+Requires **Python 3.12–3.14** and **Django 6.1**. See
 [docs/support-matrix.md](docs/support-matrix.md).
 
-This is not a published PyPI release. Install from a local checkout or sdist/wheel
-built from this tree.
+## Configure
 
-```
-python -m pip install "Django>=6.1,<6.2"
-python -m pip install .
-```
+These imports and settings match the project's verified test
+configuration. A real implementation substitutes its own app module,
+`TrustsImplementationConfig` subclass, and mixin backend path.
 
-`django-trusts` is a Python library, not an installed Django app. Do not
-list `'trusts'` in `INSTALLED_APPS`. Install a host
-`TrustsImplementationConfig` such as `trusts.zero.apps.ZeroConfig` and
-set that host's canonical backend path:
+```python
+from django.contrib.auth.backends import ModelBackend
 
-```
+from trusts.apps import TrustsImplementationConfig
+from trusts.backends import TrustModelBackendMixin
+
+HOST_BACKEND = 'tests.backends.HostTrustModelBackend'
+
+class HostTrustModelBackend(TrustModelBackendMixin, ModelBackend):
+    pass
+
+class KernelHostConfig(TrustsImplementationConfig):
+    name = 'tests.kernel_host'
+    label = 'trusts_kernel_host'
+    trusts_backend_paths = (HOST_BACKEND,)
+
 INSTALLED_APPS = (
-    'trusts.zero.apps.ZeroConfig',
+    'django.contrib.contenttypes',
+    'django.contrib.auth',
+    'tests.kernel_host.apps.KernelHostConfig',
 )
 AUTHENTICATION_BACKENDS = (
-    'trusts.zero.backends.TrustModelBackend',
+    'django.contrib.auth.backends.ModelBackend',
+    'tests.backends.HostTrustModelBackend',
 )
 ```
 
-API and compatibility notes for this modernization are in [migrates.md](migrates.md).
+Do not add `'trusts'` to `INSTALLED_APPS`.
 
-Test
-----
+## Declare and authorize
 
+Ordinary application-owned models plus one `Ref` registration. Grant
+mutation happens through those models; core has no generic grant/revoke
+workflow.
+
+```python
+from django.contrib.auth.models import Permission
+from django.db import models
+
+from trusts.core import Ref
+from trusts.decorators import permission_required
+from trusts.query import AuthorizedManager
+
+class Document(models.Model):
+    title = models.CharField(max_length=200)
+    objects = AuthorizedManager()
+
+    class Meta:
+        app_label = 'trusts_tests'
+
+class DocumentGrant(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'trusts_tests'
+
+j = Ref(DocumentGrant)
+registry.register(
+    content=j.document,
+    user=j.user,
+    permission=j.permission,
+)
+DocumentGrant.objects.create(
+    document=document, user=user, permission=change_permission,
+)
+user.has_perm('trusts_tests.change_document', document)
+Document.objects.authorized(user, change_permission)
 ```
-python -m pip install "Django>=6.1,<6.2" coverage
-python -m pip install -e .
-python -m tests.runtests
-python -m django check --settings=tests.settings
-python scripts/verify-legacy-upgrade.py
+
+View guard from the same passing test:
+
+```python
+@permission_required(
+    'trusts_tests.change_document',
+    fieldlookups_kwargs={'pk': 'pk'},
+)
+def edit_document(request, pk):
+    ...
 ```
 
-CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
-authorization tests, a fresh migrate, ``manage.py check``, an OrderedFold
-PostgreSQL job, pair proofs against the supported Zero companion, and a
-`package` job that builds an sdist/wheel and imports it from a temporary
-directory so the source tree cannot satisfy the import. Do not treat a
-removed Travis check as a stand-in green status.
+## Documentation
 
-Development version
--------------------
+- [migrates.md](migrates.md) — core API migration guide
+- [docs/source/index.rst](docs/source/index.rst) — full docs
+- [docs/support-matrix.md](docs/support-matrix.md) — Python / Django matrix
+- [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero) — 0.x continuation
+- [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions) — organization/team/repository example
+- [Issues](https://github.com/django-trusts/django-trusts/issues)
 
-The active package version is **1.0.0.dev3**. That is a development-line mark,
-not a production 1.0 release. See [docs/development-version.md](docs/development-version.md).
+Contributor and build history lives in [DEV.md](DEV.md).
 
-Legacy baseline
----------------
-
-The exact pre-modernization default-branch commit, existing release tags, source
-archive checksum, and historical Python/Django requirements are recorded in
-[docs/legacy-baseline.md](docs/legacy-baseline.md). That snapshot is historical
-documentation only.
+Licensed under the BSD 2-Clause License. Copyright BeeDesk, Inc.

@@ -128,6 +128,8 @@ jobs:
         python -m pip install "Django>=6.1,<6.2"
         python -m build
         twine check dist/*
+    - name: Package metadata (README, LICENSE, BSD-2-Clause)
+      run: python scripts/verify-package-metadata.py
     - name: Install kernel wheel and import from outside the checkout
       env:
         PYTHONPATH: ""

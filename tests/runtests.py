@@ -24,6 +24,7 @@ KERNEL_SUITE = [
     'trusts.test_issue103',
     'trusts.test_issue108',
     'trusts.test_issue111',
+    'trusts.test_issue115',
 ]
 
 # C1 ran ``run_tests(['trusts'])``. Pair re-runs that full package except
