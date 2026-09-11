@@ -10,7 +10,8 @@ membership over that enumeration), and authorized-content filtering.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
-compiler, ``granted()``, and configuration/compiler exceptions live here.
+compiler, ``granted()``, ``all_match()``, ``common_permissions()``, and
+configuration/compiler exceptions live here.
 """
 
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from operator import or_
 
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, Model, OuterRef, Q
+from django.db.models import Count, Exists, Model, OuterRef, Q
 from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
 
@@ -74,6 +75,40 @@ def _as_q(predicate):
     return Q(predicate)
 
 
+def _is_lookup_expression(value):
+    """True for OuterRef / Subquery / other SQL expressions."""
+    return hasattr(value, 'resolve_expression') and not isinstance(value, Model)
+
+
+def _bind_terminal(value, role):
+    """Accept a model instance or an unevaluated lookup expression."""
+    if _is_lookup_expression(value):
+        return value
+    return _require_instance(value, role)
+
+
+def candidate_queryset(content):
+    """Instance or QuerySet → a queryset of candidate rows.
+
+    An instance becomes ``Model.objects.filter(pk=pk)``. Does not evaluate.
+    """
+    if isinstance(content, QuerySet):
+        return content
+    if isinstance(content, Model):
+        return content._meta.concrete_model._default_manager.filter(pk=content.pk)
+    raise TrustsConfigurationError(
+        'content must be a model instance or QuerySet, not %r.' % (content,)
+    )
+
+
+def _plan_for_permission(handle, candidates, user, permission):
+    if isinstance(permission, Model):
+        return handle.registry.plan_for(
+            candidates, user=user, permission=permission,
+        )
+    return handle.registry.plan_for(candidates, user=user)
+
+
 def granted(handles, candidates, user, permission, *, kind='complete'):
     """OR each applicable handle compiler's complete (or group) predicate.
 
@@ -81,12 +116,14 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
     ceiling. A valid compiler returning ``None`` is inapplicable and is
     omitted. Compiler exceptions propagate. An empty result is ``None``
     so the caller may use the transitional undeclared fallback.
+
+    ``permission`` may be a permission instance or an unevaluated lookup
+    (``Subquery`` / ``OuterRef``). Expressions are not passed to
+    ``plan_for``; the plan is selected by content and user terminals.
     """
     parts = []
     for handle in handles:
-        plan = handle.registry.plan_for(
-            candidates, user=user, permission=permission,
-        )
+        plan = _plan_for_permission(handle, candidates, user, permission)
         if kind == 'complete':
             fn = handle.compiler.complete_exists
         else:
@@ -100,6 +137,90 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
     if len(parts) == 1:
         return parts[0]
     return reduce(or_, parts)
+
+
+def all_match(handles, candidates, user, permission, *, kind='complete', extra_q=None):
+    """True iff candidates are nonempty and no row lacks the aggregate proof.
+
+    One SQL. ``None`` when no handle applies so the caller may use the
+    undeclared fallback. ``extra_q`` is an optional overlay (AND); it
+    never creates a grant.
+    """
+    granted_q = granted(handles, candidates, user, permission, kind=kind)
+    if granted_q is None:
+        return None
+    if extra_q is not None:
+        granted_q = granted_q & extra_q
+    qs = candidate_queryset(candidates)
+    stats = qs.aggregate(
+        total=Count('pk', distinct=True),
+        lacking=Count('pk', distinct=True, filter=~granted_q),
+    )
+    return stats['total'] > 0 and stats['lacking'] == 0
+
+
+def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None):
+    """One grant EXISTS for ``obj`` through ``handle`` only.
+
+    ``None`` when the handle is inapplicable. ``extra_q`` is an optional
+    overlay (AND); it never creates a grant.
+    """
+    granted_q = granted((handle,), obj, user, permission, kind=kind)
+    if granted_q is None:
+        return None
+    if extra_q is not None:
+        granted_q = granted_q & extra_q
+    return obj._meta.concrete_model._default_manager.filter(
+        pk=obj.pk,
+    ).filter(granted_q).exists()
+
+
+def common_permissions(handles, candidates, user, *, kind='complete'):
+    """Permission queryset held on every candidate via the aggregate proof.
+
+    One SQL when evaluated. ``None`` when no handle applies so the caller
+    may use the undeclared fallback. Uses nested ``OuterRef`` so the
+    permission identity is the outer permission row, not the candidate.
+    """
+    qs = candidate_queryset(candidates)
+    perm_expr = OuterRef(OuterRef('pk'))
+    parts = []
+    permission_model = None
+    applicable = False
+    for handle in handles:
+        plan = handle.registry.plan_for(candidates, user=user)
+        if plan.records:
+            applicable = True
+            if plan.permission_model is not None:
+                if permission_model is None:
+                    permission_model = plan.permission_model
+                elif permission_model is not plan.permission_model:
+                    raise TrustsConfigurationError(
+                        'Applicable registrations must share one permission '
+                        'model; got %s and %s.'
+                        % (
+                            permission_model._meta.label,
+                            plan.permission_model._meta.label,
+                        )
+                    )
+        if kind == 'complete':
+            fn = handle.compiler.complete_exists
+        else:
+            fn = handle.compiler.group_exists
+        part = _as_q(fn(plan, qs, user, perm_expr))
+        if part is None:
+            continue
+        parts.append(part)
+    if not applicable or permission_model is None:
+        return None
+    if not parts:
+        return permission_model._default_manager.none()
+    granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
+    return permission_model._default_manager.filter(
+        Exists(qs),
+    ).exclude(
+        Exists(qs.filter(~granted_q)),
+    ).distinct()
 
 
 def _is_model_class(value):
@@ -481,8 +602,9 @@ class RelationPlan:
     def _bound_root_qs(self, record, **bindings):
         filters = {}
         for role, value in bindings.items():
-            _require_instance(value, role)
-            filters[getattr(record, _BINDING_FIELDS[role])] = value
+            filters[getattr(record, _BINDING_FIELDS[role])] = _bind_terminal(
+                value, role,
+            )
         return record.root._default_manager.filter(**filters)
 
     def _correlated_exists(self, terminal_field_attr, **bindings):
@@ -506,14 +628,40 @@ class RelationPlan:
         Later readers may OR this predicate with another predicate on the
         same incoming queryset. ``filter_content`` consumes this same
         object; there is no second content-correlation builder.
+
+        ``permission`` may be a permission instance or an unevaluated
+        lookup (``Subquery`` / nested ``OuterRef``) so callers can bind
+        permission identity in the same SQL statement.
         """
         user = _require_instance(user, 'user')
-        permission = _require_instance(permission, 'permission')
+        permission = _bind_terminal(permission, 'permission')
         if not self.records:
             return None
         return self._correlated_exists(
             'content_field', user=user, permission=permission,
         )
+
+    def common_permissions(self, user, content):
+        """Trustee permissions held on every candidate through this plan.
+
+        ``content`` is an instance or QuerySet. Empty candidates yield
+        an empty permission queryset. Group extras belong to the handle
+        compiler, not this plan-only projection.
+        """
+        user = _require_instance(user, 'user')
+        if not self.records or self.permission_model is None:
+            if self.permission_model is None:
+                return ()
+            return self.permission_model._default_manager.none()
+        qs = candidate_queryset(content)
+        exists = self.content_exists(user, OuterRef(OuterRef('pk')))
+        if exists is None:
+            return self.permission_model._default_manager.none()
+        return self.permission_model._default_manager.filter(
+            Exists(qs),
+        ).exclude(
+            Exists(qs.filter(~Q(exists))),
+        ).distinct()
 
     def permissions(self, user, content):
         """Distinct permission rows for ``(user, content)``."""
