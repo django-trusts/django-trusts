@@ -64,9 +64,9 @@ def main() -> int:
     import django
     django.setup()
 
+    import importlib
     import sys as _sys
     import trusts
-    import trusts.core_backends as core_backends
     from django.core.exceptions import ImproperlyConfigured
     from trusts.apps import (
         KERNEL_CONFIG_TOMBSTONE,
@@ -79,9 +79,6 @@ def main() -> int:
         kernel_config,
     )
     from trusts.backends import TrustModelBackendMixin
-    from trusts.core_backends import (
-        TrustModelBackendMixin as CoreTrustModelBackendMixin,
-    )
     from trusts.core import (
         ConditionLookup,
         Ref,
@@ -139,27 +136,22 @@ def main() -> int:
                 installed_version, EXPECTED_VERSION,
             )
         )
-    core_backends_file = Path(core_backends.__file__).resolve()
-    if checkout == core_backends_file or checkout in core_backends_file.parents:
+    backends_file = Path(trusts.backends.__file__).resolve()
+    if checkout == backends_file or checkout in backends_file.parents:
         raise SystemExit(
-            'Imported trusts.core_backends from the checkout: %s' % (
-                core_backends_file,
-            )
+            'Imported trusts.backends from the checkout: %s' % backends_file
         )
-    if (
-        'site-packages' not in str(core_backends_file)
-        and 'dist-packages' not in str(core_backends_file)
-    ):
+    if TrustModelBackendMixin.__module__ != 'trusts.backends':
         raise SystemExit(
-            'trusts.core_backends is not a site-packages install: %s' % (
-                core_backends_file,
-            )
+            'TrustModelBackendMixin.__module__ is %r, expected trusts.backends'
+            % TrustModelBackendMixin.__module__
         )
-    if TrustModelBackendMixin is not CoreTrustModelBackendMixin:
-        raise SystemExit(
-            'trusts.backends.TrustModelBackendMixin is not '
-            'trusts.core_backends.TrustModelBackendMixin'
-        )
+    try:
+        importlib.import_module('trusts.core_backends')
+    except ModuleNotFoundError:
+        pass
+    else:
+        raise SystemExit('trusts.core_backends still imports from the library wheel')
     if issubclass(AppConfig, TrustsImplementationConfig):
         raise SystemExit('library AppConfig must not be a TrustsImplementationConfig')
     if implementation_configs() != ():
@@ -196,9 +188,8 @@ def main() -> int:
     print('django', django.get_version())
     print('django-trusts', installed_version)
     print('trusts.__file__', trusts_file)
-    print('trusts.core_backends', core_backends_file)
+    print('trusts.backends', backends_file)
     print('TrustModelBackendMixin', TrustModelBackendMixin)
-    print('core_backends mixin identity', TrustModelBackendMixin is CoreTrustModelBackendMixin)
     print('library AppConfig', config, config.label)
     print('kernel_config tombstone ok')
     print('TrustsImplementationConfig', TrustsImplementationConfig)

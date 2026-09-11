@@ -53,7 +53,6 @@ PAIR_LEGACY_SUITE = [
     'trusts.test_issue100',
     'trusts.test_issue103',
     'trusts.test_issue108',
-    'trusts.test_issue111',
 ]
 
 

@@ -109,9 +109,22 @@ def main() -> int:
         call_command('migrate', verbosity=0, interactive=False)
 
         from trusts.apps import kernel_config
+        from trusts.backends import TrustModelBackendMixin
         from trusts.zero.apps import ZeroConfig
         from trusts.zero.backends import TrustModelBackend as ZeroBackend
         from trusts.zero.models import Trust as ZeroTrust
+
+        if TrustModelBackendMixin.__module__ != 'trusts.backends':
+            raise SystemExit(
+                'TrustModelBackendMixin.__module__ is %r'
+                % TrustModelBackendMixin.__module__
+            )
+        try:
+            import trusts.core_backends  # noqa: F401
+        except ModuleNotFoundError:
+            pass
+        else:
+            raise SystemExit('trusts.core_backends still imports on the IIa pair')
 
         labels = {config.label for config in django_apps.get_app_configs()}
         if 'trusts' not in labels:

@@ -12,7 +12,7 @@ def _listed_mixin_paths():
     from django.conf import settings
     from django.utils.module_loading import import_string
 
-    from trusts.core_backends import TrustModelBackendMixin
+    from trusts.backends import TrustModelBackendMixin
     from trusts.core import TrustsConfigurationError
 
     listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
@@ -209,7 +209,7 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
     def _validate_ownership(self):
         from django.utils.module_loading import import_string
 
-        from trusts.core_backends import TrustModelBackendMixin
+        from trusts.backends import TrustModelBackendMixin
         from trusts.core import TrustsConfigurationError
 
         owned = self.owned_backend_paths()

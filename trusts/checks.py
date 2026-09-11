@@ -122,7 +122,7 @@ def check_query_compilers(app_configs, **kwargs):
     from django.conf import settings
     from django.utils.module_loading import import_string
 
-    from trusts.core_backends import TrustModelBackendMixin
+    from trusts.backends import TrustModelBackendMixin
     from trusts.core import TrustsCompilerError, compiler_for_class
 
     messages = []

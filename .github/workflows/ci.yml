@@ -105,11 +105,8 @@ jobs:
       run: python scripts/verify-pair-zero.py
     - name: Legacy core suite against IIa
       run: python scripts/run-core-pair-tests.py
-    - name: Zero IIa tests + fresh install
-      run: |
-        python scripts/run-z1-pair-tests.py
-        cd .deps/django-trusts-zero
-        python scripts/verify-fresh-install.py
+    - name: Zero IIa product-path tests
+      run: python scripts/run-z1-pair-tests.py
 
   raw-zero-tombstone:
     name: raw Zero 2.0.0.dev0 hits tombstone

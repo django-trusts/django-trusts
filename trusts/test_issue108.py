@@ -26,9 +26,6 @@ from trusts.apps import (
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.core import TrustsConfigurationError, TrustsRegistry
-from trusts.core_backends import (
-    TrustModelBackendMixin as CoreTrustModelBackendMixin,
-)
 
 
 HOST = 'tests.backends.HostTrustModelBackend'
@@ -98,8 +95,10 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         self.assertTrue(callable(implementation_for_class))
         self.assertTrue(callable(implementation_configs))
 
-    def test_core_backends_mixin_identity_unchanged(self):
-        self.assertIs(TrustModelBackendMixin, CoreTrustModelBackendMixin)
+    def test_mixin_lives_only_on_trusts_backends(self):
+        self.assertEqual(
+            TrustModelBackendMixin.__module__, 'trusts.backends',
+        )
 
     def test_historical_backend_no_longer_imports(self):
         import trusts.backends as backends_mod

@@ -2516,17 +2516,19 @@ Zero `2.0.0.dev0` is incompatible and directing users to Zero
 `2.0.0.dev2+` or the capped old-code line
 (`django-trusts-zero==2.0.0.dev1` with `django-trusts==1.0.0.dev2`).
 Historical concrete surfaces leave core. Canonical historical behavior
-is `trusts.zero.*`. Package version becomes `1.0.0.dev3`. Pair CI
-retargets to exact Zero IIa merge
-`94e0fa109a8a7a5f53a028438ada899cbc1be1ad`.
+is `trusts.zero.*`. The generic mixin lives only at
+`trusts.backends.TrustModelBackendMixin`; `trusts.core_backends` is
+deleted (scope correction at
+https://github.com/django-trusts/django-trusts/issues/111#issuecomment-5639687890).
+Package version becomes `1.0.0.dev3`. Pair CI retargets to exact Zero
+IIa merge `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`.
 
 ## No change to these public call sites
 
 - `User.has_perm` / `User.has_perms` / `get_all_permissions` /
   `get_group_permissions` signatures
-- `from trusts.backends import TrustModelBackendMixin` (still the #104
-  same-object alias of `trusts.core_backends.TrustModelBackendMixin`)
-- `from trusts.core_backends import TrustModelBackendMixin`
+- `from trusts.backends import TrustModelBackendMixin` (sole mixin
+  definition after the #111 scope correction)
 - `TrustsImplementationConfig` and owner resolvers
   (`implementation_configs`, `implementation_for_path`,
   `implementation_for_class`)
@@ -2560,17 +2562,15 @@ from trusts.apps import (
     implementation_for_class,
     kernel_config,  # failure-only tombstone
 )
-from trusts.core_backends import TrustModelBackendMixin
-from trusts.backends import TrustModelBackendMixin  # deprecated alias; same object
+from trusts.backends import TrustModelBackendMixin
 from trusts.zero.models import Trust
 from trusts.zero.backends import TrustModelBackend
 
 # kernel_config() always raises ImproperlyConfigured
+# import trusts.core_backends  → ModuleNotFoundError
 ```
 
-Identity that must still hold: `trusts.backends.TrustModelBackendMixin is trusts.core_backends.TrustModelBackendMixin`.
-
-`from trusts.models import Trust` and `from trusts.backends import TrustModelBackend` fail. There is no forwarding, lazy re-export, or fallback import.
+`from trusts.models import Trust` and `from trusts.backends import TrustModelBackend` fail. There is no forwarding, lazy re-export, or fallback import. `trusts.core_backends` is deleted.
 
 ## Old vs new behavior
 
@@ -2581,7 +2581,8 @@ Identity that must still hold: `trusts.backends.TrustModelBackendMixin is trusts
 | Mixin with one owner | That owner | Unchanged; tombstone is not called |
 | `from trusts.models import Trust` | PEP 562 Zero forwarder | Fails; inert module |
 | `from trusts.backends import TrustModelBackend` | Core historical class | Fails |
-| `from trusts.backends import TrustModelBackendMixin` | Same-object alias | Unchanged |
+| `from trusts.backends import TrustModelBackendMixin` | Same-object alias of `core_backends` | Sole mixin definition |
+| `from trusts.core_backends import TrustModelBackendMixin` | Canonical mixin | `ModuleNotFoundError` |
 | `from trusts.zero.models import Trust` | Works when Zero installed | Unchanged stored identity |
 | `from trusts.zero.backends import TrustModelBackend` | IIa canonical path | Unchanged |
 | Listing `'trusts'` as implementation | Transitional kernel owner | Library app only; not a registry owner |
@@ -2598,6 +2599,7 @@ Identity that must still hold: `trusts.backends.TrustModelBackendMixin is trusts
 | PEP 562 `trusts.models` forwarder | `trusts.models` | Gone; module is inert |
 | `trusts.backends.TrustModelBackend` | core | `trusts.zero.backends.TrustModelBackend` |
 | `trusts.backends.HistoricalGroupQueryCompiler` | core | `trusts.zero.backends.HistoricalGroupQueryCompiler` |
+| `trusts.core_backends.TrustModelBackendMixin` | transitional mixin host | Deleted. Mixin lives only at `trusts.backends` |
 
 ## Schema
 
@@ -2628,8 +2630,9 @@ boundary. Persisted Zero `label='trusts'` and loader keys
 - [ ] Confirm `from trusts.backends import TrustModelBackend` and
       `HistoricalGroupQueryCompiler` fail. Import those names from
       `trusts.zero.backends`.
-- [ ] Confirm `trusts.backends.TrustModelBackendMixin is
-      trusts.core_backends.TrustModelBackendMixin`.
+- [ ] Confirm `from trusts.backends import TrustModelBackendMixin`
+      succeeds and `import trusts.core_backends` fails. Do not leave a
+      forwarding module or alias.
 - [ ] Locate live registry access. Use
       `implementation_for_path` / `implementation_for_class` /
       `configured_implementation_handles`. Do not call
@@ -2645,8 +2648,8 @@ boundary. Persisted Zero `label='trusts'` and loader keys
 - [ ] Retarget pair CI to Zero IIa
       `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`. Do not pair with raw
       Zero `41d07f40` or Z0-cap.
-- [ ] Leave `trusts.core_backends` in place. Do not collapse the mixin
-      alias. Do not implement `1.0.0.dev4` tombstone removal.
+- [ ] Delete `trusts.core_backends`. Do not implement `1.0.0.dev4`
+      tombstone removal.
 - [ ] Leave Windows #17, examples, and other adoption work parked.
 
 

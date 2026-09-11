@@ -47,7 +47,9 @@ if not settings.configured:
 import django
 django.setup()
 import trusts
+import importlib
 from trusts.apps import kernel_config
+from trusts.backends import TrustModelBackendMixin
 from trusts.zero.apps import ZeroConfig
 from trusts.zero.models import Trust
 from django.apps import apps as django_apps
@@ -55,6 +57,13 @@ from django.apps import apps as django_apps
 assert ZeroConfig.label == "trusts"
 assert django_apps.get_app_config("trusts").name == "trusts.zero"
 assert Trust._meta.app_label == "trusts"
+assert TrustModelBackendMixin.__module__ == "trusts.backends"
+try:
+    importlib.import_module("trusts.core_backends")
+except ModuleNotFoundError:
+    pass
+else:
+    raise SystemExit("trusts.core_backends still imports")
 try:
     kernel_config()
 except ImproperlyConfigured as exc:
@@ -65,6 +74,7 @@ init = Path(trusts.__file__)
 assert init.name == "__init__.py"
 assert (init.parent / "zero" / "apps.py").is_file()
 assert (init.parent / "apps.py").is_file()
+assert not (init.parent / "core_backends.py").is_file()
 print("companion-overlay-ok")
 '''
 
@@ -139,6 +149,10 @@ def main() -> int:
 
     kernel_wheel = _ensure_kernel_wheel()
     zero_wheel = _ensure_zero_wheel(zero_root)
+    with zipfile.ZipFile(kernel_wheel) as zf:
+        names = zf.namelist()
+    if any(n.endswith('trusts/core_backends.py') for n in names):
+        raise SystemExit('library wheel still ships trusts/core_backends.py')
     _assert_zero_record(zero_wheel)
 
     tmp = Path(tempfile.mkdtemp(prefix='trusts-dev3-companion-'))

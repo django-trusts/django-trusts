@@ -2,8 +2,8 @@
 
 Core is ``1.0.0.dev3``. ``kernel_config()`` always raises
 ``ImproperlyConfigured``. Historical concrete imports fail. Supported
-owner paths never call the tombstone. Mixin identity and
-``trusts.core_backends`` stay.
+owner paths never call the tombstone. The generic mixin lives only
+on ``trusts.backends``; ``trusts.core_backends`` is gone.
 """
 
 from unittest.mock import patch
@@ -28,9 +28,6 @@ from trusts.apps import (
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.core import TrustsConfigurationError
-from trusts.core_backends import (
-    TrustModelBackendMixin as CoreTrustModelBackendMixin,
-)
 
 
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -114,8 +111,14 @@ class HistoricalImportCutoverTest(SimpleTestCase):
         with self.assertRaises(ImportError):
             from trusts.backends import HistoricalGroupQueryCompiler  # noqa: F401
 
-    def test_mixin_alias_and_core_backends_remain(self):
-        self.assertIs(TrustModelBackendMixin, CoreTrustModelBackendMixin)
+    def test_mixin_lives_only_on_trusts_backends(self):
+        import importlib
+
+        self.assertEqual(
+            TrustModelBackendMixin.__module__, 'trusts.backends',
+        )
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module('trusts.core_backends')
         from trusts.core import PlanQueryCompiler
 
         self.assertIsInstance(

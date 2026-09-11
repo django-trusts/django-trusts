@@ -45,10 +45,11 @@ API and method changes for the modernization are recorded in
 and noun-neutral compiler/query machinery. Live registries are owned by
 installed `TrustsImplementationConfig` subclasses (Zero IIa, GH IIb, or a
 project host). `kernel_config()` is a failure-only tombstone.
-`trusts.core_backends.TrustModelBackendMixin` remains, with
-`trusts.backends.TrustModelBackendMixin` as the same-object deprecated
-alias. Historical concrete models and `TrustModelBackend` live under
-`trusts.zero.*`. See [core-registry.md](core-registry.md).
+The generic mixin lives only at
+`from trusts.backends import TrustModelBackendMixin`.
+`trusts.core_backends` is gone. Historical concrete models and
+`TrustModelBackend` live under `trusts.zero.*`. See
+[core-registry.md](core-registry.md).
 
 ## Preserved legacy source
 
