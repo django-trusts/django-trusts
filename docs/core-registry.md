@@ -117,10 +117,13 @@ contribute declarations in their own `AppConfig.ready()`; Trusts does
 not import or discover `tests.Category`.
 
 `ContentQuerySet.permitted` is the first historical reader. For a
-registered Category terminal it ORs `plan.content_exists` with the
-existing group-local grant on the original candidate queryset. Public
-signature and documented results are unchanged. Unregistered models keep
-the old `trust_grant_q` path. Backend `has_perm` is not migrated.
+registered Category or Trust-as-content terminal it ORs
+`plan.content_exists` with the existing group-local grant on the original
+candidate queryset. Public signature and documented results are
+unchanged. Unregistered models keep the old `trust_grant_q` path.
+Backend `has_perm` is not migrated. The Trusts app contributes the
+Trust-as-content path in `AppConfig.ready()`; the test app contributes
+Category.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

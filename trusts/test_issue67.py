@@ -3,7 +3,7 @@
 Migrates the trustee half of ``ContentQuerySet.permitted`` for the
 explicitly registered Category terminal. Backend ``has_perm`` stays on
 the old path. Isolated core tests keep constructing their own
-``TrustsRegistry()``.
+``TrustsRegistry()``. Trust-as-content is S1 (``test_issue70``).
 """
 
 import types
@@ -407,8 +407,8 @@ class CategoryPermittedRegistryTest(TestCase):
     def test_unregistered_models_stay_on_old_trust_grant_q_path(self):
         registry = apps.get_app_config('trusts').registry
         self.assertTrue(registry.plan_for(Category).records)
+        self.assertTrue(registry.plan_for(Trust).records)
         self.assertFalse(registry.plan_for(Ticket).records)
-        self.assertFalse(registry.plan_for(Trust).records)
         self.assertFalse(registry.plan_for(Group).records)
 
         from tests.models import Organization
@@ -428,10 +428,10 @@ class CategoryPermittedRegistryTest(TestCase):
         with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
             list(Category.objects.permitted(self.change_code, self.alice))
             self.assertEqual(grant_q.call_count, 0)
+            list(Trust.objects.permitted('trusts.change_trust', self.alice))
+            self.assertEqual(grant_q.call_count, 0)
             list(Ticket.objects.permitted('trusts_tests.change_ticket', self.alice))
             self.assertEqual(grant_q.call_count, 1)
-            list(Trust.objects.permitted('trusts.change_trust', self.alice))
-            self.assertEqual(grant_q.call_count, 2)
         self.assertIn(ticket.pk, _pks(
             Ticket.objects.permitted('trusts_tests.change_ticket', self.alice)
         ))
