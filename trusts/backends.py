@@ -2,12 +2,39 @@ from django.db.models import Q, QuerySet
 from django.contrib.auth.backends import ModelBackend
 
 from trusts.models import Trust, Content, legacy_permission_callbacks_allowed
-from trusts.query import permission_granted_via_group_exists
+from trusts.query import (
+    group_local_grant_exists,
+    permission_granted_via_group_exists,
+)
 from trusts.conditions import PermissionConditionError, evaluate_registered_expression
+from trusts.core import PlanQueryCompiler
 from trusts import get_permission_model, utils
 
 
+class HistoricalGroupQueryCompiler(object):
+    """Transitional complete proof: registered plan OR historical TrustGroup.
+
+    #69 S6 registers Group as protected content through Junction. It does
+    not register group membership as a trustee route for Category/Ticket.
+    This compiler remains through S6/S7 until a separately designed
+    group-as-trustee relation replaces it.
+    """
+
+    def complete_exists(self, plan, candidates, user, permission):
+        if not plan.records:
+            return None
+        return Q(plan.content_exists(user, permission)) | Q(
+            group_local_grant_exists(user, permission, 'trust_id')
+        )
+
+    def group_exists(self, plan, candidates, user, permission):
+        if not plan.records:
+            return None
+        return Q(group_local_grant_exists(user, permission, 'trust_id'))
+
+
 class TrustModelBackendMixin(object):
+    query_compiler = PlanQueryCompiler()
     perm_model = get_permission_model()
 
     @staticmethod
@@ -133,4 +160,4 @@ class TrustModelBackendMixin(object):
 
 
 class TrustModelBackend(TrustModelBackendMixin, ModelBackend):
-    pass
+    query_compiler = HistoricalGroupQueryCompiler()

@@ -108,22 +108,26 @@ This slice does not accept codename strings or dotted permission syntax.
 supplied `None` or other non-instance value raises
 `TrustsConfigurationError` and is never omitted from the predicate.
 
-The live package-owned instance lives on `trusts.apps.AppConfig.registry`
-and is created in `AppConfig.__init__`. `ready()` does not replace it.
-Historical readers obtain it with
-`django.apps.apps.get_app_config('trusts').registry`. Isolated tests
-still construct their own `TrustsRegistry()`. External applications
-contribute declarations in their own `AppConfig.ready()`; Trusts does
+The live store is `trusts.apps.AppConfig.registries[path]`, one
+`TrustsRegistry` per configured Trusts-derived `AUTHENTICATION_BACKENDS`
+path. `ready()` does not replace the store or an existing registry
+object. With one Trusts path, `config.registry` is a compatibility alias
+of that exact object. Isolated tests still construct their own
+`TrustsRegistry()`. External applications contribute declarations in
+their own `AppConfig.ready()` through `configured_backend()` (an exact
+path is required when several Trusts backends are listed). Trusts does
 not import or discover `tests.Category`.
 
-`ContentQuerySet.permitted` is the first historical reader. For a
-registered Category, Trust-as-content, or Ticket terminal it ORs
-`plan.content_exists` with the existing group-local grant on the original
-candidate queryset. Public signature and documented results are
-unchanged. Unregistered models keep the old `trust_grant_q` path.
-Backend `has_perm` is not migrated. The Trusts app contributes the
-Trust-as-content path in `AppConfig.ready()`; the test app contributes
-Category and Ticket independently.
+`ContentQuerySet.permitted` is a thin aggregate caller. It ORs each
+applicable handle compiler's complete predicate (`trusts.core.granted`)
+and then applies the unchanged condition overlay. Concrete
+`TrustModelBackend` routes keep the transitional historical TrustGroup
+compiler; mixin-only routes receive only their registered-plan proof.
+Public signature and documented one-path results are unchanged.
+Unregistered-on-every-path models keep `trust_grant_q`. Backend
+`has_perm` is not migrated. The Trusts app contributes Trust-as-content
+to every configured `TrustModelBackend` (or subclass) path; the test app
+contributes Category and Ticket onto the unique handle.
 
 This primitive does not change historical authorization results or add a
 database schema. See [../migrates.md](../migrates.md).

@@ -1,4 +1,4 @@
-"""Django system checks for registered permission conditions (issue #29).
+"""Django system checks for permission conditions and query compilers.
 
 Model-aware semantic validation (field names, traversal, multi-valued
 relations, operand types) and the legacy-callback policy are reported as
@@ -20,6 +20,7 @@ from trusts.models import Content, legacy_permission_callbacks_allowed
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
+CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
@@ -79,6 +80,51 @@ def _messages_for_callable(model, cond_code):
         obj=model,
         id=CHECK_ID_LEGACY_CALLBACK,
     )]
+
+
+@django_checks.register()
+def check_query_compilers(app_configs, **kwargs):
+    """Every Trusts-derived AUTHENTICATION_BACKENDS path must be query-capable.
+
+    Imports listed mixin classes and resolves ``query_compiler`` without
+    constructing a backend instance. Zero SQL. ``trusts.E003`` stays
+    reserved for S8 freeze. Silencing ``trusts.E004`` hides only this
+    diagnostic; ``ContentQuerySet.permitted()`` still raises and does
+    not fall back or omit the broken route.
+    """
+    from django.conf import settings
+    from django.utils.module_loading import import_string
+
+    from trusts.backends import TrustModelBackendMixin
+    from trusts.core import TrustsCompilerError, compiler_for_class
+
+    messages = []
+    seen = []
+    listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
+    for path in listed:
+        if path in seen:
+            continue
+        seen.append(path)
+        try:
+            cls = import_string(path)
+        except ImportError:
+            continue
+        if not issubclass(cls, TrustModelBackendMixin):
+            continue
+        try:
+            compiler_for_class(cls)
+        except TrustsCompilerError as exc:
+            messages.append(django_checks.Error(
+                str(exc),
+                hint=(
+                    'Silencing this check ID suppresses only the early '
+                    'diagnostic. ContentQuerySet.permitted() still requires '
+                    'a valid query compiler; there is no fallback or omission.'
+                ),
+                obj=cls,
+                id=CHECK_ID_MISSING_COMPILER,
+            ))
+    return messages
 
 
 @django_checks.register(django_checks.Tags.models)

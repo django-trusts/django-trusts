@@ -8,8 +8,8 @@ from django.utils.translation import gettext_lazy as _
 from trusts import ENTITY_MODEL_NAME, PERMISSION_MODEL_NAME, GROUP_MODEL_NAME, \
                     DEFAULT_SETTLOR, ALLOW_NULL_SETTLOR, ROOT_PK, \
                     get_permission_model, utils
+from trusts.core import granted as aggregate_granted
 from trusts.query import (
-    group_local_grant_exists,
     is_active_principal,
     trust_grant_q,
 )
@@ -189,19 +189,16 @@ class ContentQuerySet(models.QuerySet):
         if not is_active_principal(user):
             return self.none()
         permission = resolve_content_permission(self.model, perm)
-        # Registered terminals (Category, Trust-as-content, Ticket) take
-        # the trustee half from the package registry. Group stays in this
-        # reader and is OR-ed on the original candidate queryset. Do not
-        # filter_authorized(...) then OR group — filtered-out group-only
-        # rows cannot be restored. Unregistered models keep trust_grant_q.
-        registry = django_apps.get_app_config('trusts').registry
-        plan = registry.plan_for(self, user=user, permission=permission)
-        if plan.records:
-            trustee = plan.content_exists(user=user, permission=permission)
-            granted = Q(trustee) | Q(
-                group_local_grant_exists(user, permission, 'trust_id')
-            )
-        else:
+        # Thin aggregate caller: resolve the principal and permission,
+        # OR each applicable handle compiler's complete predicate, then
+        # apply the unchanged condition overlay. Do not factor
+        # trustee/group/ceiling fragments across paths. Unregistered on
+        # every path keeps the transitional trust_grant_q fallback.
+        handles = django_apps.get_app_config('trusts').configured_handles()
+        granted = aggregate_granted(
+            handles, self, user, permission, kind='complete',
+        )
+        if granted is None:
             granted = trust_grant_q(user, permission, trust_fk='trust')
         if condition_q is None:
             return self.filter(granted).distinct()

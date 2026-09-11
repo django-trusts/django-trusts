@@ -1154,6 +1154,102 @@ construction remains lazy.
 - Generic core path semantics; Zero; GH; example #7; Windows #17
 - S3–S8 of #69
 
+---
+
+# Path-scoped registries and aggregate list authorization (issue #75 / S3a)
+
+This record covers the S3a internal routing change. Version remains
+**1.0.0.dev0**. It does **not** migrate backend ``has_perm`` /
+``has_perms`` / ``get_all_permissions`` / ``get_group_permissions`` /
+``_trust_perm_cache``. It does **not** change ``obj is None`` behavior.
+There is **no schema or Django migration change**.
+
+Parent design: #74 r4, accepted with the S6 correction that
+``HistoricalGroupQueryCompiler`` remains through S6/S7. #69 S6 registers
+Group as **protected content through Junction**. It does not register
+group membership as a trustee route for Category/Ticket, so the
+historical group compiler is not scheduled for deletion in S6.
+
+## Decision
+
+``trusts.apps.AppConfig`` owns the sole
+``registries[configured_backend_path] → TrustsRegistry`` store.
+Configured Trusts paths are discovered by importing
+``AUTHENTICATION_BACKENDS`` classes (never ``load_backend()`` / a cached
+Django backend instance). A handle binds the exact path, the exact
+registry identity, and the class-owned immutable query compiler.
+
+With one Trusts path, ``config.registry`` remains a compatibility alias
+of that exact registry object. With zero or several Trusts paths, alias
+access fails loud. Duplicate identical path strings de-duplicate.
+Different strings that resolve to the same class are an ambiguity error.
+
+``ContentQuerySet.permitted`` stays a thin caller: active principal and
+permission resolution, then ``trusts.core.granted()`` ORs each
+applicable handle compiler's **complete** predicate, then the unchanged
+condition overlay. Built-in concrete routes keep historical group-only
+grants. Mixin-only routes receive only their registered-plan proof. If
+every route is inapplicable, the transitional ``trust_grant_q`` fallback
+remains.
+
+## No change to these public call sites
+
+- `User.has_perm` / ``User.has_perms`` signatures and backend
+  implementation (still historical; ``obj is None`` unchanged)
+- ``ContentQuerySet.permitted`` signature and documented allow/deny
+  results on the RST one-path install
+- ``Content._conditions`` / ``register_permission_condition`` /
+  callable ``has_perm``
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 34. Path-scoped AppConfig registries and aggregate ``.permitted()`` (internal)
+
+| | |
+| --- | --- |
+| Previous | One ``AppConfig.registry``. ``.permitted`` read that unique store and inlined ``group_local_grant_exists`` for every registered terminal. |
+| New | ``AppConfig.registries[path]`` is THE store. Host contributions go through ``configured_backend(path)`` (path required when several Trusts backends are listed). Package Trust-as-content is donated to every configured ``TrustModelBackend`` or subclass; mixin-only paths receive no automatic package declaration. ``.permitted`` ORs complete compiler predicates from every applicable configured Trusts path in one lazy SQL statement. |
+| Replacement | Same ``Model.objects.permitted(perm, user)`` call. With one Trusts path, ``apps.get_app_config('trusts').registry`` still ``is`` that path's registry. With several, name the exact path. |
+| Affected | Internal list-authorization routing. Object ``has_perm`` / permission enumeration stay on the historical backend path. |
+| Authorization | One-path Category / Ticket / Trust list results are unchanged. Two Trusts paths OR complete proofs; one route's failed ceiling cannot be completed with another route's fragment. Mixin-only paths do not inherit ``TrustGroup`` behavior. A Guardian-only object grant may make ``user.has_perm(perm, obj)`` True while ``.permitted`` excludes the row (Guardian is not a Trusts path). Missing/malformed ``query_compiler`` is ``trusts.E004`` plus runtime ``TrustsCompilerError``; silencing the check does not enable fallback or omission. |
+
+Migration-bot checklist:
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] One-path hosts: ``config.registry`` and existing S1/S2 sentinels keep
+      working. No call-site change for ``.permitted``.
+- [ ] Hosts that list more than one Trusts-derived backend must name the
+      exact path in ``configured_backend(path)`` when contributing
+      Category/Ticket-style declarations. Omission fails before writing.
+- [ ] A mixin-only Trusts backend does not receive package Trust-as-content
+      and does not inherit historical ``TrustGroup`` list grants.
+- [ ] Do not silence ``trusts.E004`` expecting ``.permitted`` to skip a
+      broken compiler.
+- [ ] Leave backend ``has_perm`` / ``get_all_permissions`` /
+      ``get_group_permissions`` / ``obj is None`` alone (next slice).
+- [ ] Leave ``Content._conditions`` and its registration/check behavior
+      alone.
+- [ ] Do not delete ``HistoricalGroupQueryCompiler`` in S6.
+- [ ] Leave package version at ``1.0.0.dev0``.
+
+## Schema
+
+No change. S3a adds no model and no Django migration. Query
+construction remains lazy. Evaluated ``.permitted()`` and ``[:n]`` remain
+**1 SQL**.
+
+## Out of scope (not acceptance criteria)
+
+- Backend ``has_perm`` / ``has_perms`` / ``get_all_permissions`` /
+  ``get_group_permissions`` / ``_trust_perm_cache`` migration
+- ``obj is None`` false/empty boundary (lands with backend migration)
+- ``common_permissions`` collection coordinator
+- S4–S8, grammar extension, Junction-as-content, registry deletion,
+  callback relocation
+- Schema or migration changes
+
 
 
 
