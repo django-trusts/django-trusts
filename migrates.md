@@ -2516,9 +2516,9 @@ historical models and backends live at `trusts.zero.*`. The generic
 mixin lives only at `from trusts.backends import TrustModelBackendMixin`;
 `trusts.core_backends` is deleted with no forwarding alias.
 
-Unpublished Zero `2.0.0.dev*` development snapshots are unsupported
-after this cut and may fail naturally. This release adds no runtime
-compatibility machinery for them.
+Unpublished Zero development snapshots are unsupported after this cut
+and may fail naturally. This release adds no runtime compatibility
+machinery for them.
 
 Package version is `1.0.0.dev3`. Pair CI pins the supported Zero
 companion at `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`.
@@ -2586,7 +2586,6 @@ from trusts.zero.backends import TrustModelBackend
 | Listing `'trusts'` in `INSTALLED_APPS` | Installed a kernel AppConfig | Unsupported; core is not an app |
 | Pair pin | Earlier unpublished Zero snapshot | `94e0fa109a8a7a5f53a028438ada899cbc1be1ad` |
 | Package version | `1.0.0.dev2` | `1.0.0.dev3` |
-| Unpublished Zero `2.0.0.dev*` | Still treated as a paired line | Unsupported; may fail naturally |
 
 ## Deleted or moved APIs
 
@@ -2641,7 +2640,7 @@ boundary. Persisted Zero `label='trusts'` and loader keys
 - [ ] Retarget pair CI to Zero
       `94e0fa109a8a7a5f53a028438ada899cbc1be1ad`.
 - [ ] Delete `trusts.core_backends`. Do not add runtime compatibility
-      for unpublished Zero `2.0.0.dev*` snapshots.
+      machinery for unpublished Zero development snapshots.
 - [ ] Leave Windows #17, examples, and other adoption work parked.
 
 
