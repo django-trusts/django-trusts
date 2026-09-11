@@ -573,10 +573,10 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
                     principal, operation,
                 )
             )
-        with patch('trusts.apps.kernel_config') as kernel_config:
-            kernel_config.return_value.configured_handles.return_value = (
-                self._handles()
-            )
+        with patch(
+            'trusts.apps.configured_implementation_handles',
+            return_value=self._handles(),
+        ):
             with self.assertNumQueries(1):
                 via_manager = obj in list(
                     self.Repository.objects.filter(pk=obj.pk).authorized(

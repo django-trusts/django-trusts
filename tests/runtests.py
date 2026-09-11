@@ -23,11 +23,11 @@ KERNEL_SUITE = [
     'trusts.test_issue100',
     'trusts.test_issue103',
     'trusts.test_issue108',
+    'trusts.test_issue111',
 ]
 
 # C1 ran ``run_tests(['trusts'])``. Pair re-runs that full package except
-# explicitly kernel-only C2 assertions (``test_issue96``: no label
-# ``trusts``, no Trust, shim ImportError without Zero).
+# explicitly kernel-only identity assertions (``test_issue96`` / ``111``).
 PAIR_LEGACY_SUITE = [
     'trusts.tests',
     'trusts.test_issue4',
@@ -53,6 +53,7 @@ PAIR_LEGACY_SUITE = [
     'trusts.test_issue100',
     'trusts.test_issue103',
     'trusts.test_issue108',
+    'trusts.test_issue111',
 ]
 
 

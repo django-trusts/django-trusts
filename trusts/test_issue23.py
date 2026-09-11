@@ -16,7 +16,7 @@ from trusts.authorization import (
     grant_trust_group_permission,
     grant_trustee,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Role,
     Trust,
     TrustGroup,

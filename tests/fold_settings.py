@@ -11,5 +11,6 @@ INSTALLED_APPS = (
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'trusts',
+    'tests.kernel_host.apps.KernelHostConfig',
     'tests.fold_apps.FoldTestsConfig',
 )

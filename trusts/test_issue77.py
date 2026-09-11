@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from django.apps import apps
-from trusts.apps import kernel_config
+from tests.apps import live_config
 from django.contrib.auth.models import AnonymousUser, Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
@@ -16,10 +16,10 @@ from django.db import connection, models
 from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase, override_settings
 
-from tests.apps import install_writable_registry
+from tests.apps import install_writable_registry, live_config
 from tests.backends import GroupOnlyBackend, MixinOnlyBackend
 from tests.models import Category, Organization, Ticket, TestGroupJunction
-from trusts.backends import HistoricalGroupQueryCompiler, TrustModelBackend
+from trusts.zero.backends import HistoricalGroupQueryCompiler, TrustModelBackend
 from trusts.conditions import condition_refs
 from trusts.core import (
     PlanQueryCompiler,
@@ -29,7 +29,7 @@ from trusts.core import (
     TrustsRegistry,
     common_permissions,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     ContentManager,
     PermissionConditionNotQueryable,
@@ -43,7 +43,7 @@ from trusts.tests import (
 )
 
 
-CONCRETE = 'trusts.backends.TrustModelBackend'
+CONCRETE = 'trusts.zero.backends.TrustModelBackend'
 MIXIN = 'tests.backends.MixinOnlyBackend'
 GROUP_ONLY = 'tests.backends.GroupOnlyBackend'
 MISSING = 'tests.backends.MissingCompilerBackend'
@@ -79,7 +79,7 @@ def _contribute_category(registry):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = kernel_config()
+        self.live = live_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -569,7 +569,7 @@ class UndeclaredJunctionRemainsHistoricalTest(_UsersMixin, TestCase):
         self._reload()
 
     def test_junction_group_uses_registered_plan(self):
-        handle = kernel_config().configured_backend()
+        handle = live_config().configured_backend()
         self.assertTrue(handle.registry.plan_for(Group).records)
         self.assertFalse(handle.registry.plan_for(TestGroupJunction).records)
         code = 'auth.change_group'
@@ -642,7 +642,7 @@ class CoreCommonPermissionsProjectionTest(_UsersMixin, TestCase):
         self._reload()
 
     def test_plan_and_handle_common_permissions_are_one_sql(self):
-        handle = kernel_config().configured_backend()
+        handle = live_config().configured_backend()
         plan = handle.registry.plan_for(self.cat_a, user=self.alice)
         with self.assertNumQueries(1):
             codes = set(

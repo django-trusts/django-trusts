@@ -235,15 +235,15 @@ def check_missing_declarations(app_configs, **kwargs):
     """
     from django.apps import apps as django_apps
 
-    from trusts.apps import kernel_config
+    from trusts.apps import implementation_configs
 
-    try:
-        kernel_config()
-    except LookupError:
+    owners = implementation_configs()
+    if not owners:
         return []
 
-    config = kernel_config()
-    covered = _covered_content_models(config)
+    covered = set()
+    for config in owners:
+        covered.update(_covered_content_models(config))
     messages = []
     seen = set()
 
@@ -366,17 +366,18 @@ def check_along_renderer(app_configs, **kwargs):
     from django.db import connections
     from django.db.utils import OperationalError
 
-    from trusts.apps import kernel_config
+    from trusts.apps import implementation_configs
     from trusts.core import (
         along_connection_supported,
         probe_along_capabilities,
     )
 
-    try:
-        config = kernel_config()
-    except LookupError:
+    owners = implementation_configs()
+    if not owners:
         return []
-    along_records = _live_along_records(config)
+    along_records = []
+    for config in owners:
+        along_records.extend(_live_along_records(config))
     if not along_records:
         return []
 
@@ -458,14 +459,15 @@ def check_ordered_fold_renderer(app_configs, **kwargs):
 
     from django.db import connections
 
-    from trusts.apps import kernel_config
+    from trusts.apps import implementation_configs
     from trusts.core import ordered_fold_connection_supported
 
-    try:
-        config = kernel_config()
-    except LookupError:
+    owners = implementation_configs()
+    if not owners:
         return []
-    strategies = _live_ordered_fold_strategies(config)
+    strategies = []
+    for config in owners:
+        strategies.extend(_live_ordered_fold_strategies(config))
     if not strategies:
         return []
 

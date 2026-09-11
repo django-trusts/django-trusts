@@ -23,11 +23,11 @@ from django.test import TestCase, TransactionTestCase
 from django.test.client import MULTIPART_CONTENT, Client
 from django.http.request import HttpRequest
 
-from trusts.apps import kernel_config
-from trusts.models import Trust, TrustManager, Content, Junction, \
+from tests.apps import live_config
+from trusts.zero.models import Trust, TrustManager, Content, Junction, \
                           Role, RolePermission, TrustUserPermission, TrustGroup, \
                           TrustGroupPermission
-from trusts.backends import TrustModelBackend
+from trusts.zero.backends import TrustModelBackend
 from trusts.decorators import permission_required, P, K, G, O
 from tests.models import Category, TestGroupJunction
 
@@ -496,7 +496,7 @@ class TrustContentTestMixin(ContentModel):
         self.assertEqual(len(perm), 0)
 
         self.assertFalse(
-            kernel_config().configured_backend().registry.plan_for(
+            live_config().configured_backend().registry.plan_for(
                 type(self.user),
             ).records
         )

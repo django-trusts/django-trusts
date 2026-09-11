@@ -18,17 +18,16 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig, apply_zero_trust_donation, isolate_live_registry
+from tests.apps import TestsConfig, apply_zero_trust_donation, isolate_live_registry, isolated_owner, live_config
 import tests as tests_module
 from tests.models import Category, Ticket
-from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
 from trusts.core import (
     Ref,
     RelationPlan,
     TrustsConfigurationError,
     TrustsRegistry,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     Trust,
     TrustUserPermission,
@@ -75,7 +74,7 @@ class _UnusableContents(object):
 
 class TrustContributionIdempotenceTest(SimpleTestCase):
     def setUp(self):
-        self.live = kernel_config()
+        self.live = live_config()
         self.live_registry = self.live.registry
         self.live_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -100,7 +99,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
     def test_ready_does_not_replace_registry(self):
         import trusts
 
-        config = TrustsAppConfig('trusts', trusts)
+        config = isolated_owner()
         first = config.registry
         config.ready()
         apply_zero_trust_donation(config)
@@ -122,7 +121,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
 
         import trusts
 
-        isolated = TrustsAppConfig('trusts', trusts)
+        isolated = isolated_owner()
         other = Ref(OtherTrustGrant)
         isolated.registry.register(
             content=other.trust, user=other.user, permission=other.permission,
@@ -139,7 +138,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
     def test_conflicting_contribution_reaches_register_and_fails_closed(self):
         import trusts
 
-        isolated = TrustsAppConfig('trusts', trusts)
+        isolated = isolated_owner()
         j = Ref(TrustUserPermission)
         rev = Trust._meta.get_field('trust').remote_field.get_accessor_name()
         isolated.registry.register(
@@ -163,7 +162,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
         import trusts
 
         live_before = self.live_registry.records
-        isolated = TrustsAppConfig('trusts', trusts)
+        isolated = isolated_owner()
         self.assertEqual(isolated.registry.records, ())
         isolated.ready()
         apply_zero_trust_donation(isolated)
@@ -178,7 +177,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
     def test_declaration_uses_meta_reverse_not_contents(self):
         import trusts
 
-        isolated = TrustsAppConfig('trusts', trusts)
+        isolated = isolated_owner()
         remote = Trust._meta.get_field('trust').remote_field
         with patch.object(
             remote, 'get_accessor_name', wraps=remote.get_accessor_name,
@@ -218,7 +217,7 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateTrustContributionTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = kernel_config().registry
+        live = live_config().registry
         tup_trust = [
             record for record in live.records
             if record.root is TrustUserPermission
@@ -235,7 +234,7 @@ class IsolatedAppsDoesNotDonateTrustContributionTest(SimpleTestCase):
 
         import trusts
 
-        isolated = TrustsAppConfig('trusts', trusts)
+        isolated = isolated_owner()
         isolated.apps = self.isolated_apps
         isolated.ready()
         apply_zero_trust_donation(isolated)
@@ -395,7 +394,7 @@ class TrustPermittedRegistryTest(TestCase):
             self.assertEqual(list(page), [self.child_a1])
 
     def test_no_tup_rows_deny_without_changing_registration(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         self.assertTrue(registry.plan_for(Trust).records)
         TrustUserPermission.objects.all().delete()
         self._reload()
@@ -470,7 +469,7 @@ class TrustPermittedRegistryTest(TestCase):
         )
 
     def test_reader_uses_content_exists_not_filter_authorized(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         plan = registry.plan_for(
             Trust.objects.all(), user=self.carol, permission=self.change,
         )
@@ -495,7 +494,7 @@ class TrustPermittedRegistryTest(TestCase):
         self.assertNotIn(self.child_b.pk, pks)
 
     def test_junction_stays_on_old_path(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
         self.assertTrue(registry.plan_for(Ticket).records)

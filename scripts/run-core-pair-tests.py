@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Run the complete applicable legacy core suite against C2 + Z1.
+"""Run the complete applicable legacy core suite against core + Zero IIa.
 
-Uses ``tests.pair_settings`` (kernel + ``ZeroConfig``). Excludes only
-``trusts.test_issue96`` (kernel-only C2 identity assertions).
+Uses ``tests.pair_settings`` (ZeroConfig only; no library ``'trusts'``).
 """
 
 from __future__ import annotations

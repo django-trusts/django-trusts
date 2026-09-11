@@ -9,7 +9,6 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.apps import apps
-from trusts.apps import kernel_config
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.checks import Error, Warning as CheckWarning, run_checks
@@ -28,7 +27,7 @@ from trusts.conditions import (
     condition_refs,
     validate_expression,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     PermissionConditionNotQueryable,
     Trust,
@@ -41,7 +40,7 @@ from trusts.tests import (
     get_or_create_root_user,
     reload_test_users,
 )
-from tests.apps import forget_models
+from tests.apps import forget_models, live_config
 from tests.models import AutoAdminCategory, Ticket
 
 
@@ -217,7 +216,7 @@ class PermissionConditionCheckTest(ConditionRegistryIsolationMixin, TestCase):
     def test_app_configs_subset_still_reports_other_apps(self):
         u, p, o = condition_refs()
         Content.register_permission_condition(Ticket, 'typo', u == o.nope)
-        trusts_only = [kernel_config()]
+        trusts_only = [live_config()]
         errors = _messages_with_id(
             check_permission_conditions(app_configs=trusts_only),
             CHECK_ID_INVALID_EXPR,
@@ -325,7 +324,7 @@ class PermissionConditionCheckTest(ConditionRegistryIsolationMixin, TestCase):
     def test_ready_does_not_raise_when_invalid_conditions_are_registered(self):
         u, p, o = condition_refs()
         Content.register_permission_condition(Ticket, 'typo', u == o.nope)
-        kernel_config().ready()
+        live_config().ready()
         errors = _messages_with_id(
             check_permission_conditions(None), CHECK_ID_INVALID_EXPR
         )

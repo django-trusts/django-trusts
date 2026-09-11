@@ -1,8 +1,8 @@
-"""#103 step 1: generic ``trusts.core_backends`` boundary.
+"""#103 / #111: generic ``trusts.core_backends`` boundary after cutover.
 
-Additive public mixin import plus a deprecated same-object alias on
+Canonical mixin import plus a deprecated same-object alias on
 ``trusts.backends``. Historical ``TrustModelBackend`` and TrustGroup
-SQL stay on ``trusts.backends``. Runtime mixin behavior is unchanged.
+SQL are gone from core. Runtime mixin behavior is unchanged.
 """
 
 import ast
@@ -29,16 +29,15 @@ class CoreBackendsBoundaryTest(SimpleTestCase):
         )
         self.assertIs(AliasMixin, TrustModelBackendMixin)
 
-    def test_historical_backend_path_still_imports(self):
-        from trusts.backends import (
-            HistoricalGroupQueryCompiler,
-            TrustModelBackend,
-        )
-        self.assertTrue(issubclass(TrustModelBackend, TrustModelBackendMixin))
-        self.assertIsInstance(
-            TrustModelBackend.query_compiler, HistoricalGroupQueryCompiler,
-        )
-        self.assertTrue(TrustModelBackend.query_compiler.historical_fallback)
+    def test_historical_backend_path_is_gone(self):
+        import trusts.backends as backends_mod
+
+        self.assertFalse(hasattr(backends_mod, 'TrustModelBackend'))
+        self.assertFalse(hasattr(backends_mod, 'HistoricalGroupQueryCompiler'))
+        with self.assertRaises(ImportError):
+            from trusts.backends import TrustModelBackend  # noqa: F401
+        with self.assertRaises(ImportError):
+            from trusts.backends import HistoricalGroupQueryCompiler  # noqa: F401
 
     def test_core_backends_has_no_trustgroup_dependency(self):
         import trusts.core_backends as core_backends
@@ -65,3 +64,4 @@ class CoreBackendsBoundaryTest(SimpleTestCase):
         self.assertNotIn('trust_grant_q', imported)
         self.assertNotIn('HistoricalGroupQueryCompiler', imported)
         self.assertNotIn('TrustGroup', imported)
+        self.assertNotIn('kernel_config', imported)

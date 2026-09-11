@@ -21,7 +21,7 @@ Read more: http://django-trusts.readthedocs.org/en/latest/
 Supported versions
 ------------------
 
-The `1.0.0.dev2` development line requires **Python 3.12–3.14** and **Django 6.1**.
+The `1.0.0.dev3` development line requires **Python 3.12–3.14** and **Django 6.1**.
 Sources checked on 2026-09-07 and the rationale are in
 [docs/support-matrix.md](docs/support-matrix.md).
 
@@ -33,11 +33,16 @@ python -m pip install "Django>=6.1,<6.2"
 python -m pip install .
 ```
 
-Add `trusts` to `INSTALLED_APPS` and set:
+Do not list `'trusts'` as an implementation. Install a host
+`TrustsImplementationConfig` (Zero IIa `trusts.zero.apps.ZeroConfig` or
+GH IIb) and set that host's canonical backend path:
 
 ```
+INSTALLED_APPS = (
+    'trusts.zero.apps.ZeroConfig',
+)
 AUTHENTICATION_BACKENDS = (
-    'trusts.backends.TrustModelBackend',
+    'trusts.zero.backends.TrustModelBackend',
 )
 ```
 
@@ -65,7 +70,7 @@ stand-in green status.
 Development version
 -------------------
 
-The active package version is **1.0.0.dev2**. That is a development-line mark,
+The active package version is **1.0.0.dev3**. That is a development-line mark,
 not a production 1.0 release. See [docs/development-version.md](docs/development-version.md).
 
 Legacy baseline

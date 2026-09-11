@@ -19,17 +19,16 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig, isolate_live_registry, override_apps_ready
+from tests.apps import TestsConfig, isolate_live_registry, isolated_owner, live_config, override_apps_ready
 import tests as tests_module
 from tests.models import Category, Organization, Ticket
-from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
 from trusts.core import (
     Ref,
     RelationPlan,
     TrustsConfigurationError,
     TrustsRegistry,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     Trust,
     TrustUserPermission,
@@ -98,7 +97,7 @@ class _UnusableContents(object):
 
 class TicketContributionIdempotenceTest(SimpleTestCase):
     def setUp(self):
-        self.live_trusts = kernel_config()
+        self.live_trusts = live_config()
         self.live_registry = self.live_trusts.registry
         self.live_contributor = apps.get_app_config('trusts_tests')
         self.live_category_sentinel = getattr(
@@ -226,7 +225,7 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
     def test_new_appconfig_registry_receives_declaration_again(self):
         import trusts
 
-        new_trusts = TrustsAppConfig('trusts', trusts)
+        new_trusts = isolated_owner()
         self.assertEqual(new_trusts.registry.records, ())
         original = self.live_trusts.registry
         try:
@@ -310,7 +309,7 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateTicketContributionTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = kernel_config().registry
+        live = live_config().registry
         tup_ticket = _ticket_rows(live)
         tup_category = _category_rows(live)
         self.assertEqual(len(tup_ticket), 1)
@@ -396,7 +395,7 @@ class TicketPermittedRegistryTest(TestCase):
         }
 
     def test_live_declaration_uses_meta_reverse_not_hardcoded_accessor(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         rev = Ticket._meta.get_field('trust').remote_field.get_accessor_name()
         self.assertNotEqual(rev, 'tests_ticket_content')
         record = registry.plan_for(Ticket).records[0]
@@ -463,7 +462,7 @@ class TicketPermittedRegistryTest(TestCase):
             self.assertEqual(list(page), [self.ticket_a1])
 
     def test_no_tup_rows_deny_without_changing_registration(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         self.assertTrue(registry.plan_for(Ticket).records)
         TrustUserPermission.objects.all().delete()
         self._reload()
@@ -538,7 +537,7 @@ class TicketPermittedRegistryTest(TestCase):
         )
 
     def test_reader_uses_content_exists_not_filter_authorized(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         plan = registry.plan_for(
             Ticket.objects.all(), user=self.carol, permission=self.change,
         )
@@ -551,7 +550,7 @@ class TicketPermittedRegistryTest(TestCase):
         self.assertEqual(exists.call_count, 1)
 
     def test_junction_stays_on_old_path(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         self.assertTrue(registry.plan_for(Category).records)
         self.assertTrue(registry.plan_for(Trust).records)
         self.assertTrue(registry.plan_for(Ticket).records)

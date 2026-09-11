@@ -1,8 +1,9 @@
 """Canonical generic Trusts backend mixin.
 
 ``TrustModelBackendMixin`` plus the default ``PlanQueryCompiler`` wiring
-live here. Concrete TrustGroup SQL and ``TrustModelBackend`` stay in
-``trusts.backends`` for this compatibility step.
+live here. Concrete TrustGroup SQL and ``TrustModelBackend`` live under
+``trusts.zero.backends``. ``trusts.backends.TrustModelBackendMixin`` is
+a deprecated same-object alias. Do not collapse this module in Step III.
 """
 
 from django.apps import apps as django_apps
@@ -103,12 +104,9 @@ class TrustModelBackendMixin(object):
         return klass
 
     def _trusts_config(self):
-        from trusts.apps import implementation_for_class, kernel_config
+        from trusts.apps import implementation_for_class
 
-        owner = implementation_for_class(type(self), required=False)
-        if owner is not None:
-            return owner
-        return kernel_config()
+        return implementation_for_class(type(self), required=True)
 
     def _own_handle(self):
         config = self._trusts_config()

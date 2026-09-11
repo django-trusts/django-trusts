@@ -186,7 +186,7 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
     """Reusable implementation AppConfig helper. Not installed by core.
 
     Host implementations (Zero, GH, Windows, or a project app) subclass
-    this and declare ``trusts_backend_paths``. Core's kernel
+    this and declare ``trusts_backend_paths``. Core's library
     ``AppConfig`` is *not* a subclass; ``isinstance`` resolvers skip it.
     """
 
@@ -259,21 +259,20 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
         from trusts import checks as _trusts_checks  # noqa: F401
 
 
-class AppConfig(_TrustsRegistryOwner, DjangoAppConfig):
+class AppConfig(DjangoAppConfig):
+    """Library app metadata. Not a registry owner and not an implementation.
+
+    Listing ``'trusts'`` still loads this config (``default=True``) so
+    Django can import the inert ``trusts.models`` module and register
+    checks. Supported Zero IIa / GH IIb installs do not list ``'trusts'``.
+    Historical Trusts PKs live on ZeroConfig (``label='trusts'``).
+    """
+
     name = 'trusts'
     verbose_name = "Django Trusts Add-in"
     label = 'trusts_core'
     default = True
-    # Preserve AutoField if a later kernel model is added. Historical
-    # Trusts PKs live on ZeroConfig (label='trusts').
     default_auto_field = 'django.db.models.AutoField'
-
-    def __init__(self, *args, **kwargs):
-        super(AppConfig, self).__init__(*args, **kwargs)
-        self._init_registries()
-
-    def _configured_trusts_paths(self):
-        return _listed_mixin_paths()
 
     def ready(self):
         # Auto ModelAdmin registration does not import trusts.models.
@@ -283,42 +282,43 @@ class AppConfig(_TrustsRegistryOwner, DjangoAppConfig):
         if django_apps.is_installed('django.contrib.admin'):
             from trusts.admin import register_auto_modeladmins
             register_auto_modeladmins()
-        # Register system checks. Do not validate conditions here: raising
-        # from ready() would block shell, migrations, and recovery.
         from trusts import checks as _trusts_checks  # noqa: F401
 
-        # S3a: ensure one registry per configured Trusts path. Re-entry
-        # must not replace self.registries or any stored object. Freeze
-        # is applied by the supported handle surfaces after this Apps
-        # instance is ready, not by replacing stored objects here.
-        # Package Trust-as-content donation left this ready() on C2;
-        # ZeroConfig.ready() registers TUP+TGP on the kernel store.
-        paths = self._configured_trusts_paths()
-        for path in paths:
-            self._ensure(path)
+
+KERNEL_CONFIG_TOMBSTONE = (
+    "django-trusts 1.0.0.dev3 removed the transitional kernel registry "
+    "owner. kernel_config() is a failure-only tombstone.\n\n"
+    "Raw django-trusts-zero 2.0.0.dev0 is incompatible with this core "
+    "because it calls kernel_config() as a live store. Install "
+    "django-trusts-zero 2.0.0.dev2 or newer, or stay on the capped "
+    "old-code line (django-trusts-zero==2.0.0.dev1 with "
+    "django-trusts==1.0.0.dev2).\n\n"
+    "Supported implementations own registries through "
+    "TrustsImplementationConfig and must resolve them with "
+    "implementation_for_path() / implementation_for_class(). They "
+    "must not call kernel_config()."
+)
 
 
-def kernel_config(apps_registry=None):
-    """Return the kernel ``trusts.apps.AppConfig`` by class identity.
+def kernel_config(*args, **kwargs):
+    """Failure-only tombstone. Every call raises ``ImproperlyConfigured``.
 
-    Does not look up the string label ``'trusts'`` (that label is Zero
-    after C2). Optional ``apps_registry`` is an ``Apps`` instance; the
-    default is Django's global registry.
+    Raw Zero ``2.0.0.dev0`` reaches this message. Supported Zero IIa and
+    GH IIb never call it. Tombstone removal is ``1.0.0.dev4`` (parked).
     """
-    from django.apps import apps as django_apps
+    raise ImproperlyConfigured(KERNEL_CONFIG_TOMBSTONE)
 
-    registry = django_apps if apps_registry is None else apps_registry
-    matches = [
-        config for config in registry.get_app_configs()
-        if type(config) is AppConfig
-    ]
-    if len(matches) == 1:
-        return matches[0]
-    if not matches:
-        raise LookupError('No installed Trusts kernel AppConfig.')
-    raise LookupError(
-        'Multiple Trusts kernel AppConfig instances: %r' % (matches,)
-    )
+
+def configured_implementation_handles(apps_registry=None):
+    """Handles from every installed implementation, in owner then path order.
+
+    Empty when no ``TrustsImplementationConfig`` is installed. Does not
+    call ``kernel_config()``.
+    """
+    handles = []
+    for config in implementation_configs(apps_registry):
+        handles.extend(config.configured_handles())
+    return tuple(handles)
 
 
 def implementation_configs(apps_registry=None):
@@ -362,8 +362,9 @@ def implementation_for_class(cls, apps_registry=None, required=True):
 
     Ownership is exact class identity of an owned import path
     (``import_string(path) is cls``). ``required=False`` returns
-    ``None`` when no owner exists so the Step I mixin can fall back to
-    ``kernel_config()``. Duplicate owners always fail loud.
+    ``None`` when no owner exists. Duplicate owners always fail loud.
+    Supported mixins require an owner; they do not call
+    ``kernel_config()``.
     """
     from django.utils.module_loading import import_string
 

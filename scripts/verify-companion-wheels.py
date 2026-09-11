@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Companion wheel isolation: C2 kernel + Z1 Zero.
+"""Companion wheel isolation: core 1.0.0.dev3 + Zero IIa.
 
 Proves Zero RECORD does not own trusts/__init__.py or trusts/apps.py,
 and that both companion layouts work:
@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ZERO_HEAD = '41d07f40e676f75389b91219106440932d402b53'
+ZERO_HEAD = '94e0fa109a8a7a5f53a028438ada899cbc1be1ad'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
@@ -29,6 +29,7 @@ OVERLAY_PROBE = r'''
 import sys
 from pathlib import Path
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 
 if not settings.configured:
     settings.configure(
@@ -38,25 +39,28 @@ if not settings.configured:
         INSTALLED_APPS=[
             "django.contrib.contenttypes",
             "django.contrib.auth",
-            "trusts",
             "trusts.zero.apps.ZeroConfig",
         ],
-        AUTHENTICATION_BACKENDS=["trusts.backends.TrustModelBackend"],
+        AUTHENTICATION_BACKENDS=["trusts.zero.backends.TrustModelBackend"],
         DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
     )
 import django
 django.setup()
 import trusts
-from trusts.apps import AppConfig, kernel_config
-from trusts.models import Trust
+from trusts.apps import kernel_config
 from trusts.zero.apps import ZeroConfig
+from trusts.zero.models import Trust
 from django.apps import apps as django_apps
 
 assert ZeroConfig.label == "trusts"
-assert kernel_config().label == "trusts_core"
-assert type(kernel_config()) is AppConfig
 assert django_apps.get_app_config("trusts").name == "trusts.zero"
 assert Trust._meta.app_label == "trusts"
+try:
+    kernel_config()
+except ImproperlyConfigured as exc:
+    assert "2.0.0.dev0" in str(exc)
+else:
+    raise SystemExit("overlay kernel_config() must be a tombstone")
 init = Path(trusts.__file__)
 assert init.name == "__init__.py"
 assert (init.parent / "zero" / "apps.py").is_file()
@@ -129,7 +133,7 @@ def _assert_zero_record(wheel: Path) -> None:
 def main() -> int:
     zero_root = Path(os.environ.get('ZERO_CHECKOUT', ROOT / '.deps' / 'django-trusts-zero'))
     if not zero_root.is_dir():
-        raise SystemExit('ZERO_CHECKOUT missing: %s (expected Z1 %s)' % (
+        raise SystemExit('ZERO_CHECKOUT missing: %s (expected IIa %s)' % (
             zero_root, ZERO_HEAD,
         ))
 
@@ -137,7 +141,7 @@ def main() -> int:
     zero_wheel = _ensure_zero_wheel(zero_root)
     _assert_zero_record(zero_wheel)
 
-    tmp = Path(tempfile.mkdtemp(prefix='trusts-c2-companion-'))
+    tmp = Path(tempfile.mkdtemp(prefix='trusts-dev3-companion-'))
     try:
         extracted = tmp / 'zero-extracted'
         extracted.mkdir()

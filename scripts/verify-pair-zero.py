@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Matrix B: this C2 kernel + approved Zero Z1.
+"""Matrix B: core 1.0.0.dev3 + exact Zero IIa.
 
-Requires ZERO_CHECKOUT (django-trusts-zero at the pinned Z1 SHA) and an
-installed pair (editable or wheels). Django is configured here so the
-kernel tests.settings GH-only apps are not used.
+Requires ZERO_CHECKOUT (django-trusts-zero at
+``94e0fa109a8a7a5f53a028438ada899cbc1be1ad``) and an installed pair.
+Django is configured here so the kernel tests.settings host is not used.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def configure(db_path: Path) -> None:
     if settings.configured:
         raise SystemExit('Django already configured')
     settings.configure(
-        SECRET_KEY='c2-pair-zero',
+        SECRET_KEY='dev3-pair-iia',
         USE_TZ=True,
         DEFAULT_AUTO_FIELD='django.db.models.AutoField',
         SILENCED_SYSTEM_CHECKS=['fields.W342'],
@@ -54,12 +54,11 @@ def configure(db_path: Path) -> None:
             'django.contrib.auth',
             'django.contrib.sessions',
             'django.contrib.admin',
-            'trusts',
             'trusts.zero.apps.ZeroConfig',
         ],
         AUTHENTICATION_BACKENDS=[
             'django.contrib.auth.backends.ModelBackend',
-            'trusts.backends.TrustModelBackend',
+            'trusts.zero.backends.TrustModelBackend',
         ],
         DATABASES={
             'default': {
@@ -94,12 +93,13 @@ def main() -> int:
     if not (zero / 'trusts' / 'zero' / 'apps.py').is_file():
         raise SystemExit('ZERO_CHECKOUT missing trusts.zero at %s' % zero)
 
-    with tempfile.TemporaryDirectory(prefix='django-trusts-c2-pair-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='django-trusts-dev3-pair-') as tmp:
         db_path = Path(tmp) / 'pair.sqlite3'
         configure(db_path)
 
         import django
         from django.apps import apps as django_apps
+        from django.core.exceptions import ImproperlyConfigured
         from django.core.management import call_command
         from django.core.management.base import CommandError
         from django.db import connection
@@ -108,27 +108,28 @@ def main() -> int:
         django.setup()
         call_command('migrate', verbosity=0, interactive=False)
 
-        from trusts.apps import AppConfig as KernelAppConfig, kernel_config
+        from trusts.apps import kernel_config
         from trusts.zero.apps import ZeroConfig
+        from trusts.zero.backends import TrustModelBackend as ZeroBackend
         from trusts.zero.models import Trust as ZeroTrust
 
         labels = {config.label for config in django_apps.get_app_configs()}
-        if 'trusts_core' not in labels or 'trusts' not in labels:
-            raise SystemExit('expected labels trusts_core and trusts, got %r' % labels)
+        if 'trusts' not in labels:
+            raise SystemExit('expected Zero label trusts, got %r' % labels)
+        if 'trusts_core' in labels:
+            raise SystemExit('IIa pair must not install library label trusts_core')
 
         zero_config = django_apps.get_app_config('trusts')
         if zero_config.name != 'trusts.zero' or type(zero_config) is not ZeroConfig:
             raise SystemExit('get_app_config("trusts") is not ZeroConfig: %r' % (zero_config,))
 
-        kernel = kernel_config()
-        if type(kernel) is not KernelAppConfig:
-            raise SystemExit('kernel_config() is not kernel AppConfig: %r' % (kernel,))
-        if kernel.label != 'trusts_core' or kernel.name != 'trusts':
-            raise SystemExit('kernel name/label %s/%s' % (kernel.name, kernel.label))
-        if kernel is zero_config:
-            raise SystemExit('kernel_config() must not be ZeroConfig')
-        if list(kernel.get_models()):
-            raise SystemExit('kernel get_models() not empty: %r' % list(kernel.get_models()))
+        try:
+            kernel_config()
+        except ImproperlyConfigured as exc:
+            if '2.0.0.dev0' not in str(exc):
+                raise SystemExit('tombstone missing raw Zero version: %s' % exc)
+        else:
+            raise SystemExit('kernel_config() succeeded in the IIa pair')
 
         trusts = [m for m in django_apps.get_models() if m.__name__ == 'Trust']
         if len(trusts) != 1:
@@ -139,19 +140,26 @@ def main() -> int:
             raise SystemExit('get_model("trusts", "Trust") is not Zero Trust')
 
         import trusts.models as models_mod
-        if 'NotALegacyModel' in dir(models_mod):
-            raise SystemExit('dir(trusts.models) leaked a non-compat name')
-        if hasattr(models_mod, 'NotALegacyModel') or hasattr(models_mod, 'anything'):
-            raise SystemExit('hasattr on unknown name must be False')
+        if hasattr(models_mod, 'Trust') or 'Trust' in dir(models_mod):
+            raise SystemExit('inert trusts.models still exposes Trust')
         try:
-            getattr(models_mod, 'NotALegacyModel')
-        except AttributeError:
+            from trusts.models import Trust as ShimTrust
+        except (ImportError, AttributeError):
             pass
         else:
-            raise SystemExit('unknown shim name must raise AttributeError')
-        from trusts.models import Trust as ShimTrust
-        if ShimTrust is not ZeroTrust:
-            raise SystemExit('trusts.models.Trust is not the Zero class')
+            raise SystemExit('trusts.models.Trust must not forward: %r' % ShimTrust)
+
+        try:
+            from trusts.backends import TrustModelBackend
+        except ImportError:
+            pass
+        else:
+            raise SystemExit('core historical TrustModelBackend still imports: %r' % (
+                TrustModelBackend,
+            ))
+        from trusts.zero.backends import TrustModelBackend as ImportedZero
+        if ImportedZero is not ZeroBackend:
+            raise SystemExit('canonical Zero backend mismatch')
 
         loader = MigrationLoader(connection)
         keys = {key for key in loader.disk_migrations if key[0] == 'trusts'}
@@ -184,7 +192,6 @@ def main() -> int:
 
         print('pair-zero ok')
         print('django', django.get_version())
-        print('kernel', kernel.name, kernel.label)
         print('zero', zero_config.name, zero_config.label)
         print('Trust', ZeroTrust, ZeroTrust._meta.app_label)
         print('loader', sorted(keys))

@@ -1,8 +1,9 @@
-"""C2 + Z1 settings for the preserved legacy core suite.
+"""IIa pair settings for the preserved legacy core suite.
 
-C1 ran this layout with ``INSTALLED_APPS=['trusts']`` only. After C2 the
-kernel label is ``trusts_core``; Zero owns ``label='trusts'`` and the
-historical test-app migrations that depend on ``trusts.0001_initial``.
+Supported Zero IIa does not list ``'trusts'``. Zero owns
+``label='trusts'`` and the historical test-app migrations that depend
+on ``trusts.0001_initial``. Core is a library; ``kernel_config()`` is a
+tombstone.
 """
 from os.path import dirname, join
 
@@ -23,13 +24,12 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'trusts',
     'trusts.zero.apps.ZeroConfig',
     'tests.apps.TestsConfig',
 )
 
 AUTHENTICATION_BACKENDS = (
-    'trusts.backends.TrustModelBackend',
+    'trusts.zero.backends.TrustModelBackend',
 )
 
 MIDDLEWARE = (

@@ -19,6 +19,7 @@ INSTALLED_APPS = (
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'trusts',
+    'tests.kernel_host.apps.KernelHostConfig',
     'tests.gh_permissions.apps.GhPermissionsConfig',
     'tests.apps.TestsConfig',
 )
@@ -29,7 +30,7 @@ MIGRATION_MODULES = {
 }
 
 AUTHENTICATION_BACKENDS = (
-    'trusts.backends.TrustModelBackend',
+    'tests.backends.HostTrustModelBackend',
 )
 
 MIDDLEWARE = (

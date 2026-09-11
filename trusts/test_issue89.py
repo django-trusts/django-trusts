@@ -20,6 +20,8 @@ from tests.apps import (
     TestsConfig,
     forget_models,
     install_writable_registry,
+    isolated_owner,
+    live_config,
     override_apps_ready,
 )
 import tests as tests_module
@@ -31,7 +33,6 @@ from tests.models import (
     TestGroupJunction,
     Ticket,
 )
-from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
 from trusts.checks import (
     CHECK_ID_MISSING_DECLARATION,
     CHECK_ID_LEGACY_CALLBACK_WARNING,
@@ -40,10 +41,10 @@ from trusts.checks import (
     check_query_compilers,
 )
 from trusts.core import Ref, TrustsConfigurationError, TrustsRegistry
-from trusts.models import Content, Junction, Trust, TrustUserPermission
+from trusts.zero.models import Content, Junction, Trust, TrustUserPermission
 
 
-CONCRETE = 'trusts.backends.TrustModelBackend'
+CONCRETE = 'trusts.zero.backends.TrustModelBackend'
 MIXIN = 'tests.backends.MixinOnlyBackend'
 HOST = 'tests.backends.HostTrustModelBackend'
 
@@ -113,7 +114,7 @@ def _forget_leftover_detectable_models():
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = kernel_config()
+        self.live = live_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -350,7 +351,7 @@ class LiveFreezeLifecycleTest(_RegistryRestoreMixin, SimpleTestCase):
     def test_standalone_appconfig_does_not_auto_freeze(self):
         import trusts
 
-        isolated = TrustsAppConfig('trusts', trusts)
+        isolated = isolated_owner()
         self.assertFalse(isolated._apps_instance_ready())
         first = isolated.registry
         self.assertFalse(first.frozen)
@@ -588,7 +589,7 @@ class MissingDeclarationCheckTest(_RegistryRestoreMixin, TestCase):
             call_command('check', 'trusts', stdout=out, stderr=err)
             subset = out.getvalue() + err.getvalue()
         self.assertNotIn(CHECK_ID_MISSING_DECLARATION, subset)
-        trusts_only = [kernel_config()]
+        trusts_only = [live_config()]
         with self.assertNumQueries(0):
             subset_messages = check_missing_declarations(app_configs=trusts_only)
         self.assertEqual(_e003(subset_messages), [])

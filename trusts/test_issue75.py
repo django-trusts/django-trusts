@@ -21,6 +21,8 @@ from tests.apps import (
     apply_zero_trust_donation,
     install_writable_registry,
     isolate_live_registry,
+    isolated_owner,
+    live_config,
     override_apps_ready,
 )
 from tests.backends import (
@@ -32,12 +34,8 @@ from tests.backends import (
 )
 import tests as tests_module
 from tests.models import Category, Organization, Ticket
-from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
-from trusts.backends import (
-    HistoricalGroupQueryCompiler,
-    TrustModelBackend,
-    TrustModelBackendMixin,
-)
+from trusts.backends import TrustModelBackendMixin
+from trusts.zero.backends import HistoricalGroupQueryCompiler, TrustModelBackend
 from trusts.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.core import (
     BackendHandle,
@@ -49,7 +47,7 @@ from trusts.core import (
     compiler_for_class,
     granted,
 )
-from trusts.models import Content, Trust, TrustUserPermission
+from trusts.zero.models import Content, Trust, TrustUserPermission
 from trusts.query import trust_grant_q
 from trusts.tests import (
     enable_local_group_grant,
@@ -57,7 +55,7 @@ from trusts.tests import (
 )
 
 
-CONCRETE = 'trusts.backends.TrustModelBackend'
+CONCRETE = 'trusts.zero.backends.TrustModelBackend'
 MIXIN = 'tests.backends.MixinOnlyBackend'
 HOST = 'tests.backends.HostTrustModelBackend'
 ALIASED = 'tests.backends.AliasedTrustModelBackend'
@@ -129,7 +127,7 @@ def _evaluate(handle, queryset, user, permission):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = kernel_config()
+        self.live = live_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -245,7 +243,7 @@ class PathScopedRegistryStoreTest(_RegistryRestoreMixin, SimpleTestCase):
     def test_new_appconfig_gets_its_own_store(self):
         import trusts
 
-        isolated = TrustsAppConfig('trusts', trusts)
+        isolated = isolated_owner()
         self.assertEqual(isolated.registries, {})
         first = isolated.registry
         self.assertIs(isolated.registries[CONCRETE], first)
@@ -293,7 +291,7 @@ class PathScopedRegistryStoreTest(_RegistryRestoreMixin, SimpleTestCase):
 )
 class IsolatedAppsPathStoreTest(SimpleTestCase):
     def test_isolate_apps_without_trusts_does_not_donate(self):
-        live = kernel_config()
+        live = live_config()
         before = live.registry.records
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
         contributor = TestsConfig('tests', tests_module)

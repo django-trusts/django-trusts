@@ -9,8 +9,9 @@ permissions:
   contents: read
 
 env:
-  # Approved unmerged Zero Z1. Do not merge C2 or Z1 alone.
-  COMPANION_ZERO_SHA: 41d07f40e676f75389b91219106440932d402b53
+  # Exact Zero IIa merge. Do not pair Step III with raw Zero or Z0-cap.
+  COMPANION_ZERO_SHA: 94e0fa109a8a7a5f53a028438ada899cbc1be1ad
+  RAW_ZERO_SHA: 41d07f40e676f75389b91219106440932d402b53
 
 jobs:
   tests:
@@ -78,13 +79,12 @@ jobs:
         DJANGO_SETTINGS_MODULE: tests.fold_settings
       run: python -m tests.runtests trusts.test_issue100
 
-  pair-z1:
-    name: pair with approved Z1
+  pair-iia:
+    name: pair with Zero IIa
     runs-on: ubuntu-latest
     env:
       ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero
       KERNEL_CHECKOUT: ${{ github.workspace }}
-      TRUSTS_ZERO_SKIP_C2_SHAPE: "1"
     steps:
     - uses: actions/checkout@v4
     - uses: actions/checkout@v4
@@ -95,7 +95,7 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Install C2 kernel then Z1
+    - name: Install core 1.0.0.dev3 then Zero IIa
       run: |
         python -m pip install --upgrade pip
         python -m pip install "Django>=6.1,<6.2" coverage
@@ -103,13 +103,38 @@ jobs:
         python -m pip install -e .deps/django-trusts-zero --config-settings editable_mode=compat
     - name: Matrix B pair proofs
       run: python scripts/verify-pair-zero.py
-    - name: Legacy core suite against C2+Z1
+    - name: Legacy core suite against IIa
       run: python scripts/run-core-pair-tests.py
-    - name: Zero C2-valid tests + fresh install
+    - name: Zero IIa tests + fresh install
       run: |
         python scripts/run-z1-pair-tests.py
         cd .deps/django-trusts-zero
         python scripts/verify-fresh-install.py
+
+  raw-zero-tombstone:
+    name: raw Zero 2.0.0.dev0 hits tombstone
+    runs-on: ubuntu-latest
+    env:
+      ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero
+      KERNEL_CHECKOUT: ${{ github.workspace }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        repository: django-trusts/django-trusts-zero
+        ref: ${{ env.RAW_ZERO_SHA }}
+        path: .deps/django-trusts-zero
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install core then raw Zero 2.0.0.dev0
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "Django>=6.1,<6.2"
+        python -m pip install -e . --config-settings editable_mode=compat
+        python -m pip install -e .deps/django-trusts-zero --config-settings editable_mode=compat
+    - name: Prove failure-only kernel_config tombstone
+      run: python scripts/verify-raw-zero-tombstone.py
 
   package:
     name: package

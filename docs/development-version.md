@@ -1,12 +1,13 @@
-# Development version 1.0.0.dev2
+# Development version 1.0.0.dev3
 
-The revived Trusts development line is **1.0.0.dev2**. This is a
+The revived Trusts development line is **1.0.0.dev3**. This is a
 development-version mark only. It is not a production 1.0 release, not a PyPI
 publication, and not a claim that the declarative permission model has been
-validated. `1.0.0.dev2` identifies the Step I implementation-owned
-registry bridge (#108). `1.0.0.dev1` remains the merged
-`trusts.core_backends` checkpoint (#103 / #106). Older `1.0.0.dev0`
-artifacts do not.
+validated. `1.0.0.dev3` identifies the Step III library cutover and
+failure-only `kernel_config()` tombstone (#111). `1.0.0.dev2` remains the
+merged Step I implementation-owned registry bridge (#108). `1.0.0.dev1`
+remains the merged `trusts.core_backends` checkpoint (#103 / #106).
+Tombstone removal is parked at `1.0.0.dev4`.
 
 ## Why a new major version
 
@@ -36,39 +37,18 @@ API and method changes for the modernization are recorded in
 - No move or replacement of existing tags, including `v0.10.3` and
   `legacy-pre-modernization`
 - No permission-model redesign
+- No `1.0.0.dev4` tombstone removal
 
 ## Internal registration and projection primitive
 
-`trusts.core` adds an isolated `TrustsRegistry`, root-relative `Ref`
-(issue #57), and one common relation plan with three projections
-(issue #60 / #65). The live instance is owned by `trusts.apps.AppConfig`
-(created in `__init__`, not replaced by `ready()`). Issue #67 migrates
-the trustee half of `ContentQuerySet.permitted` for the explicitly
-registered Category terminal; issue #70 adds the package-owned
-Trust-as-content declaration so `Trust.objects.permitted` uses the same
-plan; issue #72 adds the test-app Ticket declaration so
-`Ticket.objects.permitted` uses the same plan; issue #75 scopes that
-store per configured backend path and aggregates `.permitted()`;
-issue #77 migrates declared-terminal backend `has_perm` / enumeration
-onto the same compiler handles, including registered ordinary
-non-`Content` models, with historical fallback only on the concrete
-compiler capability; issue #80 moves the
-`filter_by_user_content_perm` support gate onto
-`any_plan_records` while keeping `trust_grant_q` create-under-Trust
-semantics; issue #85 contributes the Junction-backed Group terminal
-and migrates Group object authorization onto the registered J1 plan;
-issue #92 adds optional `Along` on `register()` and one SQLite
-`GrantReach` renderer for bounded walk-site reachability.
-Issue #54 C1 adds generic public seams
-(`AuthorizedQuerySet.authorized` / `AuthorizedManager`,
-`filter_authorized_scopes`, `ConditionLookup` /
-`set_condition_lookup`, and label-agnostic `kernel_config()`)
-without changing the app label, moving models, or deleting the
-legacy compiler.
-Public signatures and one-path results are
-unchanged.
-The API is not re-exported from `trusts` and does not add a schema or
-migration. See [core-registry.md](core-registry.md).
+`trusts.core` keeps an isolated `TrustsRegistry`, root-relative `Ref`,
+and noun-neutral compiler/query machinery. Live registries are owned by
+installed `TrustsImplementationConfig` subclasses (Zero IIa, GH IIb, or a
+project host). `kernel_config()` is a failure-only tombstone.
+`trusts.core_backends.TrustModelBackendMixin` remains, with
+`trusts.backends.TrustModelBackendMixin` as the same-object deprecated
+alias. Historical concrete models and `TrustModelBackend` live under
+`trusts.zero.*`. See [core-registry.md](core-registry.md).
 
 ## Preserved legacy source
 
@@ -90,8 +70,8 @@ version.
 
 | Location | Role | Value |
 | --- | --- | --- |
-| `pyproject.toml` | Authoritative package metadata | `1.0.0.dev2` |
+| `pyproject.toml` | Authoritative package metadata | `1.0.0.dev3` |
 | `setup.py` | Thin wrapper; no duplicate version field | defers to `pyproject.toml` |
-| `docs/source/conf.py` | Sphinx `version` / `release` | `1.0.0.dev2` |
+| `docs/source/conf.py` | Sphinx `version` / `release` | `1.0.0.dev3` |
 | `trusts/__init__.py` | No `__version__` | unchanged |
 | `docs/legacy-baseline.md`, `docs/legacy/baseline.json` | Historical 0.10.3 record | preserved |

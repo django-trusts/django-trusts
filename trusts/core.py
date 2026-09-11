@@ -258,8 +258,8 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
     if handles is None:
-        from trusts.apps import kernel_config
-        handles = kernel_config().configured_handles()
+        from trusts.apps import configured_implementation_handles
+        handles = configured_implementation_handles()
     if not handles:
         return queryset.none()
 

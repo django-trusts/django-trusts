@@ -2,6 +2,53 @@ from contextlib import contextmanager
 
 from django.apps import AppConfig
 
+from trusts.apps import TrustsImplementationConfig
+
+
+ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
+
+
+class IsolatedOwnerConfig(TrustsImplementationConfig):
+    """Unbound pair-test owner. Not installed; constructed in isolation.
+
+    ``ready()`` only ensures local registries. It does not validate against
+    the live ZeroConfig that already owns the canonical Zero path.
+    """
+
+    name = 'tests'
+    label = 'trusts_isolated_owner'
+    default = False
+    trusts_backend_paths = (ZERO_BACKEND,)
+
+    def ready(self):
+        for path in self.owned_backend_paths():
+            self._ensure(path)
+
+
+def isolated_owner():
+    """Construct a standalone implementation owner for isolation tests."""
+    import tests as tests_module
+
+    return IsolatedOwnerConfig('tests', tests_module)
+
+
+def live_config(apps_registry=None):
+    """The unique installed ``TrustsImplementationConfig``.
+
+    Kernel-only tests get ``KernelHostConfig``. The IIa pair gets
+    ``ZeroConfig``. Does not call ``kernel_config()``.
+    """
+    from trusts.apps import implementation_configs
+    from trusts.core import TrustsConfigurationError
+
+    configs = implementation_configs(apps_registry)
+    if len(configs) == 1:
+        return configs[0]
+    raise TrustsConfigurationError(
+        'live_config() needs exactly one implementation owner; got %r'
+        % (configs,)
+    )
+
 
 def junction_content_field(junction_model):
     """Return the Junction→content field from the concrete Junction contract.
@@ -39,30 +86,36 @@ class TestsConfig(AppConfig):
 
     def ready(self):
         # Contribute TUP→Trust←Category, TUP→Trust←Ticket, and the
-        # Junction-backed Group terminal to the package-owned registry
-        # that belongs to *this* Apps instance. isolate_apps() constructs
-        # a second TestsConfig whose apps registry does not include
-        # trusts; that instance must not donate onto the live registry.
-        if getattr(self, 'apps', None) is None or not self.apps.is_installed('trusts'):
+        # Junction-backed Group terminal to the implementation-owned
+        # registry that belongs to *this* Apps instance. isolate_apps()
+        # constructs a second TestsConfig whose apps registry has no
+        # implementation owner; that instance must not donate onto the
+        # live registry. Never call kernel_config().
+        if getattr(self, 'apps', None) is None:
             return
 
-        from trusts.apps import kernel_config
-        try:
-            config = kernel_config(self.apps)
-        except LookupError:
+        from trusts.apps import implementation_configs
+        from trusts.core import TrustsConfigurationError
+
+        owners = implementation_configs(self.apps)
+        if len(owners) != 1:
             return
+        config = owners[0]
 
         try:
+            TrustUserPermission = self.apps.get_model('trusts', 'TrustUserPermission')
             from tests.models import Category, TestGroupJunction, Ticket
             from trusts.core import Ref
-            from trusts.models import TrustUserPermission
-        except ImportError:
+        except (LookupError, ImportError):
             return
 
         # Exact handle. With one Trusts path this is the unique registry
         # (``config.registry is handle.registry``). With several, omission
         # fails before writing.
-        backend = config.configured_backend()
+        try:
+            backend = config.configured_backend()
+        except TrustsConfigurationError:
+            return
         registry = backend.registry
 
         # Instance-local sentinels: one per contribution, identity
@@ -170,16 +223,16 @@ def forget_models(*model_classes):
 
 
 def apply_zero_trust_donation(config):
-    """Donate package Trust-as-content the way Zero does on C2.
+    """Donate package Trust-as-content the way Zero does on IIa.
 
-    Kernel ``ready()`` no longer imports models. Tests that need the
+    Implementation ``ready()`` owns live donation. Tests that need the
     historical TUP→Trust declaration on a standalone or swapped store
-    call this instead of expecting ``AppConfig.ready()`` to donate.
+    call this instead of expecting a core AppConfig to donate.
     Mixin-only paths are skipped (C1 package donation rule).
     """
     from django.utils.module_loading import import_string
 
-    from trusts.backends import TrustModelBackend
+    from trusts.zero.backends import TrustModelBackend
     from trusts.zero.models import register_zero_relations
 
     paths = config._configured_trusts_paths()

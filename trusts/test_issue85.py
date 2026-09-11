@@ -24,20 +24,21 @@ from tests.apps import (
     isolate_live_registry,
     junction_content_field,
     junction_group_content_ref,
+    isolated_owner,
+    live_config,
     override_apps_ready,
 )
 from tests.backends import MixinOnlyBackend
 import tests as tests_module
 from tests.models import Category, Organization, TestGroupJunction, Ticket
-from trusts.apps import AppConfig as TrustsAppConfig, kernel_config
-from trusts.backends import TrustModelBackend
+from trusts.zero.backends import TrustModelBackend
 from trusts.core import (
     Ref,
     RelationPlan,
     TrustsConfigurationError,
     TrustsRegistry,
 )
-from trusts.models import (
+from trusts.zero.models import (
     Content,
     Trust,
     TrustUserPermission,
@@ -49,7 +50,7 @@ from trusts.tests import (
 )
 
 
-CONCRETE = 'trusts.backends.TrustModelBackend'
+CONCRETE = 'trusts.zero.backends.TrustModelBackend'
 MIXIN = 'tests.backends.MixinOnlyBackend'
 
 
@@ -134,7 +135,7 @@ class _UnusableContents(object):
 class _RegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
-        self.live = kernel_config()
+        self.live = live_config()
         self.saved_registries = dict(self.live.registries)
         self.saved_trust_sentinel = getattr(
             self.live, '_trusts_tup_trust_registry_id', None
@@ -176,7 +177,7 @@ class _RegistryRestoreMixin(object):
 
 class GroupContributionIdempotenceTest(SimpleTestCase):
     def setUp(self):
-        self.live_trusts = kernel_config()
+        self.live_trusts = live_config()
         self.live_registry = self.live_trusts.registry
         self.live_contributor = apps.get_app_config('trusts_tests')
         self.live_category_sentinel = getattr(
@@ -289,7 +290,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
     def test_new_appconfig_registry_receives_declaration_again(self):
         import trusts
 
-        new_trusts = TrustsAppConfig('trusts', trusts)
+        new_trusts = isolated_owner()
         original = self.live_registry
         try:
             isolate_live_registry(self.live_trusts, new_trusts.registry)
@@ -364,7 +365,7 @@ class GroupContributionIdempotenceTest(SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateGroupContributionTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = kernel_config().registry
+        live = live_config().registry
         tup_group = _group_rows(live)
         self.assertEqual(len(tup_group), 1)
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
@@ -481,7 +482,7 @@ class GroupAuthorizationRegistryTest(_UsersMixin, TestCase):
         self._reload()
 
     def test_live_declaration_is_on_the_configured_handle(self):
-        handle = kernel_config().configured_backend()
+        handle = live_config().configured_backend()
         self.assertTrue(handle.registry.plan_for(Group).records)
         self.assertFalse(handle.registry.plan_for(TestGroupJunction).records)
         rev, content_name, lookup = _j1_lookup()
@@ -622,7 +623,7 @@ class GroupAuthorizationRegistryTest(_UsersMixin, TestCase):
             self.assertIn(self.change_code, self.alice.get_all_permissions(qs))
         with self.assertNumQueries(1):
             self.assertIn(self.change_code, self.carol.get_group_permissions(qs))
-        handle = kernel_config().configured_backend()
+        handle = live_config().configured_backend()
         plan = handle.registry.plan_for(qs, user=self.alice)
         with self.assertNumQueries(1):
             self.assertTrue(
@@ -737,7 +738,7 @@ class GroupPlanUsesContentExistsTest(_UsersMixin, TestCase):
         self._reload()
 
     def test_authorization_uses_content_exists_not_filter_authorized(self):
-        registry = kernel_config().registry
+        registry = live_config().registry
         plan = registry.plan_for(
             self.group, user=self.alice, permission=self.change,
         )

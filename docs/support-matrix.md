@@ -2,7 +2,7 @@
 
 Recorded on **2026-09-07** while implementing #14 and the coordinated
 Django/CI work from #15. This is the current development-line claim for
-`1.0.0.dev2`. It is not a published PyPI release.
+`1.0.0.dev3`. It is not a published PyPI release.
 
 A Python-only intermediate against Django 1.8 is not a supported or testable
 state: Django 1.8 does not install on current CPython, and the preserved

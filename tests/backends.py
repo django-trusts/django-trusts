@@ -3,7 +3,7 @@
 from django.contrib.auth.backends import ModelBackend
 from django.db.models import Q
 
-from trusts.backends import TrustModelBackend, TrustModelBackendMixin
+from trusts.backends import TrustModelBackendMixin
 from trusts.query import group_local_grant_exists
 
 
@@ -29,18 +29,18 @@ class MixinOnlyBackend(TrustModelBackendMixin, ModelBackend):
     """Listed mixin-only path: plan compiler, no package Trust-as-content."""
 
 
-class HostTrustModelBackend(TrustModelBackend):
-    """Concrete subclass: historical group compiler and T2 Trust-as-content."""
+class HostTrustModelBackend(TrustModelBackendMixin, ModelBackend):
+    """Kernel-only host backend. Pair historical SQL lives on Zero."""
 
 
-class GroupOnlyBackend(TrustModelBackend):
-    """Concrete subclass whose complete proof is historical group only."""
+class GroupOnlyBackend(TrustModelBackendMixin, ModelBackend):
+    """Mixin host whose complete proof is historical group only."""
 
     query_compiler = GroupOnlyQueryCompiler()
 
 
 # Same class under a second import path (alias-ambiguity tests).
-AliasedTrustModelBackend = TrustModelBackend
+AliasedTrustModelBackend = HostTrustModelBackend
 
 
 class MissingCompilerBackend(TrustModelBackendMixin, ModelBackend):
