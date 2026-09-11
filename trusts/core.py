@@ -372,13 +372,18 @@ def _resolved_hop(field, role, path):
     return related._meta.concrete_model, attname
 
 
+_SUFFIX_KINDS = frozenset(('single', 'reverse_o2o', 'reverse_o2m'))
+_SUFFIX_MAX = 2
+
+
 def _resolve_path(root, path, role, *, trailing_reverse=False):
     """Validate a root-relative path and return lookup metadata.
 
     User and permission paths remain one direct single-valued hop.
     A content path may be that same direct hop, or one or more forward
-    single-valued hops followed by exactly one final reverse
-    one-to-many hop.
+    single-valued hops, then a reverse one-to-many gateway, then zero
+    to two suffix hops. A suffix hop is a forward single-valued,
+    reverse one-to-one, or reverse one-to-many relation.
     """
     if not path:
         raise TrustsConfigurationError(
@@ -389,7 +394,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False):
     current = root
     related = None
     target_attname = None
-    saw_reverse = False
+    gateway_index = None
     n = len(path)
 
     for index, name in enumerate(path):
@@ -421,33 +426,75 @@ def _resolve_path(root, path, role, *, trailing_reverse=False):
                 'foreign keys are not supported.'
                 % (role, _path_text(path), name, current._meta.label)
             )
-        if kind == 'reverse_o2o':
-            raise TrustsConfigurationError(
-                '%s path %r uses reverse one-to-one relation %r on %s; '
-                'reverse one-to-one traversals are not supported.'
-                % (role, _path_text(path), name, current._meta.label)
-            )
-        if kind in ('reverse_o2m', 'reverse'):
-            allowed_final = (
-                trailing_reverse
-                and is_last
-                and index > 0
-                and kind == 'reverse_o2m'
-            )
-            if not allowed_final:
-                if not is_last:
+        if trailing_reverse:
+            if gateway_index is None:
+                if kind == 'single':
+                    pass
+                elif kind == 'reverse_o2m' and index > 0:
+                    gateway_index = index
+                elif kind == 'reverse_o2o':
                     raise TrustsConfigurationError(
-                        '%s path %r uses reverse relation %r on %s before '
-                        'the final hop; reverse relations are only '
-                        'supported as the final content hop.'
+                        '%s path %r uses reverse one-to-one relation %r on '
+                        '%s; reverse one-to-one is not a valid gateway.'
                         % (role, _path_text(path), name, current._meta.label)
                     )
+                elif kind in ('reverse_o2m', 'reverse'):
+                    if not is_last:
+                        raise TrustsConfigurationError(
+                            '%s path %r uses reverse relation %r on %s '
+                            'before the gateway; reverse relations require '
+                            'a preceding forward hop.'
+                            % (
+                                role, _path_text(path), name,
+                                current._meta.label,
+                            )
+                        )
+                    raise TrustsConfigurationError(
+                        '%s path %r uses reverse relation %r on %s; '
+                        'multi-valued and reverse traversals are not '
+                        'supported.'
+                        % (role, _path_text(path), name, current._meta.label)
+                    )
+                else:
+                    raise TrustsConfigurationError(
+                        '%s path %r uses unsupported field %r on %s.'
+                        % (role, _path_text(path), name, current._meta.label)
+                    )
+            else:
+                suffix_depth = index - gateway_index
+                if suffix_depth > _SUFFIX_MAX:
+                    raise TrustsConfigurationError(
+                        '%s path %r has more than two hops after the '
+                        'reverse one-to-many gateway.'
+                        % (role, _path_text(path))
+                    )
+                if kind not in _SUFFIX_KINDS:
+                    raise TrustsConfigurationError(
+                        '%s path %r uses unsupported field %r on %s after '
+                        'the gateway; suffix hops must be forward '
+                        'single-valued, reverse one-to-one, or reverse '
+                        'one-to-many.'
+                        % (role, _path_text(path), name, current._meta.label)
+                    )
+        elif kind in ('reverse_o2o', 'reverse_o2m', 'reverse'):
+            if kind == 'reverse_o2o':
                 raise TrustsConfigurationError(
-                    '%s path %r uses reverse relation %r on %s; multi-valued '
-                    'and reverse traversals are not supported.'
+                    '%s path %r uses reverse one-to-one relation %r on %s; '
+                    'reverse one-to-one traversals are not supported.'
                     % (role, _path_text(path), name, current._meta.label)
                 )
-            saw_reverse = True
+            if not is_last:
+                raise TrustsConfigurationError(
+                    '%s path %r uses reverse relation %r on %s before '
+                    'the final hop; reverse relations are only '
+                    'supported as the final content hop.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            raise TrustsConfigurationError(
+                '%s path %r uses reverse relation %r on %s; multi-valued '
+                'and reverse traversals are not supported.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
         elif kind != 'single':
             raise TrustsConfigurationError(
                 '%s path %r uses unsupported field %r on %s.'
@@ -458,7 +505,7 @@ def _resolve_path(root, path, role, *, trailing_reverse=False):
         if not is_last:
             current = related
 
-    if n != 1 and not saw_reverse:
+    if n != 1 and gateway_index is None:
         if trailing_reverse:
             raise TrustsConfigurationError(
                 '%s path %r is not a direct single-valued relation or a '

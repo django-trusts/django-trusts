@@ -290,12 +290,6 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
                 user=extra.user,
                 permission=extra.permission,
             )
-        with self.assertRaisesRegex(TrustsConfigurationError, r'before the final hop'):
-            registry.register(
-                content=j.folder.documents.alt_folder,
-                user=j.user,
-                permission=j.permission,
-            )
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'reverse one-to-one',
         ):
@@ -324,7 +318,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
                 user=extra.user,
                 permission=extra.permission,
             )
-        with self.assertRaisesRegex(TrustsConfigurationError, r'before the final hop'):
+        with self.assertRaisesRegex(TrustsConfigurationError, r'scalar'):
             registry.register(
                 content=j.folder.documents.title,
                 user=j.user,
