@@ -2219,6 +2219,8 @@ even when a consumer schema later adds a nonnegative CHECK.
 | `registry.register_strategy(OrderedFold(...))` | Absent | Closed typed strategy; zero-SQL validation |
 | `registry.register(...)` AnyPath | `EXISTS` | Unchanged SQL and results |
 | Same content terminal AnyPath + OrderedFold | N/A | `TrustsConfigurationError`, zero SQL |
+| Permission `content_type` not `ContentType.pk` | N/A | `TrustsConfigurationError`, zero SQL |
+| Codename-only permission model | N/A | Valid (no `content_type` join) |
 | `.authorized(user, permission_instance)` on OrderedFold content | `none()` (undeclared) | Shared `Allowed` remaining-bits predicate |
 | Raw `int` / `str` permission on registry / `.authorized` | `TrustsConfigurationError` | Unchanged rejection |
 | Independent backends | Boolean OR | Unchanged OR; OrderedFold deny stays local |
