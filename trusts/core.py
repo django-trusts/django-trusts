@@ -9,7 +9,8 @@ terminal: permission enumeration, object authorization (SQL ``EXISTS``
 membership over that enumeration), and authorized-content filtering.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
-registry from ``trusts``.
+registry from ``trusts``. Generic compiler protocol, the default plan
+compiler, ``granted()``, and configuration/compiler exceptions live here.
 """
 
 from dataclasses import dataclass
@@ -18,13 +19,87 @@ from operator import or_
 
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Exists, Model, OuterRef
+from django.db.models import Exists, Model, OuterRef, Q
 from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
 
 
 class TrustsConfigurationError(Exception):
     """Malformed or unsupported ``TrustsRegistry`` registration."""
+
+
+class TrustsCompilerError(TrustsConfigurationError):
+    """Configured Trusts backend is missing or has a malformed query compiler."""
+
+
+class QueryCompiler(object):
+    """Duck-typed compiler protocol. Not a registry or store."""
+
+    def complete_exists(self, plan, candidates, user, permission):
+        raise NotImplementedError
+
+    def group_exists(self, plan, candidates, user, permission):
+        raise NotImplementedError
+
+
+class PlanQueryCompiler(object):
+    """Immutable mixin default: registered plan only, no historical group."""
+
+    def complete_exists(self, plan, candidates, user, permission):
+        if not plan.records:
+            return None
+        return plan.content_exists(user, permission)
+
+    def group_exists(self, plan, candidates, user, permission):
+        return None
+
+
+def compiler_for_class(cls):
+    """Resolve the class-owned compiler. Does not construct a backend instance."""
+    compiler = getattr(cls, 'query_compiler', None)
+    if compiler is None:
+        raise TrustsCompilerError('%r is not query-capable' % (cls,))
+    complete = getattr(compiler, 'complete_exists', None)
+    group = getattr(compiler, 'group_exists', None)
+    if not callable(complete) or not callable(group):
+        raise TrustsCompilerError('%r is not query-capable' % (cls,))
+    return compiler
+
+
+def _as_q(predicate):
+    if predicate is None:
+        return None
+    if isinstance(predicate, Q):
+        return predicate
+    return Q(predicate)
+
+
+def granted(handles, candidates, user, permission, *, kind='complete'):
+    """OR each applicable handle compiler's complete (or group) predicate.
+
+    Noun-blind: this builder does not know Trust, Group, Guardian, or
+    ceiling. A valid compiler returning ``None`` is inapplicable and is
+    omitted. Compiler exceptions propagate. An empty result is ``None``
+    so the caller may use the transitional undeclared fallback.
+    """
+    parts = []
+    for handle in handles:
+        plan = handle.registry.plan_for(
+            candidates, user=user, permission=permission,
+        )
+        if kind == 'complete':
+            fn = handle.compiler.complete_exists
+        else:
+            fn = handle.compiler.group_exists
+        part = _as_q(fn(plan, candidates, user, permission))
+        if part is None:
+            continue
+        parts.append(part)
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return reduce(or_, parts)
 
 
 def _is_model_class(value):
@@ -654,3 +729,12 @@ class TrustsRegistry(object):
         return self.plan_for(
             queryset, user=user, permission=permission,
         ).filter_content(queryset, user, permission)
+
+
+@dataclass(frozen=True, slots=True)
+class BackendHandle:
+    """Exact configured path, exact registry identity, and class compiler."""
+
+    path: str
+    registry: object
+    compiler: object

@@ -19,7 +19,11 @@ class TestsConfig(AppConfig):
         from trusts.core import Ref
         from trusts.models import TrustUserPermission
 
-        registry = self.apps.get_app_config('trusts').registry
+        # Exact handle. With one Trusts path this is the unique registry
+        # (``config.registry is handle.registry``). With several, omission
+        # fails before writing.
+        backend = self.apps.get_app_config('trusts').configured_backend()
+        registry = backend.registry
 
         # Instance-local sentinels: one per contribution, identity
         # comparison only, set only after register() succeeds. Never
