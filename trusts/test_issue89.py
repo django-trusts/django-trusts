@@ -18,6 +18,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 
 from tests.apps import (
     TestsConfig,
+    forget_models,
     install_writable_registry,
     override_apps_ready,
 )
@@ -83,19 +84,30 @@ def _new_contributor(apps_registry):
     return contributor
 
 
-def _forget_models(*model_classes):
-    all_models = apps.all_models
-    for model in model_classes:
-        all_models[model._meta.app_label].pop(model._meta.model_name, None)
-    apps.clear_cache()
-
-
 @contextmanager
 def _dynamic_models(*model_classes):
     try:
         yield model_classes
     finally:
-        _forget_models(*model_classes)
+        forget_models(*model_classes)
+
+
+def _forget_leftover_detectable_models():
+    known = {
+        Category, Ticket, Trust, TestGroupJunction, AutoAdminCategory,
+        ManualAdminCategory, AutoAdminJunction,
+    }
+    leftovers = [
+        model for model in apps.get_models()
+        if model not in known
+        and (
+            (issubclass(model, Content) and model is not Content)
+            or (issubclass(model, Junction) and model is not Junction)
+        )
+        and not model._meta.abstract
+        and not model._meta.proxy
+    ]
+    forget_models(*leftovers)
 
 
 class _RegistryRestoreMixin(object):
@@ -377,7 +389,11 @@ class SentinelAfterFreezeTest(_RegistryRestoreMixin, SimpleTestCase):
         self.assertFalse(isolated.plan_for(Trust).records)
 
 
-class MissingDeclarationCheckTest(_RegistryRestoreMixin, SimpleTestCase):
+class MissingDeclarationCheckTest(_RegistryRestoreMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        _forget_leftover_detectable_models()
+
     def test_declared_terminals_have_no_e003(self):
         messages = _e003()
         self.assertEqual(messages, [])

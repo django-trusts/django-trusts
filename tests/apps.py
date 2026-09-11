@@ -137,5 +137,21 @@ def forget_models(*model_classes):
 
     all_models = django_apps.all_models
     for model in model_classes:
-        all_models[model._meta.app_label].pop(model._meta.model_name, None)
+        app_models = all_models.get(model._meta.app_label, {})
+        app_models.pop(model._meta.model_name, None)
+        for name, existing in list(app_models.items()):
+            if existing is model:
+                app_models.pop(name, None)
     django_apps.clear_cache()
+
+
+def clone_writable_registry(registry):
+    """Copy records onto a new unfrozen registry for test isolation."""
+    from trusts.core import TrustsRegistry
+
+    cloned = TrustsRegistry()
+    cloned._by_root = {
+        root: list(rows) for root, rows in registry._by_root.items()
+    }
+    cloned._order = list(registry._order)
+    return cloned

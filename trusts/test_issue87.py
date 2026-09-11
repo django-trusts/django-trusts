@@ -18,7 +18,7 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_
 from django.test.utils import isolate_apps
 
 import tests as tests_module
-from tests.apps import forget_models, override_apps_ready
+from tests.apps import clone_writable_registry, forget_models, override_apps_ready
 from tests.backends import MixinOnlyBackend
 from tests.models import Category, TestGroupJunction, Ticket
 from trusts.backends import (
@@ -564,6 +564,8 @@ class DependentAuthorizationTest(_RegistryRestoreMixin, _UsersMixin, Transaction
             for image in extras
         ]
         contributor = _new_dependent_host(apps, self.Receipt)
+        writable = clone_writable_registry(self.live.registries[CONCRETE])
+        self.live.registries[CONCRETE] = writable
         with override_apps_ready(False):
             contributor.ready()
         self.image_code = 'trusts_tests.change_%s' % self.Image._meta.model_name

@@ -20,6 +20,7 @@ from django.test.utils import isolate_apps
 
 from tests.apps import (
     TestsConfig,
+    install_writable_registry,
     junction_content_field,
     junction_group_content_ref,
     override_apps_ready,
@@ -677,8 +678,8 @@ class GroupCompilerIsolationTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
 
     def test_mixin_only_with_plan_gets_trustee_not_historical_group(self):
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
+            install_writable_registry(self.live, MIXIN, _contribute_group)
             handle = self.live.configured_backend()
-            _contribute_group(handle.registry)
             mixin = MixinOnlyBackend()
             self.assertTrue(mixin.has_perm(self.alice, self.change_code, self.group))
             self.assertFalse(mixin.has_perm(self.carol, self.change_code, self.group))
