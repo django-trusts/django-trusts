@@ -80,7 +80,7 @@ def _record_group_grant_exists(record, user, permission):
     Group) correlates ``TrustGroup.trust`` through the remaining
     registered hops, taken from the stored path and Django ``_meta``.
     The EXISTS stays one nest deep so permission ``OuterRef`` depth
-    matches Category/Ticket. No ``Content._contents``.
+    matches Category/Ticket. No static content map.
     """
     from trusts.models import TrustGroup
 
@@ -100,7 +100,8 @@ def _record_group_grant_exists(record, user, permission):
     for name in suffix[:-1]:
         model = _hop_target_model(model, name)
     last = model._meta.get_field(suffix[-1])
-    lookup = 'trust__%s__%s' % ('__'.join(suffix[:-1]), last.attname)
+    hop = getattr(last, 'attname', None) or suffix[-1]
+    lookup = 'trust__%s__%s' % ('__'.join(suffix[:-1]), hop)
     return Exists(
         TrustGroup.objects.filter(
             **{lookup: OuterRef(record.content_target)},

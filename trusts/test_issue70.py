@@ -179,8 +179,8 @@ class TrustContributionIdempotenceTest(SimpleTestCase):
         with patch.object(
             remote, 'get_accessor_name', wraps=remote.get_accessor_name,
         ) as accessor:
-            with patch.object(Content, '_contents', _UnusableContents()):
-                isolated.ready()
+            self.assertFalse(hasattr(Content, '_contents'))
+            isolated.ready()
         accessor.assert_called()
         rev = remote.get_accessor_name()
         self.assertEqual(len(isolated.registry.records), 1)

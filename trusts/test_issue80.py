@@ -301,8 +301,7 @@ class FilterByUserContentPermRegistryGateTest(
             grant_q.assert_not_called()
 
     def test_declared_group_opens_the_gate_emptied_content_does_not_use_fallback(self):
-        self.assertTrue(Content.is_content_model(Group))
-        self.assertTrue(Content.is_content_model(Category))
+        self.assertFalse(hasattr(Content, 'is_content_model'))
         handle = self.live.configured_backend()
         self.assertTrue(handle.historical_fallback)
         self.assertTrue(handle.registry.plan_for(Group).records)
@@ -316,22 +315,18 @@ class FilterByUserContentPermRegistryGateTest(
             emptied = self.live.configured_backend()
             self.assertFalse(emptied.registry.plan_for(Category).records)
             self.assertTrue(emptied.historical_fallback)
-            self.assertTrue(Content.is_content_model(Category))
             with patch('trusts.models.trust_grant_q') as grant_q:
-                with patch.object(Content, 'is_content_model') as is_content:
-                    qs = self._filter(self.alice, Category, 'add_category')
-                    is_content.assert_not_called()
-                    grant_q.assert_not_called()
+                qs = self._filter(self.alice, Category, 'add_category')
+                grant_q.assert_not_called()
             self.assertFalse(qs.exists())
 
     def test_registered_path_does_not_consult_contents_or_filter_authorized(self):
         registry = self.live.configured_backend().registry
-        with patch.object(Content, '_contents', _UnusableContents()):
-            with patch.object(Content, 'is_content_model') as is_content:
-                with patch.object(registry, 'filter_authorized') as filtered:
-                    with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
-                        pks = _pks(self._filter(self.alice))
-        is_content.assert_not_called()
+        self.assertFalse(hasattr(Content, '_contents'))
+        self.assertFalse(hasattr(Content, 'is_content_model'))
+        with patch.object(registry, 'filter_authorized') as filtered:
+            with patch('trusts.models.trust_grant_q', wraps=trust_grant_q) as grant_q:
+                pks = _pks(self._filter(self.alice))
         filtered.assert_not_called()
         self.assertGreaterEqual(grant_q.call_count, 1)
         self.assertEqual(pks, {self.trust_a.pk})

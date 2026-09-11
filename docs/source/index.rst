@@ -149,14 +149,61 @@ Example::
 Inheritance
 ~~~~~~~~~~~
 
-Dependent model can inherit Trust from a related model. Such class need to be registered manually
-with ``fieldlookup`` specified.
+A dependent model can inherit authorization from a related ``Content``
+row. Both documented levels — ``ReceiptImage`` and ``ReceiptImageMeta``
+— must be declared explicitly from the host ``AppConfig`` using the
+bounded ``Ref`` grammar. Trusts does not import or discover host models,
+and it does not infer a field lookup from a static content map.
 
-Consider ReceiptImage as a dependent model of Receipt, and ReceiptImageMeta as a dependent
-model of ReceiptImage. The following code makes both model available for permission checking::
+Consider ``ReceiptImage`` as a dependent of ``Receipt``, and
+``ReceiptImageMeta`` as a dependent of ``ReceiptImage``, with the
+related-name ``image`` at each hop::
 
-   Content.register_content(ReceiptImage, '%s__image' % Content.get_content_fieldlookup('app.Receipt'))
-   Content.register_content(ReceiptImageMeta, '%s__image' % Content.get_content_fieldlookup(ReceiptImage))
+   # app/models.py
+   class Receipt(Content):
+       title = models.CharField(max_length=40)
+
+   class ReceiptImage(models.Model):
+       receipt = models.ForeignKey(Receipt, related_name='image', on_delete=models.CASCADE)
+
+   class ReceiptImageMeta(models.Model):
+       image = models.ForeignKey(ReceiptImage, related_name='image', on_delete=models.CASCADE)
+
+   # app/apps.py
+   from django.apps import AppConfig
+   from trusts.core import Ref
+   from trusts.models import TrustUserPermission
+
+   class ReceiptsConfig(AppConfig):
+       name = 'app'
+
+       def ready(self):
+           if getattr(self, 'apps', None) is None or not self.apps.is_installed('trusts'):
+               return
+           from app.models import Receipt
+           registry = self.apps.get_app_config('trusts').configured_backend().registry
+           j = Ref(TrustUserPermission)
+           rev = Receipt._meta.get_field('trust').remote_field.get_accessor_name()
+           if getattr(self, '_trusts_tup_receipt_image_registry_id', None) is not registry:
+               registry.register(
+                   content=getattr(j.trust, rev).image,
+                   user=j.entity,
+                   permission=j.permission,
+               )
+               self._trusts_tup_receipt_image_registry_id = registry
+           if getattr(self, '_trusts_tup_receipt_image_meta_registry_id', None) is not registry:
+               registry.register(
+                   content=getattr(j.trust, rev).image.image,
+                   user=j.entity,
+                   permission=j.permission,
+               )
+               self._trusts_tup_receipt_image_meta_registry_id = registry
+
+Name the exact Trusts path in ``configured_backend(path)`` when more
+than one Trusts backend is listed. An undeclared dependent fails closed
+(object checks false, enumeration empty, QuerySet authorization
+none/false). Conditions remain overlays on an existing relational grant;
+they never create a grant.
 
 Role
 ~~~~

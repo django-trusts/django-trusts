@@ -265,11 +265,11 @@ class TicketContributionIdempotenceTest(SimpleTestCase):
         self.live_trusts.registry = isolated
         contributor = _new_contributor(apps)
         remote = Ticket._meta.get_field('trust').remote_field
+        self.assertFalse(hasattr(Content, '_contents'))
         with patch.object(
             remote, 'get_accessor_name', wraps=remote.get_accessor_name,
         ) as accessor:
-            with patch.object(Content, '_contents', _UnusableContents()):
-                contributor.ready()
+            contributor.ready()
         accessor.assert_called()
         rev = remote.get_accessor_name()
         self.assertEqual(len(_ticket_rows(isolated)), 1)

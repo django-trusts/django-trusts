@@ -429,8 +429,17 @@ class TrustContentTestMixin(ContentModel):
         self.assertIsIterable(perm)
         self.assertEqual(len(perm), 0)
 
-        trusts = Trust.objects.filter_by_content(self.user)
-        self.assertEqual(trusts.count(), 0)
+        self.assertFalse(
+            apps.get_app_config('trusts').configured_backend().registry.plan_for(
+                type(self.user),
+            ).records
+        )
+        self.assertFalse(self.user.has_perm('auth.change_user', self.user))
+        self.assertEqual(self.user.get_all_permissions(self.user), set())
+        self.assertEqual(
+            TrustModelBackend().get_all_permissions(self.user, self.user),
+            set(),
+        )
 
     def test_user_not_in_group_has_no_perm(self):
         self.trust = Trust(settlor=self.user, trust=Trust.objects.get_root(), title='trust 1')
