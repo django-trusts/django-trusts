@@ -21,7 +21,7 @@ Read more: http://django-trusts.readthedocs.org/en/latest/
 Supported versions
 ------------------
 
-The `1.0.0.dev0` development line requires **Python 3.12–3.14** and **Django 6.1**.
+The `1.0.0.dev1` development line requires **Python 3.12–3.14** and **Django 6.1**.
 Sources checked on 2026-09-07 and the rationale are in
 [docs/support-matrix.md](docs/support-matrix.md).
 
@@ -65,7 +65,7 @@ stand-in green status.
 Development version
 -------------------
 
-The active package version is **1.0.0.dev0**. That is a development-line mark,
+The active package version is **1.0.0.dev1**. That is a development-line mark,
 not a production 1.0 release. See [docs/development-version.md](docs/development-version.md).
 
 Legacy baseline

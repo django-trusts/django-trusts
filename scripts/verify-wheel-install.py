@@ -8,8 +8,11 @@ This must not be run with the repository root as cwd or on sys.path.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import sys
 from pathlib import Path
+
+EXPECTED_VERSION = '1.0.0.dev1'
 
 
 def main() -> int:
@@ -63,6 +66,7 @@ def main() -> int:
 
     import sys as _sys
     import trusts
+    import trusts.core_backends as core_backends
     from trusts.apps import AppConfig, kernel_config
     from trusts.backends import TrustModelBackend, TrustModelBackendMixin
     from trusts.core_backends import (
@@ -109,6 +113,29 @@ def main() -> int:
         raise SystemExit('C2 kernel-only populate must not own label trusts')
     if 'trusts.zero' in _sys.modules:
         raise SystemExit('wheel populate imported trusts.zero')
+    installed_version = importlib.metadata.version('django-trusts')
+    if installed_version != EXPECTED_VERSION:
+        raise SystemExit(
+            'installed django-trusts version is %r, expected %r' % (
+                installed_version, EXPECTED_VERSION,
+            )
+        )
+    core_backends_file = Path(core_backends.__file__).resolve()
+    if checkout == core_backends_file or checkout in core_backends_file.parents:
+        raise SystemExit(
+            'Imported trusts.core_backends from the checkout: %s' % (
+                core_backends_file,
+            )
+        )
+    if (
+        'site-packages' not in str(core_backends_file)
+        and 'dist-packages' not in str(core_backends_file)
+    ):
+        raise SystemExit(
+            'trusts.core_backends is not a site-packages install: %s' % (
+                core_backends_file,
+            )
+        )
     if TrustModelBackendMixin is not CoreTrustModelBackendMixin:
         raise SystemExit(
             'trusts.backends.TrustModelBackendMixin is not '
@@ -126,7 +153,9 @@ def main() -> int:
 
     print('wheel import ok')
     print('django', django.get_version())
+    print('django-trusts', installed_version)
     print('trusts.__file__', trusts_file)
+    print('trusts.core_backends', core_backends_file)
     print('TrustModelBackend', TrustModelBackend)
     print('TrustModelBackendMixin', TrustModelBackendMixin)
     print('core_backends mixin identity', TrustModelBackendMixin is CoreTrustModelBackendMixin)
