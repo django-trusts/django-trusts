@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 from django.apps import AppConfig
 
 
@@ -90,3 +92,81 @@ class TestsConfig(AppConfig):
                 permission=j.permission,
             )
             self._trusts_tup_group_registry_id = registry
+
+
+@contextmanager
+def override_apps_ready(ready, apps_registry=None):
+    """Temporarily set ``Apps.ready`` so tests can simulate populate.
+
+    Contributor ``ready()`` methods run while that Apps instance is not
+    yet ready. Isolation tests that re-enter a host or package
+    AppConfig after Django has finished populate must restore this
+    window; they must not treat ``registries[path]`` as a live
+    contributor route.
+    """
+    from django.apps import apps as django_apps
+
+    target = django_apps if apps_registry is None else apps_registry
+    was = target.ready
+    target.ready = ready
+    try:
+        yield
+    finally:
+        target.ready = was
+
+
+def isolate_live_registry(config, registry, path=None):
+    """Swap a standalone registry into the live store without freezing.
+
+    Test isolation only. Not a host contributor route. The public
+    ``registry`` setter freezes after ``Apps.ready``; this writes the
+    path-scoped dict directly. The first supported handle read after
+    ready still freezes the stored object.
+    """
+    if path is None:
+        paths = config._configured_trusts_paths()
+        path = paths[0]
+    config.registries[path] = registry
+    return registry
+
+
+def install_writable_registry(config, path, contribute=None):
+    """Install a standalone registry on a live path for test isolation.
+
+    Callers register on the standalone instance *before* the first
+    supported handle read after ``Apps.ready``. The live store is not a
+    public contributor API.
+    """
+    from trusts.core import TrustsRegistry
+
+    registry = TrustsRegistry()
+    if contribute is not None:
+        contribute(registry)
+    config.registries[path] = registry
+    return registry
+
+
+def forget_models(*model_classes):
+    """Drop dynamically created models from the default Apps registry."""
+    from django.apps import apps as django_apps
+
+    all_models = django_apps.all_models
+    for model in model_classes:
+        app_models = all_models.get(model._meta.app_label, {})
+        app_models.pop(model._meta.model_name, None)
+        for name, existing in list(app_models.items()):
+            if existing is model:
+                app_models.pop(name, None)
+    django_apps.clear_cache()
+
+
+def clone_writable_registry(registry):
+    """Copy records onto a new unfrozen registry for test isolation."""
+    from trusts.core import TrustsRegistry
+
+    cloned = TrustsRegistry()
+    cloned._by_root = {
+        root: list(rows) for root, rows in registry._by_root.items()
+    }
+    cloned._order = list(registry._order)
+    return cloned

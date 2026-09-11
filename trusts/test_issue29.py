@@ -40,6 +40,7 @@ from trusts.tests import (
     get_or_create_root_user,
     reload_test_users,
 )
+from tests.apps import forget_models
 from tests.models import AutoAdminCategory, Ticket
 
 
@@ -198,6 +199,7 @@ class PermissionConditionCheckTest(ConditionRegistryIsolationMixin, TestCase):
         for message in errors:
             self.assertIsInstance(message, Error)
             self.assertIn('fail closed', message.hint)
+        forget_models(ImportTimeBadTicket)
 
     def test_multiple_dynamic_errors_are_aggregated(self):
         u, p, o = condition_refs()

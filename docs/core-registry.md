@@ -119,11 +119,38 @@ The live store is `trusts.apps.AppConfig.registries[path]`, one
 `TrustsRegistry` per configured Trusts-derived `AUTHENTICATION_BACKENDS`
 path. `ready()` does not replace the store or an existing registry
 object. With one Trusts path, `config.registry` is a compatibility alias
-of that exact object. Isolated tests still construct their own
-`TrustsRegistry()`. External applications contribute declarations in
-their own `AppConfig.ready()` through `configured_backend()` (an exact
-path is required when several Trusts backends are listed). Trusts does
-not import or discover `tests.Category`.
+of that exact object.
+
+Supported live access is the AppConfig handle API:
+`configured_backend(path)`, `configured_handles()`, and the one-path
+`registry` alias. Each surface returns the stored object and freezes it
+on first read once **that AppConfig's `self.apps.ready`** is true (after
+`Apps.populate`, not during contributor `ready()`). A newly observed
+configured path is frozen before the handle is returned, so a settings
+change cannot expose a writable late registry. After readiness, the
+`registry` setter also freezes the replacement before storing it, so a
+caller-held reference cannot mutate the live store. Assignment before
+ready stays writable for contributor setup and freezes on the first
+supported post-populate read. Frozen `register()` raises
+`TrustsConfigurationError` before validation or mutation; existing
+records, plans, compilers, and authorization reads stay usable.
+
+Isolated `TrustsRegistry()` instances are a different surface. They do
+not inspect Django's global readiness, never auto-freeze, and stay
+writable after `apps.ready` unless the owner calls `freeze()`. Internal
+tests may swap a standalone instance into the live store for isolation;
+hosts must not treat `registries[path]` as a contributor route. External
+applications contribute declarations in their own `AppConfig.ready()`
+through `configured_backend()` (an exact path is required when several
+Trusts backends are listed). Trusts does not import or discover
+`tests.Category`.
+
+`trusts.E003` reports already-loaded concrete, non-proxy, non-abstract
+`Content` subclasses and `Junction` subclasses whose
+`get_content_model()` has no covering record on any valid configured
+handle. Coverage on one handle is enough. Manual dependents that are
+neither Content nor Junction are outside E003 and fail closed at
+runtime. The check issues zero SQL and does not register.
 
 `ContentQuerySet.permitted` is a thin aggregate caller. It ORs each
 applicable handle compiler's complete predicate (`trusts.core.granted`)

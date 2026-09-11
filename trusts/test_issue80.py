@@ -16,6 +16,7 @@ from django.core.management import call_command
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 
+from tests.apps import install_writable_registry
 from tests.models import AutoAdminCategory, Category, Organization, Ticket
 from trusts.core import (
     Ref,
@@ -375,9 +376,9 @@ class MultiPathCreateUnderTrustGateTest(
     def test_declaration_on_one_path_supports_but_grant_stays_trust_grant_q(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
             self.live.registries[CONCRETE] = TrustsRegistry()
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_a = self.live.configured_backend(CONCRETE)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             self.assertFalse(handle_a.registry.plan_for(Category).records)
             self.assertTrue(handle_b.registry.plan_for(Category).records)
             self.assertTrue(any_plan_records((handle_a, handle_b), Category))
@@ -400,11 +401,10 @@ class MultiPathCreateUnderTrustGateTest(
 
     def test_split_terminals_do_not_leak_the_other_path(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
-            self.live.registries[CONCRETE] = TrustsRegistry()
+            install_writable_registry(self.live, CONCRETE, _contribute_category)
+            install_writable_registry(self.live, MIXIN, _contribute_ticket)
             handle_a = self.live.configured_backend(CONCRETE)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_a.registry)
-            _contribute_ticket(handle_b.registry)
             self.assertTrue(handle_a.registry.plan_for(Category).records)
             self.assertFalse(handle_a.registry.plan_for(Ticket).records)
             self.assertFalse(handle_b.registry.plan_for(Category).records)

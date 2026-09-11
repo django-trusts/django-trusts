@@ -15,6 +15,7 @@ from django.db import connection, models
 from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase, override_settings
 
+from tests.apps import install_writable_registry
 from tests.backends import GroupOnlyBackend, MixinOnlyBackend
 from tests.models import Category, Organization, Ticket, TestGroupJunction
 from trusts.backends import HistoricalGroupQueryCompiler, TrustModelBackend
@@ -346,10 +347,10 @@ class DistributiveLawTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
 
     def test_split_coverage_object_queryset_and_permitted(self):
         with self._two_path():
+            install_writable_registry(self.live, GROUP_ONLY, _contribute_category)
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_a = self.live.configured_backend(GROUP_ONLY)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_a.registry)
-            _contribute_category(handle_b.registry)
             group_only = GroupOnlyBackend()
             mixin = MixinOnlyBackend()
             self.assertTrue(group_only.has_perm(self.alice, self.change_code, self.cat_a))
@@ -378,10 +379,10 @@ class DistributiveLawTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
         ).delete()
         self._reload()
         with self._two_path():
+            install_writable_registry(self.live, GROUP_ONLY, _contribute_category)
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_a = self.live.configured_backend(GROUP_ONLY)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_a.registry)
-            _contribute_category(handle_b.registry)
             qs = Category.objects.filter(pk__in=[self.cat_a.pk, self.cat_b.pk])
             self.assertFalse(self.alice.has_perm(self.change_code, self.cat_a))
             self.assertFalse(self.alice.has_perm(self.change_code, self.cat_b))
@@ -413,8 +414,8 @@ class CompilerIsolationBackendTest(_RegistryRestoreMixin, _UsersMixin, TestCase)
             TrustUserPermission.objects.filter(entity=self.carol).exists()
         )
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             concrete = TrustModelBackend()
             mixin = MixinOnlyBackend()
             self.assertTrue(concrete.has_perm(self.carol, self.change_code, self.cat_a))
@@ -436,8 +437,8 @@ class CompilerIsolationBackendTest(_RegistryRestoreMixin, _UsersMixin, TestCase)
 
     def test_mixin_only_alone_denies_historical_group(self):
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle = self.live.configured_backend()
-            _contribute_category(handle.registry)
             mixin = MixinOnlyBackend()
             self.assertFalse(mixin.has_perm(self.carol, self.change_code, self.cat_a))
             self.assertFalse(self.carol.has_perm(self.change_code, self.cat_a))
@@ -465,8 +466,8 @@ class CoordinatorQueryCountTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
 
     def test_coordinator_one_sql_noncoordinator_zero(self):
         with override_settings(AUTHENTICATION_BACKENDS=(CONCRETE, MIXIN)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             concrete = TrustModelBackend()
             mixin = MixinOnlyBackend()
             self.assertTrue(concrete._is_collection_coordinator())
@@ -484,8 +485,8 @@ class CoordinatorQueryCountTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
 
     def test_reversed_backend_order(self):
         with override_settings(AUTHENTICATION_BACKENDS=(MIXIN, CONCRETE)):
+            install_writable_registry(self.live, MIXIN, _contribute_category)
             handle_b = self.live.configured_backend(MIXIN)
-            _contribute_category(handle_b.registry)
             concrete = TrustModelBackend()
             mixin = MixinOnlyBackend()
             self.assertTrue(mixin._is_collection_coordinator())
@@ -589,8 +590,8 @@ class CompilerFailureTest(_RegistryRestoreMixin, _UsersMixin, TestCase):
         from tests.backends import RaisingCompilerBackend
 
         with override_settings(AUTHENTICATION_BACKENDS=(RAISING,)):
+            install_writable_registry(self.live, RAISING, _contribute_category)
             handle = self.live.configured_backend()
-            _contribute_category(handle.registry)
             with self.assertRaises(RuntimeError):
                 RaisingCompilerBackend().has_perm(
                     self.alice, self.change_code, self.cat_a,
@@ -724,13 +725,15 @@ class RegisteredOrdinaryModelTest(_RegistryRestoreMixin, _UsersMixin, Transactio
             code = 'trusts_tests.change_memo'
             MemoGrant.objects.create(memo=memo, user=self.alice, permission=change)
             with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
+                isolated = TrustsRegistry()
+                j = Ref(MemoGrant)
+                isolated.register(
+                    content=j.memo, user=j.user, permission=j.permission,
+                )
+                self.live.registries[MIXIN] = isolated
                 handle = self.live.configured_backend()
                 self.assertFalse(handle.historical_fallback)
                 self.assertIsInstance(handle.compiler, PlanQueryCompiler)
-                j = Ref(MemoGrant)
-                handle.registry.register(
-                    content=j.memo, user=j.user, permission=j.permission,
-                )
                 mixin = MixinOnlyBackend()
                 self.assertTrue(mixin.has_perm(self.alice, code, memo))
                 self.assertFalse(mixin.has_perm(self.alice, code, other))

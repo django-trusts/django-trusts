@@ -1733,6 +1733,135 @@ projections remain **1 SQL**, independent of candidate count.
   redesign; #54
 - Zero; GH; example #7; Windows #17
 
+---
+
+# Freeze live registries and report detectable missing declarations (issue #89 / S8)
+
+This record covers the S8 freeze of AppConfig-owned path-scoped
+registries and the `trusts.E003` missing-declaration check. Version
+remains **1.0.0.dev0**. It closes the #89 / #69 r2 S8 slice, the final
+#69 implementation slice. Standalone `TrustsRegistry()` instances stay
+independent. There is **no schema or Django migration change**.
+
+Parent design: #69 r2 (accepted). Predecessor #87 / PR #88 merged to
+`dev` as `df9b51858047566574f378c3df2b648fb386fd4e`.
+
+## Decision
+
+Live AppConfig-owned registries freeze after Django application
+population so authorization plans cannot mutate late. Freeze is
+instance-owned (`TrustsRegistry.freeze()` / `.frozen`).
+`register()` on that exact frozen instance raises
+`TrustsConfigurationError` before validation or mutation. Existing
+records, plans, compilers, and authorization reads stay usable.
+
+A standalone `TrustsRegistry()` does not inspect Django's global
+readiness and never auto-freezes. It stays writable after global
+`apps.ready` unless its owner calls `freeze()`. Frozen state is not
+process-global, class-global, inferred from Django's global
+`apps.ready`, or shared across registry objects.
+
+Freeze is owned by `trusts.apps.AppConfig` for the existing objects in
+its path-scoped `registries` store. `ready()` does not replace those
+objects. Every supported live access surface —
+`configured_backend(path)`, `configured_handles()`, and the one-path
+`registry` alias — returns the same stored object and freezes it on
+first read when **that AppConfig's `self.apps.ready`** is true. During
+`Apps.populate`, external contributors run in their own `ready()` while
+that Apps instance is not yet ready, so declarations remain writable
+regardless of `INSTALLED_APPS` order. After population, a newly
+ensured/configured live path is frozen before exposure.
+
+Re-entering a package or host contributor after freeze is a sentinel
+no-op when that contributor already donated to the exact registry. A
+genuinely new, failed, or partial late contribution raises.
+
+`trusts.E003` reports structurally detectable missing Content/Junction
+declarations from already-loaded models. It does not import host
+modules, does not infer manual dependents, and issues **0 SQL**.
+Undeclared manual dependents continue to fail closed at runtime with no
+E003 row. Silencing E003 suppresses only the early diagnostic and never
+creates authorization.
+
+## No change to these public call sites
+
+- `User.has_perm` / `User.has_perms` / `get_all_permissions` /
+  `get_group_permissions` signatures
+- `ContentQuerySet.permitted` signature and documented Category /
+  Ticket / Trust results
+- `filter_by_user_content_perm` / `filter_by_user_perm` signatures
+  and create-under-Trust grant (`trust_grant_q` on Trust rows)
+- Condition registry APIs and E001/E002/W001/E004 checks
+- Package version `1.0.0.dev0`
+- Database schema and Trusts migrations (`0001_initial`, `0002_trustgroup`)
+
+## Changes
+
+### 43. Live registries freeze after populate
+
+| | |
+| --- | --- |
+| Previous | Live AppConfig-owned path-scoped registries stayed writable for the process lifetime. A late `register()` after `Apps.populate` could still mutate authorization plans. Isolated `TrustsRegistry()` instances were already independent. |
+| New | `TrustsRegistry.freeze()` / `.frozen` are instance-owned. Supported live handle reads freeze the stored object once that AppConfig's `self.apps.ready` is true. The one-path `registry` setter freezes a replacement before storing it after readiness, so a caller-held reference cannot mutate late. Assignment before ready stays writable and freezes on the first supported post-populate read. `register()` on that frozen instance raises `TrustsConfigurationError` before validation or mutation and leaves records unchanged. Standalone `TrustsRegistry()` instances stay writable unless explicitly frozen. |
+| Replacement | Hosts contribute from their own `AppConfig.ready()` through `configured_backend()` / `configured_handles()` / the one-path `registry` alias. Do not use `registries[path]` as a contributor route. |
+| Affected | Late `register()` after populate. Existing declared terminals keep the same authorization results. |
+| Authorization | Frozen plans still project. Undeclared terminals stay false / empty / none. A late write cannot add authorization after freeze. |
+
+Failure behavior: every register attempt after freeze (valid, duplicate,
+conflicting, malformed) raises with records unchanged. Same-contributor
+re-entry against the exact frozen registry is a sentinel no-op. A new
+or partial late contribution raises without setting that contribution's
+sentinel.
+
+### 44. `trusts.E003` detectable-domain check
+
+| | |
+| --- | --- |
+| Previous | Missing Content/Junction declarations were fail-closed only at authorization time. `trusts.E003` was reserved. |
+| New | A Django model system check walks `apps.get_models()` and reports each concrete, non-proxy, non-abstract `Content` subclass with no covering relation-plan record on any valid configured Trusts handle, and each concrete, non-proxy, non-abstract `Junction` subclass whose `get_content_model()` has no covering record on any valid handle. Coverage on one exact handle is enough. A malformed Junction content-model contract is a deterministic diagnostic, not a `manage.py check` crash. The check performs 0 SQL and does not call `registry.register`. |
+| Replacement | Contribute an explicit AppConfig `Ref` on the intended exact backend path. Silencing `trusts.E003` hides only this diagnostic. |
+| Affected | Early diagnostics for undeclared Content/Junction models. Manual dependents such as ReceiptImage / ReceiptImageMeta stay outside E003. |
+| Authorization | E003 never creates a grant. Undeclared manual dependents remain false / empty / none at runtime. |
+
+## Host AppConfig timing
+
+Contribute during the host `AppConfig.ready()` while `Apps.populate`
+has not set `ready`. After populate, the first supported live handle
+read freezes the stored registry. Re-entry is safe only as a sentinel
+no-op against the exact registry already donated to.
+
+## Rollback
+
+Remove AppConfig-owned freezing and the `trusts.E003` check only.
+S1–S7 explicit registrations and static-registry deletion remain.
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts migration; none was added.
+- [ ] Move host `register()` calls into `AppConfig.ready()` on the
+      intended exact backend path via `configured_backend()`.
+- [ ] Do not contribute through `registries[path]` after populate.
+- [ ] Treat a frozen `register()` as a configuration error, not a
+      partial write.
+- [ ] Address `trusts.E003` by declaring the Content/Junction terminal.
+      Do not expect E003 for arbitrary manual dependents.
+- [ ] Silencing `trusts.E003` does not authorize the missing terminal.
+- [ ] Leave package version at `1.0.0.dev0`.
+
+## Schema
+
+No change. S8 adds no model and no Django migration. Query
+construction remains lazy. Supported grant / all-match / enumeration
+projections remain **1 SQL**, independent of candidate count. E003
+issues **0 SQL**.
+
+## Out of scope (not acceptance criteria)
+
+- Condition-registry redesign; callback relocation; group/role
+  redesign; #54
+- Backend/module extraction; graph/CTE/inheritance feature
+- Zero; GH; example #7; Windows #17
+
 
 
 
