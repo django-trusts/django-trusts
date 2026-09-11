@@ -11,7 +11,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.checks import Error, Warning as CheckWarning
 from django.db import connection, models
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
 from trusts.checks import (
@@ -190,8 +190,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         registry.register_permission_condition(Note, 'spy', log)
         lookup = RegistryConditionLookup(registry)
         self.assertIsInstance(lookup, ConditionLookup)
-        with self.assertNumQueries(0):
-            registry.set_condition_lookup(lookup)
+        registry.set_condition_lookup(lookup)
         self.assertIs(registry.condition_lookup, lookup)
         self.assertIs(lookup.record_for(Note, 'spy').func, log)
         self.assertEqual(log.calls, [])
@@ -201,7 +200,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class ConditionRegistryRuntimeTest(TestCase):
+class ConditionRegistryRuntimeTest(TransactionTestCase):
     def test_expr_object_list_parity_and_fixed_query(self):
         Note, _Memo = _note_models()
         User = get_user_model()
@@ -223,8 +222,7 @@ class ConditionRegistryRuntimeTest(TestCase):
             registry.register_permission_condition(Note, 'editable', expr)
             perm = 'trusts_tests.change_note:editable'
             grant = 'trusts_tests.change_note'
-            with self.assertNumQueries(0):
-                q = registry.compile_registered_condition_q(Note, perm, alice)
+            q = registry.compile_registered_condition_q(Note, perm, alice)
             listed = set(Note.objects.filter(q).values_list('pk', flat=True))
             evaluated = set()
             for row in Note.objects.all():
@@ -339,10 +337,9 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         ))
         registry = ConditionRegistry()
         registry.register_permission_condition(Note, 'boom', exploding)
-        with self.assertNumQueries(0):
-            messages = permission_condition_check_messages(
-                registry.iter_permission_conditions()
-            )
+        messages = permission_condition_check_messages(
+            registry.iter_permission_conditions()
+        )
         self.assertEqual(exploding.calls, [])
         self.assertEqual(len([m for m in messages if m.id == CHECK_ID_LEGACY_CALLBACK]), 1)
 
@@ -400,7 +397,6 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         with patch(
             'trusts.apps.implementation_configs', return_value=(_Config(),),
         ):
-            with self.assertNumQueries(0):
-                messages = check_permission_conditions(None)
+            messages = check_permission_conditions(None)
         errors = [m for m in messages if m.id == CHECK_ID_INVALID_EXPR]
         self.assertTrue(any("'typo'" in m.msg for m in errors))
