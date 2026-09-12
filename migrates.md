@@ -3498,5 +3498,72 @@ Revert this Core PR. Stage A public `Expr` imports and transitional
 - [ ] Do not implement #145, #146, #138, #137, condition-only
       registration, `TQ.contains`, GH, or Windows in this PR.
 
+# Issue #151 C1: Core-owned default condition lookup (1.0.0.dev3)
+
+This record covers the **Core C1** slice of
+[django-trusts#151](https://github.com/django-trusts/django-trusts/issues/151)
+accepted against
+[r2](https://github.com/django-trusts/django-trusts/issues/151#issuecomment-5649416301).
+Package version stays **1.0.0.dev3**. No model, field, table,
+migration-loader key, content type, permission row, stored
+authorization fact, package identity, or app label changes.
+
+Companion Zero pin stays
+`18e87a63ff5079298e1ee330b888b4ff86551e1f`. Zero Z2 and Core C2
+are separate later merges. No tag or release in this PR.
+
+## Decision
+
+`TrustsRegistry` constructs its private condition store and
+self-binds the private `RegistryConditionLookup` adapter. Named
+`:condition` authorization no longer requires a consumer to import
+`trusts.conditions._ir` or call `set_condition_lookup`.
+`trusts.conditions` remains the accepted six names. No new public
+lookup SPI.
+
+## Old vs new behavior
+
+| | Previous | New |
+| --- | --- | --- |
+| Default lookup | Unbound (`None`) until a consumer imported `RegistryConditionLookup` and called `set_condition_lookup` | `TrustsRegistry` self-binds the private store adapter at construct |
+| Application / host docs | README and `tests.myapp` imported `_ir` and bound lookup | Register a builder; do not import `_ir` or bind lookup |
+| `set_condition_lookup` | Required for named `:condition` authorization | Remains for tests and explicit unbind; applications do not call it |
+| `trusts.conditions` | Six names | Unchanged |
+| Authorization | Fail-closed unknown / unbound / malformed | Unchanged |
+| Zero production | Still binds via `_ir` (redundant rebind on this Core) | Unchanged in this PR |
+
+## Fail-closed rollout
+
+1. Land this Core C1 PR on `dev`. Pair pin stays Zero
+   `18e87a63ff5079298e1ee330b888b4ff86551e1f`.
+2. Do not open Zero Z2 or Core C2 in this PR.
+3. Do not tag or release while Zero still imports `_ir`.
+
+## Rollback
+
+Revert this Core PR. Default lookup returns to unbound. No schema
+rollback.
+
+## Migration-bot checklist
+
+- [ ] Search application and host docs for
+      `from trusts.conditions._ir import RegistryConditionLookup`
+      and `set_condition_lookup(RegistryConditionLookup`. Those
+      wiring lines go away. Register a builder instead.
+- [ ] Confirm `from trusts.conditions import RegistryConditionLookup`
+      still raises `ImportError`. Do not document `_ir` types as
+      application APIs.
+- [ ] Confirm `set_condition_lookup(None)` still unbinds and
+      unknown / unbound / malformed conditions still fail closed.
+- [ ] Confirm construction, registration, bind, and `freeze()` add
+      zero SQL.
+- [ ] Confirm multiple handles keep isolated stores and lookups.
+- [ ] Do not apply a new Trusts schema or data migration; none was
+      added.
+- [ ] Leave package version at `1.0.0.dev3`.
+- [ ] Do not retarget `COMPANION_ZERO_SHA` / `ZERO_HEAD`.
+- [ ] Do not implement Zero Z2, Core C2, #152, #145, #146, #138,
+      #131, #137, GH, or Windows in this PR.
+
 
 

@@ -31,8 +31,9 @@ compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
 ``common_permissions()``, ``filter_authorized_scopes()``,
 ``ConditionLookup``, and configuration/compiler exceptions live here.
 Permission-condition *records* live on each ``TrustsRegistry`` via
-``trusts.conditions._ir.ConditionRegistry``; bind the generic
-``RegistryConditionLookup`` with ``set_condition_lookup``.
+``trusts.conditions._ir.ConditionRegistry``. Construction self-binds
+the private ``RegistryConditionLookup``. Applications register
+builders; they do not import ``_ir`` or call ``set_condition_lookup``.
 """
 
 from dataclasses import dataclass
@@ -205,9 +206,11 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
 class ConditionLookup(object):
     """Duck-typed ``:condition`` overlay protocol. Not a registry or store.
 
-    Bind with ``TrustsRegistry.set_condition_lookup``. Core never imports
-    a Zero ``Content`` registry to evaluate conditions. Unbound lookup on
-    an instance-only caller is a no-op.
+    ``TrustsRegistry`` self-binds a private store adapter at construct.
+    ``set_condition_lookup`` remains for tests and explicit unbind.
+    Core never imports a Zero ``Content`` registry to evaluate
+    conditions. An unbound lookup (after ``set_condition_lookup(None)``)
+    makes named ``:condition`` codes fail closed.
 
     ``record_for`` returns the registered record or ``None`` (unregistered
     codes fail closed as ``AttributeError`` at the caller). ``compile_q``
@@ -2182,15 +2185,18 @@ class TrustsRegistry(object):
     """
 
     def __init__(self):
-        from trusts.conditions._ir import ConditionRegistry
+        from trusts.conditions._ir import (
+            ConditionRegistry,
+            RegistryConditionLookup,
+        )
 
         self._by_root = {}
         self._order = []
         self._strategies = {}
         self._strategy_order = []
         self._frozen = False
-        self._condition_lookup = None
         self.conditions = ConditionRegistry()
+        self._condition_lookup = RegistryConditionLookup(self)
 
     @property
     def frozen(self):
@@ -2198,16 +2204,18 @@ class TrustsRegistry(object):
 
     @property
     def condition_lookup(self):
-        """Bound ``ConditionLookup``, or ``None`` when unbound."""
+        """Bound ``ConditionLookup``, or ``None`` after explicit unbind."""
         return self._condition_lookup
 
     def set_condition_lookup(self, lookup):
         """Bind a ``ConditionLookup`` on this instance (zero SQL).
 
-        Both ``record_for`` and ``compile_q`` must be callable. A missing
-        method raises ``TrustsConfigurationError`` and does not bind
-        (no partial bind). ``lookup is None`` clears the binding.
-        Methods are not invoked at bind time.
+        Construction already self-binds the private store adapter.
+        Applications do not call this. Both ``record_for`` and
+        ``compile_q`` must be callable. A missing method raises
+        ``TrustsConfigurationError`` and does not bind (no partial
+        bind). ``lookup is None`` clears the binding. Methods are not
+        invoked at bind time.
         """
         if lookup is None:
             self._condition_lookup = None

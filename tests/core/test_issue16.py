@@ -242,10 +242,10 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         registry = TrustsRegistry()
         log = _BuilderLog()
         registry.register_permission_condition(Note, 'spy', log)
-        lookup = RegistryConditionLookup(registry)
+        self.assertIsInstance(registry.condition_lookup, RegistryConditionLookup)
+        lookup = registry.condition_lookup
         self.assertIsInstance(lookup, ConditionLookup)
-        registry.set_condition_lookup(lookup)
-        self.assertIs(registry.condition_lookup, lookup)
+        self.assertIs(lookup.conditions, registry.conditions)
         self.assertIsNotNone(lookup.record_for(Note, 'spy').expr)
         self.assertEqual(len(log.calls), 1)
         q = lookup.compile_q(Note, 'trusts_tests.change_note:spy', None)

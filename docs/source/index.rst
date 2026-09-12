@@ -141,7 +141,6 @@ Register the model paths when the application starts:
    # documents/apps.py
 
    from trusts.apps import TrustsImplementationConfig
-   from trusts.conditions._ir import RegistryConditionLookup
    from trusts.core import Ref
 
 
@@ -167,9 +166,6 @@ Register the model paths when the application starts:
                Document,
                "non_confidential",
                lambda u, p, o: o.confidential != True,
-           )
-           handle.registry.set_condition_lookup(
-               RegistryConditionLookup(handle.registry),
            )
 
 ``Ref(DocumentPermission)`` begins a declaration from the permission-bearing

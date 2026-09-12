@@ -1223,8 +1223,8 @@ from trusts.core import ConditionLookup  # noqa: E402
 class RegistryConditionLookup(ConditionLookup):
     """Generic ``ConditionLookup`` over a ``ConditionRegistry``.
 
-    Bind with ``handle.registry.set_condition_lookup(
-    RegistryConditionLookup(handle.registry))``. Accepts a
+    ``TrustsRegistry`` self-binds this adapter at construct.
+    Applications do not import or construct it. Accepts a
     ``ConditionRegistry`` or any object with a ``conditions`` store
     (a ``TrustsRegistry``). Core never imports Zero nouns.
     """

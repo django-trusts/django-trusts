@@ -139,10 +139,13 @@ class KernelConfigTest(SimpleTestCase):
 
 
 class ConditionLookupBindTest(TestCase):
-    def test_unbound_is_none_and_bind_is_zero_sql(self):
-        registry = TrustsRegistry()
+    def test_default_is_self_bound_and_bind_is_zero_sql(self):
+        from trusts.conditions._ir import RegistryConditionLookup
+
         with self.assertNumQueries(0):
-            self.assertIsNone(registry.condition_lookup)
+            registry = TrustsRegistry()
+        self.assertIsInstance(registry.condition_lookup, RegistryConditionLookup)
+        self.assertIs(registry.condition_lookup.conditions, registry.conditions)
 
         class Bound(ConditionLookup):
             def record_for(self, model, cond_code):
