@@ -24,7 +24,7 @@ if str(_SCRIPTS) not in sys.path:
 from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
-ZERO_HEAD = '94256b4e50acc0c95c488cfc1e8797d542cf65b7'
+ZERO_HEAD = 'bceb0241b482fdc4f31dd72c7600c52eeb4e6cff'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
@@ -75,6 +75,33 @@ assert init.name == "__init__.py"
 assert (init.parent / "zero" / "apps.py").is_file()
 assert (init.parent / "apps.py").is_file()
 assert not (init.parent / "core_backends.py").is_file()
+former = (
+    "And", "Const", "Eq", "Expr", "Ne", "Or", "Query", "Ref", "TQ",
+    "condition_refs", "object_ref", "permission_ref", "principal_ref",
+)
+for module_name in ("trusts.conditions", "django_trusts"):
+    for name in former:
+        try:
+            exec("from %s import %s" % (module_name, name), {})
+        except ImportError:
+            pass
+        else:
+            raise SystemExit(
+                "former construction name %s.%s still imports" % (module_name, name)
+            )
+from trusts.conditions import (
+    PermissionConditionError,
+    permission_condition_code,
+    permission_has_condition,
+)
+from django_trusts import (
+    PermissionConditionError as DTError,
+    permission_has_condition as dt_has,
+)
+assert DTError is PermissionConditionError
+assert dt_has is permission_has_condition
+assert permission_has_condition("app.change_doc:non_confidential")
+assert permission_condition_code("app.change_doc:non_confidential") == "non_confidential"
 print("companion-overlay-ok")
 '''
 

@@ -1,4 +1,8 @@
-"""Restricted declarative permission conditions (issue #4 V1 / #142 A).
+"""Private permission-condition compiler (issue #4 V1 / #142 B).
+
+Application code must not import this module. Register builders on
+``BackendHandle.register_permission_condition``. Public exceptions and
+permission-code helpers live in ``trusts.conditions``.
 
 A callable argument to condition registration is a **builder**: Core
 invokes it exactly once with symbolic ``(u, p, o)`` refs, validates the
@@ -10,9 +14,8 @@ Builders are trusted startup/configuration code, the same class as
 ``AppConfig.ready()``. Core does not sandbox them. Core's own
 registration path issues zero SQL (symbolic refs plus ``_meta``).
 
-Transitional prebuilt ``Expr`` trees remain accepted so current Zero
-``Trust:own`` Meta donation keeps loading. Stage B will reject ``Expr``
-and hide construction nodes.
+A prebuilt ``Expr`` is rejected with ``TypeError`` before the registry
+is mutated.
 
 Permission-condition records live on an instantiable
 ``ConditionRegistry`` (also exposed on each ``TrustsRegistry`` and
@@ -518,12 +521,12 @@ def object_ref():
 
 
 def condition_refs():
-    """Return symbolic ``(u, p, o)`` for a builder or transitional ``Expr``.
+    """Return symbolic ``(u, p, o)`` for a registration-time builder.
 
     Application code should pass a builder to
     ``handle.register_permission_condition``. These objects are policy
-    data, not live principals or content rows. Public construction via
-    this helper remains available until Stage B.
+    data, not live principals or content rows. This helper is a private
+    compiler detail.
     """
     return principal_ref(), permission_ref(), object_ref()
 
@@ -532,10 +535,10 @@ class _QueryNamespace(object):
     """Controlled lookup namespace for declarative permission conditions.
 
     Not a Django ``QuerySet``. V1 equality uses ``==`` / ``!=`` on
-    ``condition_refs()``. Future relational operations (Django-style
-    lookup names such as ``iexact`` or ``in``) belong here so they are
-    not added as ad-hoc methods on ``Ref``. V1 does not implement those
-    lookups.
+    symbolic refs. Future relational operations (Django-style lookup
+    names such as ``iexact`` or ``in``) belong here so they are not
+    added as ad-hoc methods on ``Ref``. V1 does not implement those
+    lookups. This namespace is a private compiler detail.
     """
 
     def __getattr__(self, name):
@@ -1135,9 +1138,9 @@ class ConditionRegistry(object):
     overwrite each other.
 
     A callable argument is a registration-time builder: invoked once
-    with symbolic refs, then discarded. A prebuilt ``Expr`` is accepted
-    transitionally. Model-aware semantic validation of prebuilt ``Expr``
-    trees is a system check; builders fail at register.
+    with symbolic refs, then discarded. A prebuilt ``Expr`` raises
+    ``TypeError`` before any store mutation. Builders fail at register
+    for exceptions, non-predicates, and unresolved fields.
     """
 
     def __init__(self):
@@ -1150,29 +1153,23 @@ class ConditionRegistry(object):
         comparison. Core invokes it exactly once with symbolic refs,
         normalizes constants, and stores only IR.
 
-        A prebuilt ``Expr`` is still accepted so current Zero
-        ``Trust:own`` donation keeps loading. Shape errors (bare
-        non-predicate ``Expr``, a value that is neither ``Expr`` nor
-        callable) raise here.
+        A prebuilt ``Expr`` raises ``TypeError`` before this instance
+        is mutated. Shape errors (a value that is not callable, a
+        builder that returns a non-predicate) raise here.
         """
-        from_builder = False
         if isinstance(condition, Expr):
-            if not is_predicate(condition):
-                raise PermissionConditionError(
-                    'Registered expression must be a V1 comparison '
-                    '(==, != combined with & / |), not %r.' % (condition,)
-                )
-            expr = condition
-        elif callable(condition):
-            expr = _invoke_condition_builder(condition, model, cond_code)
-            from_builder = True
-        else:
             raise TypeError(
-                'register_permission_condition expected a builder callable '
-                'or a transitional Expr, got %r.' % (type(condition).__name__,)
+                'register_permission_condition expected a builder callable, '
+                'not a prebuilt Expr.'
             )
+        if not callable(condition):
+            raise TypeError(
+                'register_permission_condition expected a builder callable, '
+                'got %r.' % (type(condition).__name__,)
+            )
+        expr = _invoke_condition_builder(condition, model, cond_code)
         normalize_expression(expr)
-        if from_builder and getattr(model, '_meta', None) is not None:
+        if getattr(model, '_meta', None) is not None:
             validate_expression(expr, model)
         record = ConditionRecord(expr=expr, model=model)
         self._records[(_condition_model_key(model), cond_code)] = record

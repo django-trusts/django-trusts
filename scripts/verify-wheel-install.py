@@ -83,7 +83,11 @@ def main() -> int:
         filter_authorized_scopes,
     )
     from trusts.query import AuthorizedManager, AuthorizedQuerySet
-    from django_trusts import TQ, condition_refs
+    from django_trusts import (
+        PermissionConditionError,
+        permission_condition_code,
+        permission_has_condition,
+    )
 
     trusts_file = Path(trusts.__file__).resolve()
     if checkout == trusts_file or checkout in trusts_file.parents:
@@ -185,8 +189,51 @@ def main() -> int:
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
     print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
-    print('TQ', TQ)
-    print('condition_refs', condition_refs)
+    print('PermissionConditionError', PermissionConditionError)
+    print('permission_has_condition', permission_has_condition)
+    print('permission_condition_code', permission_condition_code)
+
+    former = (
+        'And', 'Const', 'Eq', 'Expr', 'Ne', 'Or', 'Query', 'Ref', 'TQ',
+        'condition_refs', 'object_ref', 'permission_ref', 'principal_ref',
+    )
+    for module_name in ('trusts.conditions', 'django_trusts'):
+        for name in former:
+            try:
+                exec('from %s import %s' % (module_name, name), {})
+            except ImportError:
+                pass
+            else:
+                raise SystemExit(
+                    'former construction name %s.%s still imports' % (
+                        module_name, name,
+                    )
+                )
+    from trusts.conditions import (
+        PermissionConditionBooleanError,
+        PermissionConditionError as ConditionsError,
+        PermissionConditionNotQueryable,
+        PermissionConditionUnsupported,
+        permission_condition_code as conditions_code,
+        permission_has_condition as conditions_has,
+    )
+    if ConditionsError is not PermissionConditionError:
+        raise SystemExit('django_trusts.PermissionConditionError is not the public exception')
+    if conditions_has is not permission_has_condition:
+        raise SystemExit('django_trusts.permission_has_condition is not the public helper')
+    if conditions_code is not permission_condition_code:
+        raise SystemExit('django_trusts.permission_condition_code is not the public helper')
+    if not permission_has_condition('app.change_doc:non_confidential'):
+        raise SystemExit('permission_has_condition rejected a :condition code')
+    if permission_condition_code('app.change_doc:non_confidential') != 'non_confidential':
+        raise SystemExit('permission_condition_code did not return the suffix')
+    print('former construction imports fail')
+    print(
+        'public condition surface',
+        PermissionConditionBooleanError,
+        PermissionConditionNotQueryable,
+        PermissionConditionUnsupported,
+    )
     import importlib.util
 
     def _find_spec(name):

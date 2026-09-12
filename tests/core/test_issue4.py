@@ -1,8 +1,8 @@
-"""#4: noun-neutral V1 condition grammar.
+"""#4 / #142 Stage B: noun-neutral V1 condition grammar.
 
 QueryableConditionTest (Trust/Content/Ticket runtime) stays on Zero
-``tests/legacy/test_issue4.py``. This module keeps the generic Expr
-grammar and ``validate_expression`` / register-shape proofs.
+``tests/legacy/test_issue4.py``. This module keeps the private-compiler
+IR proofs and the public-surface import break.
 """
 
 from django.contrib.auth import get_user_model
@@ -10,14 +10,17 @@ from django.db import models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from django_trusts import Query as DjangoTrustsQuery, TQ as DjangoTrustsTQ
-from django_trusts import condition_refs as django_condition_refs
 from trusts.conditions import (
-    Const,
-    Expr,
     PermissionConditionBooleanError,
     PermissionConditionError,
+    PermissionConditionNotQueryable,
     PermissionConditionUnsupported,
+    permission_condition_code,
+    permission_has_condition,
+)
+from trusts.conditions._ir import (
+    Const,
+    Expr,
     Query,
     TQ,
     condition_refs,
@@ -28,6 +31,23 @@ from trusts.conditions import (
     validate_expression,
 )
 from trusts.core import TrustsRegistry
+
+
+FORMER_PUBLIC_CONSTRUCTION = (
+    'And',
+    'Const',
+    'Eq',
+    'Expr',
+    'Ne',
+    'Or',
+    'Query',
+    'Ref',
+    'TQ',
+    'condition_refs',
+    'object_ref',
+    'permission_ref',
+    'principal_ref',
+)
 
 
 u, p, o = condition_refs()
@@ -57,6 +77,39 @@ def _ticket_model():
             app_label = 'trusts_tests'
 
     return Ticket
+
+
+class ConditionPublicSurfaceTest(SimpleTestCase):
+    def test_former_construction_imports_fail(self):
+        for name in FORMER_PUBLIC_CONSTRUCTION:
+            with self.subTest(module='trusts.conditions', name=name):
+                with self.assertRaises(ImportError):
+                    exec('from trusts.conditions import %s' % name, {})
+            with self.subTest(module='django_trusts', name=name):
+                with self.assertRaises(ImportError):
+                    exec('from django_trusts import %s' % name, {})
+
+    def test_supported_public_surface_remains(self):
+        from django_trusts import (
+            PermissionConditionBooleanError as DTBoolean,
+            PermissionConditionError as DTError,
+            PermissionConditionNotQueryable as DTNotQueryable,
+            PermissionConditionUnsupported as DTUnsupported,
+            permission_condition_code as dt_code,
+            permission_has_condition as dt_has,
+        )
+
+        self.assertIs(DTError, PermissionConditionError)
+        self.assertIs(DTBoolean, PermissionConditionBooleanError)
+        self.assertIs(DTUnsupported, PermissionConditionUnsupported)
+        self.assertIs(DTNotQueryable, PermissionConditionNotQueryable)
+        self.assertIs(dt_has, permission_has_condition)
+        self.assertIs(dt_code, permission_condition_code)
+        self.assertTrue(permission_has_condition('app.change_doc:non_confidential'))
+        self.assertEqual(
+            permission_condition_code('app.change_doc:non_confidential'),
+            'non_confidential',
+        )
 
 
 class ConditionGrammarTest(SimpleTestCase):
@@ -120,9 +173,14 @@ class ConditionGrammarTest(SimpleTestCase):
         ordering = o.amount < 100
         self.assertIsInstance(ordering, Expr)
         self.assertFalse(is_predicate(ordering))
-        with self.assertRaises(PermissionConditionError):
+        with self.assertRaises(TypeError) as ctx:
             TrustsRegistry().register_permission_condition(
                 object, 'range', ordering,
+            )
+        self.assertIn('builder callable', str(ctx.exception))
+        with self.assertRaises(PermissionConditionError):
+            TrustsRegistry().register_permission_condition(
+                object, 'range_builder', lambda u, p, o: o.amount < 100,
             )
 
     def test_calls_indexing_arithmetic_setters_rejected(self):
@@ -146,9 +204,7 @@ class ConditionGrammarTest(SimpleTestCase):
 
     def test_tq_namespace_is_reserved_without_v1_lookups(self):
         self.assertIs(Query, TQ)
-        self.assertIs(DjangoTrustsQuery, Query)
-        self.assertIs(DjangoTrustsTQ, TQ)
-        self.assertEqual(django_condition_refs()[0].to_tuple(), ('ref', 'principal', ()))
+        self.assertEqual(condition_refs()[0].to_tuple(), ('ref', 'principal', ()))
         with self.assertRaises(PermissionConditionUnsupported) as ctx:
             TQ.iexact
         self.assertIn('iexact', str(ctx.exception))
@@ -158,14 +214,17 @@ class ConditionGrammarTest(SimpleTestCase):
     def test_non_predicate_and_non_callable_rejected_at_register(self):
         u, p, o = condition_refs()
         registry = TrustsRegistry()
-        with self.assertRaises(PermissionConditionError):
+        with self.assertRaises(TypeError):
             registry.register_permission_condition(object, 'bare', o.owner)
+        self.assertIsNone(registry.get_permission_condition_record(object, 'bare'))
         with self.assertRaises(TypeError):
             registry.register_permission_condition(object, 'bad', 'not-a-condition')
+        self.assertIsNone(registry.get_permission_condition_record(object, 'bad'))
         with self.assertRaises(PermissionConditionError):
             registry.register_permission_condition(
                 object, 'truth', lambda u, p, o: True,
             )
+        self.assertIsNone(registry.get_permission_condition_record(object, 'truth'))
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_incompatible_literal_types_rejected_at_validate(self):

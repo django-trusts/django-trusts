@@ -3379,4 +3379,155 @@ Do not change the current Core/Zero pair pin in this PR.
 - [ ] Leave package version at `1.0.0.dev3`.
 - [ ] Do not convert Zero, zero-example, GH, or Windows in this PR.
 
+# Issue #142 Stage B: private condition compiler (1.0.0.dev3)
+
+This record covers the **Core Stage B** slice of
+[django-trusts#142](https://github.com/django-trusts/django-trusts/issues/142)
+accepted against
+[r2](https://github.com/django-trusts/django-trusts/issues/142#issuecomment-5648394520)
+and authorized after the downstream conversion gates:
+
+- Core Stage A merge: `710b3ea26778ff069d1f5329adc9f2f481a1ea92`
+- Zero Z-convert merge: `bceb0241b482fdc4f31dd72c7600c52eeb4e6cff`
+- Zero-example E-convert merge: `0cb7ea23708610e467915abd4c2f768b5aece839`
+
+Package version stays **1.0.0.dev3**. No model, field, table,
+migration-loader key, content type, permission row, stored
+authorization fact, package identity, or app label changes. The
+internal normalized IR and object/queryset parity are unchanged.
+Runtime callbacks stay deleted.
+
+## Decision
+
+Public condition registration accepts **callable builders only**.
+Passing a prebuilt `Expr` raises `TypeError` before the registry is
+mutated. Construction nodes (`Expr`, refs, constants, comparison /
+boolean trees, ref factories, reserved `Query` / `TQ`) live in the
+private compiler module `trusts.conditions._ir`.
+
+`from trusts.conditions import Expr` (and siblings) and
+`from django_trusts import Expr` / `condition_refs` / `Query` / `TQ`
+fail for application code. Compiler tests may import
+`trusts.conditions._ir`.
+
+## No change to these public call sites
+
+- `User.has_perm` / `has_perms` / `get_*_permissions` signatures
+- `TrustModelBackendMixin` grant matching
+- `handle.register_permission_condition(model, code, builder)`
+- Public condition exceptions and permission-code string helpers
+- Package version `1.0.0.dev3`
+- Stored identity: app label `trusts`, Zero migration keys, tables,
+  content types, permissions, and rows
+- Internal IR shape and object/queryset parity
+
+## Changes
+
+### 64. Prebuilt `Expr` is rejected at register
+
+| | |
+| --- | --- |
+| Previous | `register_permission_condition` accepted a builder **or** a prebuilt `Expr`. |
+| New | Only a builder callable is accepted. A prebuilt `Expr` raises `TypeError` before any store write. Non-callables also raise `TypeError`. |
+| Replacement | `handle.register_permission_condition(Document, "non_confidential", lambda u, p, o: o.confidential != True)` |
+| Affected | Any remaining `register_permission_condition(..., expr)` callers. Zero `Trust:own` and Core `Ticket.meta_own` already donate builders. |
+| Authorization | Fail closed. A rejected `Expr` does not replace or create a record. |
+
+```python
+# Old (Stage A transitional)
+from trusts.conditions import condition_refs
+u, p, o = condition_refs()
+handle.register_permission_condition(Ticket, 'own', u == o.owner)
+
+# New (Stage B)
+handle.register_permission_condition(
+    Ticket, 'own', lambda u, p, o: u == o.owner,
+)
+```
+
+### 65. Construction nodes are private
+
+| | |
+| --- | --- |
+| Previous | `from trusts.conditions import Expr, condition_refs, Query, TQ` and `from django_trusts import …` succeeded. |
+| New | Those names are not public. They live at `trusts.conditions._ir`. `trusts.conditions` and `django_trusts` do not re-export them. |
+| Replacement | Do not construct trees in application code. Register a builder. Compiler tests may `from trusts.conditions._ir import Expr, condition_refs, Query, TQ`. |
+| Affected | Application imports of `Expr`, `Ref`, `Const`, `Eq`, `Ne`, `And`, `Or`, `condition_refs`, `principal_ref` / `permission_ref` / `object_ref`, `Query`, `TQ`. |
+| Authorization | Unchanged. Only the public construction path is removed. |
+
+**Remain importable from `trusts.conditions` (and `django_trusts`):**
+
+- `PermissionConditionError`
+- `PermissionConditionBooleanError`
+- `PermissionConditionUnsupported`
+- `PermissionConditionNotQueryable`
+- `permission_has_condition`
+- `permission_condition_code`
+
+`RegistryConditionLookup`, `ConditionRegistry`, and
+`BackendHandle.register_permission_condition` remain the registration
+/ lookup API.
+
+## Old vs new behavior
+
+| Situation | Old (Core Stage A) | New (Core Stage B) |
+| --- | --- | --- |
+| `register_permission_condition(..., callable)` | Invoke once as builder; store IR | Unchanged |
+| `register_permission_condition(..., Expr)` | Accepted; constants normalized | `TypeError` before mutation |
+| `from trusts.conditions import Expr` | Succeeded | `ImportError` |
+| `from django_trusts import TQ, condition_refs` | Succeeded | `ImportError` |
+| `from trusts.conditions import PermissionConditionError` | Succeeded | Unchanged |
+| `has_perm` / `.permitted()` / `.authorized()` | Evaluate stored IR; never invoke builder | Unchanged |
+| Package version | `1.0.0.dev3` | Unchanged |
+
+## Fail-closed rollout order
+
+1. Core Stage A, Zero Z-convert, and zero-example E-convert are already
+   merged at the SHAs above.
+2. Land this Core Stage B PR on `dev` after the required checks are
+   green against companion Zero `bceb0241b482fdc4f31dd72c7600c52eeb4e6cff`.
+3. Do not merge from the implementer. Reviewer merges.
+
+Do not start #138, #137, #145, #146, condition-only registration,
+membership operators, GH, or Windows in this PR.
+
+## Rollback
+
+Revert this Core PR. Stage A public `Expr` imports and transitional
+`Expr` registration return. Downstream Zero / example builders keep
+working on Stage A. Do not restore runtime callbacks.
+
+## Migration-bot checklist
+
+- [ ] Search for `from trusts.conditions import Expr` /
+      `condition_refs` / `Query` / `TQ` / `Ref` / `Const` / `Eq` /
+      `Ne` / `And` / `Or` / `principal_ref` / `permission_ref` /
+      `object_ref`. Those imports fail. Rewrite registrations as
+      builders.
+- [ ] Search for `from django_trusts import Expr` / `TQ` /
+      `condition_refs` / `Query`. Those imports fail.
+- [ ] Search for `register_permission_condition(..., <expr>)` where
+      the third argument is a prebuilt tree. Replace with
+      `lambda u, p, o: …` or a named builder. A leftover `Expr`
+      raises `TypeError` and does not write a record.
+- [ ] Keep `from trusts.conditions import PermissionConditionError`
+      (and the other public exceptions / `permission_has_condition` /
+      `permission_condition_code`).
+- [ ] Keep `handle.register_permission_condition(model, code, builder)`
+      and `RegistryConditionLookup`.
+- [ ] Compiler tests may import `trusts.conditions._ir`. Application
+      code must not.
+- [ ] Confirm builders run only at register/donation, never during
+      `has_perm`, enumeration, `.permitted()`, or `.authorized()`.
+- [ ] Confirm a rejected `Expr` leaves the registry unchanged.
+- [ ] Confirm installed-wheel and companion proofs: former public
+      construction imports fail; the supported public surface remains.
+- [ ] Confirm Core 3.12–3.14, PostgreSQL OrderedFold, package/wheel,
+      and pair CI against Zero `bceb0241b482fdc4f31dd72c7600c52eeb4e6cff`.
+- [ ] Do not apply a new Trusts schema or data migration; none was
+      added.
+- [ ] Leave package version at `1.0.0.dev3`.
+- [ ] Do not implement #138, #137, #145, #146, GH, or Windows in this
+      PR.
+
 
