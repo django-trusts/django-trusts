@@ -4,10 +4,16 @@
 from __future__ import annotations
 
 import os
+import sys
 import tarfile
 import zipfile
 from email.parser import Parser
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_VERSION = '1.0.0.dev3'
@@ -87,6 +93,11 @@ def _check_wheel(wheel: Path) -> None:
             raise SystemExit('wheel LICENSE copyright adds "and contributors"')
         if 'django_trusts-1.0.0.dev3' not in wheel.name:
             raise SystemExit('wheel filename is not 1.0.0.dev3: %s' % wheel.name)
+        management_hits = ships_trusts_management(names)
+        if management_hits:
+            raise SystemExit(
+                'wheel still ships trusts/management/**: %s' % management_hits
+            )
     print('wheel metadata ok', wheel.name)
 
 
@@ -116,6 +127,11 @@ def _check_sdist(sdist: Path) -> None:
             pass
         else:
             raise SystemExit('sdist missing DEV.md')
+        management_hits = ships_trusts_management(names)
+        if management_hits:
+            raise SystemExit(
+                'sdist still ships trusts/management/**: %s' % management_hits
+            )
     print('sdist metadata ok', sdist.name)
 
 

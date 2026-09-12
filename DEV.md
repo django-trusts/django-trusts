@@ -73,8 +73,18 @@ python -m pip install "Django>=6.1,<6.2" coverage
 python -m pip install -e .
 python -m tests.runtests
 python -m django check --settings=tests.settings
-python scripts/verify-legacy-upgrade.py
 ```
+
+`scripts/verify-legacy-upgrade.py` and `scripts/legacy/trusts_0001_sqlite.sql`
+remain in this tree as historical already-applied-`0001` evidence. The
+runner is currently broken (imports inert `trusts.models`, lists
+`'trusts'` in `INSTALLED_APPS`) and is **not** in CI. It is not a live
+operator path. Live `create_trust_root`,
+`grandfather_trust_group_permissions`, and `update_roles_permissions`
+commands require `trusts.zero.apps.ZeroConfig`. Zero's
+fresh-install / migration-identity / grandfather tests are complementary;
+they are not an already-applied-`0001` → `0002` → grandfather replay.
+Only that Zero replay should authorize deleting this Core evidence.
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
 authorization tests, a fresh migrate, `manage.py check`, an OrderedFold

@@ -75,14 +75,22 @@ Migration-bot checklist:
 | --- | --- |
 | Previous | Always inserted the root row; a second run raised `IntegrityError`. `call_command('create_trust_root', apps=apps)` passed historical models. |
 | New | Returns the existing root when `pk` already exists. Django 6.1 rejects unknown command options, so `0001_initial` calls `create_root_trust` with `apps.get_model(...)` instead of `call_command(..., apps=apps)`. |
-| Replacement | `create_root_trust(Trust, pk, settlor, title)` or `manage.py create_trust_root`. |
+| Replacement | `create_root_trust(Trust, pk, settlor, title)` or, after #129, Zero's `manage.py create_trust_root` when `trusts.zero.apps.ZeroConfig` is installed. |
 | Affected | Tests and `0001_initial` `RunPython`. Project code that passed `apps=` to the command must stop doing so. |
 | Authorization | Does not create extra roots or change `TRUSTS_ROOT_PK`. |
 
 Migration-bot checklist:
 
-- [ ] You may run `create_trust_root` on an upgraded database; it is a no-op when the root exists.
+- [ ] You may run Zero's `create_trust_root` on an upgraded database; it is a no-op when the root exists.
 - [ ] Confirm a single root (`Trust.objects.filter(trust=F('id')).count() == 1`).
+
+Current operator path (after #129): Core no longer ships
+`trusts.management.commands.create_trust_root`. Import
+`create_root_trust` from
+`trusts.zero.management.commands.create_trust_root`, or run
+`manage.py create_trust_root` only with
+`trusts.zero.apps.ZeroConfig` installed. The chronology above is
+unchanged.
 
 ### 5. Internal Django/Python compatibility (same Trusts signatures)
 
@@ -138,7 +146,12 @@ is true (default).
 
 ### Upgrade of a representative legacy database
 
-`scripts/verify-legacy-upgrade.py` is the executable check. It:
+`scripts/verify-legacy-upgrade.py` remains in Core as historical
+already-applied-`0001` evidence. After #129 it is not a live operator
+path: it imports inert `trusts.models`, lists `'trusts'` in
+`INSTALLED_APPS`, and is off CI. Zero owns the live commands; Zero does
+not yet replay this already-applied-`0001` → `0002` → grandfather path.
+Historically the runner:
 
 1. Applies Django contrib migrations only.
 2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`
@@ -151,13 +164,15 @@ is true (default).
 6. Checks the root row plus allow/deny/isolation on `Trust` content.
 
 ```
-python scripts/verify-legacy-upgrade.py
+# Historical Core runner (retained; currently broken / off CI; not live):
+#   python scripts/verify-legacy-upgrade.py
+# Live commands require trusts.zero.apps.ZeroConfig.
 ```
 
-That is a representative Trusts upgrade, not a captured production dump
-and not a full Django 1.8→6.1 contrib-schema upgrade. Project models still
-need Django's own 1.8→6.1 path (removed APIs, `on_delete`, middleware,
-auto fields). No intermediate Trusts migration is required.
+That is a representative Trusts upgrade record, not a captured production
+dump and not a full Django 1.8→6.1 contrib-schema upgrade. Project models
+still need Django's own 1.8→6.1 path (removed APIs, `on_delete`,
+middleware, auto fields). No intermediate Trusts migration is required.
 
 ## Migration-bot summary
 
@@ -169,7 +184,7 @@ auto fields). No intermediate Trusts migration is required.
 - [ ] `pip install` the modernized package; do not install `six` / `funcsigs` /
       `mock` / `pbr` for Trusts itself.
 - [ ] Migrate a fresh DB (`python -m django migrate --settings=tests.settings`).
-- [ ] Run `python scripts/verify-legacy-upgrade.py` for the already-applied `0001_initial` path.
+- [ ] Do not treat Core `scripts/verify-legacy-upgrade.py` as a live check (historical, currently broken/off CI). Live commands require `trusts.zero.apps.ZeroConfig`.
 - [ ] Verify allow, deny, `:own`, and cross-organization isolation tests.
 
 # Issue #8 recovery (1.0.0.dev0 APIs and authorization)
@@ -315,7 +330,7 @@ Migration-bot checklist:
 Migration-bot checklist:
 
 - [ ] Do not fake or re-run `0001_initial` to pick up a through table.
-- [ ] Fresh migrate and `scripts/verify-legacy-upgrade.py` still see only `{0001_initial}`.
+- [ ] Fresh migrate at this historical step still records only `{0001_initial}` (later #23 adds `0002_trustgroup`). The Core `scripts/verify-legacy-upgrade.py` record is retained historical evidence and is currently broken/off CI. An equivalent Zero already-applied-`0001` → `0002` → grandfather replay is future work, not present evidence.
 - [ ] Replace `TrustGroup` writes with `trust.groups.add`.
 
 ## Policy not implemented (needs Thomas)
@@ -436,15 +451,21 @@ Migration-bot checklist:
 | --- | --- |
 | Previous | None. Old implicit access was the default. |
 | New | Operator-controlled copy of each TrustGroup's **current** global ceiling (`Group.permissions` ∪ role permissions) into `TrustGroupPermission`. Default is `--dry-run` (prints exact `trust_id` / `group_id` / `permission_id` tuples, writes nothing). `--apply` inserts. Not run from schema migration. |
-| Replacement | `manage.py grandfather_trust_group_permissions --dry-run` then `--apply` only when a deployment deliberately wants former group-derived access. |
+| Replacement | Zero's `manage.py grandfather_trust_group_permissions --dry-run` then `--apply` only when a deployment deliberately wants former group-derived access. Requires `trusts.zero.apps.ZeroConfig`. |
 | Affected | Existing deployments that relied on implicit `Trust.groups` + `Group.permissions`. |
 | Authorization | After `--apply`, former effective group access can be reproduced from the ceiling at apply time. Permissions added to the ceiling later are still not local. |
 
 Migration-bot checklist:
 
-- [ ] Run `--dry-run` and review the tuple list before `--apply`.
+- [ ] Run Zero's `--dry-run` and review the tuple list before `--apply`.
 - [ ] Do not invoke this command from `0002` or `post_migrate`.
 - [ ] After `--apply`, confirm a later `Group.permissions.add` still does not grant locally until a new local tuple is created.
+
+Current operator path (after #129): Core no longer ships
+`trusts.management.commands.grandfather_trust_group_permissions`.
+Run the Zero-owned command with `trusts.zero.apps.ZeroConfig`
+installed. The chronology and fail-closed default above are
+unchanged.
 
 ## Old vs new behavior
 
@@ -478,7 +499,8 @@ Applies `0001_initial` then `0002_trustgroup` and creates the root trust when
 
 ### Upgrade of a representative legacy database
 
-`scripts/verify-legacy-upgrade.py` now:
+`scripts/verify-legacy-upgrade.py` (retained in Core as historical
+evidence; currently broken/off CI; not a live operator path) then:
 
 1. Applies Django contrib migrations only.
 2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`.
@@ -490,7 +512,9 @@ Applies `0001_initial` then `0002_trustgroup` and creates the root trust when
    without mutation and `--apply` can restore former group-derived access.
 
 ```
-python scripts/verify-legacy-upgrade.py
+# Historical Core runner (retained; currently broken / off CI; not live):
+#   python scripts/verify-legacy-upgrade.py
+# Live grandfather command requires trusts.zero.apps.ZeroConfig.
 ```
 
 ## Out of scope (unchanged)
@@ -507,7 +531,7 @@ python scripts/verify-legacy-upgrade.py
 
 - [ ] Apply `trusts.0002_trustgroup`. Do not edit `0001_initial`.
 - [ ] Expect existing `Trust.groups` associations to remain and to grant **nothing** until local tuples exist.
-- [ ] Review `manage.py grandfather_trust_group_permissions --dry-run` if you want former implicit access; `--apply` only with an explicit operator decision.
+- [ ] Review Zero's `manage.py grandfather_trust_group_permissions --dry-run` if you want former implicit access; `--apply` only with an explicit operator decision. Requires `trusts.zero.apps.ZeroConfig`.
 - [ ] Stop treating `trust.groups.add` as a grant; use `grant_group_permission` / authorization helpers.
 - [ ] Keep `Group.permissions` and roles as the global ceiling; grant per-Trust subsets on `TrustGroup`.
 - [ ] Reload user objects after grant changes (`_trust_perm_cache`).
@@ -3061,5 +3085,139 @@ package boundary.
 - Examples / RST / #113 / Windows / GH-owner work
 - Folding this pair into #37
 - A generic core Team/grant UI or adapter protocol
+
+# Issue #129: remove unreachable Zero management commands (1.0.0.dev3)
+
+This record covers
+[django-trusts#129](https://github.com/django-trusts/django-trusts/issues/129).
+Package version stays **1.0.0.dev3**. No model, field, table,
+migration-loader key, content type, permission row, stored
+authorization fact, package identity, or app label changes. No
+public runtime API or method beyond the audited command modules
+changes.
+
+## Decision
+
+Core has no `AppConfig`, must not appear in `INSTALLED_APPS`, and
+therefore has no valid Django command-discovery path. Core wheels
+nevertheless still shipped `trusts.management.commands.*`. Those
+modules dynamically requested concrete `trusts.Trust` /
+`TrustGroup` / `Role` models that Core does not own.
+
+Zero already owns the live commands under
+`trusts.zero.management.commands` (`ZeroConfig.label='trusts'`)
+and exercises them. The stranded Core copies leave the wheel.
+
+The Core `scripts/verify-legacy-upgrade.py` runner and
+`scripts/legacy/trusts_0001_sqlite.sql` fixture are **retained** as
+historical already-applied-`0001` evidence. The runner imports inert
+`trusts.models`, lists `'trusts'` in `INSTALLED_APPS`, and is off CI,
+so it is not a live operator path. Zero owns the live commands and
+has complementary fresh-install / migration-identity / grandfather
+tests. Those are not an equivalent already-applied-`0001` → `0002`
+→ grandfather replay. Only that Zero proof should authorize deleting
+this Core evidence.
+
+## No change to these public call sites
+
+- `User.has_perm` / `has_perms` / `get_*_permissions` signatures
+- `TrustModelBackendMixin`, registry/query APIs, decorators,
+  conditions, `OrderedFold`
+- `get_short_model_name` / `get_short_model_name_lower` /
+  `parse_perm_code`
+- inert `trusts.models`
+- Package version `1.0.0.dev3`
+- Stored identity: app label `trusts`, Zero migration keys, tables,
+  content types, permissions, and rows
+
+## Changes
+
+### 58. Core no longer ships `trusts.management.commands.*`
+
+| | |
+| --- | --- |
+| Previous | Core wheels contained `trusts.management.commands.create_trust_root`, `grandfather_trust_group_permissions`, and `update_roles_permissions` (plus empty `trusts.management` / `trusts.management.commands` packages), despite having no valid Core `manage.py` discovery path. Direct Python imports of those modules succeeded from an installed Core wheel. |
+| New | Core no longer ships `trusts/management/**`. Built sdist/wheel contain no such paths. `import trusts.management` and the three command modules raise `ModuleNotFoundError`. |
+| Replacement | Install `django-trusts-zero` and `trusts.zero.apps.ZeroConfig`. Discoverable commands: `manage.py create_trust_root`, `manage.py grandfather_trust_group_permissions`, `manage.py update_roles_permissions`. Helpers: `trusts.zero.management.commands.create_trust_root.create_root_trust`, `trusts.zero.management.commands.update_roles_permissions.update_roles_permissions`. |
+| Affected | Direct Python imports of `trusts.management.commands.*`; operators who treated those names as Core commands. The retained Core `scripts/verify-legacy-upgrade.py` caller still names the deleted modules and remains non-executable. Zero callers already resolve Zero's copies. |
+| Authorization | None. Command behavior is unchanged on Zero. Schema, grants, and fail-closed defaults are unchanged. Removing unreachable Core modules does not widen or narrow access. |
+
+```python
+# Old (core — deleted, no alias)
+from trusts.management.commands.create_trust_root import create_root_trust
+from trusts.management.commands.update_roles_permissions import (
+    update_roles_permissions,
+)
+# manage.py create_trust_root  # never valid on Core-only INSTALLED_APPS
+
+# New (Zero, requires trusts.zero.apps.ZeroConfig)
+from trusts.zero.management.commands.create_trust_root import create_root_trust
+from trusts.zero.management.commands.update_roles_permissions import (
+    update_roles_permissions,
+)
+# manage.py create_trust_root
+# manage.py grandfather_trust_group_permissions --dry-run
+# manage.py update_roles_permissions
+```
+
+### 59. Retain the historical Core legacy-upgrade runner (not live)
+
+| | |
+| --- | --- |
+| Previous | `scripts/verify-legacy-upgrade.py` plus `scripts/legacy/trusts_0001_sqlite.sql` were sometimes described as a live Core check. |
+| New | Both files stay in Core as historical already-applied-`0001` evidence. The runner is currently broken (inert `trusts.models`, `'trusts'` in `INSTALLED_APPS`) and off CI. It is not a live operator path. |
+| Replacement | Live commands: Zero `manage.py` with `trusts.zero.apps.ZeroConfig`. Complementary Zero proofs: `scripts/verify-fresh-install.py`, `tests/test_migrations.py`, `tests/legacy/test_issue23.py`. Those are not an already-applied-`0001` → `0002` → grandfather replay. |
+| Affected | Contributors who treated the Core script as a current CI/operator check. |
+| Authorization | None. Retaining broken historical evidence does not change grants. |
+
+`docs/legacy/MANIFEST` and `docs/legacy-baseline.md` stay as
+historical 0.10.3 snapshot evidence. `scripts/verify-legacy-baseline.sh`
+is unchanged (source-archive check, not an upgrade runner).
+
+## Old vs new behavior
+
+| Situation | Old (Core before #129) | New (Core after #129) |
+| --- | --- | --- |
+| `import trusts.management.commands.create_trust_root` | Succeeded from the Core wheel | `ModuleNotFoundError` |
+| `manage.py create_trust_root` with only Core | No discovery path (no Core AppConfig) | Still no Core path; use Zero |
+| `manage.py create_trust_root` with `ZeroConfig` | Django discovered Zero's copy | Unchanged Zero command |
+| `INSTALLED_APPS = ['trusts']` | Unsupported after #111 | Still unsupported |
+| `INSTALLED_APPS = ['trusts.zero.apps.ZeroConfig']` | Discovers Zero commands | Unchanged |
+| Core `scripts/verify-legacy-upgrade.py` | Present, broken against inert models | Retained as historical evidence; still broken/off CI; not a live operator path |
+| Fail-closed already-applied-`0001` proof | Named a non-runnable Core script | Same files retained; live commands are Zero-owned; no Zero replay yet |
+| Package version | `1.0.0.dev3` | Unchanged |
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none was added.
+- [ ] Search for direct Python imports of `trusts.management`,
+      `trusts.management.commands`,
+      `trusts.management.commands.create_trust_root`,
+      `trusts.management.commands.grandfather_trust_group_permissions`,
+      and `trusts.management.commands.update_roles_permissions`. Retarget
+      those imports to `trusts.zero.management.commands.*`.
+- [ ] Confirm `'trusts'` is not in `INSTALLED_APPS`. Supported hosts
+      install `trusts.zero.apps.ZeroConfig` (or another
+      `TrustsImplementationConfig`).
+- [ ] Execute commands only with Zero installed:
+      `manage.py create_trust_root`,
+      `manage.py grandfather_trust_group_permissions --dry-run`
+      (then `--apply` only with an explicit operator decision),
+      `manage.py update_roles_permissions`.
+- [ ] Fail-closed upgrade verification: do not treat Core
+      `scripts/verify-legacy-upgrade.py` as a live check. It is
+      retained historical evidence, currently broken and off CI. Live
+      commands require `trusts.zero.apps.ZeroConfig`. An already-applied
+      `0001_initial` database still expects Zero `0002_trustgroup`
+      only; do not fake or re-run `0001`. Do not delete the Core runner
+      until Zero has an already-applied-`0001` → `0002` → grandfather
+      replay.
+- [ ] Confirm built Core sdist/wheel contains no `trusts/management/**`.
+- [ ] Confirm `import trusts.management` fails from an installed Core
+      wheel.
+- [ ] Leave package version at `1.0.0.dev3`.
+- [ ] Do not remove `get_short_model_name*`, `parse_perm_code`, inert
+      `trusts.models`, backends, decorators, conditions, registry/query
+      APIs, or `OrderedFold`.
 
 
