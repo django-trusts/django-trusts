@@ -44,7 +44,6 @@ TEMPLATES = [
         'APP_DIRS': True,
         'DIRS': [
             join(dirname(__file__), 'templates'),
-            join(dirname(dirname(__file__)), 'trusts', 'templates'),
         ],
         'OPTIONS': {
             'context_processors': [

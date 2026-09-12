@@ -25,6 +25,7 @@ comparisons cannot be overloaded and raise
 """
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.db.models import options as model_options
 from django.db.models import (
     F,
     Model,
@@ -63,10 +64,26 @@ class PermissionConditionUnsupported(PermissionConditionError):
 class PermissionConditionNotQueryable(ValueError):
     """Raised when a SQL list/create filter cannot compile a ``:condition``.
 
-    Kernel copy for backends/checks that must not import ``trusts.models``.
-    Zero also exposes this name on ``trusts.zero.models`` (and via the
-    ``trusts.models`` shim when Zero is installed).
+    Generic core exception. Import this name from ``trusts.conditions``.
     """
+
+
+def _ensure_permission_conditions_option():
+    """Register generic ``Meta.permission_conditions`` idempotently.
+
+    Must run at import, before Django constructs participating model
+    classes. Repeated import/setup must not duplicate the name.
+    """
+    names = model_options.DEFAULT_NAMES
+    if 'permission_conditions' in names:
+        return
+    if isinstance(names, tuple):
+        model_options.DEFAULT_NAMES = names + ('permission_conditions',)
+    else:
+        names.append('permission_conditions')
+
+
+_ensure_permission_conditions_option()
 
 
 def permission_has_condition(perm):
@@ -402,8 +419,8 @@ TQ = Query
 
 
 def _entity_model():
-    from trusts import get_entity_model
-    return get_entity_model()
+    from django.contrib.auth import get_user_model
+    return get_user_model()
 
 
 def resolve_field_path(model, path, ref_kind='object'):

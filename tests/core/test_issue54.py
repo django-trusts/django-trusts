@@ -128,10 +128,13 @@ class KernelConfigTest(SimpleTestCase):
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
-    def test_legacy_query_helpers_remain_importable(self):
-        from trusts.query import trust_grant_q
+    def test_legacy_query_helpers_are_removed(self):
+        import trusts.query as query
 
-        self.assertTrue(callable(trust_grant_q))
+        self.assertFalse(hasattr(query, 'trust_grant_q'))
+        self.assertFalse(hasattr(query, 'historical_group_grant_exists'))
+        self.assertFalse(hasattr(query, 'group_local_grant_exists'))
+        self.assertFalse(hasattr(query, 'permission_granted_via_group_exists'))
         self.assertTrue(callable(filter_authorized_scopes))
 
 

@@ -2854,8 +2854,192 @@ leave a forwarding alias on `Content` or `Junction`.
       added.
 - [ ] Leave package version at `1.0.0.dev3`.
 
+# Zero #18 / core #120: ownership map + core UI removals (1.0.0.dev3)
 
+This record covers the **core** half of the accepted
+[django-trusts-zero #18 ownership map](https://github.com/django-trusts/django-trusts-zero/issues/18#issuecomment-5642393972)
+and the [mandatory #120 addendum](https://github.com/django-trusts/django-trusts-zero/issues/18#issuecomment-5642470170).
+Package version stays **1.0.0.dev3**. No model, field, table,
+migration-loader key, content type, permission row, stored
+authorization fact, package identity, or app label changes. Group
+ceiling / reachability / condition / create-under-Trust *semantics*
+are unchanged; only the representation moves to alternative
+registered records plus the bounded M2M→M2M `permission_in` shape.
 
+There are **no forwarding aliases** in core.
 
+## Decision
+
+Core owns the schema-neutral engine:
+
+- `TrustsRegistry.register` permits a second complete record when
+  content/user/permission/along bindings match and only the closed
+  `condition` differs. Exact duplicates still reject. Same root +
+  content terminal with different bindings still conflicts. The plan
+  already ORs complete records.
+- `_resolve_permission_in_path` accepts exactly one intermediate M2M
+  followed by a terminal M2M on the registered permission model,
+  after zero or more forward single-valued hops. Today's reverse-O2M
+  intermediate + terminal M2M/O2M shape stays. Validation is zero-SQL
+  `_meta`. Arbitrary path grammar and a closed `Any` node are not
+  added.
+- Generic `Meta.permission_conditions` is registered idempotently on
+  `options.DEFAULT_NAMES` from `trusts.conditions` at import (before
+  model construction). Zero-only Meta names stay Zero-owned.
+
+Core no longer ships Zero-noun grant SQL, team UI, or duplicated
+entity/group/permission settings.
+
+## No change to these public call sites
+
+- `permission_in` / `PermissionIn`, `All`, `Equal`, `Ref`, `granted`,
+  `filter_authorized_scopes`
+- `AuthorizedQuerySet` / `AuthorizedManager` / `is_active_principal`
+- `User.has_perm` / `has_perms` / `get_*_permissions` signatures
+- Package version `1.0.0.dev3`
+- Stored identity: app label `trusts`, Zero migration keys, tables,
+  content types, permissions, and rows
+
+## Changes
+
+### 54. Same-root alternative conditions and bounded M2M→M2M `permission_in`
+
+| | |
+| --- | --- |
+| Previous | A second record with the same root and content terminal was always a conflict, even when only `condition` differed. `permission_in` rejected an intermediate M2M (`….roles.permissions`). |
+| New | Same bindings + a different closed condition is an allowed alternative. `permission_in` accepts `(forward single)*` then either `[reverse O2M] (terminal M2M\|reverse O2M)` or `(intermediate M2M) (terminal M2M)` on the registered permission model. Extra multi-hops, M2M-then-single, wrong terminals, GFK, and non-PK `to_field` membership targets fail closed. |
+| Replacement | Register two complete records for an OR of ceilings. Do not add `Any`. |
+| Affected | Registration of alternative ceilings. Existing single-condition records are unchanged. |
+| Authorization | Unchanged when only one record exists. Two alternatives OR. |
+
+```python
+from trusts.core import Ref, TrustsRegistry, permission_in
+
+g = Ref(GrantRoot)
+registry = TrustsRegistry()
+registry.register(
+    content=g.payload, user=g.actor, permission=g.token,
+    condition=permission_in(g.wing.floor.building.hall.badges),
+)
+registry.register(
+    content=g.payload, user=g.actor, permission=g.token,
+    condition=permission_in(g.wing.floor.building.hall.clusters.tokens),
+)
+```
+
+### 55. Delete Zero-noun query helpers (do not move)
+
+| Removed | Replacement |
+| --- | --- |
+| `trusts.query.trust_grant_q` | Registered plans + `granted` / `filter_authorized_scopes` |
+| `trusts.query.historical_group_grant_exists` | Same |
+| `trusts.query.group_local_grant_exists` | Same |
+| `trusts.query._record_group_grant_exists` | Internal; no supported caller |
+| `trusts.query.permission_granted_via_group_exists` | Internal; no supported caller |
+| `trusts.query._trust_group_model` | Internal; no supported caller |
+
+`AuthorizedQuerySet`, `AuthorizedManager`, and `is_active_principal`
+stay on `trusts.query`.
+
+### 56. Remove remaining concrete Zero UI / settings from core
+
+| Removed | New location (Zero) |
+| --- | --- |
+| `trusts.authorization` | `trusts.zero.authorization` (rewrite `has_trust_row_perm` through registered Zero scope/query; not `trust_grant_q`) |
+| `trusts.views` | `trusts.zero.views` |
+| `trusts.urls` | `trusts.zero.urls` |
+| `trusts/templates/auth/group_detail.html` | `trusts_zero/team_detail.html` (collision-safe) |
+| `trusts/templates/auth/group_form.html` | `trusts_zero/team_form.html` |
+| `trusts.admin` | Deleted. Zero already owns concrete Content/Junction admin |
+| `trusts.get_entity_model` / `get_group_model` / `get_permission_model` | `trusts.zero` (already present) |
+| `ENTITY_MODEL_NAME` / `GROUP_MODEL_NAME` / `PERMISSION_MODEL_NAME` / `DEFAULT_SETTLOR` / `ALLOW_NULL_SETTLOR` / `ROOT_PK` | `trusts.zero` |
+
+`trusts.__init__` retains only `pkgutil.extend_path` namespace
+behavior. Core does not invent a generic Team/grant UI protocol.
+
+Mixin `_condition_overlay` no longer discovers `compile_registered_condition_q`
+from a model `__module__`. Bound `RegistryConditionLookup` is the only
+condition path. Unknown codes stay `AttributeError`.
+
+## Old → new imports
+
+```python
+# Old (core — deleted, no alias)
+from trusts.query import trust_grant_q, historical_group_grant_exists
+from trusts.query import group_local_grant_exists
+from trusts.authorization import has_trust_row_perm, create_team
+from trusts import views, urls
+from trusts.admin import register_auto_modeladmins
+from trusts import get_entity_model, get_group_model, get_permission_model
+from trusts.backends import TrustModelBackend  # already gone; still gone
+
+# New
+from trusts.core import granted, filter_authorized_scopes, permission_in
+from trusts.zero.authorization import has_trust_row_perm, create_team
+from trusts.zero import views, urls
+from trusts.zero import get_entity_model, get_group_model, get_permission_model
+from trusts.conditions import PermissionConditionNotQueryable
+# include('trusts.urls') → include('trusts.zero.urls')
+# templates auth/group_*.html → trusts_zero/team_*.html
+```
+
+## URL / template removals
+
+| Old | New |
+| --- | --- |
+| `include('trusts.urls')` (`app_name='trusts'`) | `include('trusts.zero.urls')` |
+| `auth/group_detail.html` | `trusts_zero/team_detail.html` |
+| `auth/group_form.html` | `trusts_zero/team_form.html` |
+| `/teams/new/` and `/teams/<pk>/` as core routes | Same path shape on Zero's URLconf, if the host includes it |
+
+## Migration-bot search list
+
+```text
+from trusts.query import trust_grant_q
+from trusts.query import historical_group_grant_exists
+from trusts.query import group_local_grant_exists
+from trusts.query import permission_granted_via_group_exists
+trust_grant_q
+historical_group_grant_exists
+group_local_grant_exists
+permission_granted_via_group_exists
+_record_group_grant_exists
+_trust_group_model
+from trusts.authorization import
+import trusts.authorization
+from trusts.views import
+import trusts.views
+from trusts.urls import
+include('trusts.urls')
+include("trusts.urls")
+from trusts.admin import
+import trusts.admin
+register_auto_modeladmins
+auth/group_detail.html
+auth/group_form.html
+from trusts import get_entity_model
+from trusts import get_group_model
+from trusts import get_permission_model
+ENTITY_MODEL_NAME
+GROUP_MODEL_NAME
+PERMISSION_MODEL_NAME
+TRUSTS_DEFAULT_SETTLOR
+TRUSTS_ALLOW_NULL_SETTLOR
+TRUSTS_ROOT_PK
+ROOT_PK
+from trusts.backends import HistoricalGroupQueryCompiler
+```
+
+## Schema
+
+No change. This slice adds no model, table, migration, app-label, or
+package boundary.
+
+## Out of scope
+
+- Closed `Any` predicate
+- Examples / RST / #113 / Windows / GH-owner work
+- Folding this pair into #37
+- A generic core Team/grant UI or adapter protocol
 
 

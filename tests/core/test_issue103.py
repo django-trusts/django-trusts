@@ -63,3 +63,17 @@ class BackendsMixinBoundaryTest(SimpleTestCase):
         self.assertNotIn('HistoricalGroupQueryCompiler', imported)
         self.assertNotIn('TrustGroup', imported)
         self.assertNotIn('kernel_config', imported)
+        self.assertNotIn('get_permission_model', imported)
+        self.assertNotIn('get_entity_model', imported)
+
+    def test_zero_ui_surfaces_are_gone_from_core(self):
+        import importlib
+
+        for name in (
+            'trusts.authorization',
+            'trusts.views',
+            'trusts.urls',
+            'trusts.admin',
+        ):
+            with self.assertRaises(ModuleNotFoundError):
+                importlib.import_module(name)

@@ -36,10 +36,10 @@ raises `TrustsConfigurationError` when the root is absent. There is no
 `get(root)`: a single record would be ambiguous.
 
 Exact duplicate normalized registration raises. The same root plus the
-same content terminal with a different path or different user/permission
-paths is an explicit conflict. Same-root multiple paths to one content
-model are unsupported; this slice does not invent precedence. Different
-roots remain supported.
+same content terminal with different content/user/permission/along
+bindings is an explicit conflict. The same bindings with a different
+closed condition is an allowed alternative; the plan ORs complete
+records. Different roots remain supported.
 
 Permission refs remain one direct single-valued hop. A user path may be
 that same direct hop, or zero or more forward single-valued hops followed
@@ -99,8 +99,13 @@ registry.register(
   rejected at registration (zero SQL) so stored-column `F()` comparison
   cannot fail open on colliding values
 - `permission_in(*refs)` — each ref is a bounded ceiling path:
-  forward singles, at most one intermediate reverse O2M, then a
-  terminal M2M or reverse O2M on the registered permission model
+  forward singles, then either at most one intermediate reverse O2M
+  and a terminal M2M or reverse O2M on the registered permission
+  model, or exactly one intermediate M2M and a terminal M2M on that
+  permission model (`….clusters.tokens`). Extra multi-hops, M2M then
+  single, wrong terminals, GFK, and non-PK `to_field` membership
+  targets fail closed at zero SQL. The compiler emits the whole
+  accepted path.
 
 Those predicates compile as an AND overlay on the same
 permission-bearing root row. They do not create a grant. Callables,

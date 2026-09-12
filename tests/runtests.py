@@ -16,6 +16,7 @@ from django.conf import settings
 KERNEL_SUITE = [
     'tests.core.test_issue4',
     'tests.core.test_issue16',
+    'tests.core.test_issue18',
     'tests.core.test_issue29',
     'tests.core.test_issue54',
     'tests.core.test_issue57',
@@ -45,6 +46,7 @@ KERNEL_SUITE = [
 PAIR_KERNEL_SUITE = [
     'tests.core.test_issue4',
     'tests.core.test_issue16',
+    'tests.core.test_issue18',
     'tests.core.test_issue29',
     'tests.core.test_issue54',
     'tests.core.test_issue57',
