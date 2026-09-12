@@ -31,10 +31,12 @@ declared Python version with Django 6.1, plus the OrderedFold PostgreSQL
 job, the Core/Zero pair job, and a `package` job. The `package` job
 (sdist/wheel build, `twine check`, metadata/LICENSE proof, and an
 out-of-checkout wheel import) runs on **Python 3.12** as a representative
-install of the declared range. Legacy already-applied-`0001` upgrade
-proof and the three Trusts management commands live in
-[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero),
-not in this schema-neutral library.
+install of the declared range. Core still retains
+`scripts/verify-legacy-upgrade.py` as historical already-applied-`0001`
+evidence; that runner is currently broken, off CI, and not a live
+operator path. Live Trusts management commands require
+[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
+and `trusts.zero.apps.ZeroConfig`.
 
 ## Database (Along reachability, issue #92)
 

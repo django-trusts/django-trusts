@@ -75,13 +75,16 @@ python -m tests.runtests
 python -m django check --settings=tests.settings
 ```
 
-The former Core `scripts/verify-legacy-upgrade.py` path is gone. Core has
-no AppConfig and no valid command-discovery path. Zero owns the live
-`create_trust_root`, `grandfather_trust_group_permissions`, and
-`update_roles_permissions` commands and the equivalent upgrade proof
-(`scripts/verify-fresh-install.py`, `tests/test_migrations.py`,
-`tests/legacy/test_issue23.py`, plus the preserved
-`scripts/legacy/trusts_0001_sqlite.sql` fixture).
+`scripts/verify-legacy-upgrade.py` and `scripts/legacy/trusts_0001_sqlite.sql`
+remain in this tree as historical already-applied-`0001` evidence. The
+runner is currently broken (imports inert `trusts.models`, lists
+`'trusts'` in `INSTALLED_APPS`) and is **not** in CI. It is not a live
+operator path. Live `create_trust_root`,
+`grandfather_trust_group_permissions`, and `update_roles_permissions`
+commands require `trusts.zero.apps.ZeroConfig`. Zero's
+fresh-install / migration-identity / grandfather tests are complementary;
+they are not an already-applied-`0001` → `0002` → grandfather replay.
+Only that Zero replay should authorize deleting this Core evidence.
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
 authorization tests, a fresh migrate, `manage.py check`, an OrderedFold

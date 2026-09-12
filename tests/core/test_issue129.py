@@ -20,8 +20,6 @@ REMOVED_MODULES = (
 class UnreachableManagementCommandsRemovedTest(SimpleTestCase):
     def test_source_tree_has_no_management_package(self):
         self.assertFalse((ROOT / 'trusts' / 'management').exists())
-        self.assertFalse((ROOT / 'scripts' / 'verify-legacy-upgrade.py').exists())
-        self.assertFalse((ROOT / 'scripts' / 'legacy' / 'trusts_0001_sqlite.sql').exists())
 
     def test_removed_modules_are_not_importable(self):
         for name in REMOVED_MODULES:

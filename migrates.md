@@ -146,10 +146,12 @@ is true (default).
 
 ### Upgrade of a representative legacy database
 
-`scripts/verify-legacy-upgrade.py` was the Core executable check (removed
-in #129; it imported inert `trusts.models` and listed `'trusts'` in
-`INSTALLED_APPS`, so it had no valid Core path). Live proof is Zero-owned.
-Historically it:
+`scripts/verify-legacy-upgrade.py` remains in Core as historical
+already-applied-`0001` evidence. After #129 it is not a live operator
+path: it imports inert `trusts.models`, lists `'trusts'` in
+`INSTALLED_APPS`, and is off CI. Zero owns the live commands; Zero does
+not yet replay this already-applied-`0001` → `0002` → grandfather path.
+Historically the runner:
 
 1. Applies Django contrib migrations only.
 2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`
@@ -162,17 +164,15 @@ Historically it:
 6. Checks the root row plus allow/deny/isolation on `Trust` content.
 
 ```
-# Historical Core invocation (removed in #129). Use Zero:
-#   python scripts/verify-fresh-install.py
-# plus Zero tests/test_migrations.py and tests/legacy/test_issue23.py.
+# Historical Core runner (retained; currently broken / off CI; not live):
+#   python scripts/verify-legacy-upgrade.py
+# Live commands require trusts.zero.apps.ZeroConfig.
 ```
 
-That was a representative Trusts upgrade, not a captured production dump
-and not a full Django 1.8→6.1 contrib-schema upgrade. Project models still
-need Django's own 1.8→6.1 path (removed APIs, `on_delete`, middleware,
-auto fields). No intermediate Trusts migration is required. Live
-already-applied-`0001` / grandfather proof belongs to
-[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
+That is a representative Trusts upgrade record, not a captured production
+dump and not a full Django 1.8→6.1 contrib-schema upgrade. Project models
+still need Django's own 1.8→6.1 path (removed APIs, `on_delete`,
+middleware, auto fields). No intermediate Trusts migration is required.
 
 ## Migration-bot summary
 
@@ -184,7 +184,7 @@ already-applied-`0001` / grandfather proof belongs to
 - [ ] `pip install` the modernized package; do not install `six` / `funcsigs` /
       `mock` / `pbr` for Trusts itself.
 - [ ] Migrate a fresh DB (`python -m django migrate --settings=tests.settings`).
-- [ ] Run Zero's fresh-install / migration-identity / grandfather proofs for the already-applied `0001_initial` path (Core `scripts/verify-legacy-upgrade.py` was removed in #129).
+- [ ] Do not treat Core `scripts/verify-legacy-upgrade.py` as a live check (historical, currently broken/off CI). Live commands require `trusts.zero.apps.ZeroConfig`.
 - [ ] Verify allow, deny, `:own`, and cross-organization isolation tests.
 
 # Issue #8 recovery (1.0.0.dev0 APIs and authorization)
@@ -499,7 +499,8 @@ Applies `0001_initial` then `0002_trustgroup` and creates the root trust when
 
 ### Upgrade of a representative legacy database
 
-`scripts/verify-legacy-upgrade.py` (removed in #129) historically then:
+`scripts/verify-legacy-upgrade.py` (retained in Core as historical
+evidence; currently broken/off CI; not a live operator path) then:
 
 1. Applies Django contrib migrations only.
 2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`.
@@ -511,9 +512,9 @@ Applies `0001_initial` then `0002_trustgroup` and creates the root trust when
    without mutation and `--apply` can restore former group-derived access.
 
 ```
-# Historical Core invocation (removed in #129). Use Zero:
-#   python scripts/verify-fresh-install.py
-# plus tests/legacy/test_issue23.py (grandfather dry-run/apply).
+# Historical Core runner (retained; currently broken / off CI; not live):
+#   python scripts/verify-legacy-upgrade.py
+# Live grandfather command requires trusts.zero.apps.ZeroConfig.
 ```
 
 ## Out of scope (unchanged)
@@ -3107,11 +3108,15 @@ Zero already owns the live commands under
 `trusts.zero.management.commands` (`ZeroConfig.label='trusts'`)
 and exercises them. The stranded Core copies leave the wheel.
 
-The Core `scripts/verify-legacy-upgrade.py` path imported inert
-`trusts.models` and listed `'trusts'` in `INSTALLED_APPS`, so it
-was not executable proof. Zero preserves equivalent upgrade
-evidence: the historical `0001` SQLite DDL, fresh-install /
-migration-identity checks, and grandfather dry-run/apply tests.
+The Core `scripts/verify-legacy-upgrade.py` runner and
+`scripts/legacy/trusts_0001_sqlite.sql` fixture are **retained** as
+historical already-applied-`0001` evidence. The runner imports inert
+`trusts.models`, lists `'trusts'` in `INSTALLED_APPS`, and is off CI,
+so it is not a live operator path. Zero owns the live commands and
+has complementary fresh-install / migration-identity / grandfather
+tests. Those are not an equivalent already-applied-`0001` → `0002`
+→ grandfather replay. Only that Zero proof should authorize deleting
+this Core evidence.
 
 ## No change to these public call sites
 
@@ -3134,7 +3139,7 @@ migration-identity checks, and grandfather dry-run/apply tests.
 | Previous | Core wheels contained `trusts.management.commands.create_trust_root`, `grandfather_trust_group_permissions`, and `update_roles_permissions` (plus empty `trusts.management` / `trusts.management.commands` packages), despite having no valid Core `manage.py` discovery path. Direct Python imports of those modules succeeded from an installed Core wheel. |
 | New | Core no longer ships `trusts/management/**`. Built sdist/wheel contain no such paths. `import trusts.management` and the three command modules raise `ModuleNotFoundError`. |
 | Replacement | Install `django-trusts-zero` and `trusts.zero.apps.ZeroConfig`. Discoverable commands: `manage.py create_trust_root`, `manage.py grandfather_trust_group_permissions`, `manage.py update_roles_permissions`. Helpers: `trusts.zero.management.commands.create_trust_root.create_root_trust`, `trusts.zero.management.commands.update_roles_permissions.update_roles_permissions`. |
-| Affected | Direct Python imports of `trusts.management.commands.*`; operators who treated those names as Core commands; the broken Core `scripts/verify-legacy-upgrade.py` caller (removed). Zero callers already resolve Zero's copies. |
+| Affected | Direct Python imports of `trusts.management.commands.*`; operators who treated those names as Core commands. The retained Core `scripts/verify-legacy-upgrade.py` caller still names the deleted modules and remains non-executable. Zero callers already resolve Zero's copies. |
 | Authorization | None. Command behavior is unchanged on Zero. Schema, grants, and fail-closed defaults are unchanged. Removing unreachable Core modules does not widen or narrow access. |
 
 ```python
@@ -3155,12 +3160,15 @@ from trusts.zero.management.commands.update_roles_permissions import (
 # manage.py update_roles_permissions
 ```
 
-### 59. Remove the broken Core legacy-upgrade script
+### 59. Retain the historical Core legacy-upgrade runner (not live)
 
-| Removed | Replacement |
+| | |
 | --- | --- |
-| `scripts/verify-legacy-upgrade.py` | Zero `scripts/verify-fresh-install.py`, `tests/test_migrations.py`, and `tests/legacy/test_issue23.py` (grandfather dry-run/apply). |
-| `scripts/legacy/trusts_0001_sqlite.sql` | Same historical DDL already preserved in Zero `scripts/legacy/trusts_0001_sqlite.sql`. |
+| Previous | `scripts/verify-legacy-upgrade.py` plus `scripts/legacy/trusts_0001_sqlite.sql` were sometimes described as a live Core check. |
+| New | Both files stay in Core as historical already-applied-`0001` evidence. The runner is currently broken (inert `trusts.models`, `'trusts'` in `INSTALLED_APPS`) and off CI. It is not a live operator path. |
+| Replacement | Live commands: Zero `manage.py` with `trusts.zero.apps.ZeroConfig`. Complementary Zero proofs: `scripts/verify-fresh-install.py`, `tests/test_migrations.py`, `tests/legacy/test_issue23.py`. Those are not an already-applied-`0001` → `0002` → grandfather replay. |
+| Affected | Contributors who treated the Core script as a current CI/operator check. |
+| Authorization | None. Retaining broken historical evidence does not change grants. |
 
 `docs/legacy/MANIFEST` and `docs/legacy-baseline.md` stay as
 historical 0.10.3 snapshot evidence. `scripts/verify-legacy-baseline.sh`
@@ -3175,8 +3183,8 @@ is unchanged (source-archive check, not an upgrade runner).
 | `manage.py create_trust_root` with `ZeroConfig` | Django discovered Zero's copy | Unchanged Zero command |
 | `INSTALLED_APPS = ['trusts']` | Unsupported after #111 | Still unsupported |
 | `INSTALLED_APPS = ['trusts.zero.apps.ZeroConfig']` | Discovers Zero commands | Unchanged |
-| Core `scripts/verify-legacy-upgrade.py` | Present, broken against inert models | Removed |
-| Fail-closed already-applied-`0001` proof | Named a non-runnable Core script | Zero-owned tests/scripts |
+| Core `scripts/verify-legacy-upgrade.py` | Present, broken against inert models | Retained as historical evidence; still broken/off CI; not a live operator path |
+| Fail-closed already-applied-`0001` proof | Named a non-runnable Core script | Same files retained; live commands are Zero-owned; no Zero replay yet |
 | Package version | `1.0.0.dev3` | Unchanged |
 
 ## Migration-bot checklist
@@ -3196,11 +3204,14 @@ is unchanged (source-archive check, not an upgrade runner).
       `manage.py grandfather_trust_group_permissions --dry-run`
       (then `--apply` only with an explicit operator decision),
       `manage.py update_roles_permissions`.
-- [ ] Fail-closed upgrade verification: do not run a Core
-      `scripts/verify-legacy-upgrade.py` (it is gone). Use Zero's
-      fresh-install / migration-identity / grandfather proofs. An
-      already-applied `0001_initial` database still expects Zero
-      `0002_trustgroup` only; do not fake or re-run `0001`.
+- [ ] Fail-closed upgrade verification: do not treat Core
+      `scripts/verify-legacy-upgrade.py` as a live check. It is
+      retained historical evidence, currently broken and off CI. Live
+      commands require `trusts.zero.apps.ZeroConfig`. An already-applied
+      `0001_initial` database still expects Zero `0002_trustgroup`
+      only; do not fake or re-run `0001`. Do not delete the Core runner
+      until Zero has an already-applied-`0001` → `0002` → grandfather
+      replay.
 - [ ] Confirm built Core sdist/wheel contains no `trusts/management/**`.
 - [ ] Confirm `import trusts.management` fails from an installed Core
       wheel.
