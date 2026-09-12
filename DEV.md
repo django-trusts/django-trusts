@@ -26,7 +26,7 @@ Trust / Content / settlor / trustee models and the concrete backend
 live only in `django-trusts-zero`.
 
 Pair CI pins the Zero #37 STAGE 1 destination
-`904a51f922df4d0dc9a20ccadc37f34eb481fcff` so historical tests run
+`73b74b4213f6040f0e71c4c46d7a509804975672` so historical tests run
 from Zero `tests/legacy/`, not from core package paths.
 
 ## What this package is not

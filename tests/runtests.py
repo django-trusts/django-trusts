@@ -14,11 +14,21 @@ from django.conf import settings
 # Library-only suite: no Zero, no concrete Trust models, no shipped
 # trusts/test*.py modules.
 KERNEL_SUITE = [
+    'tests.core.test_issue4',
     'tests.core.test_issue16',
+    'tests.core.test_issue29',
+    'tests.core.test_issue54',
     'tests.core.test_issue57',
     'tests.core.test_issue60',
     'tests.core.test_issue65',
+    'tests.core.test_issue67',
+    'tests.core.test_issue70',
+    'tests.core.test_issue72',
+    'tests.core.test_issue75',
+    'tests.core.test_issue77',
+    'tests.core.test_issue80',
     'tests.core.test_issue83',
+    'tests.core.test_issue89',
     'tests.core.test_issue92',
     'tests.core.test_issue96',
     'tests.core.test_issue98',
@@ -33,11 +43,21 @@ KERNEL_SUITE = [
 # Historical Trust/Content/Junction/Role coverage runs from the Zero
 # checkout (see scripts/run-z1-pair-tests.py), not from core paths.
 PAIR_KERNEL_SUITE = [
+    'tests.core.test_issue4',
     'tests.core.test_issue16',
+    'tests.core.test_issue29',
+    'tests.core.test_issue54',
     'tests.core.test_issue57',
     'tests.core.test_issue60',
     'tests.core.test_issue65',
+    'tests.core.test_issue67',
+    'tests.core.test_issue70',
+    'tests.core.test_issue72',
+    'tests.core.test_issue75',
+    'tests.core.test_issue77',
+    'tests.core.test_issue80',
     'tests.core.test_issue83',
+    'tests.core.test_issue89',
     'tests.core.test_issue92',
     'tests.core.test_issue98',
     'tests.core.test_issue100',
