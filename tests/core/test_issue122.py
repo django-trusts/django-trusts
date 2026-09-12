@@ -18,6 +18,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'kernel_config',
             'C1 default',
             'pip install django-trusts',
+            'TeamRepositoryGrant',
+            'permission_bundles',
         )
         self.assertEqual([needle for needle in forbidden if needle in rst], [])
         self.assertIn('non-standalone Python dependency', rst)
@@ -25,6 +27,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('TrustModelBackendMixin', rst)
         self.assertIn('Document.objects.authorized(user, change_permission)', rst)
         self.assertIn('filter_authorized_scopes', rst)
+        self.assertIn('TeamRepositoryPermission', rst)
+        self.assertIn('t.team.allowed_operations', rst)
         self.assertIn('django-trusts-zero', rst)
         self.assertIn('django-trusts-gh-permissions', rst)
         self.assertIn('django-trusts-windows-acl', rst)
