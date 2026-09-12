@@ -343,7 +343,7 @@ the explicit ``trusts.zero`` paths described in the `Zero migration guide
 
 A runnable application using that implementation is available in
 `django-trusts-zero-example
-<https://github.com/django-trusts/django-trusts-zero-example>`_.
+<https://github.com/django-trusts/django-trusts-zero-example/tree/dev>`_.
 
 Validation and support
 ----------------------
