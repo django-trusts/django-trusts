@@ -3394,6 +3394,7 @@ Downstream gates already merged:
 - Core Stage A `710b3ea26778ff069d1f5329adc9f2f481a1ea92`
 - Zero Z-convert `bceb0241b482fdc4f31dd72c7600c52eeb4e6cff`
 - Zero Example E-convert `0cb7ea23708610e467915abd4c2f768b5aece839`
+- Zero #27 Stage B test conversion `7ff4e14686b7b443f36392c5142c165ec45071ff`
 
 ## Decision
 
@@ -3455,7 +3456,7 @@ private module. Runtime callbacks stay deleted.
 
 ## Fail-closed rollout
 
-1. Stage A, Z-convert, and E-convert are already merged.
+1. Stage A, Z-convert, E-convert, and Zero #27 are already merged.
 2. Land this Core Stage B PR on `dev`.
 3. Do not start #145, #146, #138, #137, condition-only registration, or `TQ.contains` here.
 

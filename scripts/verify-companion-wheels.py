@@ -24,7 +24,7 @@ if str(_SCRIPTS) not in sys.path:
 from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
-ZERO_HEAD = 'bceb0241b482fdc4f31dd72c7600c52eeb4e6cff'
+ZERO_HEAD = '7ff4e14686b7b443f36392c5142c165ec45071ff'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
