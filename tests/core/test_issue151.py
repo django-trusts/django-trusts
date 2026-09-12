@@ -14,6 +14,7 @@ from django.db import connection, models
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
+from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document
@@ -122,6 +123,15 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertTrue(permission_has_condition('change_note:own'))
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
+    def test_host_docs_do_not_import_or_bind_ir_lookup(self):
+        apps_text = (ROOT / 'tests' / 'myapp' / 'apps.py').read_text()
+        readme = (ROOT / 'README.md').read_text()
+        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
+        for text in (apps_text, readme, rst):
+            self.assertNotIn('RegistryConditionLookup', text)
+            self.assertNotIn('trusts.conditions._ir', text)
+            self.assertNotIn('set_condition_lookup', text)
+
 
 class ImportOrderStandaloneConstructionTest(SimpleTestCase):
     def _run_isolated(self, source):
@@ -187,11 +197,8 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
         self.assertIn('ir-then-construct-ok', stdout)
 
 
-class LiveEnsureSelfBindTest(SimpleTestCase):
+class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
-        apps_text = (ROOT / 'tests' / 'myapp' / 'apps.py').read_text()
-        self.assertNotIn('RegistryConditionLookup', apps_text)
-        self.assertNotIn('set_condition_lookup', apps_text)
         owner = implementation_for_path(DOCUMENT_BACKEND)
         registry = owner.configured_backend().registry
         self.assertTrue(registry.frozen)
@@ -200,7 +207,7 @@ class LiveEnsureSelfBindTest(SimpleTestCase):
         self.assertIs(lookup.conditions, registry.conditions)
 
 
-class OverrideUnbindAndFailClosedTest(TestCase):
+class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
     def test_explicit_unbind_and_partial_bind_do_not_mutate_wrongly(self):
         registry = TrustsRegistry()
         default = registry.condition_lookup
