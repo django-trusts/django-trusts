@@ -211,8 +211,7 @@ class ConditionLookup(object):
 
     ``record_for`` returns the registered record or ``None`` (unregistered
     codes fail closed as ``AttributeError`` at the caller). ``compile_q``
-    compiles an ``Expr`` to ``Q``. A callable policy must raise
-    ``PermissionConditionNotQueryable`` and must never be invoked.
+    compiles stored condition IR to ``Q``.
     """
 
     def record_for(self, model, cond_code):
@@ -2173,10 +2172,11 @@ class TrustsRegistry(object):
     models, or when the same bindings use a different closed condition.
 
         Frozen state is instance-owned. ``freeze()`` is idempotent.
-        ``register`` and ``register_strategy`` on that exact frozen instance
-        raise ``TrustsConfigurationError`` before validation or mutation.
-        Existing records, plans, compilers, and authorization reads stay
-        usable.
+        ``register``, ``register_strategy``, and
+        ``register_permission_condition`` on that exact frozen instance
+        raise ``TrustsConfigurationError`` before validation, builder
+        invoke, or mutation. Existing records, plans, compilers, and
+        authorization reads stay usable.
     A standalone ``TrustsRegistry()`` never inspects Django readiness
     and never auto-freezes.
     """
@@ -2224,11 +2224,15 @@ class TrustsRegistry(object):
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
 
-        Ordinary registry method for AppConfig / module contribution.
-        Dispatch is by type: an ``Expr`` is queryable policy data; a
-        callable is the object-only escape hatch. Callables are never
-        invoked at registration. ``freeze()`` does not seal this method.
+        A callable is a registration-time builder. A frozen instance
+        raises ``TrustsConfigurationError`` before the builder is
+        invoked. A prebuilt ``Expr`` is accepted transitionally.
         """
+        if self._frozen:
+            raise TrustsConfigurationError(
+                'Cannot register a permission condition on a frozen '
+                'TrustsRegistry.'
+            )
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
         )
@@ -2256,7 +2260,7 @@ class TrustsRegistry(object):
         )
 
     def freeze(self):
-        """Seal this instance against further ``register`` / ``register_strategy`` writes."""
+        """Seal relation, strategy, and condition registration on this instance."""
         self._frozen = True
 
     @property
@@ -2526,6 +2530,16 @@ class BackendHandle:
     path: str
     registry: object
     compiler: object
+
+    def register_permission_condition(self, model, code, builder_or_expr):
+        """Application API: register a named condition on this handle.
+
+        Thin-forwards to the handle registry. A frozen/finalized handle
+        raises ``TrustsConfigurationError`` before a builder is invoked.
+        """
+        return self.registry.register_permission_condition(
+            model, code, builder_or_expr,
+        )
 
     @property
     def historical_fallback(self):

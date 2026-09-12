@@ -162,6 +162,10 @@ class ConditionGrammarTest(SimpleTestCase):
             registry.register_permission_condition(object, 'bare', o.owner)
         with self.assertRaises(TypeError):
             registry.register_permission_condition(object, 'bad', 'not-a-condition')
+        with self.assertRaises(PermissionConditionError):
+            registry.register_permission_condition(
+                object, 'truth', lambda u, p, o: True,
+            )
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_incompatible_literal_types_rejected_at_validate(self):
@@ -179,3 +183,22 @@ class ConditionGrammarTest(SimpleTestCase):
         validate_expression(o.status == 'open', Ticket)
         validate_expression(u == o.owner, Ticket)
         validate_expression(o.region == None, Ticket)
+
+    @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+    def test_builder_once_never_during_validate(self):
+        Ticket = _ticket_model()
+        calls = []
+
+        def owned(u, p, o):
+            calls.append((u, p, o))
+            return u == o.owner
+
+        registry = TrustsRegistry()
+        record = registry.register_permission_condition(Ticket, 'own', owned)
+        self.assertEqual(len(calls), 1)
+        validate_expression(record.expr, Ticket)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            record.expr.to_tuple(),
+            ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
+        )

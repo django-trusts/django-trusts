@@ -10,9 +10,7 @@ from django.db.models import Model, QuerySet, Subquery
 
 from trusts.conditions import (
     PermissionConditionError,
-    PermissionConditionNotQueryable,
     evaluate_registered_expression,
-    legacy_permission_callbacks_allowed,
     permission_has_condition,
 )
 from trusts.query import (
@@ -135,14 +133,11 @@ class TrustModelBackendMixin(object):
         return self._instance_permissions(user_obj, obj, kind='complete')
 
     def permission_condition_met(self, record, user_obj, perm, obj):
-        if isinstance(obj, QuerySet) and record.expr is None:
-            raise PermissionConditionNotQueryable(
-                'ContentQuerySet.permitted does not support permission '
-                'condition on %s. Register an Expr from condition_refs() '
-                'to compile a V1 declarative expression. Callables remain '
-                'object-only via has_perm; this queryset API refuses them so '
-                'the underlying grant cannot be returned without the '
-                'condition.' % obj.model._meta.label
+        if record.expr is None:
+            model = obj.model if isinstance(obj, QuerySet) else getattr(obj, '__class__', obj)
+            raise PermissionConditionError(
+                'Permission condition on %s is unbound.'
+                % getattr(getattr(model, '_meta', None), 'label', model)
             )
         if isinstance(obj, QuerySet):
             objs = obj.all()
@@ -154,22 +149,12 @@ class TrustModelBackendMixin(object):
             objs = [obj]
             model = obj.__class__
 
-        if record.expr is not None:
-            return all([
-                evaluate_registered_expression(
-                    record.expr, user_obj, perm, o, model=model or o.__class__
-                )
-                for o in objs
-            ])
-        if not legacy_permission_callbacks_allowed():
-            raise PermissionConditionError(
-                'Callable permission conditions are disabled. Set '
-                'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True to use '
-                'the object-only has_perm path, or register an Expr from '
-                'condition_refs(). Silencing trusts.E002 does not enable '
-                'the callback.'
+        return all([
+            evaluate_registered_expression(
+                record.expr, user_obj, perm, o, model=model or o.__class__
             )
-        return all([record.func(user_obj, perm, o) for o in objs])
+            for o in objs
+        ])
 
     def _bound_condition_lookup(self, obj):
         """Bound ``ConditionLookup`` on the coordinating / own registry.
@@ -187,10 +172,8 @@ class TrustModelBackendMixin(object):
     def _condition_overlay(self, permext, obj, user_obj):
         """Return (record, extra_q) for a ``:condition`` suffix.
 
-        An ``Expr`` on a QuerySet compiles to SQL (AND overlay). Callables
-        on a QuerySet raise ``PermissionConditionNotQueryable`` before
-        any candidate SQL or callback. Unregistered codes raise the same
-        ``AttributeError`` as before.
+        Stored IR on a QuerySet compiles to SQL (AND overlay).
+        Unregistered codes raise the same ``AttributeError`` as before.
 
         A bound ``ConditionLookup`` is the only condition path. Unknown
         codes raise ``AttributeError``. Core does not import Zero modules

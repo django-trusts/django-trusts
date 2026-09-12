@@ -248,6 +248,45 @@ Protect a view with the same permission:
 Object checks, permission enumeration, queryset filtering, and view protection
 all use the registered permission relationship.
 
+Named queryable conditions
+--------------------------
+
+A named ``:condition`` further constrains an existing permission. Register a
+builder on the configured handle. Core invokes that callable exactly once
+with symbolic ``(u, p, o)`` refs, validates the returned comparison, and
+stores only the normalized predicate. The callable is not kept as policy
+and is never run during ``has_perm``, permission enumeration, or queryset
+filtering.
+
+Builders are trusted startup code, like ``AppConfig.ready()``. Do not query,
+perform I/O, or read request state inside them. Core itself adds no SQL
+during registration.
+
+.. code-block:: python
+
+   handle = self.configured_backend()
+   handle.register_permission_condition(
+       Document,
+       "non_confidential",
+       lambda u, p, o: o.confidential != True,
+   )
+   handle.register_permission_condition(
+       Document,
+       "own",
+       lambda u, p, o: u == o.owner,
+   )
+
+   user.has_perm("documents.change_document:non_confidential", document)
+
+A ``lambda`` and an equivalent named function are accepted identically.
+Unsupported operations, exceptions, non-predicates, unresolved fields, and
+forbidden constant captures fail at registration. Later mutation of a
+Python object captured by the builder cannot change authorization.
+
+``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` does not restore runtime
+callbacks. If that setting is still ``True``, ``manage.py check`` reports
+``trusts.E002``.
+
 More expressive permission policies
 -----------------------------------
 

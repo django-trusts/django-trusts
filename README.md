@@ -149,6 +149,30 @@ def edit_document(request, pk):
     return 'ok'
 ```
 
+Named queryable conditions are registration-time builders. Core invokes
+the callable once with symbolic refs, stores only the normalized
+predicate, and never runs it during `has_perm` or queryset filtering.
+Write builders like migrations: no queries, no I/O, no request state.
+
+```python
+handle = self.configured_backend()
+handle.register_permission_condition(
+    Document,
+    'non_confidential',
+    lambda u, p, o: o.confidential != True,
+)
+handle.register_permission_condition(
+    Document,
+    'own',
+    lambda u, p, o: u == o.owner,
+)
+user.has_perm('myapp.change_document:non_confidential', document)
+```
+
+A lambda and an equivalent named function are accepted identically.
+`TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` does not restore runtime
+callbacks; if it is still `True`, Django system checks fail.
+
 ## Documentation
 
 - [migrates.md](migrates.md) — core API migration guide

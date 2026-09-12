@@ -201,7 +201,7 @@ class ConditionLookupBindTest(TestCase):
                 return type('Rec', (), {'expr': None, 'func': callback})()
 
             def compile_q(self, model, perm_string, user):
-                raise PermissionError('callables stay object-only')
+                raise PermissionError('lookup compile_q must not invoke builders')
 
         lookup = Refusing()
         with self.assertNumQueries(0):
