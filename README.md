@@ -1,5 +1,7 @@
 # django-trusts
 
+[![Coverage](https://coveralls.io/repos/github/django-trusts/django-trusts/badge.svg?branch=dev)](https://coveralls.io/github/django-trusts/django-trusts?branch=dev)
+
 `django-trusts` is a **non-standalone Python dependency** for applications
 and packages that define their own declarative Django authorization
 implementation.

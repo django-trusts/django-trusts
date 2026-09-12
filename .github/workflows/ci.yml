@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [dev]
   pull_request:
 
 permissions:
@@ -35,6 +35,17 @@ jobs:
       run: |
         coverage run -m tests.runtests
         coverage report
+    - name: Generate Cobertura coverage.xml
+      if: matrix.python-version == '3.12'
+      run: coverage xml
+    - name: Upload coverage to Coveralls
+      if: matrix.python-version == '3.12'
+      uses: coverallsapp/github-action@v2
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        file: coverage.xml
+        format: cobertura
+        compare-ref: dev
     - name: Fresh migrate (no Trusts schema)
       run: python -m django migrate --noinput --settings=tests.settings
     - name: System checks
