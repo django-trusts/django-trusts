@@ -216,6 +216,29 @@ def main() -> int:
         pass
     else:
         raise SystemExit('trusts.conditions still exports condition_refs')
+    for _hidden in (
+        'ConditionLookup',
+        'ConditionRecord',
+        'ConditionRegistry',
+        'ModelIdentity',
+        'RegistryConditionLookup',
+        'compile_expression_q',
+        'evaluate_registered_expression',
+        'obsolete_legacy_callback_setting_enabled',
+        'validate_expression',
+    ):
+        try:
+            getattr(__import__('trusts.conditions', fromlist=[_hidden]), _hidden)
+        except AttributeError:
+            pass
+        else:
+            raise SystemExit('trusts.conditions still exports %s' % _hidden)
+        try:
+            exec('from trusts.conditions import %s' % _hidden)
+        except ImportError:
+            pass
+        else:
+            raise SystemExit('trusts.conditions still imports %s' % _hidden)
     print('public construction imports fail')
     import importlib.util
 

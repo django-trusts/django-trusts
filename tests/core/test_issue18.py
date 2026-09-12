@@ -308,7 +308,7 @@ class CoreImportBoundaryTest(SimpleTestCase):
 
 class PermissionConditionsMetaOptionTest(SimpleTestCase):
     def test_generic_option_is_registered_idempotently(self):
-        from trusts.conditions import _ensure_permission_conditions_option
+        from trusts.conditions._ir import _ensure_permission_conditions_option
 
         self.assertIn('permission_conditions', model_options.DEFAULT_NAMES)
         before = model_options.DEFAULT_NAMES

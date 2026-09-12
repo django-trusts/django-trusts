@@ -3399,15 +3399,16 @@ Downstream gates already merged:
 
 Public condition registration accepts **callable builders only**.
 Passing a prebuilt `Expr` raises `TypeError` before the registry is
-mutated. Construction nodes, ref factories, and reserved `Query` /
-`TQ` live in `trusts.conditions._ir`. `trusts.conditions` and
-`django_trusts` do not export them. `from trusts.conditions import
-Expr` and `from django_trusts import condition_refs` raise
-`ImportError`.
+mutated. Construction nodes, ref factories, reserved `Query` /
+`TQ`, and registry/compiler store types live in
+`trusts.conditions._ir`. `trusts.conditions` and `django_trusts` do
+not export them. `from trusts.conditions import Expr` /
+`ConditionRegistry` and `from django_trusts import condition_refs`
+raise `ImportError`.
 
-The public `trusts.conditions` surface keeps the condition exceptions
-and permission-code string helpers. Compiler tests may import the
-private module. Runtime callbacks stay deleted.
+The public `trusts.conditions` surface keeps only the four condition
+exceptions and the two permission-code string helpers. Compiler tests
+may import the private module. Runtime callbacks stay deleted.
 
 ## No change to these public call sites
 
@@ -3435,10 +3436,10 @@ private module. Runtime callbacks stay deleted.
 
 | | |
 | --- | --- |
-| Previous | `from trusts.conditions import Expr, condition_refs` and `from django_trusts import TQ, condition_refs` succeeded. |
-| New | Those imports raise `ImportError`. Nodes live in `trusts.conditions._ir`. |
-| Replacement | Do not construct nodes in application code. Register a builder. Compiler tests import `_ir`. |
-| Affected | Docs/tests that imported public construction names. Inventory found no production callers after Z-convert / E-convert. |
+| Previous | `from trusts.conditions import Expr, condition_refs, ConditionRegistry, validate_expression` and `from django_trusts import TQ, condition_refs` succeeded. |
+| New | Those imports raise `ImportError`. Nodes and store/compiler types live in `trusts.conditions._ir`. |
+| Replacement | Do not construct nodes in application code. Register a builder. Compiler and implementation tests import `_ir`. |
+| Affected | Docs/tests that imported public construction or registry-store names. |
 | Authorization | Unchanged. IR evaluate/compile still run on stored predicates. |
 
 ## Old vs new behavior
@@ -3448,6 +3449,7 @@ private module. Runtime callbacks stay deleted.
 | `register_permission_condition(..., callable)` | Builder; store IR | Unchanged |
 | `register_permission_condition(..., Expr)` | Accepted; constants normalized | `TypeError` before mutation |
 | `from trusts.conditions import Expr` | Succeeded | `ImportError` |
+| `from trusts.conditions import ConditionRegistry` / `validate_expression` | Succeeded | `ImportError` |
 | `from django_trusts import condition_refs` | Succeeded | `ImportError` |
 | `has_perm` / `.permitted()` | Evaluate stored IR | Unchanged |
 | Runtime callbacks | Deleted (`trusts.E007`) | Unchanged |
@@ -3469,7 +3471,11 @@ Revert this Core PR. Stage A public `Expr` imports and transitional
 ## Migration-bot checklist
 
 - [ ] Search for `from trusts.conditions import Expr` /
-      `condition_refs` / `Query` / `TQ` / `Const` / `Eq` / `Ref`.
+      `condition_refs` / `Query` / `TQ` / `Const` / `Eq` / `Ref` /
+      `ConditionRegistry` / `ConditionRecord` /
+      `RegistryConditionLookup` / `ConditionLookup` / `ModelIdentity` /
+      `compile_expression_q` / `evaluate_registered_expression` /
+      `validate_expression` / `obsolete_legacy_callback_setting_enabled`.
       Those public imports must fail. Application code registers a
       builder instead.
 - [ ] Search for `from django_trusts import Expr` / `TQ` /

@@ -86,6 +86,18 @@ except ImportError:
 else:
     raise SystemExit("companion overlay still exports trusts.conditions.Expr")
 try:
+    from trusts.conditions import ConditionRegistry
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.ConditionRegistry")
+try:
+    from trusts.conditions import validate_expression
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.validate_expression")
+try:
     from django_trusts import condition_refs
 except ImportError:
     pass

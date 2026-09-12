@@ -31,7 +31,7 @@ compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
 ``common_permissions()``, ``filter_authorized_scopes()``,
 ``ConditionLookup``, and configuration/compiler exceptions live here.
 Permission-condition *records* live on each ``TrustsRegistry`` via
-``trusts.conditions.ConditionRegistry``; bind the generic
+``trusts.conditions._ir.ConditionRegistry``; bind the generic
 ``RegistryConditionLookup`` with ``set_condition_lookup``.
 """
 
@@ -2182,7 +2182,7 @@ class TrustsRegistry(object):
     """
 
     def __init__(self):
-        from trusts.conditions import ConditionRegistry
+        from trusts.conditions._ir import ConditionRegistry
 
         self._by_root = {}
         self._order = []

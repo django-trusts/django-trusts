@@ -23,12 +23,13 @@ from trusts.checks import (
     check_permission_conditions,
     permission_condition_check_messages,
 )
-from trusts.conditions import (
+from trusts.conditions import PermissionConditionError
+from trusts.conditions._ir import (
     ConditionRecord,
-    PermissionConditionError,
+    Ref,
+    condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
-from trusts.conditions._ir import Ref, condition_refs
 from trusts.core import TrustsConfigurationError, TrustsRegistry
 
 

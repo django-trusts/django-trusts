@@ -15,8 +15,8 @@ and ``trusts.W001`` are retired.
 
 from django.core import checks as django_checks
 
-from trusts.conditions import (
-    PermissionConditionError,
+from trusts.conditions import PermissionConditionError
+from trusts.conditions._ir import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )
