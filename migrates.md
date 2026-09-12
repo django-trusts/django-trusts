@@ -3220,4 +3220,163 @@ is unchanged (source-archive check, not an upgrade runner).
       `trusts.models`, backends, decorators, conditions, registry/query
       APIs, or `OrderedFold`.
 
+# Issue #142 Stage A: registration-time condition builders (1.0.0.dev3)
+
+This record covers the **Core Stage A** slice of
+[django-trusts#142](https://github.com/django-trusts/django-trusts/issues/142)
+accepted against
+[r2](https://github.com/django-trusts/django-trusts/issues/142#issuecomment-5648394520).
+Package version stays **1.0.0.dev3**. No model, field, table,
+migration-loader key, content type, permission row, stored
+authorization fact, package identity, or app label changes. Stage B
+(reject `Expr`; hide construction nodes), Zero conversion, and
+zero-example conversion are **out of scope**.
+
+## Decision
+
+A callable supplied to Core condition registration is a **builder**.
+Core invokes it exactly once with symbolic `(u, p, o)` refs, validates
+the returned predicate, normalizes constants into durable IR, stores
+only that IR, and discards the callable from the policy record.
+`Meta.permission_conditions` may still hold the callable as an
+application declaration.
+
+Builders are trusted startup/configuration code. Core does not sandbox
+them. Core registration itself issues zero SQL.
+
+Transitional prebuilt `Expr` remains accepted so current Zero
+`Trust:own` (`_u == _o.settlor`) keeps loading. Runtime permission
+callbacks, `ConditionRecord.func`, and `trusts.W001` are removed.
+`TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True` is a configuration
+error (`trusts.E007`) and does not enable callbacks.
+`legacy_permission_callbacks_allowed()` is deleted.
+
+`BackendHandle.register_permission_condition(model, code, builder_or_expr)`
+is the application API. `freeze()` seals condition registration with
+relation/strategy registration and raises **before** invoking a builder.
+
+## No change to these public call sites
+
+- `User.has_perm` / `has_perms` / `get_*_permissions` signatures
+- `TrustModelBackendMixin` grant matching
+- Public `Expr` / `condition_refs` / `Query` / `TQ` imports (Stage B)
+- Package version `1.0.0.dev3`
+- Stored identity: app label `trusts`, Zero migration keys, tables,
+  content types, permissions, and rows
+- Companion Zero pin (Z-convert is a later PR)
+
+## Changes
+
+### 60. Callable registration is a one-shot builder
+
+| | |
+| --- | --- |
+| Previous | `register_permission_condition(..., callable)` stored `ConditionRecord.func`. Dispatch was by type. The callable was never invoked with `Ref`s. `has_perm` invoked it with real values only when `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` was True (`trusts.W001`). Queryset use raised `PermissionConditionNotQueryable`. |
+| New | The callable is a builder. Core invokes it once with symbolic `(u, p, o)`, normalizes constants, stores IR only, and discards the callable from the record. Authorization never invokes it. A `lambda` and an equivalent named function are accepted identically. |
+| Replacement | `handle.register_permission_condition(Document, "non_confidential", lambda u, p, o: o.confidential != True)` |
+| Affected | Explicit `register_permission_condition(..., callable)` callers and `Meta.permission_conditions` callables that Zero donates. Core `Ticket.meta_own` is now a builder. |
+| Authorization | Named conditions are queryable IR on both object and list paths. There is no object-only callback path. Fail closed on malformed builders. |
+
+```python
+# Old (object-only runtime callback, or prebuilt Expr)
+from trusts.conditions import condition_refs
+u, p, o = condition_refs()
+registry.register_permission_condition(Ticket, 'own', u == o.owner)
+registry.register_permission_condition(Ticket, 'spy', lambda user, perm, obj: user == obj.owner)
+
+# New (builder). Transitional Expr is still accepted in Stage A.
+handle.register_permission_condition(
+    Ticket, 'own', lambda u, p, o: u == o.owner,
+)
+```
+
+### 61. Immediate durable constant normalization
+
+| | |
+| --- | --- |
+| Previous | `Const` retained the live Python object (`Model` instance, scalar). |
+| New | Allowed scalars (`None`, `bool`, `int`, `float`, `str`, `bytes`, `Decimal` / `UUID` / `date` / `datetime` / `time` / `timedelta`) are copied by value. A saved model instance becomes `(app_label, model_name, pk)` (`ModelIdentity`). Unsaved / adding instances, `QuerySet` / `Manager`, mutable containers, lazy/request objects, callables, files, and connections are rejected at register. Later mutation of the captured Python object cannot change authorization. |
+| Replacement | Capture only allowed constants. Save model instances before registration. |
+| Affected | Builders and transitional `Expr` trees that close over Python objects. |
+| Authorization | Evaluate/compile use the snapshotted identity. No silent policy drift. |
+
+### 62. Application API is the handle; freeze seals conditions first
+
+| | |
+| --- | --- |
+| Previous | Callers used `handle.registry.register_permission_condition`. `freeze()` sealed `register` / `register_strategy` only. Late condition writes were unrestricted. |
+| New | `BackendHandle.register_permission_condition` thin-forwards to the registry. A frozen handle/registry raises `TrustsConfigurationError` **before** the builder is invoked. Isolated `TrustsRegistry()` still never auto-freezes. |
+| Replacement | `handle.register_permission_condition(model, code, builder)` from `AppConfig.ready()` while `apps.ready` is false. |
+| Affected | AppConfig contributors and tests that registered conditions after `freeze()`. |
+| Authorization | Policy cannot change after finalize. A rejected write has no builder side effects. |
+
+### 63. Runtime callbacks and the opt-in setting are gone
+
+| | |
+| --- | --- |
+| Previous | Missing / False: `trusts.E002` plus runtime `PermissionConditionError` without invoking the callable. True: object-only `has_perm` plus `trusts.W001`. |
+| New | There is no callback execution path and no `ConditionRecord.func`. `trusts.E002` / `trusts.W001` and `legacy_permission_callbacks_allowed()` are deleted. If `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` is still True, `trusts.E007` is a configuration error and does not enable callbacks. |
+| Replacement | Rewrite remaining callables as builders. Remove the setting. Do not import `legacy_permission_callbacks_allowed`. |
+| Affected | Tests and any host still setting the flag or importing the old helper. Inventory found no production callback callers. |
+| Authorization | Fail closed. Silencing `trusts.E007` does not restore callbacks. |
+
+## Old vs new behavior
+
+| Situation | Old (Core before Stage A) | New (Core Stage A) |
+| --- | --- | --- |
+| `register_permission_condition(..., callable)` | Store `func`; never invoke with `Ref`s | Invoke once as builder; store IR only |
+| `register_permission_condition(..., Expr)` | Store the tree | Still accepted; constants normalized |
+| `has_perm` / `.permitted()` / `.authorized()` | May invoke `func` when the flag is True | Never invoke the builder; evaluate stored IR |
+| Frozen registry condition write | Allowed | `TrustsConfigurationError` before builder invoke |
+| `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` missing / False | Fail closed; callback not invoked | Setting unused; no callback path |
+| Flag True | Object-only `has_perm` + `trusts.W001` | `trusts.E007`; callbacks still absent |
+| `legacy_permission_callbacks_allowed()` | Returned the setting bool | Deleted (`ImportError`) |
+| `ConditionRecord.func` | Callable or `None` | Attribute removed |
+| Public `Expr` / `condition_refs` imports | Supported | Still supported (Stage B removes them) |
+| Package version | `1.0.0.dev3` | Unchanged |
+
+## Fail-closed rollout order
+
+1. Land this Core Stage A PR on `dev`.
+2. Convert Zero (`Trust:own`, spies, docs) in a Z-convert PR pinned to the Stage A merge SHA.
+3. Convert zero-example in an E-convert PR pinned to Stage A + Z-convert.
+4. Only then open Core Stage B (reject `Expr`; move nodes to a private module).
+
+Do not change the current Core/Zero pair pin in this PR.
+
+## Migration-bot checklist
+
+- [ ] Search for `register_permission_condition(..., <callable>)` and
+      `Meta.permission_conditions` callables. Treat each callable as a
+      builder that returns `u == o.field` / `o.flag != True` style
+      comparisons. Do not expect object-only `has_perm` callbacks.
+- [ ] Retarget application registration to
+      `handle.register_permission_condition(model, code, builder)`.
+      `handle.registry.register_permission_condition` still works if
+      the registry is not frozen.
+- [ ] Search for `ConditionRecord.func` and
+      `get_permission_condition_func`. Those are gone. Read
+      `record.expr` (IR) only.
+- [ ] Search for `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`. Remove
+      it. `True` is `trusts.E007` and does not enable callbacks. Do
+      not silence `trusts.E007` expecting a callback to run.
+- [ ] Search for `legacy_permission_callbacks_allowed`. The helper
+      is deleted and must not return True.
+- [ ] Search for `trusts.E002` / `trusts.W001` /
+      `CHECK_ID_LEGACY_CALLBACK_WARNING`. Those callback IDs are
+      retired. The leftover-setting error is `trusts.E007`.
+- [ ] Do not delete `from trusts.conditions import Expr` /
+      `condition_refs` yet (Stage B). Prefer builders in new code.
+- [ ] Confirm builders run only at register/donation, never during
+      `has_perm`, enumeration, `.permitted()`, or `.authorized()`.
+- [ ] Confirm unsupported ops / exceptions / non-predicates /
+      unresolved builder fields / unsaved instances fail at register
+      with no stored record.
+- [ ] Confirm Core registration adds zero SQL
+      (`assertNumQueries(0)`).
+- [ ] Do not apply a new Trusts schema or data migration; none was
+      added.
+- [ ] Leave package version at `1.0.0.dev3`.
+- [ ] Do not convert Zero, zero-example, GH, or Windows in this PR.
+
 

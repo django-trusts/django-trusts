@@ -2,33 +2,32 @@
 query compilers, Along renderer support, and OrderedFold renderer support.
 
 Model-aware semantic validation (field names, traversal, multi-valued
-relations, operand types) and the legacy-callback policy are reported as
-``CheckMessage`` objects with stable IDs. ``PermissionConditionError`` is
-caught here so ``SILENCED_SYSTEM_CHECKS`` can filter the diagnostic.
-Silencing an ID does not make the policy executable: ``has_perm`` and
-``.permitted()`` still validate and fail closed.
+relations, operand types) is reported as ``CheckMessage`` objects with
+stable IDs. ``PermissionConditionError`` is caught here so
+``SILENCED_SYSTEM_CHECKS`` can filter the diagnostic. Silencing an ID
+does not make the policy executable: ``has_perm`` and ``.permitted()``
+still validate and fail closed.
 
-``DeprecationWarning`` is commonly filtered; this module uses
-``django.core.checks.Warning`` so the legacy-callback opt-in stays visible
-under ``manage.py check``.
+``trusts.E007`` reports the deleted runtime-callback setting still
+being ``True``. That setting never enables callbacks. ``trusts.E002``
+and ``trusts.W001`` are retired.
 """
 
 from django.core import checks as django_checks
 
 from trusts.conditions import (
     PermissionConditionError,
-    legacy_permission_callbacks_allowed,
+    obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
-CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'
-CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
+CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -80,33 +79,22 @@ def _messages_for_expr(model, cond_code, expr):
     return []
 
 
-def _messages_for_callable(model, cond_code):
-    label = _model_label(model)
-    if legacy_permission_callbacks_allowed():
-        return [django_checks.Warning(
-            'Callable permission condition %r on %s is a deprecated '
-            'object-only escape hatch. Rewrite it as an Expr from '
-            'condition_refs() for queryable policy. ContentQuerySet.permitted() '
-            'still refuses callables.' % (cond_code, label),
-            hint=(
-                'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is True, so '
-                'has_perm() may invoke this callback with real values. '
-                'Rewrite the condition as an Expr to drop this warning.'
-            ),
-            obj=model,
-            id=CHECK_ID_LEGACY_CALLBACK_WARNING,
-        )]
+def _messages_for_obsolete_callback_setting():
+    if not obsolete_legacy_callback_setting_enabled():
+        return []
     return [django_checks.Error(
-        'Callable permission condition %r on %s is disabled. Set '
-        'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True to keep the '
-        'object-only has_perm path, or rewrite it as an Expr from '
-        'condition_refs().' % (cond_code, label),
+        'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is True, but runtime '
+        'permission callbacks are removed. The setting does not enable '
+        'callbacks. Register a builder '
+        '(handle.register_permission_condition(model, code, '
+        'lambda u, p, o: ...)) or a transitional Expr.',
         hint=(
-            'Enabling TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is the only '
-            'way to run the callback. ' + _SILENCE_DOES_NOT_ENABLE_HINT
+            'Remove TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS from settings. '
+            'It cannot restore object-only has_perm callbacks. '
+            + _SILENCE_DOES_NOT_ENABLE_HINT
         ),
-        obj=model,
-        id=CHECK_ID_LEGACY_CALLBACK,
+        obj=None,
+        id=CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     )]
 
 
@@ -359,15 +347,19 @@ def iter_live_permission_conditions(apps_registry=None):
 def permission_condition_check_messages(entries):
     """Build check messages for ``(model, cond_code, record)`` entries.
 
-    Callables are never inspected or invoked.
+    Builders are never invoked here; only stored IR is validated.
     """
     messages = []
     for model, cond_code, record in entries:
         if getattr(record, 'expr', None) is not None:
             messages.extend(_messages_for_expr(model, cond_code, record.expr))
-        elif getattr(record, 'func', None) is not None:
-            messages.extend(_messages_for_callable(model, cond_code))
     return messages
+
+
+@django_checks.register()
+def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
+    """Fail loud if the deleted runtime-callback setting is still True."""
+    return _messages_for_obsolete_callback_setting()
 
 
 @django_checks.register(django_checks.Tags.models)
@@ -377,7 +369,7 @@ def check_permission_conditions(app_configs, **kwargs):
     Does not import extra application modules and does not depend on
     ``INSTALLED_APPS`` order. ``app_configs`` is ignored so a subset
     ``manage.py check trusts`` still reports project-model conditions.
-    Callables are never inspected or invoked. No database queries.
+    Builders are never invoked. No database queries.
     """
     return permission_condition_check_messages(
         iter_live_permission_conditions()

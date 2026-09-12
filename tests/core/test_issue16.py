@@ -1,23 +1,27 @@
-"""Zero #16 core half: per-handle permission-condition registry.
+"""#16 / #142 Stage A: per-handle condition registry and builders.
 
-Library-only proofs. Does not import Zero nouns. Sibling Zero PR must
-keep has_perm / .permitted() / Meta donation / ContentConditionLookup
-removal proofs green against this core API.
+Library-only proofs. Does not import Zero nouns. Transitional ``Expr``
+acceptance remains so Zero ``Trust:own`` donation keeps loading.
 """
 
 from contextlib import contextmanager
+from decimal import Decimal
+from io import BytesIO
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
-from django.core.checks import Error, Warning as CheckWarning
+from django.core.checks import Error
 from django.db import connection, models
-from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.http import HttpRequest
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
+from tests.models import Ticket, ticket_meta_own
 from trusts.checks import (
     CHECK_ID_INVALID_EXPR,
-    CHECK_ID_LEGACY_CALLBACK,
-    CHECK_ID_LEGACY_CALLBACK_WARNING,
+    CHECK_ID_OBSOLETE_CALLBACK_SETTING,
+    check_obsolete_legacy_callback_setting,
     check_permission_conditions,
     iter_live_permission_conditions,
     permission_condition_check_messages,
@@ -26,13 +30,15 @@ from trusts.conditions import (
     ConditionLookup,
     ConditionRecord,
     ConditionRegistry,
+    ModelIdentity,
     PermissionConditionError,
-    PermissionConditionNotQueryable,
+    PermissionConditionUnsupported,
+    Ref,
     RegistryConditionLookup,
     condition_refs,
-    legacy_permission_callbacks_allowed,
+    obsolete_legacy_callback_setting_enabled,
 )
-from trusts.core import TrustsRegistry
+from trusts.core import BackendHandle, TrustsConfigurationError, TrustsRegistry
 
 
 def _note_models():
@@ -68,14 +74,19 @@ def _tables(*model_classes):
                 editor.delete_model(model)
 
 
-class _CallLog(object):
+class _BuilderLog(object):
     def __init__(self, impl=None):
-        self.impl = impl or (lambda user, perm, obj: True)
+        self.impl = impl or (lambda u, p, o: u == o.owner)
         self.calls = []
 
-    def __call__(self, user, perm, obj):
-        self.calls.append((user, perm, obj))
-        return self.impl(user, perm, obj)
+    def __call__(self, u, p, o):
+        self.calls.append((u, p, o))
+        return self.impl(u, p, o)
+
+    def saw_only_refs(self):
+        return all(
+            isinstance(arg, Ref) for call in self.calls for arg in call
+        )
 
 
 class ConditionRegistryIsolationTest(SimpleTestCase):
@@ -83,6 +94,7 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         import trusts.conditions as conditions_mod
 
         self.assertFalse(hasattr(conditions_mod, '_conditions'))
+        self.assertFalse(hasattr(conditions_mod, 'legacy_permission_callbacks_allowed'))
         self.assertIsInstance(ConditionRegistry(), ConditionRegistry)
         first = ConditionRegistry()
         second = ConditionRegistry()
@@ -101,7 +113,7 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ConditionRegistryShapeTest(SimpleTestCase):
-    def test_expr_and_callable_records_and_shape_errors(self):
+    def test_expr_and_builder_records_and_shape_errors(self):
         Note, Memo = _note_models()
         u, _p, o = condition_refs()
         registry = TrustsRegistry()
@@ -109,7 +121,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         record = registry.register_permission_condition(Note, 'owned', expr)
         self.assertIsInstance(record, ConditionRecord)
         self.assertIs(record.expr, expr)
-        self.assertIsNone(record.func)
+        self.assertFalse(hasattr(record, 'func'))
         self.assertIs(record.model, Note)
         self.assertIs(
             registry.get_permission_condition_record(Note, 'owned'), record,
@@ -117,17 +129,22 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIsNone(registry.get_permission_condition_record(Note, 'missing'))
         self.assertIsNone(registry.get_permission_condition_record(Memo, 'owned'))
 
-        log = _CallLog()
-        callable_record = registry.register_permission_condition(Note, 'spy', log)
-        self.assertIsNone(callable_record.expr)
-        self.assertIs(callable_record.func, log)
-        self.assertEqual(log.calls, [])
+        log = _BuilderLog()
+        builder_record = registry.register_permission_condition(Note, 'spy', log)
+        self.assertIsNotNone(builder_record.expr)
+        self.assertFalse(hasattr(builder_record, 'func'))
+        self.assertEqual(len(log.calls), 1)
+        self.assertTrue(log.saw_only_refs())
+        self.assertEqual(
+            builder_record.expr.to_tuple(),
+            ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
+        )
 
         with self.assertRaises(PermissionConditionError):
             registry.register_permission_condition(Note, 'bare', o.owner)
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'bad', 'not-a-condition')
-        self.assertEqual(log.calls, [])
+        self.assertEqual(len(log.calls), 1)
 
     def test_duplicate_condition_overwrites_same_identity(self):
         Note, _Memo = _note_models()
@@ -175,34 +192,56 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         third = ConditionRegistry()
         self.assertIsNone(third.get_permission_condition_record(Note, 'own'))
 
-    def test_freeze_does_not_seal_condition_registration(self):
+    def test_freeze_seals_condition_registration_before_builder(self):
         Note, _Memo = _note_models()
-        u, _p, o = condition_refs()
+        log = _BuilderLog()
         registry = TrustsRegistry()
         registry.freeze()
-        record = registry.register_permission_condition(Note, 'own', u == o.owner)
-        self.assertIs(record.model, Note)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.register_permission_condition(Note, 'own', log)
+        self.assertIn('frozen', str(ctx.exception).lower())
+        self.assertEqual(log.calls, [])
+        self.assertIsNone(registry.get_permission_condition_record(Note, 'own'))
 
-    def test_generic_lookup_binds_without_invoking(self):
+    def test_handle_register_forwards_and_freeze_is_before_builder(self):
         Note, _Memo = _note_models()
-        u, _p, o = condition_refs()
         registry = TrustsRegistry()
-        log = _CallLog()
+        handle = BackendHandle(
+            path='tests.backends.HostTrustModelBackend',
+            registry=registry,
+            compiler=object(),
+        )
+        log = _BuilderLog()
+        record = handle.register_permission_condition(Note, 'own', log)
+        self.assertIs(
+            registry.get_permission_condition_record(Note, 'own'), record,
+        )
+        self.assertEqual(len(log.calls), 1)
+        registry.freeze()
+        late = _BuilderLog()
+        with self.assertRaises(TrustsConfigurationError):
+            handle.register_permission_condition(Note, 'late', late)
+        self.assertEqual(late.calls, [])
+
+    def test_generic_lookup_binds_without_reinvoking_builder(self):
+        Note, _Memo = _note_models()
+        registry = TrustsRegistry()
+        log = _BuilderLog()
         registry.register_permission_condition(Note, 'spy', log)
         lookup = RegistryConditionLookup(registry)
         self.assertIsInstance(lookup, ConditionLookup)
         registry.set_condition_lookup(lookup)
         self.assertIs(registry.condition_lookup, lookup)
-        self.assertIs(lookup.record_for(Note, 'spy').func, log)
-        self.assertEqual(log.calls, [])
-        with self.assertRaises(PermissionConditionNotQueryable):
-            lookup.compile_q(Note, 'trusts_tests.change_note:spy', None)
-        self.assertEqual(log.calls, [])
+        self.assertIsNotNone(lookup.record_for(Note, 'spy').expr)
+        self.assertEqual(len(log.calls), 1)
+        q = lookup.compile_q(Note, 'trusts_tests.change_note:spy', None)
+        self.assertIsNotNone(q)
+        self.assertEqual(len(log.calls), 1)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ConditionRegistryRuntimeTest(TransactionTestCase):
-    def test_expr_object_list_parity_and_fixed_query(self):
+    def test_builder_object_list_parity_and_fixed_query(self):
         Note, _Memo = _note_models()
         User = get_user_model()
         with _tables(Note):
@@ -217,10 +256,13 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             locked = Note.objects.create(
                 title='keep', owner=alice, status='locked',
             )
-            u, _p, o = condition_refs()
+            log = _BuilderLog(
+                lambda u, p, o: (u == o.owner) & (o.status != 'locked'),
+            )
             registry = TrustsRegistry()
-            expr = (u == o.owner) & (o.status != 'locked')
-            registry.register_permission_condition(Note, 'editable', expr)
+            with self.assertNumQueries(0):
+                registry.register_permission_condition(Note, 'editable', log)
+            self.assertEqual(len(log.calls), 1)
             perm = 'trusts_tests.change_note:editable'
             grant = 'trusts_tests.change_note'
             q = registry.compile_registered_condition_q(Note, perm, alice)
@@ -238,56 +280,58 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             sql = str(Note.objects.filter(q).query)
             self.assertIn('owner', sql.lower())
             self.assertIn('status', sql.lower())
-
-    def test_default_rejects_callable_without_invoking(self):
-        self.assertFalse(legacy_permission_callbacks_allowed())
-        Note, _Memo = _note_models()
-        User = get_user_model()
-        with _tables(Note):
-            alice = User.objects.create_user(
-                'alice-16c', 'alice-16c@example.com', 'x',
-            )
-            note = Note.objects.create(title='n', owner=alice)
-            log = _CallLog(lambda user, perm, obj: True)
-            registry = TrustsRegistry()
-            registry.register_permission_condition(Note, 'spy', log)
-            with self.assertRaises(PermissionConditionNotQueryable):
-                registry.compile_registered_condition_q(
-                    Note, 'trusts_tests.change_note:spy', alice,
-                )
-            with self.assertRaises(PermissionConditionError) as ctx:
-                registry.evaluate_permission_condition(
-                    Note, 'spy', alice, 'trusts_tests.change_note', note,
-                )
-            self.assertIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', str(ctx.exception))
-            self.assertEqual(log.calls, [])
-
-    @override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True)
-    def test_opt_in_callback_is_object_only(self):
-        self.assertTrue(legacy_permission_callbacks_allowed())
-        Note, _Memo = _note_models()
-        User = get_user_model()
-        with _tables(Note):
-            alice = User.objects.create_user(
-                'alice-16o', 'alice-16o@example.com', 'x',
-            )
-            note = Note.objects.create(title='n', owner=alice)
-            log = _CallLog(lambda user, perm, obj: user == obj.owner)
-            registry = TrustsRegistry()
-            registry.register_permission_condition(Note, 'spy', log)
-            with self.assertRaises(PermissionConditionNotQueryable):
-                registry.compile_registered_condition_q(
-                    Note, 'trusts_tests.change_note:spy', alice,
-                )
-            self.assertEqual(log.calls, [])
-            self.assertTrue(
-                registry.evaluate_permission_condition(
-                    Note, 'spy', alice, 'trusts_tests.change_note', note,
-                )
-            )
             self.assertEqual(len(log.calls), 1)
-            self.assertEqual(log.calls[0][0], alice)
-            self.assertEqual(log.calls[0][2], note)
+
+    def _donate_meta_permission_conditions(self, registry, model):
+        """Walk ``Meta.permission_conditions`` the way Zero donates them.
+
+        Idempotent per registry instance so repeated ready() does not
+        invoke builders again.
+        """
+        donated = getattr(registry, '_core_ticket_meta_donation_id', None)
+        if donated is registry:
+            return False
+        for cond_code, condition in (
+            getattr(model._meta, 'permission_conditions', ()) or ()
+        ):
+            registry.register_permission_condition(model, cond_code, condition)
+        registry._core_ticket_meta_donation_id = registry
+        return True
+
+    def test_ticket_meta_own_donation_is_zero_sql_and_idempotent(self):
+        self.assertEqual(
+            Ticket._meta.permission_conditions,
+            (('meta_own', ticket_meta_own),),
+        )
+        registry = TrustsRegistry()
+        with self.assertNumQueries(0):
+            first = self._donate_meta_permission_conditions(registry, Ticket)
+        self.assertTrue(first)
+        record = registry.get_permission_condition_record(Ticket, 'meta_own')
+        self.assertIsNotNone(record)
+        self.assertIs(record.model, Ticket)
+        self.assertEqual(
+            record.expr.to_tuple(),
+            ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
+        )
+        with self.assertNumQueries(0):
+            second = self._donate_meta_permission_conditions(registry, Ticket)
+        self.assertFalse(second)
+        self.assertIs(
+            registry.get_permission_condition_record(Ticket, 'meta_own'),
+            record,
+        )
+
+    def test_core_registration_path_is_zero_sql_for_expr_and_builder(self):
+        Note, _Memo = _note_models()
+        u, _p, o = condition_refs()
+        registry = TrustsRegistry()
+        with self.assertNumQueries(0):
+            registry.register_permission_condition(Note, 'expr', u == o.owner)
+        with self.assertNumQueries(0):
+            registry.register_permission_condition(
+                Note, 'builder', lambda u, p, o: o.status != 'locked',
+            )
 
     def test_unknown_malformed_and_unbound_fail_closed(self):
         Note, _Memo = _note_models()
@@ -328,21 +372,106 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
                 )
             self.assertIn('unbound', str(unbound.exception))
 
+    def test_constant_normalization_is_durable(self):
+        Note, _Memo = _note_models()
+        User = get_user_model()
+        with _tables(Note):
+            alice = User.objects.create_user(
+                'alice-16n', 'alice-16n@example.com', 'x',
+            )
+            bob = User.objects.create_user(
+                'bob-16n', 'bob-16n@example.com', 'x',
+            )
+            note = Note.objects.create(title='n', owner=alice, status='open')
+            captured = alice
+            registry = TrustsRegistry()
+            with self.assertNumQueries(0):
+                record = registry.register_permission_condition(
+                    Note, 'owner_is', lambda u, p, o: o.owner == captured,
+                )
+            const = record.expr.right
+            self.assertIsInstance(const.value, ModelIdentity)
+            self.assertEqual(
+                const.value.as_tuple(),
+                (alice._meta.app_label, alice._meta.model_name, alice.pk),
+            )
+            alice.username = 'mutated'
+            alice.save(update_fields=['username'])
+            self.assertTrue(
+                registry.evaluate_permission_condition(
+                    Note, 'owner_is', bob, 'trusts_tests.change_note', note,
+                )
+            )
+            captured = bob
+            self.assertTrue(
+                registry.evaluate_permission_condition(
+                    Note, 'owner_is', bob, 'trusts_tests.change_note', note,
+                )
+            )
+
+    def test_forbidden_captures_rejected_at_register(self):
+        Note, _Memo = _note_models()
+        User = get_user_model()
+        unsaved = User(username='ghost-16', email='ghost-16@example.com')
+        registry = TrustsRegistry()
+        with self.assertRaises(PermissionConditionError):
+            registry.register_permission_condition(
+                Note, 'unsaved', lambda u, p, o: o.owner == unsaved,
+            )
+        with self.assertRaises(PermissionConditionUnsupported):
+            registry.register_permission_condition(
+                Note, 'qs', lambda u, p, o: o.owner == User.objects.all(),
+            )
+        with self.assertRaises(PermissionConditionUnsupported):
+            registry.register_permission_condition(
+                Note, 'list', lambda u, p, o: o.status == ['open'],
+            )
+        with self.assertRaises(PermissionConditionUnsupported):
+            registry.register_permission_condition(
+                Note, 'req', lambda u, p, o: o.status == HttpRequest(),
+            )
+        with self.assertRaises(PermissionConditionUnsupported):
+            registry.register_permission_condition(
+                Note, 'file', lambda u, p, o: o.status == BytesIO(b'x'),
+            )
+        with self.assertRaises(PermissionConditionUnsupported):
+            registry.register_permission_condition(
+                Note, 'fn', lambda u, p, o: o.status == str,
+            )
+        self.assertIsNone(registry.get_permission_condition_record(Note, 'unsaved'))
+        self.assertIsNone(registry.get_permission_condition_record(Note, 'qs'))
+
+    def test_immutable_scalars_are_accepted(self):
+        Note, _Memo = _note_models()
+        registry = TrustsRegistry()
+        record = registry.register_permission_condition(
+            Note, 'open', lambda u, p, o: o.status == 'open',
+        )
+        self.assertEqual(record.expr.right.value, 'open')
+        uid = uuid4()
+        amount = Decimal('1.5')
+        # Construction of unused extras proves as_node accepts the types.
+        from trusts.conditions import as_node
+        self.assertEqual(as_node(amount).value, amount)
+        self.assertEqual(as_node(uid).value, uid)
+        self.assertEqual(as_node(None).value, None)
+
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ConditionRegistryCheckTest(SimpleTestCase):
-    def test_checks_never_invoke_callables(self):
+    def test_checks_never_reinvoke_builder(self):
         Note, _Memo = _note_models()
-        exploding = _CallLog(lambda user, perm, obj: (_ for _ in ()).throw(
-            AssertionError('callable must not run during checks')
-        ))
+        log = _BuilderLog()
         registry = ConditionRegistry()
-        registry.register_permission_condition(Note, 'boom', exploding)
+        registry.register_permission_condition(Note, 'own', log)
         messages = permission_condition_check_messages(
             registry.iter_permission_conditions()
         )
-        self.assertEqual(exploding.calls, [])
-        self.assertEqual(len([m for m in messages if m.id == CHECK_ID_LEGACY_CALLBACK]), 1)
+        self.assertEqual(len(log.calls), 1)
+        self.assertEqual(
+            [m for m in messages if m.id == CHECK_ID_OBSOLETE_CALLBACK_SETTING],
+            [],
+        )
 
     def test_invalid_expr_is_check_error_not_registration_error(self):
         Note, _Memo = _note_models()
@@ -361,22 +490,25 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         self.assertIsInstance(errors[0], Error)
         self.assertIn('not_a_field', errors[0].msg)
 
-    @override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True)
-    def test_opt_in_emits_warning_without_invoking(self):
+    def test_builder_unresolved_field_fails_at_register(self):
         Note, _Memo = _note_models()
-        log = _CallLog()
         registry = ConditionRegistry()
-        registry.register_permission_condition(Note, 'spy', log)
-        messages = permission_condition_check_messages(
-            registry.iter_permission_conditions()
-        )
-        warnings = [m for m in messages if m.id == CHECK_ID_LEGACY_CALLBACK_WARNING]
-        self.assertEqual(len(warnings), 1)
-        self.assertIsInstance(warnings[0], CheckWarning)
-        self.assertEqual(
-            [m for m in messages if m.id == CHECK_ID_LEGACY_CALLBACK], [],
-        )
-        self.assertEqual(log.calls, [])
+        with self.assertRaises(PermissionConditionError) as ctx:
+            registry.register_permission_condition(
+                Note, 'missing', lambda u, p, o: u == o.not_a_field,
+            )
+        self.assertIn('not_a_field', str(ctx.exception))
+        self.assertIsNone(registry.get_permission_condition_record(Note, 'missing'))
+
+    def test_obsolete_setting_is_check_error_and_does_not_enable_callbacks(self):
+        self.assertFalse(obsolete_legacy_callback_setting_enabled())
+        self.assertEqual(check_obsolete_legacy_callback_setting(None), [])
+        with override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True):
+            self.assertTrue(obsolete_legacy_callback_setting_enabled())
+            messages = check_obsolete_legacy_callback_setting(None)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].id, CHECK_ID_OBSOLETE_CALLBACK_SETTING)
+        self.assertIn('does not enable', messages[0].msg)
 
     def test_check_permission_conditions_reads_handle_registry(self):
         Note, _Memo = _note_models()

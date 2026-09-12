@@ -6,6 +6,7 @@ from trusts.query import AuthorizedManager
 
 class Document(models.Model):
     title = models.CharField(max_length=200)
+    confidential = models.BooleanField(default=False)
     objects = AuthorizedManager()
 
     class Meta:

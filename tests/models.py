@@ -1,11 +1,12 @@
 from django.db import models
 from django.contrib.auth.models import Group, User
 
-from trusts.conditions import condition_refs
-
-_u, _p, _o = condition_refs()
-
 from django.conf import settings
+
+
+def ticket_meta_own(u, p, o):
+    """Core Ticket fixture builder: principal is the ticket owner."""
+    return u == o.owner
 
 _ZERO_LISTED = any(
     entry == 'trusts.zero' or str(entry).startswith('trusts.zero')
@@ -87,26 +88,27 @@ if Content is not None:
             auto_modeladmin = True
 
 
-    class Ticket(Content):
-        """Content model with owner / organization / status for V1 conditions."""
+class Ticket(Content if Content is not None else models.Model):
+    """Content/fixture model with owner / organization / status for V1 conditions."""
 
-        title = models.CharField(max_length=40, null=False, blank=False)
-        owner = models.ForeignKey(
-            User, null=False, blank=False, related_name='tickets',
-            on_delete=models.CASCADE,
+    title = models.CharField(max_length=40, null=False, blank=False)
+    owner = models.ForeignKey(
+        User, null=False, blank=False, related_name='tickets',
+        on_delete=models.CASCADE,
+    )
+    organization = models.ForeignKey(
+        Organization, null=False, blank=False, related_name='tickets',
+        on_delete=models.CASCADE,
+    )
+    status = models.CharField(max_length=20, null=False, blank=False, default='open')
+    region = models.CharField(max_length=40, null=True, blank=True)
+
+    class Meta:
+        app_label = 'trusts_tests'
+        default_permissions = ('add', 'read', 'change', 'delete')
+        permission_conditions = (
+            ('meta_own', ticket_meta_own),
         )
-        organization = models.ForeignKey(
-            Organization, null=False, blank=False, related_name='tickets',
-            on_delete=models.CASCADE,
-        )
-        status = models.CharField(max_length=20, null=False, blank=False, default='open')
-        region = models.CharField(max_length=40, null=True, blank=True)
 
-        class Meta:
-            default_permissions = ('add', 'read', 'change', 'delete')
-            permission_conditions = (
-                ('meta_own', _u == _o.owner),
-            )
-
-        def __str__(self):
-            return self.title
+    def __str__(self):
+        return self.title
