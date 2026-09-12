@@ -202,14 +202,16 @@ operation and organization alignment:
 
    from trusts.core import All, Equal, Ref, permission_in
 
-   grant = Ref(TeamRepositoryGrant)
+   from gh_permissions.models import TeamRepositoryPermission
+
+   t = Ref(TeamRepositoryPermission)
    registry.register(
-       content=grant.repository,
-       user=grant.team.members,
-       permission=grant.operation,
+       content=t.repository,
+       user=t.team.members,
+       permission=t.operation,
        condition=All(
-           permission_in(grant.team.permission_bundles.operations),
-           Equal(grant.team.organization, grant.repository.organization),
+           permission_in(t.team.allowed_operations),
+           Equal(t.team.organization, t.repository.organization),
        ),
    )
 
