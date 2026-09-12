@@ -16,6 +16,15 @@ from trusts.conditions import (
 from trusts.core import TrustsRegistry
 
 
+PUBLIC_SURFACE_NAMES = (
+    'PermissionConditionBooleanError',
+    'PermissionConditionError',
+    'PermissionConditionNotQueryable',
+    'PermissionConditionUnsupported',
+    'permission_condition_code',
+    'permission_has_condition',
+)
+
 HIDDEN_PUBLIC_NAMES = (
     'Expr',
     'Const',
@@ -30,11 +39,23 @@ HIDDEN_PUBLIC_NAMES = (
     'principal_ref',
     'permission_ref',
     'object_ref',
+    'ConditionLookup',
+    'ConditionRecord',
+    'ConditionRegistry',
+    'ModelIdentity',
+    'RegistryConditionLookup',
+    'compile_expression_q',
+    'evaluate_registered_expression',
+    'obsolete_legacy_callback_setting_enabled',
+    'validate_expression',
 )
 
 
 class StageBPublicSurfaceTest(SimpleTestCase):
     def test_public_conditions_module_keeps_exceptions_and_helpers(self):
+        import trusts.conditions as conditions_mod
+
+        self.assertEqual(tuple(conditions_mod.__all__), PUBLIC_SURFACE_NAMES)
         self.assertTrue(issubclass(PermissionConditionBooleanError, PermissionConditionError))
         self.assertTrue(issubclass(PermissionConditionUnsupported, PermissionConditionError))
         self.assertTrue(issubclass(PermissionConditionNotQueryable, ValueError))
@@ -54,6 +75,10 @@ class StageBPublicSurfaceTest(SimpleTestCase):
             from trusts.conditions import Expr  # noqa: F401
         with self.assertRaises(ImportError):
             from trusts.conditions import condition_refs  # noqa: F401
+        with self.assertRaises(ImportError):
+            from trusts.conditions import ConditionRegistry  # noqa: F401
+        with self.assertRaises(ImportError):
+            from trusts.conditions import validate_expression  # noqa: F401
         with self.assertRaises(ImportError):
             from django_trusts import TQ  # noqa: F401
         with self.assertRaises(ImportError):

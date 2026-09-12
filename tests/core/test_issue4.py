@@ -14,7 +14,6 @@ from trusts.conditions import (
     PermissionConditionBooleanError,
     PermissionConditionError,
     PermissionConditionUnsupported,
-    validate_expression,
 )
 from trusts.conditions._ir import (
     Const,
@@ -26,6 +25,7 @@ from trusts.conditions._ir import (
     object_ref,
     permission_ref,
     principal_ref,
+    validate_expression,
 )
 from trusts.core import TrustsRegistry
 

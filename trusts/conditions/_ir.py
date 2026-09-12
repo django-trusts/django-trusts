@@ -520,12 +520,12 @@ def object_ref():
 
 
 def condition_refs():
-    """Return symbolic ``(u, p, o)`` for a builder or transitional ``Expr``.
+    """Return symbolic ``(u, p, o)`` for private compiler tests.
 
-    Application code should pass a builder to
+    Application code registers a builder with
     ``handle.register_permission_condition``. These objects are policy
-    data, not live principals or content rows. Public construction via
-    this helper remains available until Stage B.
+    data, not live principals or content rows. This helper is not a
+    public import.
     """
     return principal_ref(), permission_ref(), object_ref()
 
