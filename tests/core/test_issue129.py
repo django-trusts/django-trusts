@@ -16,6 +16,14 @@ COMMAND_MODULES = (
     'trusts.management.commands.update_roles_permissions',
 )
 
+COMMAND_PATHS = (
+    ROOT / 'trusts' / 'management',
+    ROOT / 'trusts' / 'management' / 'commands',
+    ROOT / 'trusts' / 'management' / 'commands' / 'create_trust_root.py',
+    ROOT / 'trusts' / 'management' / 'commands' / 'grandfather_trust_group_permissions.py',
+    ROOT / 'trusts' / 'management' / 'commands' / 'update_roles_permissions.py',
+)
+
 
 def _find_spec(name):
     try:
@@ -26,9 +34,20 @@ def _find_spec(name):
 
 class ManagementCommandRemovalTest(SimpleTestCase):
     def test_checkout_has_no_management_package(self):
-        self.assertFalse((ROOT / 'trusts' / 'management').exists())
+        for path in COMMAND_PATHS:
+            self.assertFalse(path.exists(), path)
 
-    def test_importable_specs_are_absent(self):
+    def test_this_checkout_does_not_provide_command_modules(self):
+        # ``trusts`` is a namespace package. Other checkouts on sys.path
+        # may still expose historical command modules; only this tree is
+        # under test. Wheel isolation is ``scripts/verify-wheel-install.py``.
         for name in COMMAND_MODULES:
             with self.subTest(name=name):
-                self.assertIsNone(_find_spec(name))
+                spec = _find_spec(name)
+                if spec is None or not spec.origin:
+                    continue
+                origin = Path(spec.origin).resolve()
+                self.assertFalse(
+                    ROOT == origin or ROOT in origin.parents,
+                    '%s still ships from this checkout: %s' % (name, origin),
+                )
