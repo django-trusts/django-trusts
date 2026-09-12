@@ -18,6 +18,11 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from management_archive import ships_trusts_management
+
 ROOT = Path(__file__).resolve().parents[1]
 ZERO_HEAD = '94256b4e50acc0c95c488cfc1e8797d542cf65b7'
 FORBIDDEN_ZERO_PATHS = (
@@ -148,7 +153,7 @@ def main() -> int:
         names = zf.namelist()
     if any(n.endswith('trusts/core_backends.py') for n in names):
         raise SystemExit('library wheel still ships trusts/core_backends.py')
-    if any('/trusts/management/' in n or n.endswith('/trusts/management') for n in names):
+    if ships_trusts_management(names):
         raise SystemExit('library wheel still ships trusts/management/**')
     _assert_zero_record(zero_wheel)
 

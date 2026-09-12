@@ -330,7 +330,7 @@ Migration-bot checklist:
 Migration-bot checklist:
 
 - [ ] Do not fake or re-run `0001_initial` to pick up a through table.
-- [ ] Fresh migrate and Zero's already-applied-`0001` proof still see only `{0001_initial}` at that historical step (later #23 adds `0002_trustgroup`).
+- [ ] Fresh migrate at this historical step still records only `{0001_initial}` (later #23 adds `0002_trustgroup`). The Core `scripts/verify-legacy-upgrade.py` record is retained historical evidence and is currently broken/off CI. An equivalent Zero already-applied-`0001` → `0002` → grandfather replay is future work, not present evidence.
 - [ ] Replace `TrustGroup` writes with `trust.groups.add`.
 
 ## Policy not implemented (needs Thomas)
