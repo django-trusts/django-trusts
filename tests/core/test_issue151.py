@@ -123,6 +123,14 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertTrue(permission_has_condition('change_note:own'))
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
+    def test_pair_runner_omits_pinned_zero_unbound_default(self):
+        runner = (ROOT / 'scripts' / 'run-z1-pair-tests.py').read_text()
+        self.assertIn('18e87a63ff5079298e1ee330b888b4ff86551e1f', runner)
+        self.assertIn(
+            'test_unbound_is_none_and_bind_is_zero_sql',
+            runner,
+        )
+
     def test_host_docs_do_not_import_or_bind_ir_lookup(self):
         apps_text = (ROOT / 'tests' / 'myapp' / 'apps.py').read_text()
         readme = (ROOT / 'README.md').read_text()

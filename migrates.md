@@ -3573,8 +3573,13 @@ new SPI or public IR is introduced.
 
 1. Land this Core C1 PR on `dev`. Companion pin stays Zero
    `18e87a63ff5079298e1ee330b888b4ff86551e1f`.
-2. Do not open or merge Zero Z2 before this Core merge.
-3. Do not start #152, #145, #146, #138, #131, or #137 here.
+2. The Core pair runner omits Zero
+   `tests.legacy.test_issue54.ConditionLookupBindTest.test_unbound_is_none_and_bind_is_zero_sql`
+   on that pin (it still asserts the pre-C1 unbound default).
+   Override/unbind Zero tests stay. Z2 updates the Zero test; C2
+   drops the omit when the companion pin moves.
+3. Do not open or merge Zero Z2 before this Core merge.
+4. Do not start #152, #145, #146, #138, #131, or #137 here.
 
 ## Rollback
 
