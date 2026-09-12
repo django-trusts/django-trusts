@@ -1,267 +1,361 @@
 django-trusts
 =============
 
-Declarative authorization for Django applications that own their policy model.
+Declarative object permissions for Django
+-----------------------------------------
 
-``django-trusts`` is a **non-standalone Python dependency** for applications
-and packages that want authorization to follow ordinary persisted Django
-relationships. The application describes the path from a user to a permission
-and protected content; core compiles that declaration for object checks and
-authorized querysets.
+``django-trusts`` is a Django permission system for object-level
+authorization. It integrates with Django's authentication backend interface,
+allowing applications to use familiar checks such as
+``user.has_perm(permission, object)`` while defining authorization policies
+with ordinary Django models.
 
-Core supplies no concrete permission schema, no Trust, Content, Group, ACL,
-organization, or role models, no generic grant editor, and no Django
-``AppConfig``. Do **not** list ``'trusts'`` in ``INSTALLED_APPS``. The consumer
-owns its implementation ``AppConfig``, backend, models, and editing workflow.
+At its simplest, a permission is a persisted relationship among a user, an
+operation, and protected content. An application declares the model paths
+connecting them. A permission may come from a direct grant row, team
+membership, an organizational relationship, an inherited access-control
+entry, or another relational structure owned by the application.
 
-Choose the right package
-------------------------
+``django-trusts`` compiles these declarations into database queries, keeping
+permission decisions based on persisted truth. The same declarations support
+object checks, authorized querysets, permission enumeration, and decorators
+for protecting views.
 
-* Upgrading from or seeking the concrete django-trusts 0.x Trust/Content
-  behavior: `django-trusts-zero
-  <https://github.com/django-trusts/django-trusts-zero>`_.
-* Learning from persisted organization, team, and repository relationships:
-  `django-trusts-gh-permissions
-  <https://github.com/django-trusts/django-trusts-gh-permissions>`_.
-* Learning from explicit ordered allow/deny rows:
-  `django-trusts-windows-acl
-  <https://github.com/django-trusts/django-trusts-windows-acl>`_.
-* Designing a new implementation-neutral permission layer: continue here.
+How permissions are represented
+--------------------------------
 
-The reference implementations validate bounded real-world shapes. They are not
-complete clones of GitHub or Windows, and application-level validation remains
-necessary.
+A registered permission relationship connects three paths:
 
-Why use it?
------------
+* **user** -- who is requesting access;
+* **permission** -- the operation being requested; and
+* **content** -- the object being protected.
 
-``django-trusts`` keeps authorization:
+The paths begin from the same permission-bearing relation. In the simplest
+case, that relation is a table with foreign keys to a user, a Django
+permission, and a protected object.
 
-* **minimal** -- ordinary Django models plus compact declarations;
-* **declarative** -- relationship paths identify where user, permission, and
-  protected content meet;
-* **persisted** -- authorization derives from stored relational state rather
-  than transient application guesses;
-* **database-first** -- object decisions and authorized querysets share a
-  compiled policy, with supported filtering performed in SQL before
-  pagination;
-* **fail-closed** -- missing, malformed, or unsupported policy cannot become a
-  grant; and
-* **implementation-neutral** -- core does not impose one domain schema.
+Multiple registered relationships may authorize the same kind of content.
+Each complete relationship is an independent way to receive permission.
 
-This differs from an object-permission store that needs a permission row for
-every user/object pair. An implementation may infer a permission from existing
-organization relationships, or represent it with explicit policy rows. In
-both cases, the database remains the authorization truth.
+Installation
+------------
 
-Install
--------
+The current development version requires Python 3.12--3.14 and Django 6.1.
 
-This is a development release of the 1.x line, not a declared stable 1.0 and
-not a published PyPI release. Install from a local checkout or built artifact::
+.. code-block:: console
 
    python -m pip install "Django>=6.1,<6.2"
-   python -m pip install .
+   python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
-The supported matrix is Python 3.12--3.14 and Django 6.1. See the
-`support matrix
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
+Define the models
+-----------------
 
-Configure a consumer
---------------------
-
-The example below is copied from the passing ``tests.myapp`` consumer in this
-repository. The implementation owns both the backend and the registry.
+The application owns its protected content and permission relationships.
 
 .. code-block:: python
 
-   from django.contrib.auth.backends import ModelBackend
+   # documents/models.py
 
-   from trusts.apps import TrustsImplementationConfig
-   from trusts.backends import TrustModelBackendMixin
-   from trusts.core import Ref
-
-   DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
-
-   class DocumentBackend(TrustModelBackendMixin, ModelBackend):
-       pass
-
-   class DocumentConfig(TrustsImplementationConfig):
-       name = 'tests.myapp'
-       label = 'myapp'
-       trusts_backend_paths = (DOCUMENT_BACKEND,)
-
-       def ready(self):
-           super().ready()
-           from tests.myapp.models import DocumentGrant
-
-           handle = self.configured_backend()
-           registry = handle.registry
-           j = Ref(DocumentGrant)
-           registry.register(
-               content=j.document,
-               user=j.user,
-               permission=j.permission,
-           )
-
-Configure Django with the consumer application and backend, not core itself:
-
-.. code-block:: python
-
-   INSTALLED_APPS = (
-       'django.contrib.contenttypes',
-       'django.contrib.auth',
-       'tests.myapp.apps.DocumentConfig',
-   )
-   AUTHENTICATION_BACKENDS = (
-       'django.contrib.auth.backends.ModelBackend',
-       'tests.myapp.backends.DocumentBackend',
-   )
-
-``ModelBackend`` is optional if the host does not need Django's global
-permissions. A Trusts backend contributes ``False`` or an empty set when no
-object is supplied; it does not silently become a global-permission backend.
-
-Declare and authorize
----------------------
-
-Application-owned models hold the facts. Core intentionally has no generic
-grant or revoke method.
-
-.. code-block:: python
-
+   from django.conf import settings
    from django.contrib.auth.models import Permission
    from django.db import models
 
    from trusts.query import AuthorizedManager
 
+
    class Document(models.Model):
        title = models.CharField(max_length=200)
+
        objects = AuthorizedManager()
 
-       class Meta:
-           app_label = 'myapp'
 
-   class DocumentGrant(models.Model):
-       document = models.ForeignKey(Document, on_delete=models.CASCADE)
-       user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
-       permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+   class DocumentPermission(models.Model):
+       user = models.ForeignKey(
+           settings.AUTH_USER_MODEL,
+           on_delete=models.CASCADE,
+       )
+       permission = models.ForeignKey(
+           Permission,
+           on_delete=models.CASCADE,
+       )
+       document = models.ForeignKey(
+           Document,
+           on_delete=models.CASCADE,
+       )
 
-       class Meta:
-           app_label = 'myapp'
+``DocumentPermission`` is the permission-bearing relation. Each row connects
+one user and one permission to one document.
 
-   DocumentGrant.objects.create(
-       document=document, user=user, permission=change_permission,
-   )
-   user.has_perm('myapp.change_document', document)
-   Document.objects.authorized(user, change_permission)
-
-The object decision and queryset use the same registered policy.
-``AuthorizedQuerySet.authorized(user, permission, extra_q=None)`` requires a
-permission model instance. Unsupported inputs fail closed rather than falling
-back to a broader rule.
-
-Guard a view with the same Django permission name:
+Granting and revoking permission are ordinary changes to persisted application
+data:
 
 .. code-block:: python
+
+   DocumentPermission.objects.create(
+       user=user,
+       permission=change_document,
+       document=document,
+   )
+
+   DocumentPermission.objects.filter(
+       user=user,
+       permission=change_document,
+       document=document,
+   ).delete()
+
+An application may instead change a team membership, organizational
+relationship, ACL entry, or another persisted fact. ``django-trusts`` does
+not impose one grant-management workflow.
+
+Define the backend
+------------------
+
+The application provides a Django authentication backend using
+``TrustModelBackendMixin``.
+
+.. code-block:: python
+
+   # documents/backends.py
+
+   from django.contrib.auth.backends import ModelBackend
+
+   from trusts.backends import TrustModelBackendMixin
+
+
+   class DocumentBackend(TrustModelBackendMixin, ModelBackend):
+       pass
+
+Register the permission relationship
+------------------------------------
+
+Register the model paths when the application starts:
+
+.. code-block:: python
+
+   # documents/apps.py
+
+   from trusts.apps import TrustsImplementationConfig
+   from trusts.core import Ref
+
+
+   class DocumentsConfig(TrustsImplementationConfig):
+       name = "documents"
+       trusts_backend_paths = (
+           "documents.backends.DocumentBackend",
+       )
+
+       def ready(self):
+           super().ready()
+
+           from .models import DocumentPermission
+
+           relation = Ref(DocumentPermission)
+
+           self.configured_backend().registry.register(
+               user=relation.user,
+               permission=relation.permission,
+               content=relation.document,
+           )
+
+``Ref(DocumentPermission)`` begins a declaration from the permission-bearing
+model. The three paths identify the user, permission, and protected content
+associated with each row.
+
+The declaration is validated when it is registered. Invalid or unsupported
+paths raise a configuration error instead of becoming an authorization rule.
+
+Configure Django
+----------------
+
+Install the application that owns the permission implementation and add its
+backend:
+
+.. code-block:: python
+
+   # settings.py
+
+   INSTALLED_APPS = [
+       "django.contrib.contenttypes",
+       "django.contrib.auth",
+       "documents.apps.DocumentsConfig",
+   ]
+
+   AUTHENTICATION_BACKENDS = [
+       "django.contrib.auth.backends.ModelBackend",
+       "documents.backends.DocumentBackend",
+   ]
+
+Django's ``ModelBackend`` remains available for ordinary global permissions.
+``DocumentBackend`` answers object-level permission questions declared
+through ``django-trusts``.
+
+Ask permission questions
+------------------------
+
+Use Django's familiar object-permission API:
+
+.. code-block:: python
+
+   user.has_perm(
+       "documents.change_document",
+       document,
+   )
+
+List the user's permissions on an object:
+
+.. code-block:: python
+
+   user.get_all_permissions(document)
+   # {"documents.change_document"}
+
+Filter a queryset to the objects authorized for a particular permission:
+
+.. code-block:: python
+
+   change_document = Permission.objects.get(
+       content_type__app_label="documents",
+       codename="change_document",
+   )
+
+   documents = Document.objects.authorized(
+       user,
+       change_document,
+   )
+
+Protect a view with the same permission:
+
+.. code-block:: python
+
+   # documents/views.py
+
+   from django.http import HttpResponse
 
    from trusts.decorators import permission_required
 
+
    @permission_required(
-       'myapp.change_document',
-       fieldlookups_kwargs={'pk': 'pk'},
+       "documents.change_document",
+       fieldlookups_kwargs={"pk": "pk"},
    )
    def edit_document(request, pk):
-       return 'ok'
+       return HttpResponse("Authorized")
 
-Registration model
-------------------
+Object checks, permission enumeration, queryset filtering, and view protection
+all use the registered permission relationship.
 
-``Ref(Model)`` starts a typed, root-relative declaration. A registration names
-the content, requester, and permission paths contributed by one persisted row.
-Multiple complete registrations for the same content combine with OR; fields
-inside one registration remain correlated to that same row.
+More expressive permission policies
+-----------------------------------
 
-Core validates declarations without querying the database. Unsupported
-relationship shapes, ambiguous registrations, incompatible comparison fields,
-and missing terminals raise ``TrustsConfigurationError``. Runtime failures do
-not widen access.
+The ``DocumentPermission`` example uses the shortest useful path: one row
+directly connects a user, a permission, and a document. The same registration
+API also supports paths through multiple relationships.
 
-Conditions constrain existing paths
-------------------------------------
+For example, a user may receive permission through membership in a team, while
+the team receives access to content through another model. The registered user
+path can traverse those relationships without copying the resulting
+permissions into a separate user-object table.
 
-Closed predicates such as ``All``, ``Equal``, and ``permission_in`` can add
-declarative constraints to a registered path. They never create a grant on
-their own. Object authorization, permission enumeration, and queryset
-filtering consume the same compiled plan.
+Conditions can further constrain a permission path. A condition may require
+the user and content to belong to the same organization, or require a
+requested operation to appear in a team's allowed operations. Conditions
+narrow an existing permission relationship; they cannot create permission by
+themselves.
 
-For example, a team-derived repository permission can require both a bundled
-operation and organization alignment:
+Applications may register more than one valid path to the same content. A
+direct user grant and a team-derived grant can coexist, with either complete
+path providing permission.
 
-.. code-block:: python
+Inherited relationships
+~~~~~~~~~~~~~~~~~~~~~~~
 
-   from trusts.core import All, Equal, Ref, permission_in
+Permissions may also be inherited through hierarchical relationships. The
+``Along`` strategy walks a bounded hierarchy with a recursive common table
+expression, allowing a permission attached to one node to apply to related
+ancestors or descendants without traversing the hierarchy in Python.
 
-   from gh_permissions.models import TeamRepositoryPermission
+Policies that require ordered allow and deny entries can use the
+``OrderedFold`` strategy. It evaluates persisted entries in order while
+tracking which requested permission bits remain undecided.
 
-   t = Ref(TeamRepositoryPermission)
-   registry.register(
-       content=t.repository,
-       user=t.team.members,
-       permission=t.operation,
-       condition=All(
-           permission_in(t.team.allowed_operations),
-           Equal(t.team.organization, t.repository.organization),
-       ),
-   )
+Evaluation strategies use the same object-check, permission-enumeration, and
+queryset interfaces as direct permission paths. Database support varies by
+strategy; see the support matrix for the currently verified combinations.
 
-Application-specific condition adapters may bind through
-``TrustsRegistry.set_condition_lookup``. Arbitrary callbacks are not queryset
-policy and must not be used as a fallback grant.
+Reference implementations
+-------------------------
 
-Create-under-scope filtering
-----------------------------
+Two reference implementations demonstrate how different permission systems
+can be built with ``django-trusts``.
 
-``filter_authorized_scopes`` filters an intermediate model that is a proper
-prefix of a registered content path:
+Organization and team permissions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+`django-trusts-gh-permissions
+<https://github.com/django-trusts/django-trusts-gh-permissions>`_ models
+permissions implied by organization, team, repository, and membership
+relationships.
 
-   from trusts.core import filter_authorized_scopes
+It demonstrates:
 
-   filter_authorized_scopes(
-       Scope.objects.all(),
-       user,
-       permission_instance,
-       content=Payload,
-   )
+* direct and team-derived permission paths;
+* many-to-many team membership;
+* operation ceilings;
+* organization-alignment conditions; and
+* multiple valid paths to the same protected content.
 
-Unknown terminals, empty registries, invalid prefixes, and the content
-terminal itself return an empty queryset. Use ``.authorized()`` for the
-content terminal.
+It is a focused example of a GitHub-shaped permission model, not a complete
+reimplementation of GitHub.
 
-Operational guarantees
+Ordered access-control entries
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+`django-trusts-windows-acl
+<https://github.com/django-trusts/django-trusts-windows-acl>`_ models
+permissions using persisted access-control entries with ordering, allow and
+deny effects, permission masks, and inheritance.
+
+It demonstrates how an ACL-style permission system can select an ordered
+evaluation strategy while retaining the same Django-facing permission APIs.
+
+The project is intended to prove that this class of permission system can be
+implemented with ``django-trusts``. It is not intended to reproduce every
+feature or security guarantee of Windows ACLs.
+
+Users of django-trusts 0.x
+--------------------------
+
+Earlier versions of ``django-trusts`` included a concrete permission system
+based on ``Trust``, ``Content``, groups, roles, and their associated
+migrations.
+
+That implementation now continues as `django-trusts-zero
+<https://github.com/django-trusts/django-trusts-zero>`_. Applications
+upgrading from 0.x, or applications that specifically want that model, should
+use ``django-trusts-zero``.
+
+Its Django application label, database tables, content types, permissions, and
+migration identities are preserved. Python imports and Django settings move to
+the explicit ``trusts.zero`` paths described in the `Zero migration guide
+<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
+
+A runnable application using that implementation is available in
+`django-trusts-zero-example
+<https://github.com/django-trusts/django-trusts-zero-example>`_.
+
+Validation and support
 ----------------------
 
-* Register policy from the consumer ``AppConfig.ready()`` and call
-  ``super().ready()``.
-* Run ``python manage.py check`` in CI and before deployment.
-* Filter authorized querysets before slicing or pagination.
-* Keep grant mutation in explicit application-owned ORM workflows.
-* Treat reference implementations as evidence for bounded shapes, not as a
-  substitute for validation in the host application.
-* NIST material is research context, not an adopted architecture.
+Run Django's system checks during development and deployment:
 
-Migration and support
----------------------
+.. code-block:: console
 
-* `Core migration guide
-  <https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_
-* `Support matrix
-  <https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_
-* `Legacy baseline
-  <https://github.com/django-trusts/django-trusts/blob/dev/docs/legacy-baseline.md>`_
-* `Contributor and build history
-  <https://github.com/django-trusts/django-trusts/blob/dev/DEV.md>`_
+   python manage.py check
 
-Copyright BeeDesk, Inc., 2015--2026. BSD-2-Clause.
+Invalid declarations are rejected during application setup. Missing
+registrations and unsupported permission paths fail closed.
+
+Current Python, Django, database, and evaluation-strategy support is recorded
+in the `support matrix
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
+
+Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.
