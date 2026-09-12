@@ -1,6 +1,12 @@
 from django.apps import AppConfig as DjangoAppConfig
 from django.core.exceptions import ImproperlyConfigured
 
+from trusts._meta_options import _ensure_permission_conditions_option
+
+# Hosts load this module before Django constructs their models. Register
+# Meta.permission_conditions here so applications do not import _ir.
+_ensure_permission_conditions_option()
+
 
 def _listed_mixin_paths():
     """Exact AUTHENTICATION_BACKENDS mixin paths, de-duped by string.

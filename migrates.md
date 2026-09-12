@@ -3567,6 +3567,7 @@ new SPI or public IR is introduced.
 | `trusts.conditions` | Six names | Unchanged |
 | Authorization | Fail-closed unknown/unbound/malformed | Unchanged |
 | Companion Zero pin | `18e87a63ff5079298e1ee330b888b4ff86551e1f` | Unchanged in this PR |
+| `Meta.permission_conditions` option | Registered when a host imported `_ir` | Registered when Core `trusts.apps` is imported. Do not import `_ir` to enable the Meta option. |
 
 ## Fail-closed rollout
 
@@ -3586,6 +3587,8 @@ binds a lookup. No schema rollback.
       `RegistryConditionLookup` and `from trusts.conditions._ir`.
       Those production imports and bind calls go away. Register a
       builder instead. Do not document `_ir` types as application APIs.
+      Core registers `Meta.permission_conditions` when
+      `TrustsImplementationConfig` is imported.
 - [ ] Search for `handle.registry.set_condition_lookup(...)` in
       application hosts. Drop it. Tests that inject a fake or unbind
       may keep the call.

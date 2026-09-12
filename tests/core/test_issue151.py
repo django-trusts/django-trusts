@@ -160,6 +160,18 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
         )
         self.assertIn('core-then-construct-ok', stdout)
 
+    def test_apps_registers_meta_option_without_loading_core_or_ir(self):
+        stdout = self._run_isolated(
+            'import sys\n'
+            'import trusts.apps\n'
+            'from django.db.models import options as model_options\n'
+            'assert "permission_conditions" in model_options.DEFAULT_NAMES\n'
+            'assert "trusts.core" not in sys.modules\n'
+            'assert "trusts.conditions._ir" not in sys.modules\n'
+            'print("apps-option-ok")\n'
+        )
+        self.assertIn('apps-option-ok', stdout)
+
     def test_import_ir_then_construct_is_not_circular(self):
         stdout = self._run_isolated(
             'import trusts.conditions._ir\n'
