@@ -70,6 +70,7 @@ The application owns its protected content and permission relationships.
 
    class Document(models.Model):
        title = models.CharField(max_length=200)
+       confidential = models.BooleanField(default=False)
 
        objects = AuthorizedManager()
 
@@ -140,6 +141,7 @@ Register the model paths when the application starts:
    # documents/apps.py
 
    from trusts.apps import TrustsImplementationConfig
+   from trusts.conditions import RegistryConditionLookup
    from trusts.core import Ref
 
 
@@ -152,14 +154,22 @@ Register the model paths when the application starts:
        def ready(self):
            super().ready()
 
-           from .models import DocumentPermission
+           from .models import Document, DocumentPermission
 
+           handle = self.configured_backend()
            relation = Ref(DocumentPermission)
-
-           self.configured_backend().registry.register(
+           handle.registry.register(
                user=relation.user,
                permission=relation.permission,
                content=relation.document,
+           )
+           handle.register_permission_condition(
+               Document,
+               "non_confidential",
+               lambda u, p, o: o.confidential != True,
+           )
+           handle.registry.set_condition_lookup(
+               RegistryConditionLookup(handle.registry),
            )
 
 ``Ref(DocumentPermission)`` begins a declaration from the permission-bearing
@@ -262,30 +272,21 @@ Builders are trusted startup code, like ``AppConfig.ready()``. Do not query,
 perform I/O, or read request state inside them. Core itself adds no SQL
 during registration.
 
-.. code-block:: python
+The ``DocumentsConfig.ready()`` example above registers
+``non_confidential`` against ``Document.confidential``. A ``lambda`` and
+an equivalent named function are accepted identically.
 
-   handle = self.configured_backend()
-   handle.register_permission_condition(
-       Document,
-       "non_confidential",
-       lambda u, p, o: o.confidential != True,
-   )
-   handle.register_permission_condition(
-       Document,
-       "own",
-       lambda u, p, o: u == o.owner,
-   )
+.. code-block:: python
 
    user.has_perm("documents.change_document:non_confidential", document)
 
-A ``lambda`` and an equivalent named function are accepted identically.
 Unsupported operations, exceptions, non-predicates, unresolved fields, and
 forbidden constant captures fail at registration. Later mutation of a
 Python object captured by the builder cannot change authorization.
 
 ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` does not restore runtime
 callbacks. If that setting is still ``True``, ``manage.py check`` reports
-``trusts.E002``.
+``trusts.E007``.
 
 More expressive permission policies
 -----------------------------------

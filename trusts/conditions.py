@@ -122,7 +122,7 @@ def obsolete_legacy_callback_setting_enabled():
     """True when the deleted runtime-callback setting is still ``True``.
 
     The setting no longer enables object-only callbacks. A True value is
-    a configuration error (``trusts.E002``). Missing or False is quiet.
+    a configuration error (``trusts.E007``). Missing or False is quiet.
     Read at call time so ``override_settings`` works.
     """
     from django.conf import settings as django_settings
@@ -130,15 +130,6 @@ def obsolete_legacy_callback_setting_enabled():
     return bool(getattr(
         django_settings, 'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', False
     ))
-
-
-def legacy_permission_callbacks_allowed():
-    """Obsolete alias. Reports the deleted setting; never enables callbacks.
-
-    A True value is a configuration error (``trusts.E002``). Runtime
-    authorization never invokes a registered callable.
-    """
-    return obsolete_legacy_callback_setting_enabled()
 
 
 _BOOLEAN_ERROR_MESSAGE = (

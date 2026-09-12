@@ -67,6 +67,7 @@ from django.contrib.auth.backends import ModelBackend
 
 from trusts.apps import TrustsImplementationConfig
 from trusts.backends import TrustModelBackendMixin
+from trusts.conditions import RegistryConditionLookup
 from trusts.core import Ref
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
@@ -81,7 +82,7 @@ class DocumentConfig(TrustsImplementationConfig):
 
     def ready(self):
         super().ready()
-        from tests.myapp.models import DocumentGrant
+        from tests.myapp.models import Document, DocumentGrant
 
         handle = self.configured_backend()
         registry = handle.registry
@@ -90,6 +91,14 @@ class DocumentConfig(TrustsImplementationConfig):
             content=j.document,
             user=j.user,
             permission=j.permission,
+        )
+        handle.register_permission_condition(
+            Document,
+            'non_confidential',
+            lambda u, p, o: o.confidential != True,
+        )
+        handle.registry.set_condition_lookup(
+            RegistryConditionLookup(handle.registry),
         )
 
 INSTALLED_APPS = (
@@ -119,6 +128,7 @@ from trusts.query import AuthorizedManager
 
 class Document(models.Model):
     title = models.CharField(max_length=200)
+    confidential = models.BooleanField(default=False)
     objects = AuthorizedManager()
 
     class Meta:
@@ -149,29 +159,21 @@ def edit_document(request, pk):
     return 'ok'
 ```
 
-Named queryable conditions are registration-time builders. Core invokes
-the callable once with symbolic refs, stores only the normalized
-predicate, and never runs it during `has_perm` or queryset filtering.
-Write builders like migrations: no queries, no I/O, no request state.
+Named queryable conditions are registration-time builders. The
+`DocumentConfig.ready()` example above registers `non_confidential`
+against `Document.confidential`. Core invokes that callable once with
+symbolic refs, stores only the normalized predicate, and never runs it
+during `has_perm` or queryset filtering. Write builders like
+migrations: no queries, no I/O, no request state. A lambda and an
+equivalent named function are accepted identically.
 
 ```python
-handle = self.configured_backend()
-handle.register_permission_condition(
-    Document,
-    'non_confidential',
-    lambda u, p, o: o.confidential != True,
-)
-handle.register_permission_condition(
-    Document,
-    'own',
-    lambda u, p, o: u == o.owner,
-)
 user.has_perm('myapp.change_document:non_confidential', document)
 ```
 
-A lambda and an equivalent named function are accepted identically.
 `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` does not restore runtime
-callbacks; if it is still `True`, Django system checks fail.
+callbacks; if it is still `True`, Django system checks report
+`trusts.E007`.
 
 ## Documentation
 

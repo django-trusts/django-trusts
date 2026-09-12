@@ -89,6 +89,21 @@ class ReadmeExampleAuthorizationTest(TestCase):
             handle.registry.records[0].content_model,
             Document,
         )
+        record = handle.registry.get_permission_condition_record(
+            Document, 'non_confidential',
+        )
+        self.assertIsNotNone(record)
+        self.assertEqual(
+            record.expr.to_tuple(),
+            (
+                'ne',
+                ('ref', 'object', ('confidential',)),
+                ('const', True),
+            ),
+        )
+        field = Document._meta.get_field('confidential')
+        self.assertFalse(field.null)
+        self.assertIs(field.default, False)
 
     def test_object_has_perm_and_authorized_queryset(self):
         self.assertTrue(
@@ -113,6 +128,30 @@ class ReadmeExampleAuthorizationTest(TestCase):
         self.assertFalse(
             Document.objects.authorized(self.bob, self.change_permission).exists()
         )
+
+    def test_documented_non_confidential_builder_overlays_the_grant(self):
+        self.assertTrue(
+            self.alice.has_perm(
+                'myapp.change_document:non_confidential', self.document,
+            ),
+        )
+        secret = Document.objects.create(title='secret', confidential=True)
+        DocumentGrant.objects.create(
+            document=secret,
+            user=self.alice,
+            permission=self.change_permission,
+        )
+        self.assertTrue(
+            self.alice.has_perm('myapp.change_document', secret),
+        )
+        self.assertFalse(
+            self.alice.has_perm(
+                'myapp.change_document:non_confidential', secret,
+            ),
+        )
+        owner = implementation_for_path(DOCUMENT_BACKEND)
+        with self.assertNumQueries(0):
+            owner.ready()
 
     def test_permission_required_uses_the_same_permission(self):
         allowed = edit_document(_request(self.alice), pk=self.document.pk)
@@ -232,6 +271,14 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn('super().ready()', apps)
         self.assertIn('content=j.document', apps)
         self.assertIn('content=j.document', readme)
+        models_text = (ROOT / 'tests' / 'myapp' / 'models.py').read_text()
+        self.assertIn('confidential = models.BooleanField(default=False)', models_text)
+        self.assertIn('confidential = models.BooleanField(default=False)', readme)
+        self.assertIn('handle.register_permission_condition(', readme)
+        self.assertIn('o.confidential != True', readme)
+        self.assertIn('handle.register_permission_condition(', apps)
+        self.assertIn('RegistryConditionLookup', readme)
+        self.assertIn('RegistryConditionLookup', apps)
         views = (ROOT / 'tests' / 'myapp' / 'views.py').read_text()
         self.assertIn(
             "@permission_required('myapp.change_document', fieldlookups_kwargs={'pk': 'pk'})",

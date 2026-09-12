@@ -19,7 +19,7 @@ from django.test.utils import isolate_apps
 
 from trusts.checks import (
     CHECK_ID_INVALID_EXPR,
-    CHECK_ID_LEGACY_CALLBACK,
+    CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
     check_permission_conditions,
     permission_condition_check_messages,
@@ -147,7 +147,10 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             registry.iter_permission_conditions(),
         )
         self.assertEqual(len(log.calls), 1)
-        self.assertEqual(_messages_with_id(messages, CHECK_ID_LEGACY_CALLBACK), [])
+        self.assertEqual(
+            _messages_with_id(messages, CHECK_ID_OBSOLETE_CALLBACK_SETTING),
+            [],
+        )
 
     def test_builder_exception_and_non_predicate_fail_at_register(self):
         Note = _note_model()
@@ -176,7 +179,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         with override_settings(TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS=True):
             errors = _messages_with_id(
                 check_obsolete_legacy_callback_setting(None),
-                CHECK_ID_LEGACY_CALLBACK,
+                CHECK_ID_OBSOLETE_CALLBACK_SETTING,
             )
         self.assertEqual(len(errors), 1)
         self.assertIn('does not enable', errors[0].msg)
@@ -230,7 +233,7 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
     def test_manage_py_check_passes_for_valid_library_suite(self):
         output = self._output()
         self.assertNotIn(CHECK_ID_INVALID_EXPR, output)
-        self.assertNotIn(CHECK_ID_LEGACY_CALLBACK, output)
+        self.assertNotIn(CHECK_ID_OBSOLETE_CALLBACK_SETTING, output)
 
     def test_manage_py_check_reports_invalid_registration_via_handle(self):
         from tests.myapp.models import Document
@@ -262,5 +265,5 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
     def test_manage_py_check_reports_obsolete_callback_setting(self):
         with self.assertRaises(SystemCheckError) as ctx:
             call_command('check')
-        self.assertIn(CHECK_ID_LEGACY_CALLBACK, str(ctx.exception))
+        self.assertIn(CHECK_ID_OBSOLETE_CALLBACK_SETTING, str(ctx.exception))
         self.assertIn('does not enable', str(ctx.exception))

@@ -8,8 +8,9 @@ stable IDs. ``PermissionConditionError`` is caught here so
 does not make the policy executable: ``has_perm`` and ``.permitted()``
 still validate and fail closed.
 
-``trusts.E002`` is reserved for the deleted runtime-callback setting
-still being ``True``. That setting never enables callbacks.
+``trusts.E007`` reports the deleted runtime-callback setting still
+being ``True``. That setting never enables callbacks. ``trusts.E002``
+and ``trusts.W001`` are retired.
 """
 
 from django.core import checks as django_checks
@@ -22,11 +23,11 @@ from trusts.conditions import (
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
-CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'
+CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -93,7 +94,7 @@ def _messages_for_obsolete_callback_setting():
             + _SILENCE_DOES_NOT_ENABLE_HINT
         ),
         obj=None,
-        id=CHECK_ID_LEGACY_CALLBACK,
+        id=CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     )]
 
 

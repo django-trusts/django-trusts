@@ -17,10 +17,10 @@ from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
-from tests.models import ticket_meta_own
+from tests.models import Ticket, ticket_meta_own
 from trusts.checks import (
     CHECK_ID_INVALID_EXPR,
-    CHECK_ID_LEGACY_CALLBACK,
+    CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
     check_permission_conditions,
     iter_live_permission_conditions,
@@ -94,6 +94,7 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         import trusts.conditions as conditions_mod
 
         self.assertFalse(hasattr(conditions_mod, '_conditions'))
+        self.assertFalse(hasattr(conditions_mod, 'legacy_permission_callbacks_allowed'))
         self.assertIsInstance(ConditionRegistry(), ConditionRegistry)
         first = ConditionRegistry()
         second = ConditionRegistry()
@@ -281,16 +282,44 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             self.assertIn('status', sql.lower())
             self.assertEqual(len(log.calls), 1)
 
-    def test_first_party_ticket_builder_is_zero_sql(self):
-        Note, _Memo = _note_models()
+    def _donate_meta_permission_conditions(self, registry, model):
+        """Walk ``Meta.permission_conditions`` the way Zero donates them.
+
+        Idempotent per registry instance so repeated ready() does not
+        invoke builders again.
+        """
+        donated = getattr(registry, '_core_ticket_meta_donation_id', None)
+        if donated is registry:
+            return False
+        for cond_code, condition in (
+            getattr(model._meta, 'permission_conditions', ()) or ()
+        ):
+            registry.register_permission_condition(model, cond_code, condition)
+        registry._core_ticket_meta_donation_id = registry
+        return True
+
+    def test_ticket_meta_own_donation_is_zero_sql_and_idempotent(self):
+        self.assertEqual(
+            Ticket._meta.permission_conditions,
+            (('meta_own', ticket_meta_own),),
+        )
         registry = TrustsRegistry()
         with self.assertNumQueries(0):
-            record = registry.register_permission_condition(
-                Note, 'meta_own', ticket_meta_own,
-            )
+            first = self._donate_meta_permission_conditions(registry, Ticket)
+        self.assertTrue(first)
+        record = registry.get_permission_condition_record(Ticket, 'meta_own')
+        self.assertIsNotNone(record)
+        self.assertIs(record.model, Ticket)
         self.assertEqual(
             record.expr.to_tuple(),
             ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
+        )
+        with self.assertNumQueries(0):
+            second = self._donate_meta_permission_conditions(registry, Ticket)
+        self.assertFalse(second)
+        self.assertIs(
+            registry.get_permission_condition_record(Ticket, 'meta_own'),
+            record,
         )
 
     def test_core_registration_path_is_zero_sql_for_expr_and_builder(self):
@@ -439,7 +468,10 @@ class ConditionRegistryCheckTest(SimpleTestCase):
             registry.iter_permission_conditions()
         )
         self.assertEqual(len(log.calls), 1)
-        self.assertEqual([m for m in messages if m.id == CHECK_ID_LEGACY_CALLBACK], [])
+        self.assertEqual(
+            [m for m in messages if m.id == CHECK_ID_OBSOLETE_CALLBACK_SETTING],
+            [],
+        )
 
     def test_invalid_expr_is_check_error_not_registration_error(self):
         Note, _Memo = _note_models()
@@ -475,7 +507,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
             self.assertTrue(obsolete_legacy_callback_setting_enabled())
             messages = check_obsolete_legacy_callback_setting(None)
         self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0].id, CHECK_ID_LEGACY_CALLBACK)
+        self.assertEqual(messages[0].id, CHECK_ID_OBSOLETE_CALLBACK_SETTING)
         self.assertIn('does not enable', messages[0].msg)
 
     def test_check_permission_conditions_reads_handle_registry(self):

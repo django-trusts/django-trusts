@@ -3248,7 +3248,8 @@ Transitional prebuilt `Expr` remains accepted so current Zero
 `Trust:own` (`_u == _o.settlor`) keeps loading. Runtime permission
 callbacks, `ConditionRecord.func`, and `trusts.W001` are removed.
 `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True` is a configuration
-error (`trusts.E002`) and does not enable callbacks.
+error (`trusts.E007`) and does not enable callbacks.
+`legacy_permission_callbacks_allowed()` is deleted.
 
 `BackendHandle.register_permission_condition(model, code, builder_or_expr)`
 is the application API. `freeze()` seals condition registration with
@@ -3314,10 +3315,10 @@ handle.register_permission_condition(
 | | |
 | --- | --- |
 | Previous | Missing / False: `trusts.E002` plus runtime `PermissionConditionError` without invoking the callable. True: object-only `has_perm` plus `trusts.W001`. |
-| New | There is no callback execution path and no `ConditionRecord.func`. `trusts.W001` is deleted. If `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` is still True, `trusts.E002` is a configuration error and does not enable callbacks. |
-| Replacement | Rewrite remaining callables as builders. Remove the setting. |
-| Affected | Tests and any host still setting the flag. Inventory found no production callback callers. |
-| Authorization | Fail closed. Silencing `trusts.E002` does not restore callbacks. |
+| New | There is no callback execution path and no `ConditionRecord.func`. `trusts.E002` / `trusts.W001` and `legacy_permission_callbacks_allowed()` are deleted. If `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` is still True, `trusts.E007` is a configuration error and does not enable callbacks. |
+| Replacement | Rewrite remaining callables as builders. Remove the setting. Do not import `legacy_permission_callbacks_allowed`. |
+| Affected | Tests and any host still setting the flag or importing the old helper. Inventory found no production callback callers. |
+| Authorization | Fail closed. Silencing `trusts.E007` does not restore callbacks. |
 
 ## Old vs new behavior
 
@@ -3328,7 +3329,8 @@ handle.register_permission_condition(
 | `has_perm` / `.permitted()` / `.authorized()` | May invoke `func` when the flag is True | Never invoke the builder; evaluate stored IR |
 | Frozen registry condition write | Allowed | `TrustsConfigurationError` before builder invoke |
 | `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` missing / False | Fail closed; callback not invoked | Setting unused; no callback path |
-| Flag True | Object-only `has_perm` + `trusts.W001` | `trusts.E002`; callbacks still absent |
+| Flag True | Object-only `has_perm` + `trusts.W001` | `trusts.E007`; callbacks still absent |
+| `legacy_permission_callbacks_allowed()` | Returned the setting bool | Deleted (`ImportError`) |
 | `ConditionRecord.func` | Callable or `None` | Attribute removed |
 | Public `Expr` / `condition_refs` imports | Supported | Still supported (Stage B removes them) |
 | Package version | `1.0.0.dev3` | Unchanged |
@@ -3356,10 +3358,13 @@ Do not change the current Core/Zero pair pin in this PR.
       `get_permission_condition_func`. Those are gone. Read
       `record.expr` (IR) only.
 - [ ] Search for `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`. Remove
-      it. `True` is `trusts.E002` and does not enable callbacks. Do
-      not silence `trusts.E002` expecting a callback to run.
-- [ ] Search for `trusts.W001` / `CHECK_ID_LEGACY_CALLBACK_WARNING`.
-      The warning is deleted.
+      it. `True` is `trusts.E007` and does not enable callbacks. Do
+      not silence `trusts.E007` expecting a callback to run.
+- [ ] Search for `legacy_permission_callbacks_allowed`. The helper
+      is deleted and must not return True.
+- [ ] Search for `trusts.E002` / `trusts.W001` /
+      `CHECK_ID_LEGACY_CALLBACK_WARNING`. Those callback IDs are
+      retired. The leftover-setting error is `trusts.E007`.
 - [ ] Do not delete `from trusts.conditions import Expr` /
       `condition_refs` yet (Stage B). Prefer builders in new code.
 - [ ] Confirm builders run only at register/donation, never during
