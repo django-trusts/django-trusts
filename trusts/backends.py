@@ -159,8 +159,9 @@ class TrustModelBackendMixin(object):
     def _bound_condition_lookup(self, obj):
         """Bound ``ConditionLookup`` on the coordinating / own registry.
 
-        Unbound (the C1 default) is ``None``. Unknown ``:condition``
-        codes then raise ``AttributeError``.
+        Unbound (after explicit ``set_condition_lookup(None)``) is
+        ``None``. Unknown ``:condition`` codes then raise
+        ``AttributeError``.
         """
         if isinstance(obj, QuerySet):
             handles = self._trusts_config().configured_handles()

@@ -139,10 +139,12 @@ class KernelConfigTest(SimpleTestCase):
 
 
 class ConditionLookupBindTest(TestCase):
-    def test_unbound_is_none_and_bind_is_zero_sql(self):
-        registry = TrustsRegistry()
+    def test_construct_self_binds_and_unbind_is_zero_sql(self):
         with self.assertNumQueries(0):
-            self.assertIsNone(registry.condition_lookup)
+            registry = TrustsRegistry()
+            lookup = registry.condition_lookup
+        self.assertIsNotNone(lookup)
+        self.assertIs(lookup.conditions, registry.conditions)
 
         class Bound(ConditionLookup):
             def record_for(self, model, cond_code):
@@ -151,16 +153,18 @@ class ConditionLookupBindTest(TestCase):
             def compile_q(self, model, perm_string, user):
                 raise AssertionError('must not invoke at bind')
 
-        lookup = Bound()
+        override = Bound()
         with self.assertNumQueries(0):
-            registry.set_condition_lookup(lookup)
-        self.assertIs(registry.condition_lookup, lookup)
+            registry.set_condition_lookup(override)
+        self.assertIs(registry.condition_lookup, override)
         with self.assertNumQueries(0):
             registry.set_condition_lookup(None)
         self.assertIsNone(registry.condition_lookup)
 
     def test_missing_methods_raise_and_do_not_partial_bind(self):
         registry = TrustsRegistry()
+        default = registry.condition_lookup
+        self.assertIs(default.conditions, registry.conditions)
 
         class Complete(object):
             def record_for(self, model, cond_code):
@@ -176,6 +180,16 @@ class ConditionLookupBindTest(TestCase):
         class OnlyCompile(object):
             def compile_q(self, model, perm_string, user):
                 return Q()
+
+        with self.assertNumQueries(0):
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_condition_lookup(OnlyRecord())
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_condition_lookup(OnlyCompile())
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_condition_lookup(object())
+        self.assertIs(registry.condition_lookup, default)
+        self.assertIs(default.conditions, registry.conditions)
 
         complete = Complete()
         with self.assertNumQueries(0):

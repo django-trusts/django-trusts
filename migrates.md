@@ -3498,5 +3498,114 @@ Revert this Core PR. Stage A public `Expr` imports and transitional
 - [ ] Do not implement #145, #146, #138, #137, condition-only
       registration, `TQ.contains`, GH, or Windows in this PR.
 
+# Issue #151 C1: construct-time condition lookup self-bind (1.0.0.dev3)
+
+This record covers the **Core C1** slice of
+[django-trusts#151](https://github.com/django-trusts/django-trusts/issues/151)
+accepted against
+[r2](https://github.com/django-trusts/django-trusts/issues/151#issuecomment-5649416301)
+and
+[acceptance](https://github.com/django-trusts/django-trusts/issues/151#issuecomment-5649421978).
+Package version stays **1.0.0.dev3**. No model, field, table,
+migration-loader key, content type, permission row, stored
+authorization fact, package identity, or app label changes.
+
+This PR pairs against Zero
+`18e87a63ff5079298e1ee330b888b4ff86551e1f`. Do not retarget the
+companion Zero pin here.
+
+## Decision
+
+`TrustsRegistry` constructs its private condition store and self-binds
+the private store adapter at construct time. Every live `_ensure`
+registry and every standalone Core-only registry is bound without
+consumer wiring. Applications register a builder on the handle. They
+do not import `trusts.conditions._ir` or call `set_condition_lookup`.
+`set_condition_lookup` remains for tests and explicit unbind. The
+public `trusts.conditions` surface stays the accepted six names. No
+new SPI or public IR is introduced.
+
+## No change to these public call sites
+
+- `handle.register_permission_condition(Model, "code", lambda u, p, o: …)`
+- `User.has_perm` / `has_perms` / `get_*_permissions` signatures
+- `TrustModelBackendMixin` grant matching
+- Package version `1.0.0.dev3`
+- Stored identity: app label `trusts`, Zero migration keys, tables,
+  content types, permissions, and rows
+- Six-name `trusts.conditions` surface
+
+## Changes
+
+### 66. Default named-condition lookup is self-bound at construct
+
+| | |
+| --- | --- |
+| Previous | Unbound (`None`) until a consumer imported `RegistryConditionLookup` and called `set_condition_lookup`. |
+| New | `TrustsRegistry` self-binds the private store adapter at construct. `lookup.conditions is registry.conditions`. |
+| Replacement | Register a builder. Do not import `_ir` or bind lookup. |
+| Affected | README / RST / host `AppConfig` examples that imported and bound the private adapter. Tests that assumed a new registry was unbound. |
+| Authorization | Unchanged once a builder is stored. Unknown / unbound-record / malformed conditions still fail closed. |
+
+### 67. `set_condition_lookup` is no longer required for named `:condition` authorization
+
+| | |
+| --- | --- |
+| Previous | Required for named `:condition` authorization. |
+| New | Remains for tests and explicit unbind (`None` clears). A partial bind (missing `record_for` or `compile_q`) still raises `TrustsConfigurationError` and does not mutate the existing binding. |
+| Replacement | Application hosts drop the bind call. Tests that inject a fake or unbind keep using this method. |
+| Affected | Host `ready()` wiring and override/unbind tests. |
+| Authorization | After explicit unbind, named `:condition` overlay fails closed (`AttributeError`). |
+
+## Old vs new behavior
+
+| Situation | Previous | New |
+| --- | --- | --- |
+| Default lookup | Unbound (`None`) until a consumer imported `RegistryConditionLookup` and called `set_condition_lookup` | `TrustsRegistry` self-binds the private store adapter at construct |
+| Application | README/host showed `_ir` wiring | Register a builder; do not import `_ir` or bind lookup |
+| `set_condition_lookup` | Required for named `:condition` authorization | Remains for tests/unbind; applications do not call it |
+| `trusts.conditions` | Six names | Unchanged |
+| Authorization | Fail-closed unknown/unbound/malformed | Unchanged |
+| Companion Zero pin | `18e87a63ff5079298e1ee330b888b4ff86551e1f` | Unchanged in this PR |
+
+## Fail-closed rollout
+
+1. Land this Core C1 PR on `dev`. Companion pin stays Zero
+   `18e87a63ff5079298e1ee330b888b4ff86551e1f`.
+2. Do not open or merge Zero Z2 before this Core merge.
+3. Do not start #152, #145, #146, #138, #131, or #137 here.
+
+## Rollback
+
+Revert this Core PR. New registries are unbound again until a consumer
+binds a lookup. No schema rollback.
+
+## Migration-bot checklist
+
+- [ ] Search application and Zero production code for
+      `RegistryConditionLookup` and `from trusts.conditions._ir`.
+      Those production imports and bind calls go away. Register a
+      builder instead. Do not document `_ir` types as application APIs.
+- [ ] Search for `handle.registry.set_condition_lookup(...)` in
+      application hosts. Drop it. Tests that inject a fake or unbind
+      may keep the call.
+- [ ] Confirm `from trusts.conditions import PermissionConditionError`,
+      `PermissionConditionNotQueryable`, `permission_has_condition`,
+      and `permission_condition_code` still work. No new public names.
+- [ ] Confirm unknown / unbound-record / malformed conditions still
+      fail closed, and that explicit `set_condition_lookup(None)`
+      fail-closes the named `:condition` overlay.
+- [ ] Confirm construction, registration, and `freeze()` remain
+      zero SQL.
+- [ ] Confirm a standalone `TrustsRegistry()` and every live `_ensure`
+      registry are self-bound without `ready()` / `freeze()` wiring.
+- [ ] Do not apply a new Trusts schema or data migration; none was
+      added.
+- [ ] Leave package version at `1.0.0.dev3`.
+- [ ] Leave `COMPANION_ZERO_SHA` / `ZERO_HEAD` at
+      `18e87a63ff5079298e1ee330b888b4ff86551e1f`.
+- [ ] Do not implement Z2, C2, #152, #145, #146, #138, #131, or
+      #137 in this PR.
+
 
 

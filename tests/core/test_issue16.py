@@ -116,6 +116,9 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         right = TrustsRegistry()
         self.assertIsInstance(left.conditions, ConditionRegistry)
         self.assertIsNot(left.conditions, right.conditions)
+        self.assertIs(left.condition_lookup.conditions, left.conditions)
+        self.assertIs(right.condition_lookup.conditions, right.conditions)
+        self.assertIsNot(left.condition_lookup, right.condition_lookup)
         self.assertEqual(list(left.iter_permission_conditions()), [])
         self.assertEqual(list(right.iter_permission_conditions()), [])
 
