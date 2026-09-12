@@ -11,7 +11,7 @@ permissions:
 env:
   # Exact Zero #18 companion head (django-trusts-zero#20). Do not pair this
   # core with unpublished snapshots.
-  COMPANION_ZERO_SHA: 42cd9d6b15578a61db5dcab7cfc478cbb3cd6949
+  COMPANION_ZERO_SHA: 94256b4e50acc0c95c488cfc1e8797d542cf65b7
 
 jobs:
   tests:
