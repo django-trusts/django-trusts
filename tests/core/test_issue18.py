@@ -828,11 +828,10 @@ class MembershipGroupExistsTest(TransactionTestCase):
             self.assertIsNone(granted(
                 (handle,), self.folder, self.owner, self.read, kind='group',
             ))
-        with self.assertNumQueries(1):
-            self.assertIs(all_match(
-                (handle,), self.folder, self.owner, self.read,
-            ), True)
-        with self.assertNumQueries(1):
+        self.assertTrue(self.trustee.has_permission(
+            self.owner, self.folder, self.read,
+        ))
+        with self.assertNumQueries(0):
             self.assertEqual(
                 list(common_permissions(
                     (handle,), self.folder, self.owner, kind='group',
