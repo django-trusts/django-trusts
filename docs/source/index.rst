@@ -273,6 +273,9 @@ Permissions may also be inherited through hierarchical relationships. The
 expression, allowing a permission attached to one node to apply to related
 ancestors or descendants without traversing the hierarchy in Python.
 
+Ordered allow and deny
+~~~~~~~~~~~~~~~~~~~~~~
+
 Policies that require ordered allow and deny entries can use the
 ``OrderedFold`` strategy. It evaluates persisted entries in order while
 tracking which requested permission bits remain undecided.
