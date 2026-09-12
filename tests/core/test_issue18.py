@@ -111,6 +111,9 @@ def _long_path_models():
         actor = models.ForeignKey(
             Actor, related_name='placements', on_delete=models.CASCADE,
         )
+        alt_actor = models.ForeignKey(
+            Actor, related_name='alt_placements', on_delete=models.CASCADE,
+        )
         token = models.ForeignKey(
             Token, related_name='placements', on_delete=models.CASCADE,
         )
@@ -360,8 +363,8 @@ class LongPathRegistrationTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
                 registry.register(
-                    content=p.wing,
-                    user=p.actor,
+                    content=p.artifact,
+                    user=p.alt_actor,
                     permission=p.token,
                     condition=permission_in(
                         p.wing.floor.building.hall.clusters.tokens,
@@ -508,8 +511,8 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.artifact = self.Artifact.objects.create(title='scope')
         self.other = self.Artifact.objects.create(title='other')
         self.Placement.objects.create(
-            artifact=self.artifact, actor=self.actor, token=self.read,
-            wing=self.wing,
+            artifact=self.artifact, actor=self.actor, alt_actor=self.stranger,
+            token=self.read, wing=self.wing,
         )
         self.registry = TrustsRegistry()
         _direct_ceiling(self.registry, self.Placement)
