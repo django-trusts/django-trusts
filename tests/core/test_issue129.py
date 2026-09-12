@@ -25,6 +25,10 @@ class UnreachableManagementCommandsRemovedTest(SimpleTestCase):
 
     def test_removed_modules_are_not_importable(self):
         for name in REMOVED_MODULES:
-            self.assertIsNone(importlib.util.find_spec(name), name)
+            try:
+                spec = importlib.util.find_spec(name)
+            except ModuleNotFoundError:
+                spec = None
+            self.assertIsNone(spec, name)
             with self.assertRaises(ModuleNotFoundError):
                 importlib.import_module(name)

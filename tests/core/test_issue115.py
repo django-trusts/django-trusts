@@ -256,10 +256,14 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIsNone(importlib.util.find_spec('trusts.tests'))
         self.assertIsNone(importlib.util.find_spec('trusts.test_issue16'))
         self.assertIsNone(importlib.util.find_spec('trusts.test_issue115'))
-        self.assertIsNone(importlib.util.find_spec('trusts.management'))
-        self.assertIsNone(
-            importlib.util.find_spec('trusts.management.commands.create_trust_root')
-        )
+        def _find_spec(name):
+            try:
+                return importlib.util.find_spec(name)
+            except ModuleNotFoundError:
+                return None
+
+        self.assertIsNone(_find_spec('trusts.management'))
+        self.assertIsNone(_find_spec('trusts.management.commands.create_trust_root'))
         self.assertTrue((ROOT / 'tests' / 'core' / 'test_issue16.py').is_file())
         self.assertFalse((ROOT / 'trusts' / 'tests.py').exists())
         self.assertFalse((ROOT / 'trusts' / 'management').exists())
