@@ -1,6 +1,11 @@
 django-trusts
 =============
 
+.. image:: _static/django-trusts-mascot.png
+   :alt: django-trusts badger mascot holding a green key
+   :align: center
+   :width: 220px
+
 Declarative object permissions for Django
 -----------------------------------------
 
