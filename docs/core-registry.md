@@ -342,10 +342,11 @@ the same plan (user path ending in M2M) via `RelationPlan.content_exists`.
 Direct FK / O2O / reverse user hops stay out of the group slice.
 An OrderedFold `strategy` makes `group_exists` inapplicable (`None`).
 
-`TrustsRegistry` self-binds a private store adapter at construct.
-`set_condition_lookup` remains for tests and explicit unbind. Missing
-methods raise `TrustsConfigurationError` and do not bind. Applications
-register builders; they do not import `trusts.conditions._ir`.
+Live implementation registries self-bind a private store adapter in
+`_ensure`. `set_condition_lookup` remains for tests and explicit unbind.
+Missing methods raise `TrustsConfigurationError` and do not bind.
+Standalone `TrustsRegistry()` stays unbound. Applications register
+builders; they do not import `trusts.conditions._ir`.
 Live registries are owned by installed `TrustsImplementationConfig`
 subclasses. Resolve them with `implementation_for_path()`,
 `implementation_for_class()`, or `configured_implementation_handles()`.

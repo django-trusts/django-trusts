@@ -139,13 +139,13 @@ class KernelConfigTest(SimpleTestCase):
 
 
 class ConditionLookupBindTest(TestCase):
-    def test_default_is_self_bound_and_bind_is_zero_sql(self):
+    def test_standalone_unbound_live_owner_self_binds_zero_sql(self):
+        from tests.apps import live_config
         from trusts.conditions._ir import RegistryConditionLookup
 
+        registry = TrustsRegistry()
         with self.assertNumQueries(0):
-            registry = TrustsRegistry()
-        self.assertIsInstance(registry.condition_lookup, RegistryConditionLookup)
-        self.assertIs(registry.condition_lookup.conditions, registry.conditions)
+            self.assertIsNone(registry.condition_lookup)
 
         class Bound(ConditionLookup):
             def record_for(self, model, cond_code):
@@ -161,6 +161,10 @@ class ConditionLookupBindTest(TestCase):
         with self.assertNumQueries(0):
             registry.set_condition_lookup(None)
         self.assertIsNone(registry.condition_lookup)
+
+        live = live_config().configured_backend().registry
+        self.assertIsInstance(live.condition_lookup, RegistryConditionLookup)
+        self.assertIs(live.condition_lookup.conditions, live.conditions)
 
     def test_missing_methods_raise_and_do_not_partial_bind(self):
         registry = TrustsRegistry()

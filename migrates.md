@@ -3514,20 +3514,22 @@ are separate later merges. No tag or release in this PR.
 
 ## Decision
 
-`TrustsRegistry` constructs its private condition store and
-self-binds the private `RegistryConditionLookup` adapter. Named
-`:condition` authorization no longer requires a consumer to import
-`trusts.conditions._ir` or call `set_condition_lookup`.
-`trusts.apps` registers generic `Meta.permission_conditions` at
-import so host models can declare that option without importing
-`_ir`. `trusts.conditions` remains the accepted six names. No new
-public lookup SPI.
+Live implementation registries (`_TrustsRegistryOwner._ensure`)
+construct the private condition store and self-bind the private
+`RegistryConditionLookup` adapter. Named `:condition` authorization
+on a live handle no longer requires a consumer to import
+`trusts.conditions._ir` or call `set_condition_lookup`. A standalone
+`TrustsRegistry()` stays unbound so exact Zero `18e87a63`
+`test_unbound_is_none` remains green. `trusts.apps` registers
+generic `Meta.permission_conditions` at import so host models can
+declare that option without importing `_ir`. `trusts.conditions`
+remains the accepted six names. No new public lookup SPI.
 
 ## Old vs new behavior
 
 | | Previous | New |
 | --- | --- | --- |
-| Default lookup | Unbound (`None`) until a consumer imported `RegistryConditionLookup` and called `set_condition_lookup` | `TrustsRegistry` self-binds the private store adapter at construct |
+| Default lookup | Unbound (`None`) until a consumer imported `RegistryConditionLookup` and called `set_condition_lookup` | Live owners self-bind in `_ensure`. Standalone `TrustsRegistry()` stays unbound |
 | Application / host docs | README and `tests.myapp` imported `_ir` and bound lookup | Register a builder; do not import `_ir` or bind lookup |
 | `set_condition_lookup` | Required for named `:condition` authorization | Remains for tests and explicit unbind; applications do not call it |
 | `trusts.conditions` | Six names | Unchanged |

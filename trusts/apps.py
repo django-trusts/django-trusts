@@ -90,10 +90,13 @@ class _TrustsRegistryOwner(object):
         return bool(apps_registry is not None and apps_registry.ready)
 
     def _ensure(self, path):
+        from trusts.conditions._ir import RegistryConditionLookup
         from trusts.core import TrustsRegistry
 
         if path not in self.registries:
-            self.registries[path] = TrustsRegistry()
+            registry = TrustsRegistry()
+            registry.set_condition_lookup(RegistryConditionLookup(registry))
+            self.registries[path] = registry
         return self.registries[path]
 
     def _exposed_registry(self, path):

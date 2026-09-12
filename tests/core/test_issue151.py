@@ -11,12 +11,13 @@ from contextlib import contextmanager
 
 from django.contrib.auth import get_user_model
 from django.db import connection, models
-from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
+from tests.apps import live_config
+from trusts.conditions import PermissionConditionError
 from trusts.conditions._ir import ConditionRecord, RegistryConditionLookup
 from trusts.core import TrustsConfigurationError, TrustsRegistry
-from trusts.conditions import PermissionConditionError
 
 
 def _note_models():
@@ -61,12 +62,14 @@ django.setup()
 if %r:
     import trusts.conditions._ir  # noqa: F401
 import trusts.core
+from tests.apps import live_config
 from trusts.conditions._ir import RegistryConditionLookup
 
-registry = trusts.core.TrustsRegistry()
-assert registry.condition_lookup is not None
-assert isinstance(registry.condition_lookup, RegistryConditionLookup)
-assert registry.condition_lookup.conditions is registry.conditions
+standalone = trusts.core.TrustsRegistry()
+assert standalone.condition_lookup is None
+live = live_config().configured_backend().registry
+assert isinstance(live.condition_lookup, RegistryConditionLookup)
+assert live.condition_lookup.conditions is live.conditions
 print('ok')
 """
 
@@ -80,25 +83,43 @@ class DefaultLookupBindTest(TestCase):
         self.assertIn('permission_conditions', model_options.DEFAULT_NAMES)
         self.assertFalse(hasattr(apps_mod, 'RegistryConditionLookup'))
 
-    def test_construct_self_binds_private_adapter_zero_sql(self):
+    def test_standalone_unbound_live_owner_self_binds_zero_sql(self):
         with self.assertNumQueries(0):
-            registry = TrustsRegistry()
-            registry.freeze()
-        self.assertIsInstance(registry.condition_lookup, RegistryConditionLookup)
-        self.assertIs(registry.condition_lookup.conditions, registry.conditions)
-        self.assertTrue(registry.frozen)
+            standalone = TrustsRegistry()
+            standalone.freeze()
+        self.assertIsNone(standalone.condition_lookup)
+        self.assertTrue(standalone.frozen)
 
-    def test_handles_stay_isolated(self):
-        left = TrustsRegistry()
-        right = TrustsRegistry()
-        self.assertIsNot(left.condition_lookup, right.condition_lookup)
+        live = live_config().configured_backend().registry
+        self.assertIsInstance(live.condition_lookup, RegistryConditionLookup)
+        self.assertIs(live.condition_lookup.conditions, live.conditions)
+
+    def test_live_handles_stay_isolated(self):
+        from django.conf import settings
+
+        from tests.kernel_host.apps import HOST_BACKEND
+        from tests.myapp.apps import DOCUMENT_BACKEND
+        from trusts.apps import implementation_for_path
+
+        listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
+        if HOST_BACKEND not in listed or DOCUMENT_BACKEND not in listed:
+            self.skipTest('both kernel host and document backends are required')
+
+        left = implementation_for_path(HOST_BACKEND).configured_backend(
+            HOST_BACKEND,
+        ).registry
+        right = implementation_for_path(DOCUMENT_BACKEND).configured_backend(
+            DOCUMENT_BACKEND,
+        ).registry
+        self.assertIsNot(left, right)
         self.assertIsNot(left.conditions, right.conditions)
+        self.assertIsNot(left.condition_lookup, right.condition_lookup)
         self.assertIs(left.condition_lookup.conditions, left.conditions)
         self.assertIs(right.condition_lookup.conditions, right.conditions)
 
     def test_explicit_unbind_and_partial_bind_do_not_mutate(self):
         registry = TrustsRegistry()
-        bound = registry.condition_lookup
+        self.assertIsNone(registry.condition_lookup)
         with self.assertNumQueries(0):
             registry.set_condition_lookup(None)
         self.assertIsNone(registry.condition_lookup)
@@ -111,9 +132,6 @@ class DefaultLookupBindTest(TestCase):
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_condition_lookup(OnlyRecord())
         self.assertIsNone(registry.condition_lookup)
-        with self.assertNumQueries(0):
-            registry.set_condition_lookup(bound)
-        self.assertIs(registry.condition_lookup, bound)
 
     def _import_order(self, ir_first):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -158,11 +176,9 @@ class DefaultLookupCompileTest(TransactionTestCase):
                 registry.register_permission_condition(
                     Note, 'open', lambda u, p, o: o.status != 'locked',
                 )
-            lookup = registry.condition_lookup
-            self.assertIsInstance(lookup, RegistryConditionLookup)
-            record = lookup.record_for(Note, 'open')
-            self.assertIsNotNone(record)
-            q = lookup.compile_q(Note, 'trusts_tests.change_note:open', alice)
+            q = registry.compile_registered_condition_q(
+                Note, 'trusts_tests.change_note:open', alice,
+            )
             listed = set(Note.objects.filter(q).values_list('pk', flat=True))
             self.assertEqual(listed, {keep.pk})
             self.assertNotIn(locked.pk, listed)
@@ -186,10 +202,9 @@ class DefaultLookupCompileTest(TransactionTestCase):
             )
             note = Note.objects.create(title='n', owner=alice)
             registry = TrustsRegistry()
-            lookup = registry.condition_lookup
-            self.assertIsNone(lookup.record_for(Note, 'missing'))
+            self.assertIsNone(registry.condition_lookup)
             with self.assertRaises(AttributeError) as missing:
-                lookup.compile_q(
+                registry.compile_registered_condition_q(
                     Note, 'trusts_tests.change_note:missing', alice,
                 )
             self.assertIn('missing', str(missing.exception))
