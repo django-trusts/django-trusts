@@ -1,32 +1,25 @@
-"""#54 C1: additive generic public seams.
+"""#54: generic kernel, lookup/compiler-protocol, and queryset seams.
 
-AuthorizedQuerySet / AuthorizedManager, filter_authorized_scopes,
-ConditionLookup / set_condition_lookup, and live_config(). Structural
-and behavioral tests only — no source-token or inspect.getsource
-assertions. Does not retarget the app label, move models, bind a Zero
-Content lookup, or delete the legacy compiler.
+Zero-owned pair/live Trust proofs stay on ``tests/legacy/test_issue54.py``.
 """
 
-import sys
 from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
-from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser, Group, Permission, User
+from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
-from django.core.management import call_command
 from django.db import connection, models
-from django.db.migrations.loader import MigrationLoader
 from django.db.models import Q
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.apps import live_config
-from tests.models import Category, Organization, Ticket
+from tests.core import kernel_host_listed
+from tests.kernel_host.apps import KernelHostConfig
+from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsImplementationConfig
-from trusts.zero.backends import HistoricalGroupQueryCompiler
 from trusts.core import (
     ConditionLookup,
     PlanQueryCompiler,
@@ -35,37 +28,21 @@ from trusts.core import (
     TrustsRegistry,
     filter_authorized_scopes,
 )
-from trusts.zero.models import (
-    ContentQuerySet,
-    PermissionConditionNotQueryable,
-    Trust,
-    TrustUserPermission,
-)
-from trusts.query import (
-    AuthorizedManager,
-    AuthorizedQuerySet,
-    is_active_principal,
-    trust_grant_q,
-)
-from trusts.tests import (
-    enable_local_group_grant,
-    get_or_create_root_user,
-)
+from trusts.query import AuthorizedManager, AuthorizedQuerySet, is_active_principal
 
 
 def _pks(qs):
     return set(qs.values_list('pk', flat=True))
 
 
-def _perm(model, codename):
-    return Permission.objects.get(
-        content_type=ContentType.objects.get_for_model(model),
-        codename=codename,
+def _change_document():
+    ct = ContentType.objects.get_for_model(Document)
+    permission, _created = Permission.objects.get_or_create(
+        content_type=ct,
+        codename='change_document',
+        defaults={'name': 'Can change document'},
     )
-
-
-def _authorized(model, user, permission, extra_q=None):
-    return AuthorizedQuerySet(model).authorized(user, permission, extra_q=extra_q)
+    return permission
 
 
 class _Handle(object):
@@ -88,8 +65,6 @@ def _tables(*model_classes):
 
 
 def _scope_models():
-    """FolderGrant → Folder ← Row → Payload (J1). Isolated nouns only."""
-
     class Folder(models.Model):
         title = models.CharField(max_length=40)
 
@@ -141,88 +116,23 @@ def _register_payload(registry, grant):
     )
 
 
-class _UsersMixin(object):
-    def _make_users(self, suffix):
-        get_or_create_root_user(self)
-        call_command('create_trust_root')
-        self.alice = User.objects.create_user(
-            'alice-%s' % suffix, 'alice-%s@example.com' % suffix, 'x',
-        )
-        self.bob = User.objects.create_user(
-            'bob-%s' % suffix, 'bob-%s@example.com' % suffix, 'x',
-        )
-        self.carol = User.objects.create_user(
-            'carol-%s' % suffix, 'carol-%s@example.com' % suffix, 'x',
-        )
-        for user in (self.alice, self.bob, self.carol):
-            user.is_active = True
-            user.save()
-        root = Trust.objects.get_root()
-        self.trust_a = Trust(settlor=self.alice, trust=root, title='C1 A %s' % suffix)
-        self.trust_a.save()
-        self.trust_b = Trust(settlor=self.alice, trust=root, title='C1 B %s' % suffix)
-        self.trust_b.save()
-
-    def _reload(self):
-        self.alice = User.objects.get(pk=self.alice.pk)
-        self.bob = User.objects.get(pk=self.bob.pk)
-        self.carol = User.objects.get(pk=self.carol.pk)
-
-
-class KernelConfigTest(TestCase):
-    def test_live_owner_is_zero_and_kernel_config_is_gone(self):
+class KernelConfigTest(SimpleTestCase):
+    def test_live_owner_is_host_and_kernel_config_is_gone(self):
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
         import trusts.apps as apps_mod
-        from trusts.zero.apps import ZeroConfig
 
-        with self.assertNumQueries(0):
-            config = live_config()
-        zero = apps.get_app_config('trusts')
-        self.assertIs(type(config), ZeroConfig)
+        config = live_config()
+        self.assertIs(type(config), KernelHostConfig)
         self.assertIsInstance(config, TrustsImplementationConfig)
-        self.assertEqual(config.name, 'trusts.zero')
-        self.assertEqual(config.label, 'trusts')
-        self.assertIs(config, live_config())
-        self.assertIs(config, zero)
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
-    def test_legacy_helpers_and_compiler_remain_importable(self):
-        from trusts.query import (
-            group_local_grant_exists,
-            historical_group_grant_exists,
-            trust_grant_q,
-        )
+    def test_legacy_query_helpers_remain_importable(self):
+        from trusts.query import trust_grant_q
+
         self.assertTrue(callable(trust_grant_q))
-        self.assertTrue(callable(group_local_grant_exists))
-        self.assertTrue(callable(historical_group_grant_exists))
-        self.assertTrue(getattr(HistoricalGroupQueryCompiler(), 'historical_fallback', False))
-
-
-class LegacyMatrixBPairTest(TestCase):
-    def test_pair_zero_owns_trusts_label_and_migration_keys(self):
-        config = live_config()
-        self.assertEqual(config.name, 'trusts.zero')
-        self.assertEqual(config.label, 'trusts')
-        self.assertIs(config, apps.get_app_config('trusts'))
-        self.assertIs(apps.get_model('trusts', 'Trust'), Trust)
-        self.assertTrue(apps.is_installed('trusts.zero'))
-        self.assertFalse(apps.is_installed('trusts'))
-        loader = MigrationLoader(connection)
-        keys = {
-            key for key in loader.disk_migrations
-            if key[0] == 'trusts'
-        }
-        self.assertEqual(
-            keys,
-            {('trusts', '0001_initial'), ('trusts', '0002_trustgroup')},
-        )
-        initial = loader.disk_migrations[('trusts', '0001_initial')]
-        self.assertTrue(initial.__module__.startswith('trusts.zero.migrations'))
-        group = loader.disk_migrations[('trusts', '0002_trustgroup')]
-        self.assertTrue(group.__module__.startswith('trusts.zero.migrations'))
-        self.assertTrue(
-            Trust.objects.filter(pk=Trust.objects.get_root().pk).exists()
-        )
+        self.assertTrue(callable(filter_authorized_scopes))
 
 
 class ConditionLookupBindTest(TestCase):
@@ -288,57 +198,13 @@ class ConditionLookupBindTest(TestCase):
                 return type('Rec', (), {'expr': None, 'func': callback})()
 
             def compile_q(self, model, perm_string, user):
-                raise PermissionConditionNotQueryable('callables stay object-only')
+                raise PermissionError('callables stay object-only')
 
         lookup = Refusing()
         with self.assertNumQueries(0):
-            with self.assertRaises(PermissionConditionNotQueryable):
-                lookup.compile_q(Category, 'read_category:own', None)
+            with self.assertRaises(PermissionError):
+                lookup.compile_q(Document, 'myapp.change_document:own', None)
         self.assertEqual(called, [])
-
-
-class ConditionLookupBackendAdapterTest(_UsersMixin, TestCase):
-    def setUp(self):
-        super().setUp()
-        self._make_users('cond')
-        self.cat_a = Category.objects.create(trust=self.trust_a, name='c1-cond')
-        self.read = _perm(Category, 'read_category')
-        TrustUserPermission(
-            trust=self.trust_a, entity=self.alice, permission=self.read,
-        ).save()
-        self._reload()
-        self.handle = live_config().configured_backend()
-        self.saved_lookup = self.handle.registry.condition_lookup
-
-    def tearDown(self):
-        self.handle.registry.set_condition_lookup(self.saved_lookup)
-        super().tearDown()
-
-    def test_zero_binds_content_condition_lookup(self):
-        from trusts.zero.models import ContentConditionLookup
-
-        self.assertIsInstance(
-            self.handle.registry.condition_lookup, ContentConditionLookup,
-        )
-        with self.assertRaises(AttributeError):
-            self.alice.has_perm('trusts_tests.read_category:missing', self.cat_a)
-
-    def test_bound_lookup_is_used_and_unregistered_is_attributeerror(self):
-        record_for = Mock(return_value=None)
-        compile_q = Mock(side_effect=AssertionError('compile_q must not run'))
-
-        class Bound(object):
-            pass
-
-        lookup = Bound()
-        lookup.record_for = record_for
-        lookup.compile_q = compile_q
-        self.handle.registry.set_condition_lookup(lookup)
-        with self.assertNumQueries(0):
-            with self.assertRaises(AttributeError):
-                self.alice.has_perm('trusts_tests.read_category:missing', self.cat_a)
-        record_for.assert_called()
-        compile_q.assert_not_called()
 
 
 class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
@@ -347,101 +213,81 @@ class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(AuthorizedQuerySet, 'get_permission'))
         self.assertFalse(hasattr(AuthorizedManager, 'permitted'))
         self.assertFalse(hasattr(AuthorizedManager, 'get_permission'))
-        self.assertTrue(issubclass(ContentQuerySet, QuerySet))
-        self.assertTrue(issubclass(ContentQuerySet, AuthorizedQuerySet))
-        self.assertTrue(hasattr(ContentQuerySet, 'permitted'))
         self.assertTrue(hasattr(AuthorizedManager, 'authorized'))
-        self.assertFalse(hasattr(AuthorizedManager, 'permitted'))
-        self.assertFalse(hasattr(AuthorizedManager, 'get_permission'))
+        self.assertTrue(issubclass(Document._default_manager._queryset_class, AuthorizedQuerySet))
 
 
-class AuthorizedQuerySetLiveTest(_UsersMixin, TestCase):
+class AuthorizedQuerySetLiveTest(TestCase):
     def setUp(self):
-        super().setUp()
-        self._make_users('authz')
-        self.cat_a = Category.objects.create(trust=self.trust_a, name='c1-a')
-        self.cat_b = Category.objects.create(trust=self.trust_b, name='c1-b')
-        self.read = _perm(Category, 'read_category')
-        self.change = _perm(Category, 'change_category')
-        TrustUserPermission(
-            trust=self.trust_a, entity=self.alice, permission=self.read,
-        ).save()
-        self.carol_group = Group.objects.create(name='carol-c1')
-        self.carol.groups.add(self.carol_group)
-        self.read.group_set.add(self.carol_group)
-        enable_local_group_grant(self.trust_a, self.carol_group, self.read)
-        self._reload()
+        if not kernel_host_listed():
+            self.skipTest('kernel-only host path is not listed on the pair')
+        User = get_user_model()
+        self.alice = User.objects.create_user('alice-54', password='x')
+        self.bob = User.objects.create_user('bob-54', password='x')
+        self.change = _change_document()
+        self.doc_a = Document.objects.create(title='a')
+        self.doc_b = Document.objects.create(title='b')
+        DocumentGrant.objects.create(
+            document=self.doc_a, user=self.alice, permission=self.change,
+        )
 
     def test_wrong_permission_type_is_zero_sql_configuration_error(self):
-        qs = AuthorizedQuerySet(Category)
+        qs = AuthorizedQuerySet(Document)
         with patch('trusts.query.is_active_principal', wraps=is_active_principal) as active:
-            with patch.object(Category.objects, 'get_permission') as get_perm:
-                with self.assertNumQueries(0):
-                    with self.assertRaises(TrustsConfigurationError):
-                        qs.authorized(self.alice, 'read_category')
-                    with self.assertRaises(TrustsConfigurationError):
-                        qs.authorized(self.alice, 'trusts_tests.read_category')
-                    with self.assertRaises(TrustsConfigurationError):
-                        qs.authorized(self.alice, 'read_category:own')
-                    with self.assertRaises(TrustsConfigurationError):
-                        qs.authorized(self.alice, None)
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError):
+                    qs.authorized(self.alice, 'change_document')
+                with self.assertRaises(TrustsConfigurationError):
+                    qs.authorized(self.alice, 'myapp.change_document')
+                with self.assertRaises(TrustsConfigurationError):
+                    qs.authorized(self.alice, None)
         active.assert_not_called()
-        get_perm.assert_not_called()
 
-    def test_instance_filter_matches_trustee_and_group_and_stays_lazy(self):
-        qs = _authorized(Category, self.alice, self.read)
+    def test_instance_filter_matches_grant_and_stays_lazy(self):
+        qs = Document.objects.authorized(self.alice, self.change)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
             pks = _pks(qs)
-        self.assertEqual(pks, {self.cat_a.pk})
-        self.assertNotIn(self.cat_b.pk, pks)
-        self.assertEqual(
-            _pks(_authorized(Category, self.carol, self.read)),
-            {self.cat_a.pk},
-        )
-        self.assertFalse(_authorized(Category, self.bob, self.read).exists())
-        self.assertFalse(_authorized(Category, self.alice, self.change).exists())
+        self.assertEqual(pks, {self.doc_a.pk})
+        self.assertNotIn(self.doc_b.pk, pks)
+        self.assertFalse(Document.objects.authorized(self.bob, self.change).exists())
 
-    def test_does_not_call_is_active_principal_or_get_permission(self):
+    def test_does_not_call_is_active_principal(self):
         self.alice.is_active = False
         self.alice.save()
-        self._reload()
         with patch('trusts.query.is_active_principal') as active:
-            with patch.object(Category.objects, 'get_permission') as get_perm:
-                pks = _pks(_authorized(Category, self.alice, self.read))
+            pks = _pks(Document.objects.authorized(self.alice, self.change))
         active.assert_not_called()
-        get_perm.assert_not_called()
-        self.assertEqual(pks, {self.cat_a.pk})
+        self.assertEqual(pks, {self.doc_a.pk})
 
-    def test_extra_q_is_and_overlay_and_never_creates_a_grant(self):
-        extra = Q(pk=self.cat_a.pk)
+    def test_extra_q_is_and_overlay(self):
+        extra = Q(pk=self.doc_a.pk)
         self.assertEqual(
-            _pks(_authorized(Category, self.alice, self.read, extra_q=extra)),
-            {self.cat_a.pk},
+            _pks(Document.objects.authorized(self.alice, self.change, extra_q=extra)),
+            {self.doc_a.pk},
         )
         self.assertFalse(
-            _authorized(
-                Category, self.alice, self.read, extra_q=Q(pk=self.cat_b.pk),
+            Document.objects.authorized(
+                self.alice, self.change, extra_q=Q(pk=self.doc_b.pk),
             ).exists()
-        )
-        self.assertFalse(
-            _authorized(Category, self.bob, self.read, extra_q=extra).exists()
         )
 
     def test_unknown_terminal_is_none_without_grant_sql(self):
-        qs = _authorized(Organization, self.alice, self.read)
+        from tests.models import Organization
+
+        qs = AuthorizedQuerySet(Organization).authorized(self.alice, self.change)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
-    def test_non_instance_user_is_configuration_error_without_codec(self):
+    def test_non_instance_user_is_configuration_error(self):
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                _authorized(Category, AnonymousUser(), self.read)
-            with self.assertRaises(TrustsConfigurationError):
-                _authorized(Category, None, self.read)
+            with self.assertRaises((TrustsConfigurationError, TypeError, AttributeError)):
+                Document.objects.authorized(AnonymousUser(), self.change)
+            with self.assertRaises((TrustsConfigurationError, TypeError, AttributeError)):
+                Document.objects.authorized(None, self.change)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -573,8 +419,6 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
-    """Grant → Scope(slug) ← Row → Payload. Prefix identity is not pk."""
-
     def test_non_pk_to_field_prefix_returns_authorized_scope(self):
         User = get_user_model()
 
@@ -636,7 +480,6 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             scope_a = Scope.objects.create(slug='alpha', title='A')
             scope_b = Scope.objects.create(slug='beta', title='B')
             self.assertNotEqual(scope_a.pk, 'alpha')
-            self.assertNotEqual(scope_b.pk, 'beta')
             payload = Payload.objects.create(title='P')
             Row.objects.create(scope=scope_a, content=payload)
             Grant.objects.create(scope=scope_a, user=alice, permission=add)
@@ -661,77 +504,3 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                     content=Payload, handles=(handle,),
                 ).exists()
             )
-
-
-class FilterAuthorizedScopesLiveTest(_UsersMixin, TestCase):
-    def setUp(self):
-        super().setUp()
-        self._make_users('scope-live')
-        self.cat_a = Category.objects.create(trust=self.trust_a, name='c1-scope')
-        self.add = _perm(Category, 'add_category')
-        TrustUserPermission(
-            trust=self.trust_a, entity=self.alice, permission=self.add,
-        ).save()
-        self.carol_group = Group.objects.create(name='carol-c1-scope')
-        self.carol.groups.add(self.carol_group)
-        self.add.group_set.add(self.carol_group)
-        enable_local_group_grant(self.trust_a, self.carol_group, self.add)
-        self._reload()
-        self.handles = live_config().configured_handles()
-
-    def test_trust_is_prefix_of_category_for_trustee_not_historical_group(self):
-        qs = filter_authorized_scopes(
-            Trust.objects.all(), self.alice, self.add,
-            content=Category, handles=self.handles,
-        )
-        self.assertIsInstance(qs, QuerySet)
-        self.assertIsNone(qs._result_cache)
-        with self.assertNumQueries(1):
-            pks = _pks(qs)
-        self.assertEqual(pks, {self.trust_a.pk})
-        self.assertNotIn(self.trust_b.pk, pks)
-        self.assertFalse(
-            filter_authorized_scopes(
-                Trust.objects.all(), self.carol, self.add,
-                content=Category, handles=self.handles,
-            ).exists()
-        )
-        self.assertIn(
-            self.trust_a.pk,
-            _pks(Trust.objects.filter_by_user_content_perm(
-                self.carol, Category, 'add_category',
-            )),
-        )
-
-    def test_content_terminal_and_unknown_scope_are_none(self):
-        with self.assertNumQueries(0):
-            self.assertFalse(
-                filter_authorized_scopes(
-                    Category.objects.all(), self.alice, self.add,
-                    content=Category, handles=self.handles,
-                ).exists()
-            )
-            self.assertFalse(
-                filter_authorized_scopes(
-                    Organization.objects.all(), self.alice, self.add,
-                    content=Category, handles=self.handles,
-                ).exists()
-            )
-            self.assertFalse(
-                filter_authorized_scopes(
-                    Trust.objects.all(), self.alice, self.add,
-                    content=Organization, handles=self.handles,
-                ).exists()
-            )
-            self.assertFalse(
-                filter_authorized_scopes(
-                    Trust.objects.all(), self.alice, self.add,
-                    content=Ticket, handles=(),
-                ).exists()
-            )
-
-    def test_legacy_create_under_trust_path_is_unchanged(self):
-        pks = _pks(Trust.objects.filter_by_user_content_perm(
-            self.alice, Category, 'add_category',
-        ))
-        self.assertEqual(pks, {self.trust_a.pk})

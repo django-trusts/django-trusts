@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Run Zero IIa product-path tests that remain valid on Step III.
+"""Run Zero's complete top-level suite from the Zero checkout.
 
-Invokes Zero's runner from the Zero checkout so ``tests`` is Zero's
-package. Skips leftover Step I assertions in ``tests.test_appconfig``
-(expects a kernel ``AppConfig`` / ``kernel_config()``). Those leftovers
-are replaced by core pair proofs.
+Historical Trust/Content/Junction coverage lives in Zero
+``tests/legacy/`` after #37 STAGE 1. Do not import those modules from
+core package paths.
 """
 
 from __future__ import annotations
@@ -20,24 +19,16 @@ kernel = Path(os.environ.get('KERNEL_CHECKOUT', ROOT)).resolve()
 
 if not (zero / 'tests' / 'runtests.py').is_file():
     raise SystemExit('ZERO_CHECKOUT missing tests/runtests.py at %s' % zero)
-
-PROBE = r'''
-import tests.runtests as rt
-rt.NORMAL_SUITE = [
-    "tests.test_migrations",
-    "tests.test_packaging",
-    "tests.test_codec",
-    "tests.test_smoke",
-]
-rt.runtests()
-'''
+if not (zero / 'tests' / 'legacy' / 'test_historical.py').is_file():
+    raise SystemExit(
+        'ZERO_CHECKOUT missing tests/legacy/ (need #37 STAGE 1) at %s' % zero
+    )
 
 env = os.environ.copy()
 env['KERNEL_CHECKOUT'] = str(kernel)
-env['TRUSTS_ZERO_SKIP_C2_SHAPE'] = '1'
 env.pop('DJANGO_SETTINGS_MODULE', None)
 result = subprocess.run(
-    [sys.executable, '-c', PROBE],
+    [sys.executable, '-m', 'tests.runtests'],
     cwd=str(zero),
     env=env,
 )

@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero IIa merge. Do not pair this core with unpublished Zero snapshots.
-  COMPANION_ZERO_SHA: 94e0fa109a8a7a5f53a028438ada899cbc1be1ad
+  # Exact Zero #37 STAGE 1 head. Do not pair this core with unpublished snapshots.
+  COMPANION_ZERO_SHA: 73b74b4213f6040f0e71c4c46d7a509804975672
 
 jobs:
   tests:
@@ -76,10 +76,10 @@ jobs:
     - name: OrderedFold PostgreSQL regressions
       env:
         DJANGO_SETTINGS_MODULE: tests.fold_settings
-      run: python -m tests.runtests trusts.test_issue100
+      run: python -m tests.runtests tests.core.test_issue100
 
   pair-iia:
-    name: pair with Zero IIa
+    name: pair with Zero #37 STAGE 1
     runs-on: ubuntu-latest
     env:
       ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero
@@ -94,7 +94,7 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Install core 1.0.0.dev3 then Zero IIa
+    - name: Install core 1.0.0.dev3 then Zero STAGE 1
       run: |
         python -m pip install --upgrade pip
         python -m pip install "Django>=6.1,<6.2" coverage
@@ -102,9 +102,9 @@ jobs:
         python -m pip install -e .deps/django-trusts-zero --config-settings editable_mode=compat
     - name: Matrix B pair proofs
       run: python scripts/verify-pair-zero.py
-    - name: Legacy core suite against IIa
+    - name: Library suite against paired Zero
       run: python scripts/run-core-pair-tests.py
-    - name: Zero IIa product-path tests
+    - name: Zero complete suite from Zero checkout
       run: python scripts/run-z1-pair-tests.py
 
   package:
