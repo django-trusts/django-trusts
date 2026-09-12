@@ -38,9 +38,9 @@ keywords = ["django", "authorization", "permissions", "declarative"]
 Homepage = "https://github.com/django-trusts/django-trusts"
 Repository = "https://github.com/django-trusts/django-trusts"
 Issues = "https://github.com/django-trusts/django-trusts/issues"
-Documentation = "https://django-trusts.readthedocs.org/en/latest/"
-"Legacy baseline" = "https://github.com/django-trusts/django-trusts/blob/master/docs/legacy-baseline.md"
-"Support matrix" = "https://github.com/django-trusts/django-trusts/blob/master/docs/support-matrix.md"
+Documentation = "https://github.com/django-trusts/django-trusts/blob/dev/docs/source/index.rst"
+"Legacy baseline" = "https://github.com/django-trusts/django-trusts/blob/dev/docs/legacy-baseline.md"
+"Support matrix" = "https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md"
 
 [project.optional-dependencies]
 test = [

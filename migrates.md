@@ -1,22 +1,24 @@
-# Migration record (1.0.0.dev0 Python/Django modernization)
+# Core migration record
 
-This record covers API and method changes in the coordinated #14/#15
-modernization. Authorization semantics are intended to be preserved. This is
-not a permission-model redesign.
+## Current 1.x contract
 
-## No change to these public call sites
+`django-trusts` is now a schema-neutral dependency. Do not add `'trusts'`
+to `INSTALLED_APPS`; the consumer supplies a
+`TrustsImplementationConfig`, backend, models, registrations, and grant
+editing workflow. The public backend building block is
+`trusts.backends.TrustModelBackendMixin`.
 
-These keep their previous signatures and intended allow/deny behavior:
+Applications that need the concrete 0.x Trust/Content continuation should
+install
+[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
+and use `trusts.zero.apps.ZeroConfig`,
+`trusts.zero.backends.TrustModelBackend`, and `trusts.zero.*` model APIs.
+The chronological sections below document how the project reached this
+boundary; older “no change” statements are not the current core contract.
 
-- `User.has_perm` / `User.has_perms` via `trusts.backends.TrustModelBackend`
-- `trusts.decorators.permission_required`, `P`, `K`, `G`, `O`
-- `Trust.objects.get_or_create_settlor_default`, `get_root`,
-  `filter_by_content`, `filter_by_user_perm`
-- `Content` / `Junction` subclassing, role `Meta` options, management commands
-  `create_trust_root` and `update_roles_permissions`
-
-Runtime requirements changed (Python 2.7 / Django 1.8 → Python ≥3.12 /
-Django 6.1). That is a compatibility break, not a Trusts method rename.
+The 1.x runtime requires Python 3.12–3.14 and Django 6.1. Every API or method
+change below includes its old behavior, new behavior, replacement, affected
+callers, authorization effect, and migration-bot checklist.
 
 ## Changes
 
