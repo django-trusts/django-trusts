@@ -73,8 +73,10 @@ python -m pip install "Django>=6.1,<6.2" coverage
 python -m pip install -e .
 python -m tests.runtests
 python -m django check --settings=tests.settings
-python scripts/verify-legacy-upgrade.py
 ```
+
+`scripts/verify-legacy-upgrade.py` is retained historical Core evidence.
+It is not a current test step and is not run in CI.
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
 authorization tests, a fresh migrate, `manage.py check`, an OrderedFold

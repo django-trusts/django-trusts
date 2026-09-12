@@ -212,6 +212,11 @@ def main() -> int:
         'trusts.views',
         'trusts.urls',
         'trusts.admin',
+        'trusts.management',
+        'trusts.management.commands',
+        'trusts.management.commands.create_trust_root',
+        'trusts.management.commands.grandfather_trust_group_permissions',
+        'trusts.management.commands.update_roles_permissions',
     ):
         if _find_spec(name) is not None:
             raise SystemExit('installed wheel still exposes %s' % name)

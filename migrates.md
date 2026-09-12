@@ -71,6 +71,10 @@ Migration-bot checklist:
 
 ### 4. `create_trust_root` is idempotent; `apps=` is no longer a command option
 
+Current operator path: django-trusts-zero `create_root_trust` /
+`manage.py create_trust_root` (discovered via `ZeroConfig`). Core no
+longer ships this command.
+
 | | |
 | --- | --- |
 | Previous | Always inserted the root row; a second run raised `IntegrityError`. `call_command('create_trust_root', apps=apps)` passed historical models. |
@@ -138,7 +142,11 @@ is true (default).
 
 ### Upgrade of a representative legacy database
 
-`scripts/verify-legacy-upgrade.py` is the executable check. It:
+`scripts/verify-legacy-upgrade.py` was the executable check at this
+cut. The Core script is retained as historical evidence. It is not in
+current CI and is broken against inert `trusts.models` (`from
+trusts.models import Trust`). Live migrate / command proofs live in
+django-trusts-zero. Historically it:
 
 1. Applies Django contrib migrations only.
 2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`
@@ -432,6 +440,10 @@ Migration-bot checklist:
 
 ### 17. `grandfather_trust_group_permissions` management command
 
+Current operator path: django-trusts-zero
+`manage.py grandfather_trust_group_permissions` (discovered via
+`ZeroConfig`). Core no longer ships this command.
+
 | | |
 | --- | --- |
 | Previous | None. Old implicit access was the default. |
@@ -478,7 +490,11 @@ Applies `0001_initial` then `0002_trustgroup` and creates the root trust when
 
 ### Upgrade of a representative legacy database
 
-`scripts/verify-legacy-upgrade.py` now:
+`scripts/verify-legacy-upgrade.py` then also covered grandfather. That
+Core script remains historical evidence only (not in CI; broken against
+inert `trusts.models`). Live grandfather `--dry-run` / `--apply` proofs
+live in django-trusts-zero `tests/legacy/test_issue23.py`. Historically
+it:
 
 1. Applies Django contrib migrations only.
 2. Creates Trusts tables from `scripts/legacy/trusts_0001_sqlite.sql`.
@@ -3061,5 +3077,35 @@ package boundary.
 - Examples / RST / #113 / Windows / GH-owner work
 - Folding this pair into #37
 - A generic core Team/grant UI or adapter protocol
+
+### 58. Remove unreachable Core management commands (#129)
+
+| | |
+| --- | --- |
+| Previous | Core wheels shipped `trusts.management.commands.create_trust_root`, `grandfather_trust_group_permissions`, and `update_roles_permissions`, plus empty `trusts.management` / `trusts.management.commands` packages. Core has no `AppConfig` and must not appear in `INSTALLED_APPS`, so there was no valid `manage.py` discovery path. |
+| New | Core no longer ships `trusts/management/**`. The supported commands live under `trusts.zero.management.commands.*` and are discovered when `trusts.zero.apps.ZeroConfig` is installed. |
+| Replacement | Zero `create_root_trust` / `manage.py create_trust_root`; `manage.py grandfather_trust_group_permissions`; `manage.py update_roles_permissions`. Direct `from trusts.management...` imports fail. |
+| Affected | Callers that imported the Core command modules by Python path, listed `'trusts'` in `INSTALLED_APPS` expecting command discovery, or treated the Core dump-replay script as a live operator path. |
+| Authorization | No schema, grant, or permission-evaluation change. |
+
+Package version stays `1.0.0.dev3`.
+
+`scripts/verify-legacy-upgrade.py` and `scripts/legacy/` stay in the
+Core tree as historical evidence. They are not current CI. The script
+imports `from trusts.models import Trust` against the inert library
+module. Zero owns the three live commands and exercises them
+(`create_trust_root`, `update_roles_permissions`, grandfather
+`--dry-run` / `--apply`). Zero does not currently replay a
+0.10.3-shaped SQLite dump with `0001` already applied, then `0002`,
+then grandfather. That dump-replay gap is why the Core script is kept,
+not deleted.
+
+Migration-bot checklist:
+
+- [ ] Stop importing `trusts.management` / `trusts.management.commands.*`.
+- [ ] Do not add `'trusts'` to `INSTALLED_APPS`; Core still has no `AppConfig`.
+- [ ] Run the three commands only with `trusts.zero.apps.ZeroConfig` installed.
+- [ ] Fail-closed upgrade verification: Zero tests cover command execution. Do not treat the retained Core dump-replay script as a green current proof, and do not treat the missing Zero dump-replay as a green upgrade either.
+- [ ] Leave package version at `1.0.0.dev3`.
 
 

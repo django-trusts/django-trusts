@@ -25,11 +25,12 @@ declares one matrix and tests it in CI.
 | Python | 3.12, 3.13, 3.14 (`requires-python >=3.12`) | Intersection of currently supported CPython and Django 6.1's official matrix. 3.10/3.11 remain in CPython security support but are not in Django 6.1's matrix. 3.15 is not a stable release yet. |
 | Django | `>=6.1,<6.2` (tested against 6.1.1) | Latest stable Django at implementation time, per #15. |
 
-CI (`.github/workflows/ci.yml`) runs authorization tests, a fresh migrate,
-and `scripts/verify-legacy-upgrade.py` on **each** declared Python version
-with Django 6.1. The `package` job (sdist/wheel build, `twine check`, and
-an out-of-checkout wheel import) runs on **Python 3.12** as a representative
-install of the declared range.
+CI (`.github/workflows/ci.yml`) runs kernel-only authorization tests, a
+fresh migrate, and `manage.py check` on **each** declared Python version
+with Django 6.1. An OrderedFold PostgreSQL job, pair proofs against the
+supported Zero companion, and a `package` job (sdist/wheel build,
+`twine check`, and an out-of-checkout wheel import) run on **Python 3.12**
+as a representative install of the declared range.
 
 ## Database (Along reachability, issue #92)
 
