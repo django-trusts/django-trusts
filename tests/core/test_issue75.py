@@ -300,6 +300,7 @@ class CompilerCheckQueryCountTest(TestCase):
 
 class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
     def setUp(self):
+        super().setUp()
         User = get_user_model()
         self.alice = User.objects.create_user('alice-75', password='x')
         self.bob = User.objects.create_user('bob-75', password='x')

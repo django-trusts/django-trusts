@@ -18,6 +18,7 @@ from trusts.core import Ref, TrustsConfigurationError, TrustsRegistry
 
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def setUp(self):
+        super().setUp()
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
         self.saved_registries = dict(self.contributor.registries)

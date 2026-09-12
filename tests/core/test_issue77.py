@@ -95,6 +95,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
     def setUp(self):
+        super().setUp()
         User = get_user_model()
         self.alice = User.objects.create_user('alice-77', password='x')
         self.change = _change_document()
@@ -122,6 +123,7 @@ class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
 
 class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
     def setUp(self):
+        super().setUp()
         User = get_user_model()
         self.alice = User.objects.create_user('alice-77p', password='x')
         self.change = _change_document()
