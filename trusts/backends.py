@@ -5,12 +5,12 @@
 are ``trusts.zero.backends``. ``trusts.core_backends`` is gone.
 """
 
-from django.apps import apps as django_apps
+from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
 from trusts.conditions import (
     PermissionConditionError,
-    PermissionConditionNotQueryable as KernelPermissionConditionNotQueryable,
+    PermissionConditionNotQueryable,
     evaluate_registered_expression,
     legacy_permission_callbacks_allowed,
     permission_has_condition,
@@ -24,42 +24,7 @@ from trusts.core import (
     common_permissions,
     instance_match,
 )
-from trusts import get_permission_model, utils
-
-
-def _permission_condition_not_queryable():
-    """Zero's class when Trust is installed; otherwise the kernel copy."""
-    try:
-        Trust = django_apps.get_model('trusts', 'Trust')
-    except LookupError:
-        return KernelPermissionConditionNotQueryable
-    import sys
-    cls = getattr(
-        sys.modules.get(Trust.__module__),
-        'PermissionConditionNotQueryable',
-        None,
-    )
-    if cls is None:
-        return KernelPermissionConditionNotQueryable
-    return cls
-
-
-def _historical_content_class():
-    """Abstract Zero ``Content`` via Trust's MRO. Does not import the shim."""
-    try:
-        Trust = django_apps.get_model('trusts', 'Trust')
-    except LookupError:
-        return None
-    for base in Trust.__mro__:
-        meta = getattr(base, '_meta', None)
-        if (
-            meta is not None
-            and meta.abstract
-            and base.__name__ == 'Content'
-            and meta.app_label == 'trusts'
-        ):
-            return base
-    return None
+from trusts import utils
 
 
 def _permission_binding(perm, model):
@@ -68,7 +33,6 @@ def _permission_binding(perm, model):
     Unknown codes become an empty subquery and match nothing. This is
     permission identity in SQL, not a second authorization source.
     """
-    Permission = get_permission_model()
     if isinstance(perm, Permission):
         return perm
     applabel, modelname, action, _cond = utils.parse_perm_code(perm)
@@ -92,7 +56,6 @@ def _perm_codes(permission_qs):
 
 class TrustModelBackendMixin(object):
     query_compiler = PlanQueryCompiler()
-    perm_model = get_permission_model()
 
     @staticmethod
     def _get_class(obj):
@@ -173,7 +136,7 @@ class TrustModelBackendMixin(object):
 
     def permission_condition_met(self, record, user_obj, perm, obj):
         if isinstance(obj, QuerySet) and record.expr is None:
-            raise _permission_condition_not_queryable()(
+            raise PermissionConditionNotQueryable(
                 'ContentQuerySet.permitted does not support permission '
                 'condition on %s. Register an Expr from condition_refs() '
                 'to compile a V1 declarative expression. Callables remain '
@@ -211,8 +174,8 @@ class TrustModelBackendMixin(object):
     def _bound_condition_lookup(self, obj):
         """Bound ``ConditionLookup`` on the coordinating / own registry.
 
-        Unbound (the C1 default) is ``None`` so instance-only callers and
-        the historical ``Content`` condition store keep current behavior.
+        Unbound (the C1 default) is ``None``. Unknown ``:condition``
+        codes then raise ``AttributeError``.
         """
         if isinstance(obj, QuerySet):
             handles = self._trusts_config().configured_handles()
@@ -229,34 +192,21 @@ class TrustModelBackendMixin(object):
         any candidate SQL or callback. Unregistered codes raise the same
         ``AttributeError`` as before.
 
-        A bound ``ConditionLookup`` is preferred when present. Unbound
-        preserves the historical ``Content`` condition registry when Zero
-        is installed (discovered from Trust's MRO; the shim is not
-        imported). Core does not import Zero models for this overlay.
+        A bound ``ConditionLookup`` is the only condition path. Unknown
+        codes raise ``AttributeError``. Core does not import Zero modules
+        or discover helpers from a model ``__module__``.
         """
         if not permission_has_condition(permext):
             return None, None
         applabel, modelname, action, cond = utils.parse_perm_code(permext)
         model = self._get_class(obj)
         lookup = self._bound_condition_lookup(obj)
-        if lookup is not None:
-            record = lookup.record_for(model, cond)
-            if record is None:
-                raise AttributeError(
-                    'Permission condition code "%s" is not associate with model "%s_%s"'
-                    % (cond, applabel, modelname)
-                )
-            extra_q = None
-            if isinstance(obj, QuerySet):
-                extra_q = lookup.compile_q(obj.model, permext, user_obj)
-            return record, extra_q
-        Content = _historical_content_class()
-        if Content is None:
+        if lookup is None:
             raise AttributeError(
                 'Permission condition code "%s" is not associate with model "%s_%s"'
                 % (cond, applabel, modelname)
             )
-        record = Content.get_permission_condition_record(model, cond)
+        record = lookup.record_for(model, cond)
         if record is None:
             raise AttributeError(
                 'Permission condition code "%s" is not associate with model "%s_%s"'
@@ -264,14 +214,7 @@ class TrustModelBackendMixin(object):
             )
         extra_q = None
         if isinstance(obj, QuerySet):
-            import sys
-            compile_registered_condition_q = getattr(
-                sys.modules[Content.__module__],
-                'compile_registered_condition_q',
-            )
-            extra_q = compile_registered_condition_q(
-                obj.model, permext, user_obj,
-            )
+            extra_q = lookup.compile_q(obj.model, permext, user_obj)
         return record, extra_q
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None):

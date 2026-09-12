@@ -68,7 +68,14 @@ class QueryCompiler(object):
 
 
 class PlanQueryCompiler(object):
-    """Immutable mixin default: registered plan only, no historical group."""
+    """Immutable mixin default: registered plan; group slice is membership hops.
+
+    ``complete_exists`` compiles every record (or the OrderedFold
+    strategy). ``group_exists`` compiles only records whose user path
+    ends in a many-to-many membership hop. Direct FK / O2O / reverse
+    user hops stay out of the group slice. An OrderedFold ``strategy``
+    makes ``group_exists`` inapplicable (``None``).
+    """
 
     historical_fallback = False
 
@@ -80,7 +87,18 @@ class PlanQueryCompiler(object):
         return plan.content_exists(user, permission)
 
     def group_exists(self, plan, candidates, user, permission):
-        return None
+        if getattr(plan, 'strategy', None) is not None:
+            return None
+        membership = tuple(
+            record for record in plan.records
+            if _user_path_is_membership(record)
+        )
+        if not membership:
+            return None
+        return RelationPlan(
+            records=membership,
+            permission_model=plan.permission_model,
+        ).content_exists(user, permission)
 
 
 def compiler_for_class(cls):
@@ -242,15 +260,17 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     that node, bind user + permission from the same record, and OR
     applicable records.
 
-    ``queryset.model`` equal to the content terminal returns ``none()``
-    (that path is ``AuthorizedQuerySet.authorized``). Unknown terminal,
-    empty handles, or a scope model not on the path return ``none()``.
+    ``queryset.model`` equal to the content terminal is allowed when a
+    proper prefix hop of that same model exists (self-referential
+    trees). A terminal-only path has no proper prefix, so the same-model
+    queryset still returns ``none()``. Unknown terminal, empty handles,
+    or a scope model not on the path also return ``none()``.
     ``permission`` must be a model instance. Construction of a fail-closed
     result issues zero SQL; SQL runs only when a compiled predicate is
     evaluated.
 
     Noun-blind: this builder does not import or name Zero schema models
-    and does not use ``trust_grant_q`` or a compiler's historical group
+    and does not use a compiler's historical group
     OR. Group-as-trustee remains a later registered root.
     """
     if not isinstance(queryset, QuerySet):
@@ -266,10 +286,7 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     if not handles:
         return queryset.none()
 
-    content_model = _content_model(content)
     scope_model = queryset.model._meta.concrete_model
-    if scope_model is content_model:
-        return queryset.none()
 
     parts = []
     for handle in handles:
@@ -501,16 +518,42 @@ def _resolved_hop(field, role, path):
     return related._meta.concrete_model, attname
 
 
+def _user_path_is_membership(record):
+    """True when the user binding's last hop is a many-to-many membership.
+
+    Direct FK / O2O / reverse user hops are trustee bindings, not the
+    group slice. Intermediate hops must stay single-valued so the last
+    hop is the membership. Walk uses stored path names and ``_meta``
+    only (zero SQL).
+    """
+    path = getattr(record, 'user_path', None) or ()
+    if not path:
+        return False
+    current = record.root
+    for name in path[:-1]:
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        if _classify_field(field) == 'm2m':
+            return False
+        try:
+            current, _attname = _resolved_hop(field, 'user', path)
+        except TrustsConfigurationError:
+            return False
+    try:
+        last = current._meta.get_field(path[-1])
+    except FieldDoesNotExist:
+        return False
+    return _classify_field(last) == 'm2m'
+
+
 _SUFFIX_KINDS = frozenset(('single', 'reverse_o2o', 'reverse_o2m'))
 _SUFFIX_MAX = 2
 
 
-def _resolve_m2m_terminal(field, role, path):
-    """Resolve a terminal many-to-many hop without ``get_path_info()``.
-
-    M2M path information is two joins (through table + target). Membership
-    correlation uses the related model and its primary key only.
-    """
+def _m2m_related_model(field):
+    """Related model of a many-to-many field. Metadata only (zero SQL)."""
     _materialize_related_model(field)
     related = getattr(field, 'related_model', None)
     if not _is_model_class(related):
@@ -519,17 +562,84 @@ def _resolve_m2m_terminal(field, role, path):
         if _is_model_class(model):
             related = model
     if not _is_model_class(related):
+        return None
+    return related._meta.concrete_model
+
+
+def _m2m_related_target_attname(field, related):
+    """Attname the M2M through-FK uses on ``related`` (PK or ``to_field``)."""
+    through = getattr(getattr(field, 'remote_field', None), 'through', None)
+    if through is None:
+        pk = related._meta.pk
+        return getattr(pk, 'attname', None)
+    for hop in through._meta.get_fields():
+        if not getattr(hop, 'is_relation', False):
+            continue
+        if getattr(hop, 'many_to_many', False):
+            continue
+        remote = getattr(hop, 'related_model', None)
+        if not _is_model_class(remote):
+            continue
+        if remote._meta.concrete_model is not related._meta.concrete_model:
+            continue
+        target = getattr(hop, 'target_field', None)
+        attname = getattr(target, 'attname', None)
+        if attname:
+            return attname
+    pk = related._meta.pk
+    return getattr(pk, 'attname', None)
+
+
+def _resolve_m2m_terminal(field, role, path):
+    """Resolve a terminal many-to-many hop without ``get_path_info()``.
+
+    M2M path information is two joins (through table + target). Membership
+    correlation uses the related model and its primary key only.
+    """
+    related = _m2m_related_model(field)
+    if related is None:
         raise TrustsConfigurationError(
             '%s path %r does not terminate on a model.'
             % (role, _path_text(path))
         )
-    related = related._meta.concrete_model
     pk = related._meta.pk
     attname = getattr(pk, 'attname', None)
     if not attname:
         raise TrustsConfigurationError(
             '%s path %r does not expose one supported target field.'
             % (role, _path_text(path))
+        )
+    return related, attname
+
+
+def _resolve_permission_in_m2m(field, role, path, *, require_pk=False):
+    """Resolve one permission_in M2M hop from ``_meta`` / through-FK metadata.
+
+    Non-PK ``to_field`` targets are rejected so stored-column ``F()``
+    comparison cannot fail open on colliding unique values.
+    """
+    related = _m2m_related_model(field)
+    if related is None:
+        raise TrustsConfigurationError(
+            '%s path %r does not terminate on a model.'
+            % (role, _path_text(path))
+        )
+    attname = _m2m_related_target_attname(field, related)
+    if not attname:
+        raise TrustsConfigurationError(
+            '%s path %r does not expose one supported target field.'
+            % (role, _path_text(path))
+        )
+    pk_attname = getattr(related._meta.pk, 'attname', None)
+    if require_pk and attname != pk_attname:
+        raise TrustsConfigurationError(
+            '%s path %r must share one resolved comparison field; '
+            'got %s.%s and %s.%s.'
+            % (
+                role, _path_text(path),
+                related._meta.label, attname,
+                related._meta.label, pk_attname,
+            )
         )
     return related, attname
 
@@ -758,8 +868,20 @@ def _resolve_forward_singles(root, path, role):
     return tuple(path), related, _lookup_text(path), target_attname
 
 
-def _resolve_permission_in_path(root, path, role, permission_model):
-    """Bounded ceiling path: forward singles, optional reverse O2M, terminal membership."""
+def _resolve_permission_in_path(root, path, role, permission_model,
+                                permission_target=None):
+    """Bounded ceiling path from ``_meta`` / stored path metadata.
+
+    Accepted shapes, after zero or more forward single-valued hops:
+
+    * optional intermediate reverse O2M, then a terminal M2M or reverse
+      O2M on the registered permission model;
+    * exactly one intermediate M2M, then a terminal M2M on the
+      registered permission model.
+
+    Extra multi-hops, M2M-then-single, GFK, wrong terminals, and
+    non-PK ``to_field`` membership targets are rejected (zero SQL).
+    """
     if not path:
         raise TrustsConfigurationError(
             '%s must be a non-empty root-relative path from %s.'
@@ -768,7 +890,7 @@ def _resolve_permission_in_path(root, path, role, permission_model):
     current = root
     related = None
     target_attname = None
-    intermediate_multi = False
+    intermediate_kind = None
     n = len(path)
     for index, name in enumerate(path):
         is_last = index == n - 1
@@ -792,7 +914,7 @@ def _resolve_permission_in_path(root, path, role, permission_model):
                 % (role, _path_text(path), name, current._meta.label)
             )
         if kind == 'single':
-            if intermediate_multi:
+            if intermediate_kind is not None:
                 raise TrustsConfigurationError(
                     '%s path %r uses extra or intermediate multi-valued '
                     'walks; single-valued hops cannot follow a collection.'
@@ -807,21 +929,40 @@ def _resolve_permission_in_path(root, path, role, permission_model):
             related, target_attname = _resolved_hop(field, role, path)
             current = related
             continue
-        if kind == 'reverse_o2m' and not is_last:
-            if intermediate_multi:
+        if kind == 'm2m' and not is_last:
+            if intermediate_kind is not None:
                 raise TrustsConfigurationError(
                     '%s path %r uses extra or intermediate multi-valued '
                     'field %r on %s.'
                     % (role, _path_text(path), name, current._meta.label)
                 )
-            intermediate_multi = True
+            intermediate_kind = 'm2m'
+            related, target_attname = _resolve_permission_in_m2m(
+                field, role, path, require_pk=False,
+            )
+            current = related
+            continue
+        if kind == 'reverse_o2m' and not is_last:
+            if intermediate_kind is not None:
+                raise TrustsConfigurationError(
+                    '%s path %r uses extra or intermediate multi-valued '
+                    'field %r on %s.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            intermediate_kind = 'reverse_o2m'
             related, target_attname = _resolved_hop(field, role, path)
             current = related
             continue
         if kind in ('m2m', 'reverse_o2m') and is_last:
+            if intermediate_kind == 'm2m' and kind != 'm2m':
+                raise TrustsConfigurationError(
+                    '%s path %r uses extra or intermediate multi-valued '
+                    'field %r on %s.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
             if kind == 'm2m':
-                related, target_attname = _resolve_m2m_terminal(
-                    field, role, path,
+                related, target_attname = _resolve_permission_in_m2m(
+                    field, role, path, require_pk=True,
                 )
             else:
                 related, target_attname = _resolved_hop(field, role, path)
@@ -832,6 +973,19 @@ def _resolve_permission_in_path(root, path, role, permission_model):
                     % (
                         role, _path_text(path), related._meta.label,
                         permission_model._meta.label,
+                    )
+                )
+            if (
+                permission_target is not None
+                and target_attname != permission_target
+            ):
+                raise TrustsConfigurationError(
+                    '%s path %r must share one resolved comparison field; '
+                    'got %s.%s and %s.%s.'
+                    % (
+                        role, _path_text(path),
+                        related._meta.label, target_attname,
+                        permission_model._meta.label, permission_target,
                     )
                 )
             return tuple(path), related, _lookup_text(path), target_attname
@@ -879,7 +1033,8 @@ def _validate_equal(predicate, root):
         )
 
 
-def _validate_permission_in(predicate, root, permission_model):
+def _validate_permission_in(predicate, root, permission_model,
+                            permission_target=None):
     if not predicate.refs:
         raise TrustsConfigurationError(
             'permission_in requires one or more refs.'
@@ -888,10 +1043,12 @@ def _validate_permission_in(predicate, root, permission_model):
         bound = _require_same_root(ref, root, 'permission_in')
         _resolve_permission_in_path(
             root, bound._path, 'permission_in', permission_model,
+            permission_target=permission_target,
         )
 
 
-def _validate_condition(condition, root, permission_model):
+def _validate_condition(condition, root, permission_model,
+                        permission_target=None):
     """Registration-time ``_meta`` validation. Zero SQL. None is a no-op."""
     if condition is None:
         return None
@@ -901,13 +1058,19 @@ def _validate_condition(condition, root, permission_model):
                 'All requires one or more predicates.'
             )
         for predicate in condition.predicates:
-            _validate_condition(predicate, root, permission_model)
+            _validate_condition(
+                predicate, root, permission_model,
+                permission_target=permission_target,
+            )
         return condition
     if isinstance(condition, Equal):
         _validate_equal(condition, root)
         return condition
     if isinstance(condition, PermissionIn):
-        _validate_permission_in(condition, root, permission_model)
+        _validate_permission_in(
+            condition, root, permission_model,
+            permission_target=permission_target,
+        )
         return condition
     raise TrustsConfigurationError(
         'condition is not supported; omit it or pass None.'
@@ -1801,6 +1964,22 @@ _BINDING_FIELDS = {
     'permission': 'permission_field',
 }
 
+
+def _same_terminal_bindings(existing, record):
+    """True when two records share content/user/permission/along bindings."""
+    return (
+        existing.content_path == record.content_path
+        and existing.content_model is record.content_model
+        and existing.content_target == record.content_target
+        and existing.user_path == record.user_path
+        and existing.user_model is record.user_model
+        and existing.user_target == record.user_target
+        and existing.permission_path == record.permission_path
+        and existing.permission_model is record.permission_model
+        and existing.permission_target == record.permission_target
+        and existing.along == record.along
+    )
+
 _TARGET_ATTRS = {
     'user_field': 'user_target',
     'content_field': 'content_target',
@@ -1990,7 +2169,8 @@ class TrustsRegistry(object):
     Create a new instance per isolated context. There is no process-global
     singleton in this slice. ``register`` performs zero SQL. Projection
     methods compile one shared plan from stored records. One root may
-    store several records when they terminate on different content models.
+    store several records when they terminate on different content
+    models, or when the same bindings use a different closed condition.
 
         Frozen state is instance-owned. ``freeze()`` is idempotent.
         ``register`` and ``register_strategy`` on that exact frozen instance
@@ -2104,8 +2284,10 @@ class TrustsRegistry(object):
 
         Exact duplicate normalized registration raises
         ``TrustsConfigurationError``. The same root plus the same content
-        terminal with a different registration is a conflict and also
-        raises. The same root may register different content terminals.
+        terminal with different content/user/permission/along bindings is
+        a conflict and also raises. The same bindings with a *different*
+        closed condition is an allowed alternative (the plan ORs complete
+        records). The same root may register different content terminals.
         Both error outcomes leave stored records unchanged.
 
         Optional ``along`` is an ``Along`` that replaces equality at the
@@ -2161,7 +2343,10 @@ class TrustsRegistry(object):
             along_walk = _build_along_walk(
                 root, content_path, content_model, along,
             )
-        condition = _validate_condition(condition, root, permission_model)
+        condition = _validate_condition(
+            condition, root, permission_model,
+            permission_target=permission_target,
+        )
 
         record = RegisteredRelation(
             root=root,
@@ -2189,6 +2374,11 @@ class TrustsRegistry(object):
                         'Duplicate registration for %s.' % root._meta.label
                     )
                 if existing.content_model is record.content_model:
+                    if (
+                        _same_terminal_bindings(existing, record)
+                        and existing.condition != record.condition
+                    ):
+                        continue
                     raise TrustsConfigurationError(
                         'Conflicting registration for %s content terminal '
                         '%s: existing %r, new %r.'

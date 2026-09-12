@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ZERO_HEAD = '73b74b4213f6040f0e71c4c46d7a509804975672'
+ZERO_HEAD = '94256b4e50acc0c95c488cfc1e8797d542cf65b7'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
