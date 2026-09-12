@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class FinalDocumentationSurfaceTest(SimpleTestCase):
-    def test_rst_describes_schema_neutral_core(self):
+    def test_rst_introduces_the_current_permission_system(self):
         rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
         forbidden = (
             'from trusts.models import',
@@ -20,19 +20,25 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'pip install django-trusts',
             'TeamRepositoryGrant',
             'permission_bundles',
+            'non-standalone Python dependency',
+            'Core supplies',
+            'core compiles',
         )
         self.assertEqual([needle for needle in forbidden if needle in rst], [])
-        self.assertIn('non-standalone Python dependency', rst)
+        self.assertIn('Django permission system for object-level', rst)
+        self.assertIn('permission is a persisted relationship', rst)
         self.assertIn('TrustsImplementationConfig', rst)
         self.assertIn('TrustModelBackendMixin', rst)
-        self.assertIn('Document.objects.authorized(user, change_permission)', rst)
-        self.assertIn('filter_authorized_scopes', rst)
-        self.assertIn('TeamRepositoryPermission', rst)
-        self.assertIn('t.team.allowed_operations', rst)
+        self.assertIn('class DocumentPermission(models.Model)', rst)
+        self.assertIn('Document.objects.authorized(', rst)
+        self.assertIn('user.get_all_permissions(document)', rst)
+        self.assertIn('from trusts.decorators import permission_required', rst)
+        self.assertIn('Along', rst)
+        self.assertIn('OrderedFold', rst)
         self.assertIn('django-trusts-zero', rst)
         self.assertIn('django-trusts-gh-permissions', rst)
         self.assertIn('django-trusts-windows-acl', rst)
-        self.assertIn('NIST material is research context', rst)
+        self.assertIn('django-trusts-zero-example', rst)
 
     def test_sphinx_and_package_metadata_point_to_current_docs(self):
         conf = (ROOT / 'docs' / 'source' / 'conf.py').read_text()
