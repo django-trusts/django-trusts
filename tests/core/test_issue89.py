@@ -94,7 +94,7 @@ class RegisterAfterFreezeLeavesRecordsUnchangedTest(SimpleTestCase):
         self.assertEqual(len(registry.plan_for(Document).records), 1)
 
 
-class FrozenPlanProjectionsTest(TestCase):
+class FrozenPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
     def test_frozen_plan_still_projects(self):
         registry = TrustsRegistry()
         _contribute_document(registry)
