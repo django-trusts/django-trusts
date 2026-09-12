@@ -10,7 +10,7 @@ permissions:
 
 env:
   # Exact Zero IIa merge. Do not pair this core with unpublished Zero snapshots.
-  COMPANION_ZERO_SHA: 94e0fa109a8a7a5f53a028438ada899cbc1be1ad
+  COMPANION_ZERO_SHA: 904a51f922df4d0dc9a20ccadc37f34eb481fcff
 
 jobs:
   tests:
@@ -76,10 +76,10 @@ jobs:
     - name: OrderedFold PostgreSQL regressions
       env:
         DJANGO_SETTINGS_MODULE: tests.fold_settings
-      run: python -m tests.runtests trusts.test_issue100
+      run: python -m tests.runtests tests.core.test_issue100
 
   pair-iia:
-    name: pair with Zero IIa
+    name: pair with Zero #37 STAGE 1
     runs-on: ubuntu-latest
     env:
       ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero

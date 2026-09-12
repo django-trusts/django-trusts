@@ -241,3 +241,20 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn("'tests.myapp.apps.DocumentConfig'", default_settings)
         self.assertIn("'tests.myapp.backends.DocumentBackend'", default_settings)
         self.assertNotIn("'trusts',", default_settings)
+
+    def test_no_test_modules_in_installable_trusts_package(self):
+        import importlib.util
+
+        trusts_dir = ROOT / 'trusts'
+        offenders = [
+            path.relative_to(ROOT).as_posix()
+            for path in trusts_dir.rglob('*.py')
+            if path.name == 'tests.py' or path.name.startswith('test_')
+            or path.parent.name in {'tests', 'test'}
+        ]
+        self.assertEqual(offenders, [])
+        self.assertIsNone(importlib.util.find_spec('trusts.tests'))
+        self.assertIsNone(importlib.util.find_spec('trusts.test_issue16'))
+        self.assertIsNone(importlib.util.find_spec('trusts.test_issue115'))
+        self.assertTrue((ROOT / 'tests' / 'core' / 'test_issue16.py').is_file())
+        self.assertFalse((ROOT / 'trusts' / 'tests.py').exists())

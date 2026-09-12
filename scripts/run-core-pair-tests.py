@@ -36,4 +36,4 @@ os.environ.pop('TRUSTS_ZERO_SKIP_C2_SHAPE', None)
 os.chdir(str(kernel))
 
 import tests.runtests as rt
-rt.runtests(rt.PAIR_LEGACY_SUITE)
+rt.runtests(rt.PAIR_KERNEL_SUITE)

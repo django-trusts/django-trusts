@@ -187,7 +187,23 @@ def main() -> int:
     print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
     print('TQ', TQ)
     print('condition_refs', condition_refs)
+    import importlib.util
+
+    if importlib.util.find_spec('trusts.tests') is not None:
+        raise SystemExit('installed wheel still exposes trusts.tests')
+    for name in (
+        'trusts.test_issue16',
+        'trusts.test_issue57',
+        'trusts.test_issue100',
+        'trusts.test_issue115',
+    ):
+        if importlib.util.find_spec(name) is not None:
+            raise SystemExit('installed wheel still exposes %s' % name)
+    if importlib.util.find_spec('trusts.zero.tests') is not None:
+        raise SystemExit('installed wheel exposes trusts.zero.tests')
+
     print('models_inert', models_mod)
+    print('find_spec trusts.tests', importlib.util.find_spec('trusts.tests'))
     return 0
 
 

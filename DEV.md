@@ -25,10 +25,9 @@ mixin stays at `trusts.backends.TrustModelBackendMixin`. Historical
 Trust / Content / settlor / trustee models and the concrete backend
 live only in `django-trusts-zero`.
 
-Pair CI still pins the supported Zero companion
-`94e0fa109a8a7a5f53a028438ada899cbc1be1ad` for existing Matrix B and
-wheel-overlay proofs. That pin is independent of Zero's later
-user-README rewrite.
+Pair CI pins the Zero #37 STAGE 1 destination
+`904a51f922df4d0dc9a20ccadc37f34eb481fcff` so historical tests run
+from Zero `tests/legacy/`, not from core package paths.
 
 ## What this package is not
 

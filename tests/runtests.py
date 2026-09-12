@@ -11,46 +11,38 @@ from django.test.utils import get_runner
 from django.conf import settings
 
 
-# Kernel-only suite: no Zero, no concrete Trust models.
+# Library-only suite: no Zero, no concrete Trust models, no shipped
+# trusts/test*.py modules.
 KERNEL_SUITE = [
-    'trusts.test_issue16',
-    'trusts.test_issue57',
-    'trusts.test_issue60',
-    'trusts.test_issue65',
-    'trusts.test_issue83',
-    'trusts.test_issue92',
-    'trusts.test_issue96',
-    'trusts.test_issue98',
-    'trusts.test_issue100',
-    'trusts.test_issue103',
-    'trusts.test_issue108',
-    'trusts.test_issue111',
-    'trusts.test_issue115',
+    'tests.core.test_issue16',
+    'tests.core.test_issue57',
+    'tests.core.test_issue60',
+    'tests.core.test_issue65',
+    'tests.core.test_issue83',
+    'tests.core.test_issue92',
+    'tests.core.test_issue96',
+    'tests.core.test_issue98',
+    'tests.core.test_issue100',
+    'tests.core.test_issue103',
+    'tests.core.test_issue108',
+    'tests.core.test_issue111',
+    'tests.core.test_issue115',
 ]
 
-# C1 ran ``run_tests(['trusts'])``. Pair re-runs that full package except
-# kernel-only identity assertions (``test_issue96`` / ``111``) and tests
-# that still need a core product module or a second test-backend owner
-# Zero IIa does not provide (admin/views templates, multi-path
-# ``tests.backends.*`` hosts).
-PAIR_LEGACY_SUITE = [
-    'trusts.tests',
-    'trusts.test_issue4',
-    'trusts.test_issue16',
-    'trusts.test_issue29',
-    'trusts.test_issue54',
-    'trusts.test_issue57',
-    'trusts.test_issue60',
-    'trusts.test_issue65',
-    'trusts.test_issue67',
-    'trusts.test_issue70',
-    'trusts.test_issue72',
-    'trusts.test_issue83',
-    'trusts.test_issue92',
-    'trusts.test_issue98',
-    'trusts.test_issue100',
-    'trusts.test_issue103',
-    'trusts.test_issue108',
+# Kernel modules that remain valid against an installed Zero owner.
+# Historical Trust/Content/Junction/Role coverage runs from the Zero
+# checkout (see scripts/run-z1-pair-tests.py), not from core paths.
+PAIR_KERNEL_SUITE = [
+    'tests.core.test_issue16',
+    'tests.core.test_issue57',
+    'tests.core.test_issue60',
+    'tests.core.test_issue65',
+    'tests.core.test_issue83',
+    'tests.core.test_issue92',
+    'tests.core.test_issue98',
+    'tests.core.test_issue100',
+    'tests.core.test_issue103',
+    'tests.core.test_issue108',
 ]
 
 
