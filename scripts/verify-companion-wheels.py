@@ -24,7 +24,8 @@ if str(_SCRIPTS) not in sys.path:
 from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
-ZERO_HEAD = '94256b4e50acc0c95c488cfc1e8797d542cf65b7'
+# Exact Zero #28 six-name compatibility squash-merge SHA.
+ZERO_HEAD = '18e87a63ff5079298e1ee330b888b4ff86551e1f'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
@@ -75,6 +76,33 @@ assert init.name == "__init__.py"
 assert (init.parent / "zero" / "apps.py").is_file()
 assert (init.parent / "apps.py").is_file()
 assert not (init.parent / "core_backends.py").is_file()
+from trusts.conditions import permission_has_condition, PermissionConditionError
+assert permission_has_condition("change_trust:own")
+assert PermissionConditionError is not None
+try:
+    from trusts.conditions import Expr
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.Expr")
+try:
+    from trusts.conditions import ConditionRegistry
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.ConditionRegistry")
+try:
+    from trusts.conditions import validate_expression
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.validate_expression")
+try:
+    from django_trusts import condition_refs
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports django_trusts.condition_refs")
 print("companion-overlay-ok")
 '''
 

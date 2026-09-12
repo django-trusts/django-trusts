@@ -10,9 +10,9 @@ from django.db.models import Model, QuerySet, Subquery
 
 from trusts.conditions import (
     PermissionConditionError,
-    evaluate_registered_expression,
     permission_has_condition,
 )
+from trusts.conditions._ir import evaluate_registered_expression
 from trusts.query import (
     is_active_principal,
 )

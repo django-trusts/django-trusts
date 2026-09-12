@@ -1,7 +1,7 @@
 """#4: noun-neutral V1 condition grammar.
 
 QueryableConditionTest (Trust/Content/Ticket runtime) stays on Zero
-``tests/legacy/test_issue4.py``. This module keeps the generic Expr
+``tests/legacy/test_issue4.py``. This module keeps the generic private IR
 grammar and ``validate_expression`` / register-shape proofs.
 """
 
@@ -10,14 +10,14 @@ from django.db import models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from django_trusts import Query as DjangoTrustsQuery, TQ as DjangoTrustsTQ
-from django_trusts import condition_refs as django_condition_refs
 from trusts.conditions import (
-    Const,
-    Expr,
     PermissionConditionBooleanError,
     PermissionConditionError,
     PermissionConditionUnsupported,
+)
+from trusts.conditions._ir import (
+    Const,
+    Expr,
     Query,
     TQ,
     condition_refs,
@@ -120,7 +120,7 @@ class ConditionGrammarTest(SimpleTestCase):
         ordering = o.amount < 100
         self.assertIsInstance(ordering, Expr)
         self.assertFalse(is_predicate(ordering))
-        with self.assertRaises(PermissionConditionError):
+        with self.assertRaises(TypeError):
             TrustsRegistry().register_permission_condition(
                 object, 'range', ordering,
             )
@@ -144,11 +144,14 @@ class ConditionGrammarTest(SimpleTestCase):
         with self.assertRaises(PermissionConditionUnsupported):
             list(o.owner)
 
-    def test_tq_namespace_is_reserved_without_v1_lookups(self):
+    def test_tq_namespace_is_private_and_reserved_without_v1_lookups(self):
         self.assertIs(Query, TQ)
-        self.assertIs(DjangoTrustsQuery, Query)
-        self.assertIs(DjangoTrustsTQ, TQ)
-        self.assertEqual(django_condition_refs()[0].to_tuple(), ('ref', 'principal', ()))
+        with self.assertRaises(ImportError):
+            from django_trusts import TQ as _exported_tq  # noqa: F401
+        with self.assertRaises(ImportError):
+            from django_trusts import condition_refs as _exported_refs  # noqa: F401
+        with self.assertRaises(ImportError):
+            from trusts.conditions import TQ as _public_tq  # noqa: F401
         with self.assertRaises(PermissionConditionUnsupported) as ctx:
             TQ.iexact
         self.assertIn('iexact', str(ctx.exception))
@@ -158,10 +161,13 @@ class ConditionGrammarTest(SimpleTestCase):
     def test_non_predicate_and_non_callable_rejected_at_register(self):
         u, p, o = condition_refs()
         registry = TrustsRegistry()
-        with self.assertRaises(PermissionConditionError):
+        with self.assertRaises(TypeError):
             registry.register_permission_condition(object, 'bare', o.owner)
         with self.assertRaises(TypeError):
             registry.register_permission_condition(object, 'bad', 'not-a-condition')
+        with self.assertRaises(TypeError):
+            registry.register_permission_condition(object, 'expr', u == o.owner)
+        self.assertIsNone(registry.get_permission_condition_record(object, 'expr'))
         with self.assertRaises(PermissionConditionError):
             registry.register_permission_condition(
                 object, 'truth', lambda u, p, o: True,

@@ -1,4 +1,4 @@
-"""#29 / #142 Stage A: registration / check-ID / builder lifecycle.
+"""#29 / #142 Stage B: registration / check-ID / builder lifecycle.
 
 Live Trust/Content runtime stay on Zero ``tests/legacy/test_issue29.py``.
 This module proves library check IDs, builder-once registration, and
@@ -8,7 +8,6 @@ the obsolete-setting fail-loud check.
 from io import StringIO
 from unittest.mock import patch
 
-from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.checks import Error
 from django.core.management import call_command
@@ -24,13 +23,21 @@ from trusts.checks import (
     check_permission_conditions,
     permission_condition_check_messages,
 )
-from trusts.conditions import (
-    PermissionConditionError,
+from trusts.conditions import PermissionConditionError
+from trusts.conditions._ir import (
+    ConditionRecord,
     Ref,
     condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
 from trusts.core import TrustsConfigurationError, TrustsRegistry
+
+
+def _store_expr(registry, model, code, expr):
+    store = getattr(registry, 'conditions', registry)
+    store._records[(model._meta.label, code)] = ConditionRecord(
+        expr=expr, model=model,
+    )
 
 
 def _note_model():
@@ -63,12 +70,16 @@ class _BuilderLog(object):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class PermissionConditionCheckLifecycleTest(SimpleTestCase):
-    def test_semantic_invalid_expr_does_not_raise_at_registration(self):
+    def test_prebuilt_expr_is_type_error_before_mutation(self):
         Note = _note_model()
         u, _p, o = condition_refs()
         registry = TrustsRegistry()
         expr = u == o.not_a_field
-        record = registry.register_permission_condition(Note, 'missing', expr)
+        with self.assertRaises(TypeError):
+            registry.register_permission_condition(Note, 'missing', expr)
+        self.assertIsNone(registry.get_permission_condition_record(Note, 'missing'))
+        _store_expr(registry, Note, 'missing', expr)
+        record = registry.get_permission_condition_record(Note, 'missing')
         self.assertIs(record.expr, expr)
         self.assertIs(record.model, Note)
         errors = _messages_with_id(
@@ -81,16 +92,13 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertIsInstance(errors[0], Error)
         self.assertIn('not_a_field', errors[0].msg)
 
-    def test_registration_before_models_ready_retains_expr_identity(self):
+    def test_builder_validates_at_register_when_models_are_ready(self):
         Note = _note_model()
         u, _p, o = condition_refs()
         registry = TrustsRegistry()
-        expr = u == o.owner
-        with patch.object(apps, 'models_ready', False):
-            record = registry.register_permission_condition(
-                Note, 'deferred_own', expr,
-            )
-        self.assertIs(record.expr, expr)
+        record = registry.register_permission_condition(
+            Note, 'deferred_own', lambda u, p, o: u == o.owner,
+        )
         self.assertIs(record.model, Note)
         self.assertEqual(
             _messages_with_id(
@@ -102,8 +110,9 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             [],
         )
         bad = u == o.deferred_missing
-        with patch.object(apps, 'models_ready', False):
+        with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'deferred_bad', bad)
+        _store_expr(registry, Note, 'deferred_bad', bad)
         errors = _messages_with_id(
             permission_condition_check_messages(
                 registry.iter_permission_conditions(),
@@ -117,8 +126,8 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         Note = _note_model()
         u, _p, o = condition_refs()
         registry = TrustsRegistry()
-        registry.register_permission_condition(Note, 'typo', u == o.nope)
-        registry.register_permission_condition(Note, 'types', o.status == 1)
+        _store_expr(registry, Note, 'typo', u == o.nope)
+        _store_expr(registry, Note, 'types', o.status == 1)
         errors = _messages_with_id(
             permission_condition_check_messages(
                 registry.iter_permission_conditions(),
@@ -188,7 +197,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         Note = _note_model()
         u, _p, o = condition_refs()
         registry = TrustsRegistry()
-        registry.register_permission_condition(Note, 'typo', u == o.nope)
+        _store_expr(registry, Note, 'typo', u == o.nope)
 
         class _Handle(object):
             def __init__(self, store):
@@ -240,7 +249,7 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
 
         u, _p, o = condition_refs()
         registry = TrustsRegistry()
-        registry.register_permission_condition(Document, 'typo-29', u == o.nope)
+        _store_expr(registry, Document, 'typo-29', u == o.nope)
 
         class _Handle(object):
             def __init__(self, store):

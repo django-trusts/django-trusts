@@ -15,8 +15,8 @@ and ``trusts.W001`` are retired.
 
 from django.core import checks as django_checks
 
-from trusts.conditions import (
-    PermissionConditionError,
+from trusts.conditions import PermissionConditionError
+from trusts.conditions._ir import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )
@@ -87,7 +87,7 @@ def _messages_for_obsolete_callback_setting():
         'permission callbacks are removed. The setting does not enable '
         'callbacks. Register a builder '
         '(handle.register_permission_condition(model, code, '
-        'lambda u, p, o: ...)) or a transitional Expr.',
+        'lambda u, p, o: ...)).',
         hint=(
             'Remove TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS from settings. '
             'It cannot restore object-only has_perm callbacks. '

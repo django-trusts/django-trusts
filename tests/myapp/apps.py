@@ -1,5 +1,5 @@
 from trusts.apps import TrustsImplementationConfig
-from trusts.conditions import RegistryConditionLookup
+from trusts.conditions._ir import RegistryConditionLookup
 from trusts.core import Ref
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
