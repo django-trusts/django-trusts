@@ -9,8 +9,9 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero #37 STAGE 1 head. Do not pair this core with unpublished snapshots.
-  COMPANION_ZERO_SHA: 73b74b4213f6040f0e71c4c46d7a509804975672
+  # Exact Zero #18 companion head (django-trusts-zero#20). Do not pair this
+  # core with unpublished snapshots.
+  COMPANION_ZERO_SHA: 42cd9d6b15578a61db5dcab7cfc478cbb3cd6949
 
 jobs:
   tests:

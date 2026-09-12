@@ -26,8 +26,14 @@ from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
+    RelationPlan,
     TrustsConfigurationError,
     TrustsRegistry,
+    all_match,
+    common_permissions,
+    filter_authorized_scopes,
+    granted,
+    instance_match,
     permission_in,
 )
 from trusts.query import AuthorizedManager
@@ -605,3 +611,381 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.assertIn('exists', sql)
         self.assertIn('placement', sql)
         self.assertIn('cluster', sql)
+
+
+def _membership_models():
+    """Isolated nouns: M2M user hop vs FK user hop on the same folder."""
+
+    class Holder(models.Model):
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Token(models.Model):
+        code = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Folder(models.Model):
+        title = models.CharField(max_length=40)
+
+        objects = AuthorizedManager()
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Desk(models.Model):
+        title = models.CharField(max_length=40)
+        holders = models.ManyToManyField(
+            Holder, related_name='desks', blank=True,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Seat(models.Model):
+        folder = models.ForeignKey(
+            Folder, related_name='seats', on_delete=models.CASCADE,
+        )
+        desk = models.ForeignKey(
+            Desk, related_name='seats', on_delete=models.CASCADE,
+        )
+        token = models.ForeignKey(
+            Token, related_name='seats', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Title(models.Model):
+        folder = models.ForeignKey(
+            Folder, related_name='titles', on_delete=models.CASCADE,
+        )
+        owner = models.ForeignKey(
+            Holder, related_name='titles', on_delete=models.CASCADE,
+        )
+        token = models.ForeignKey(
+            Token, related_name='titles', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    return Holder, Token, Folder, Desk, Seat, Title
+
+
+def _self_prefix_models():
+    """Self-referential tree: prefix hop and terminal share one model."""
+
+    class Holder(models.Model):
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Token(models.Model):
+        code = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Node(models.Model):
+        title = models.CharField(max_length=40)
+        parent = models.ForeignKey(
+            'self',
+            null=True,
+            blank=True,
+            related_name='children',
+            on_delete=models.CASCADE,
+        )
+
+        objects = AuthorizedManager()
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class NodeGrant(models.Model):
+        node = models.ForeignKey(
+            Node, related_name='grants', on_delete=models.CASCADE,
+        )
+        holder = models.ForeignKey(
+            Holder, related_name='node_grants', on_delete=models.CASCADE,
+        )
+        token = models.ForeignKey(
+            Token, related_name='node_grants', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    return Holder, Token, Node, NodeGrant
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class MembershipGroupExistsTest(TransactionTestCase):
+    def setUp(self):
+        (
+            self.Holder,
+            self.Token,
+            self.Folder,
+            self.Desk,
+            self.Seat,
+            self.Title,
+        ) = _membership_models()
+        self._table_cm = _tables(
+            self.Holder, self.Token, self.Folder, self.Desk, self.Seat, self.Title,
+        )
+        self._table_cm.__enter__()
+        self.member = self.Holder.objects.create(name='member')
+        self.owner = self.Holder.objects.create(name='owner')
+        self.stranger = self.Holder.objects.create(name='stranger')
+        self.read = self.Token.objects.create(code='read')
+        self.write = self.Token.objects.create(code='write')
+        self.folder = self.Folder.objects.create(title='lab')
+        self.other = self.Folder.objects.create(title='other')
+        self.desk = self.Desk.objects.create(title='night')
+        self.desk.holders.add(self.member)
+        self.Seat.objects.create(
+            folder=self.folder, desk=self.desk, token=self.read,
+        )
+        self.Title.objects.create(
+            folder=self.folder, owner=self.owner, token=self.read,
+        )
+        self.membership = TrustsRegistry()
+        s = Ref(self.Seat)
+        self.membership.register(
+            content=s.folder, user=s.desk.holders, permission=s.token,
+        )
+        self.trustee = TrustsRegistry()
+        t = Ref(self.Title)
+        self.trustee.register(
+            content=t.folder, user=t.owner, permission=t.token,
+        )
+        self.mixed = TrustsRegistry()
+        s = Ref(self.Seat)
+        t = Ref(self.Title)
+        self.mixed.register(
+            content=s.folder, user=s.desk.holders, permission=s.token,
+        )
+        self.mixed.register(
+            content=t.folder, user=t.owner, permission=t.token,
+        )
+        self.compiler = PlanQueryCompiler()
+
+    def tearDown(self):
+        self._table_cm.__exit__(None, None, None)
+
+    def _handle(self, registry):
+        return BackendHandle(
+            path='issue18-group',
+            registry=registry,
+            compiler=self.compiler,
+        )
+
+    def test_membership_user_hop_is_group_slice(self):
+        handle = self._handle(self.membership)
+        plan = self.membership.plan_for(
+            self.folder, user=self.member, permission=self.read,
+        )
+        self.assertEqual(plan.records[0].user_path, ('desk', 'holders'))
+        with self.assertNumQueries(0):
+            pred = self.compiler.group_exists(
+                plan, self.folder, self.member, self.read,
+            )
+        self.assertIsNotNone(pred)
+        with self.assertNumQueries(1):
+            self.assertIs(all_match(
+                (handle,), self.folder, self.member, self.read, kind='group',
+            ), True)
+        with self.assertNumQueries(1):
+            self.assertIs(all_match(
+                (handle,), self.folder, self.member, self.read,
+            ), True)
+        with self.assertNumQueries(1):
+            self.assertIs(all_match(
+                (handle,), self.folder, self.stranger, self.read, kind='group',
+            ), False)
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                _pks(common_permissions(
+                    (handle,), self.folder, self.member, kind='group',
+                )),
+                {self.read.pk},
+            )
+
+    def test_fk_user_hop_is_not_group_slice(self):
+        handle = self._handle(self.trustee)
+        plan = self.trustee.plan_for(
+            self.folder, user=self.owner, permission=self.read,
+        )
+        self.assertEqual(plan.records[0].user_path, ('owner',))
+        with self.assertNumQueries(0):
+            self.assertIsNone(self.compiler.group_exists(
+                plan, self.folder, self.owner, self.read,
+            ))
+            self.assertIsNone(granted(
+                (handle,), self.folder, self.owner, self.read, kind='group',
+            ))
+        with self.assertNumQueries(1):
+            self.assertIs(all_match(
+                (handle,), self.folder, self.owner, self.read,
+            ), True)
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                list(common_permissions(
+                    (handle,), self.folder, self.owner, kind='group',
+                )),
+                [],
+            )
+
+    def test_mixed_plan_group_slice_omits_fk_records(self):
+        handle = self._handle(self.mixed)
+        with self.assertNumQueries(1):
+            self.assertIs(all_match(
+                (handle,), self.folder, self.member, self.read, kind='group',
+            ), True)
+        with self.assertNumQueries(1):
+            self.assertIs(all_match(
+                (handle,), self.folder, self.owner, self.read, kind='group',
+            ), False)
+        with self.assertNumQueries(1):
+            self.assertIs(all_match(
+                (handle,), self.folder, self.owner, self.read,
+            ), True)
+        with self.assertNumQueries(1):
+            self.assertIs(instance_match(
+                handle, self.folder, self.member, self.read, kind='group',
+            ), True)
+        with self.assertNumQueries(1):
+            self.assertIs(instance_match(
+                handle, self.other, self.member, self.read, kind='group',
+            ), False)
+
+    def test_strategy_makes_group_exists_none(self):
+        plan = RelationPlan(
+            records=self.membership.records,
+            permission_model=self.Token,
+            strategy=object(),
+        )
+        with self.assertNumQueries(0):
+            self.assertIsNone(self.compiler.group_exists(
+                plan, self.folder, self.member, self.read,
+            ))
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class SelfReferentialPrefixScopeTest(TransactionTestCase):
+    def setUp(self):
+        self.Holder, self.Token, self.Node, self.NodeGrant = _self_prefix_models()
+        self._table_cm = _tables(
+            self.Holder, self.Token, self.Node, self.NodeGrant,
+        )
+        self._table_cm.__enter__()
+        self.holder = self.Holder.objects.create(name='keeper')
+        self.stranger = self.Holder.objects.create(name='stranger')
+        self.add = self.Token.objects.create(code='add')
+        self.parent = self.Node.objects.create(title='parent')
+        self.child = self.Node.objects.create(
+            title='child', parent=self.parent,
+        )
+        self.other = self.Node.objects.create(title='other')
+        self.NodeGrant.objects.create(
+            node=self.parent, holder=self.holder, token=self.add,
+        )
+        self.registry = TrustsRegistry()
+        g = Ref(self.NodeGrant)
+        self.registry.register(
+            content=g.node.children,
+            user=g.holder,
+            permission=g.token,
+        )
+        self.handle = BackendHandle(
+            path='issue18-prefix',
+            registry=self.registry,
+            compiler=PlanQueryCompiler(),
+        )
+
+    def tearDown(self):
+        self._table_cm.__exit__(None, None, None)
+
+    def test_same_model_prefix_is_create_scope(self):
+        record = self.registry.records[0]
+        self.assertEqual(record.content_path, ('node', 'children'))
+        self.assertIs(record.content_model, self.Node)
+        with self.assertNumQueries(0):
+            qs = filter_authorized_scopes(
+                self.Node.objects.all(),
+                self.holder,
+                self.add,
+                content=self.Node,
+                handles=(self.handle,),
+            )
+        self.assertIsInstance(qs, QuerySet)
+        self.assertIsNone(qs._result_cache)
+        with self.assertNumQueries(1):
+            self.assertEqual(_pks(qs), {self.parent.pk})
+        self.assertFalse(
+            filter_authorized_scopes(
+                self.Node.objects.all(),
+                self.stranger,
+                self.add,
+                content=self.Node,
+                handles=(self.handle,),
+            ).exists()
+        )
+
+    def test_terminal_only_same_model_is_none(self):
+        registry = TrustsRegistry()
+        g = Ref(self.NodeGrant)
+        registry.register(
+            content=g.node, user=g.holder, permission=g.token,
+        )
+        handle = BackendHandle(
+            path='issue18-terminal',
+            registry=registry,
+            compiler=PlanQueryCompiler(),
+        )
+        qs = filter_authorized_scopes(
+            self.Node.objects.all(),
+            self.holder,
+            self.add,
+            content=self.Node,
+            handles=(handle,),
+        )
+        with self.assertNumQueries(0):
+            self.assertFalse(qs.exists())
+
+    def test_authorized_content_is_child_not_parent(self):
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                self.registry.has_permission(self.holder, self.child, self.add),
+            )
+        with self.assertNumQueries(1):
+            self.assertFalse(
+                self.registry.has_permission(self.holder, self.parent, self.add),
+            )
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                _pks(self.registry.filter_authorized(
+                    self.Node.objects.all(), self.holder, self.add,
+                )),
+                {self.child.pk},
+            )
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                _pks(self.registry.permissions_for(self.holder, self.child)),
+                {self.add.pk},
+            )
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                _pks(filter_authorized_scopes(
+                    self.Node.objects.all(),
+                    self.holder,
+                    self.add,
+                    content=self.Node,
+                    handles=(self.handle,),
+                )),
+                {self.parent.pk},
+            )

@@ -68,7 +68,14 @@ class QueryCompiler(object):
 
 
 class PlanQueryCompiler(object):
-    """Immutable mixin default: registered plan only, no historical group."""
+    """Immutable mixin default: registered plan; group slice is membership hops.
+
+    ``complete_exists`` compiles every record (or the OrderedFold
+    strategy). ``group_exists`` compiles only records whose user path
+    ends in a many-to-many membership hop. Direct FK / O2O / reverse
+    user hops stay out of the group slice. An OrderedFold ``strategy``
+    makes ``group_exists`` inapplicable (``None``).
+    """
 
     historical_fallback = False
 
@@ -80,7 +87,18 @@ class PlanQueryCompiler(object):
         return plan.content_exists(user, permission)
 
     def group_exists(self, plan, candidates, user, permission):
-        return None
+        if getattr(plan, 'strategy', None) is not None:
+            return None
+        membership = tuple(
+            record for record in plan.records
+            if _user_path_is_membership(record)
+        )
+        if not membership:
+            return None
+        return RelationPlan(
+            records=membership,
+            permission_model=plan.permission_model,
+        ).content_exists(user, permission)
 
 
 def compiler_for_class(cls):
@@ -242,9 +260,11 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     that node, bind user + permission from the same record, and OR
     applicable records.
 
-    ``queryset.model`` equal to the content terminal returns ``none()``
-    (that path is ``AuthorizedQuerySet.authorized``). Unknown terminal,
-    empty handles, or a scope model not on the path return ``none()``.
+    ``queryset.model`` equal to the content terminal is allowed when a
+    proper prefix hop of that same model exists (self-referential
+    trees). A terminal-only path has no proper prefix, so the same-model
+    queryset still returns ``none()``. Unknown terminal, empty handles,
+    or a scope model not on the path also return ``none()``.
     ``permission`` must be a model instance. Construction of a fail-closed
     result issues zero SQL; SQL runs only when a compiled predicate is
     evaluated.
@@ -266,10 +286,7 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     if not handles:
         return queryset.none()
 
-    content_model = _content_model(content)
     scope_model = queryset.model._meta.concrete_model
-    if scope_model is content_model:
-        return queryset.none()
 
     parts = []
     for handle in handles:
@@ -499,6 +516,36 @@ def _resolved_hop(field, role, path):
             % (role, _path_text(path))
         )
     return related._meta.concrete_model, attname
+
+
+def _user_path_is_membership(record):
+    """True when the user binding's last hop is a many-to-many membership.
+
+    Direct FK / O2O / reverse user hops are trustee bindings, not the
+    group slice. Intermediate hops must stay single-valued so the last
+    hop is the membership. Walk uses stored path names and ``_meta``
+    only (zero SQL).
+    """
+    path = getattr(record, 'user_path', None) or ()
+    if not path:
+        return False
+    current = record.root
+    for name in path[:-1]:
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        if _classify_field(field) == 'm2m':
+            return False
+        try:
+            current, _attname = _resolved_hop(field, 'user', path)
+        except TrustsConfigurationError:
+            return False
+    try:
+        last = current._meta.get_field(path[-1])
+    except FieldDoesNotExist:
+        return False
+    return _classify_field(last) == 'm2m'
 
 
 _SUFFIX_KINDS = frozenset(('single', 'reverse_o2o', 'reverse_o2m'))

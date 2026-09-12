@@ -331,10 +331,16 @@ correlated to `OuterRef` of that hop's resolved target field (the
 related `attname` from `get_path_info()`, including non-PK
 `ForeignKey(..., to_field=...)`) at that node, binds user +
 permission, and ORs applicable records. `queryset.model` equal to the
-content terminal, an unknown terminal, empty handles, or a scope model
-not on the path return `none()`. Core does not import Zero schema models
-(`Trust`, `TrustUserPermission`, `TrustGroup`, …). Live create-under-Trust
-callers stay on `trust_grant_q` until a later codec wrapper.
+content terminal is allowed when a proper prefix hop of that same model
+exists (self-referential trees). A terminal-only path, an unknown
+terminal, empty handles, or a scope model not on the path return
+`none()`. Core does not import Zero schema models
+(`Trust`, `TrustUserPermission`, `TrustGroup`, …).
+
+`PlanQueryCompiler.group_exists` compiles the membership-hop subset of
+the same plan (user path ending in M2M) via `RelationPlan.content_exists`.
+Direct FK / O2O / reverse user hops stay out of the group slice.
+An OrderedFold `strategy` makes `group_exists` inapplicable (`None`).
 
 `ConditionLookup` (`record_for`, `compile_q`) binds with
 `TrustsRegistry.set_condition_lookup`. Missing methods raise

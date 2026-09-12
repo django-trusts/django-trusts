@@ -3030,6 +3030,24 @@ ROOT_PK
 from trusts.backends import HistoricalGroupQueryCompiler
 ```
 
+### 57. Membership `group_exists` and same-model proper prefixes
+
+| | |
+| --- | --- |
+| Previous | `PlanQueryCompiler.group_exists` was a no-op (`None`). `filter_authorized_scopes` returned `none()` when `queryset.model` equalled the content terminal, even if a proper prefix hop used that same model. |
+| New | `group_exists` compiles records whose user path ends in a many-to-many membership hop via `RelationPlan.content_exists`. Direct FK / O2O / reverse user hops stay out of the group slice. OrderedFold `strategy` stays inapplicable. `filter_authorized_scopes` includes same-model proper prefixes (self-referential trees). A terminal-only path still returns `none()`. |
+| Replacement | Call public `PlanQueryCompiler.group_exists` and `filter_authorized_scopes`. Do not monkeypatch the compiler or reassemble `_scope_prefix_lookups` in a host. |
+| Affected | `get_group_permissions` vs trustee split; create-under-parent when prefix model equals the content terminal. |
+| Authorization | Complete records are unchanged. Group enumeration is the membership-hop subset. Scope rows are still proper prefixes, never the content terminal hop. |
+
+```python
+from trusts.core import PlanQueryCompiler, filter_authorized_scopes
+
+compiler = PlanQueryCompiler()
+# kind='group' uses membership-hop records only
+filter_authorized_scopes(Node.objects.all(), holder, token, content=Node)
+```
+
 ## Schema
 
 No change. This slice adds no model, table, migration, app-label, or
