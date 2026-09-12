@@ -1,5 +1,25 @@
 from django.apps import AppConfig as DjangoAppConfig
 from django.core.exceptions import ImproperlyConfigured
+from django.db.models import options as model_options
+
+
+def _ensure_permission_conditions_option():
+    """Register generic ``Meta.permission_conditions`` before host models.
+
+    Hosts import ``TrustsImplementationConfig`` at AppConfig load, which
+    is before later apps construct models. This must not import
+    ``trusts.core`` or ``trusts.conditions._ir``.
+    """
+    names = model_options.DEFAULT_NAMES
+    if 'permission_conditions' in names:
+        return
+    if isinstance(names, tuple):
+        model_options.DEFAULT_NAMES = names + ('permission_conditions',)
+    else:
+        names.append('permission_conditions')
+
+
+_ensure_permission_conditions_option()
 
 
 def _listed_mixin_paths():

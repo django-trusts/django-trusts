@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 from django.contrib.auth import get_user_model
 from django.db import connection, models
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from trusts.conditions._ir import ConditionRecord, RegistryConditionLookup
@@ -71,7 +71,15 @@ print('ok')
 """
 
 
-class DefaultLookupBindTest(SimpleTestCase):
+class DefaultLookupBindTest(TestCase):
+    def test_apps_registers_meta_option_without_ir(self):
+        from django.db.models import options as model_options
+
+        import trusts.apps as apps_mod
+
+        self.assertIn('permission_conditions', model_options.DEFAULT_NAMES)
+        self.assertFalse(hasattr(apps_mod, 'RegistryConditionLookup'))
+
     def test_construct_self_binds_private_adapter_zero_sql(self):
         with self.assertNumQueries(0):
             registry = TrustsRegistry()

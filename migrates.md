@@ -3518,8 +3518,10 @@ are separate later merges. No tag or release in this PR.
 self-binds the private `RegistryConditionLookup` adapter. Named
 `:condition` authorization no longer requires a consumer to import
 `trusts.conditions._ir` or call `set_condition_lookup`.
-`trusts.conditions` remains the accepted six names. No new public
-lookup SPI.
+`trusts.apps` registers generic `Meta.permission_conditions` at
+import so host models can declare that option without importing
+`_ir`. `trusts.conditions` remains the accepted six names. No new
+public lookup SPI.
 
 ## Old vs new behavior
 
