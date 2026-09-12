@@ -74,6 +74,11 @@ class BackendsMixinBoundaryTest(SimpleTestCase):
             'trusts.views',
             'trusts.urls',
             'trusts.admin',
+            'trusts.management',
+            'trusts.management.commands',
+            'trusts.management.commands.create_trust_root',
+            'trusts.management.commands.grandfather_trust_group_permissions',
+            'trusts.management.commands.update_roles_permissions',
         ):
             with self.assertRaises(ModuleNotFoundError):
                 importlib.import_module(name)

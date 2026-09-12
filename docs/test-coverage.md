@@ -43,7 +43,7 @@ joined model. That is historical, not a new denial-widening.
 | `get_group_permissions` content path | Declared terminals return the group-only common string set (issue #77). |
 | Decorator `raise_exception=True` | Most decorator tests use `raise_exception=False`. |
 | `TRUSTS_ENTITY_MODEL` swap | Custom entity model is configurable but untested. |
-| Captured production MySQL/Postgres dump | `scripts/verify-legacy-upgrade.py` upgrades a representative 0.10.3-shaped SQLite DB (`trusts.0001_initial` already recorded, historical table DDL). It is not a customer dump and does not replay Django 1.8 contrib tables. |
+| Captured production MySQL/Postgres dump | Core no longer ships an upgrade script. Zero preserves a representative 0.10.3-shaped SQLite DDL fixture (`scripts/legacy/trusts_0001_sqlite.sql`) and exercises fresh-install / migration-identity / grandfather command proof. That is not a customer dump and does not replay Django 1.8 contrib tables. |
 | Admin / i18n surfaces | Core models registered; `auto_modeladmin` opt-in is exercised in `AutoModelAdminTest`. |
 
 ## Issue #8 recovery tests (do not close #8)

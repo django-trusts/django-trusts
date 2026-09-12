@@ -73,8 +73,15 @@ python -m pip install "Django>=6.1,<6.2" coverage
 python -m pip install -e .
 python -m tests.runtests
 python -m django check --settings=tests.settings
-python scripts/verify-legacy-upgrade.py
 ```
+
+The former Core `scripts/verify-legacy-upgrade.py` path is gone. Core has
+no AppConfig and no valid command-discovery path. Zero owns the live
+`create_trust_root`, `grandfather_trust_group_permissions`, and
+`update_roles_permissions` commands and the equivalent upgrade proof
+(`scripts/verify-fresh-install.py`, `tests/test_migrations.py`,
+`tests/legacy/test_issue23.py`, plus the preserved
+`scripts/legacy/trusts_0001_sqlite.sql` fixture).
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
 authorization tests, a fresh migrate, `manage.py check`, an OrderedFold

@@ -148,6 +148,8 @@ def main() -> int:
         names = zf.namelist()
     if any(n.endswith('trusts/core_backends.py') for n in names):
         raise SystemExit('library wheel still ships trusts/core_backends.py')
+    if any('/trusts/management/' in n or n.endswith('/trusts/management') for n in names):
+        raise SystemExit('library wheel still ships trusts/management/**')
     _assert_zero_record(zero_wheel)
 
     tmp = Path(tempfile.mkdtemp(prefix='trusts-dev3-companion-'))

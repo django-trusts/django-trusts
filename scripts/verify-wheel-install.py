@@ -219,6 +219,15 @@ def main() -> int:
         raise SystemExit('library wheel still exposes Zero model getters')
     if _find_spec('trusts.zero.tests') is not None:
         raise SystemExit('installed wheel exposes trusts.zero.tests')
+    for name in (
+        'trusts.management',
+        'trusts.management.commands',
+        'trusts.management.commands.create_trust_root',
+        'trusts.management.commands.grandfather_trust_group_permissions',
+        'trusts.management.commands.update_roles_permissions',
+    ):
+        if _find_spec(name) is not None:
+            raise SystemExit('installed wheel still exposes %s' % name)
 
     print('models_inert', models_mod)
     print('find_spec trusts.tests', _find_spec('trusts.tests'))
