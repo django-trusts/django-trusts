@@ -9,9 +9,8 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero #27 Stage B test-only merge SHA. Stage B pairs against
-  # this SHA; do not revert to a pre-convert or pre-#27 Zero pin.
-  COMPANION_ZERO_SHA: 7ff4e14686b7b443f36392c5142c165ec45071ff
+  # Exact Zero #28 six-name compatibility squash-merge SHA.
+  COMPANION_ZERO_SHA: 18e87a63ff5079298e1ee330b888b4ff86551e1f
 
 jobs:
   tests:

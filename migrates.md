@@ -3393,6 +3393,7 @@ Downstream gates already merged:
 
 - Core Stage A `710b3ea26778ff069d1f5329adc9f2f481a1ea92`
 - Zero #27 Stage B test-only merge `7ff4e14686b7b443f36392c5142c165ec45071ff`
+- Zero #28 six-name compatibility squash-merge `18e87a63ff5079298e1ee330b888b4ff86551e1f`
 - Zero Example E-convert `0cb7ea23708610e467915abd4c2f768b5aece839`
 
 ## Decision
@@ -3457,9 +3458,11 @@ may import the private module. Runtime callbacks stay deleted.
 
 ## Fail-closed rollout
 
-1. Stage A, Z-convert, E-convert, and Zero #27 Stage B
-   test-only (`7ff4e14686b7b443f36392c5142c165ec45071ff`) are
-   already merged. This PR pairs against that Zero SHA.
+1. Stage A, Z-convert, E-convert, Zero #27 Stage B
+   test-only (`7ff4e14686b7b443f36392c5142c165ec45071ff`), and
+   Zero #28 six-name compatibility
+   (`18e87a63ff5079298e1ee330b888b4ff86551e1f`) are already
+   merged. This PR pairs against the Zero #28 SHA.
 2. Land this Core Stage B PR on `dev`.
 3. Do not start #145, #146, #138, #137, condition-only registration, or `TQ.contains` here.
 

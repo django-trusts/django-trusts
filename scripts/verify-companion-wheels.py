@@ -24,8 +24,8 @@ if str(_SCRIPTS) not in sys.path:
 from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
-# Exact Zero #27 Stage B test-only merge SHA.
-ZERO_HEAD = '7ff4e14686b7b443f36392c5142c165ec45071ff'
+# Exact Zero #28 six-name compatibility squash-merge SHA.
+ZERO_HEAD = '18e87a63ff5079298e1ee330b888b4ff86551e1f'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
