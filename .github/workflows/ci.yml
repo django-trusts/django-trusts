@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero #142 Z-convert merge. Stage B pairs against this SHA;
-  # do not revert to a pre-convert or pre-merge Zero pin.
-  COMPANION_ZERO_SHA: bceb0241b482fdc4f31dd72c7600c52eeb4e6cff
+  # Exact Zero #27 Stage B test-only merge SHA. Stage B pairs against
+  # this SHA; do not revert to a pre-convert or pre-#27 Zero pin.
+  COMPANION_ZERO_SHA: 7ff4e14686b7b443f36392c5142c165ec45071ff
 
 jobs:
   tests:
