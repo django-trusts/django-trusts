@@ -17,18 +17,17 @@ from django.core import checks as django_checks
 
 from trusts.conditions import (
     PermissionConditionError,
-    legacy_permission_callbacks_allowed,
+    leftover_legacy_callback_setting_enabled,
     validate_expression,
 )
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
-CHECK_ID_LEGACY_CALLBACK = 'trusts.E002'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'
-CHECK_ID_LEGACY_CALLBACK_WARNING = 'trusts.W001'
+CHECK_ID_REMOVED_LEGACY_CALLBACK_SETTING = 'trusts.E007'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -80,33 +79,15 @@ def _messages_for_expr(model, cond_code, expr):
     return []
 
 
-def _messages_for_callable(model, cond_code):
-    label = _model_label(model)
-    if legacy_permission_callbacks_allowed():
-        return [django_checks.Warning(
-            'Callable permission condition %r on %s is a deprecated '
-            'object-only escape hatch. Rewrite it as an Expr from '
-            'condition_refs() for queryable policy. ContentQuerySet.permitted() '
-            'still refuses callables.' % (cond_code, label),
-            hint=(
-                'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is True, so '
-                'has_perm() may invoke this callback with real values. '
-                'Rewrite the condition as an Expr to drop this warning.'
-            ),
-            obj=model,
-            id=CHECK_ID_LEGACY_CALLBACK_WARNING,
-        )]
+def leftover_legacy_callback_setting_messages():
+    if not leftover_legacy_callback_setting_enabled():
+        return []
     return [django_checks.Error(
-        'Callable permission condition %r on %s is disabled. Set '
-        'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True to keep the '
-        'object-only has_perm path, or rewrite it as an Expr from '
-        'condition_refs().' % (cond_code, label),
-        hint=(
-            'Enabling TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is the only '
-            'way to run the callback. ' + _SILENCE_DOES_NOT_ENABLE_HINT
-        ),
-        obj=model,
-        id=CHECK_ID_LEGACY_CALLBACK,
+        'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is set. Callable '
+        'permission conditions are registration-time builders only; '
+        'this setting does not enable runtime callbacks. Remove it.',
+        hint=_SILENCE_DOES_NOT_ENABLE_HINT,
+        id=CHECK_ID_REMOVED_LEGACY_CALLBACK_SETTING,
     )]
 
 
@@ -365,8 +346,6 @@ def permission_condition_check_messages(entries):
     for model, cond_code, record in entries:
         if getattr(record, 'expr', None) is not None:
             messages.extend(_messages_for_expr(model, cond_code, record.expr))
-        elif getattr(record, 'func', None) is not None:
-            messages.extend(_messages_for_callable(model, cond_code))
     return messages
 
 
@@ -379,8 +358,10 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Callables are never inspected or invoked. No database queries.
     """
-    return permission_condition_check_messages(
-        iter_live_permission_conditions()
+    return leftover_legacy_callback_setting_messages() + (
+        permission_condition_check_messages(
+            iter_live_permission_conditions()
+        )
     )
 
 

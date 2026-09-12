@@ -248,6 +248,32 @@ Protect a view with the same permission:
 Object checks, permission enumeration, queryset filtering, and view protection
 all use the registered permission relationship.
 
+Named queryable conditions
+--------------------------
+
+A named ``:condition`` is a trusted registration-time builder. Core
+invokes it once with symbolic ``(u, p, o)``, stores only normalized IR,
+and never calls it during ``has_perm`` or authorized querysets.
+
+.. code-block:: python
+
+   handle = apps.get_app_config("documents").configured_backend()
+   handle.register_permission_condition(
+       Document,
+       "non_confidential",
+       lambda u, p, o: o.confidential != True,
+   )
+   handle.register_permission_condition(
+       Document,
+       "own",
+       lambda u, p, o: u == o.owner,
+   )
+
+   user.has_perm("documents.change_document:non_confidential", document)
+   Document.objects.authorized(
+       user, "documents.change_document:non_confidential",
+   )
+
 More expressive permission policies
 -----------------------------------
 

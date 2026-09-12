@@ -139,6 +139,27 @@ user.has_perm('myapp.change_document', document)
 Document.objects.authorized(user, change_permission)
 ```
 
+Named queryable conditions are registration-time builders. Core invokes
+the callable once with symbolic ``(u, p, o)``, stores only normalized
+IR, and never runs the callable during ``has_perm`` or
+``.authorized()``.
+
+```python
+handle = apps.get_app_config('myapp').configured_backend()
+handle.register_permission_condition(
+    Document,
+    'non_confidential',
+    lambda u, p, o: o.confidential != True,
+)
+handle.register_permission_condition(
+    Document,
+    'own',
+    lambda u, p, o: u == o.owner,
+)
+user.has_perm('myapp.change_document:non_confidential', document)
+Document.objects.authorized(user, 'myapp.change_document:non_confidential')
+```
+
 View guard for the same permission:
 
 ```python

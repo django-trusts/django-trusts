@@ -3220,4 +3220,92 @@ is unchanged (source-archive check, not an upgrade runner).
       `trusts.models`, backends, decorators, conditions, registry/query
       APIs, or `OrderedFold`.
 
+# Issue #142 Stage A: registration-time condition builders (1.0.0.dev3)
+
+This record covers
+[django-trusts#142](https://github.com/django-trusts/django-trusts/issues/142)
+Stage A only. Package version stays **1.0.0.dev3**. No model, field,
+table, migration-loader key, content type, permission row, stored
+authorization fact, package identity, or app label changes.
+
+## Decision
+
+`register_permission_condition(..., callable)` now means a trusted
+startup builder. Core invokes it once with symbolic `(u, p, o)`,
+normalizes constants into durable IR, and stores only that IR. The
+callable is not the policy record and is never invoked during
+`has_perm`, enumeration, or queryset filtering. A transitional prebuilt
+`Expr` is still accepted so unconverted Zero `Trust:own` Meta trees
+keep loading.
+
+`BackendHandle.register_permission_condition` is the application API.
+`freeze()` seals condition registration and raises before the builder
+runs. Invalid fields, real booleans, and unsupported Python fail at
+register. `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` no longer enables
+callbacks; if still True it is `trusts.E007`.
+
+Stage B (not this PR) removes public `Expr` / `condition_refs` imports
+and rejects prebuilt `Expr`. Zero/example conversion is a later paired
+pin.
+
+## No change to these public call sites
+
+- `User.has_perm` / `has_perms` / `get_*_permissions` signatures
+- Relation `register(...)` / `Along` / `OrderedFold`
+- `permission_required` inference (queued on #138)
+- Public `condition_refs` / `Expr` / `django_trusts` construction
+  exports (removed in Stage B)
+- Package version `1.0.0.dev3`
+
+## Behavior
+
+| | |
+| --- | --- |
+| Previous | `register_permission_condition` type-dispatch: `Expr` from `condition_refs()` is queryable IR; a callable is an object-only runtime predicate, never invoked at register, gated by `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`. Field errors wait for `trusts.E001` / runtime. `freeze()` does not seal conditions. Registration is `handle.registry.register_permission_condition`. |
+| New | A callable is a builder: invoked once, IR stored, callable discarded from the record. Transitional `Expr` still accepted. Field/type validation and constant normalization run at register (zero SQL). `handle.register_permission_condition(...)`. Frozen handles reject writes before invoke. Leftover callback setting is `trusts.E007` and enables nothing. |
+| Replacement | `handle.register_permission_condition(Model, 'code', lambda u, p, o: ...)`. |
+| Affected | Core tests #4/#16/#29/#142; Core `Ticket.meta_own` fixture. Zero production `Trust:own` remains a prebuilt `Expr` until Z-convert. No GH/Windows application callers. |
+| Authorization | Object evaluate and queryset compile use the same stored IR. No fallback to the bare grant. |
+| Rollout | Merge Stage A; keep current `COMPANION_ZERO_SHA`. Do not merge Stage B until Z-convert and example conversion heads are green. |
+
+```python
+# Previous
+u, p, o = condition_refs()
+handle.registry.register_permission_condition(Document, 'own', u == o.owner)
+
+# New
+handle.register_permission_condition(
+    Document, 'own', lambda u, p, o: u == o.owner,
+)
+```
+
+## Schema
+
+No change.
+
+## Out of scope
+
+- Stage B public-import removal
+- Zero / example conversion
+- `TQ.contains`
+- #138 `require_authorized`
+- #137 coverage resume
+- #131 relation `handle.register(...)`
+
+## Migration-bot checklist
+
+- [ ] Do not apply a new Trusts schema or data migration; none was added.
+- [ ] Search for `register_permission_condition(..., callable)` used as
+      a runtime `has_perm` predicate. Rewrite as a builder that returns
+      a V1 comparison, or wait for Stage B / Z-convert.
+- [ ] Retarget application registration to
+      `configured_backend().register_permission_condition`.
+- [ ] Remove `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` from settings.
+      Leaving it True is `trusts.E007` and does not enable callbacks.
+- [ ] Do not import-delete `condition_refs` / `Expr` yet (Stage B).
+- [ ] Confirm first-party builders/donation add zero queries.
+- [ ] Leave package version at `1.0.0.dev3`.
+- [ ] Do not start Zero/example conversion, Stage B, #138, or #137 in
+      this PR.
+
 

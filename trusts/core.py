@@ -2224,11 +2224,15 @@ class TrustsRegistry(object):
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
 
-        Ordinary registry method for AppConfig / module contribution.
-        Dispatch is by type: an ``Expr`` is queryable policy data; a
-        callable is the object-only escape hatch. Callables are never
-        invoked at registration. ``freeze()`` does not seal this method.
+        A callable is a registration-time builder. A transitional
+        prebuilt ``Expr`` is still accepted. ``freeze()`` seals this
+        method and raises before the builder is invoked.
         """
+        if self._frozen:
+            raise TrustsConfigurationError(
+                'Cannot register a permission condition on a frozen '
+                'TrustsRegistry.'
+            )
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
         )
@@ -2256,7 +2260,11 @@ class TrustsRegistry(object):
         )
 
     def freeze(self):
-        """Seal this instance against further ``register`` / ``register_strategy`` writes."""
+        """Seal this instance against further writes.
+
+        Seals ``register``, ``register_strategy``, and
+        ``register_permission_condition``.
+        """
         self._frozen = True
 
     @property
@@ -2526,6 +2534,12 @@ class BackendHandle:
     path: str
     registry: object
     compiler: object
+
+    def register_permission_condition(self, model, cond_code, condition):
+        """Register a named queryable condition without using ``.registry``."""
+        return self.registry.register_permission_condition(
+            model, cond_code, condition,
+        )
 
     @property
     def historical_fallback(self):

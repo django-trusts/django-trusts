@@ -1,10 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import Group, User
 
-from trusts.conditions import condition_refs
-
-_u, _p, _o = condition_refs()
-
 from django.conf import settings
 
 _ZERO_LISTED = any(
@@ -105,7 +101,7 @@ if Content is not None:
         class Meta:
             default_permissions = ('add', 'read', 'change', 'delete')
             permission_conditions = (
-                ('meta_own', _u == _o.owner),
+                ('meta_own', lambda u, p, o: u == o.owner),
             )
 
         def __str__(self):

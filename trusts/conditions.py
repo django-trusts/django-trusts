@@ -1,12 +1,15 @@
-"""Restricted declarative permission conditions (issue #4 V1).
+"""Restricted declarative permission conditions (issue #4 V1 / #142 A).
 
-Register an ``Expr`` tree built from ``condition_refs()`` (``u``, ``p``,
-``o``). That tree is policy data: ``has_perm`` evaluates it and
-``.permitted()`` compiles it to SQL. Django ``Q`` is one compiler
-target, not the canonical representation.
+Register a named condition as a **trusted startup builder** (lambda or
+``def``). Core invokes it once with symbolic ``(u, p, o)``, validates
+and normalizes the returned predicate, and stores only IR. The callable
+is not the policy record and is never invoked during ``has_perm``,
+enumeration, or queryset filtering. A transitional prebuilt ``Expr`` is
+still accepted in Stage A so unconverted Zero Meta trees keep loading.
 
-A callable argument is the legacy object-only predicate. Registration
-dispatches by type and never invokes a callable with symbolic refs.
+Builders are trusted configuration, not a sandbox: Core does not parse
+AST/bytecode and cannot stop a named function from querying or doing
+I/O. Core-owned registration itself adds zero SQL.
 
 Permission-condition records live on an instantiable
 ``ConditionRegistry`` (also exposed on each ``TrustsRegistry``). There
@@ -15,12 +18,10 @@ records so owners cannot share or overwrite each other.
 
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
-Python properties); literal constants; ``==`` / ``!=``; nested ``&`` /
-``|``. Operand types must match without Django field coercion:
-``CharField`` compares to ``str``, relations compare to model instances
-(not raw primary keys). Missing attribute names fail closed; they are
-not treated as ``NULL``. Python ``and`` / ``or`` / ``not`` and chained
-comparisons cannot be overloaded and raise
+Python properties); normalized constants; ``==`` / ``!=``; nested ``&``
+/ ``|``. Operand types must match without Django field coercion.
+Missing attribute names fail closed at registration. Python ``and`` /
+``or`` / ``not`` and chained comparisons raise
 ``PermissionConditionBooleanError``.
 """
 
@@ -104,12 +105,11 @@ def permission_condition_code(perm):
     return perm.split(':', 1)[1]
 
 
-def legacy_permission_callbacks_allowed():
-    """True only when ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is set.
+def leftover_legacy_callback_setting_enabled():
+    """True when the removed callback setting is still set.
 
-    Read at call time so ``override_settings`` works. Missing or False
-    means registered callables are a system-check error and runtime
-    fail-closed (the callback is never invoked).
+    The setting never enables runtime callbacks. System checks report it
+    as ``trusts.E007``. Read at call time so ``override_settings`` works.
     """
     from django.conf import settings as django_settings
 
@@ -266,11 +266,56 @@ class Ref(Expr):
         return '%s.%s' % (name, '.'.join(self.path))
 
 
+class ModelIdentity(object):
+    """Durable saved-model constant: concrete model identity plus PK.
+
+    Not a live instance. Equality compares ``(app_label, model_name, pk)``
+    so later mutation of a captured Python object cannot change policy.
+    """
+
+    __slots__ = ('app_label', 'model_name', 'pk')
+
+    def __init__(self, app_label, model_name, pk):
+        self.app_label = app_label
+        self.model_name = model_name
+        self.pk = pk
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if isinstance(other, ModelIdentity):
+            return (
+                self.app_label, self.model_name, self.pk
+            ) == (other.app_label, other.model_name, other.pk)
+        if isinstance(other, Model):
+            meta = other._meta.concrete_model._meta
+            return (
+                self.app_label, self.model_name, self.pk
+            ) == (meta.app_label, meta.model_name, other.pk)
+        return False
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash((self.app_label, self.model_name, self.pk))
+
+    def __repr__(self):
+        return 'ModelIdentity(%s.%s, pk=%r)' % (
+            self.app_label, self.model_name, self.pk,
+        )
+
+
 class Const(Expr):
     def __init__(self, value):
         self.value = value
 
     def to_tuple(self):
+        if isinstance(self.value, ModelIdentity):
+            return (
+                'const',
+                ('model', self.value.app_label, self.value.model_name, self.value.pk),
+            )
         return ('const', self.value)
 
     def __repr__(self):
@@ -348,13 +393,103 @@ def is_predicate(node):
     return isinstance(node, (Eq, Ne, And, Or))
 
 
+_IMMUTABLE_EXTRA = None
+
+
+def _immutable_extra_types():
+    global _IMMUTABLE_EXTRA
+    if _IMMUTABLE_EXTRA is None:
+        from datetime import date, datetime, time, timedelta
+        from decimal import Decimal
+        from uuid import UUID
+
+        _IMMUTABLE_EXTRA = (Decimal, UUID, datetime, date, time, timedelta)
+    return _IMMUTABLE_EXTRA
+
+
+def _normalize_const_value(value):
+    """Copy an allowed constant into durable IR, or raise.
+
+    Scalars are stored by value. A saved model instance becomes
+    ``ModelIdentity``. Mutable, lazy, request, queryset, and unsaved
+    captures are rejected so later Python mutation cannot change policy.
+    """
+    if isinstance(value, ModelIdentity):
+        return value
+    if isinstance(value, _LITERAL_TYPES):
+        return value
+    if isinstance(value, _immutable_extra_types()):
+        return value
+    if isinstance(value, Model):
+        adding = getattr(getattr(value, '_state', None), 'adding', True)
+        if adding or value.pk is None:
+            raise PermissionConditionError(
+                'Unsaved model instance cannot be a permission-condition '
+                'constant; save it and register the identity (model + pk).'
+            )
+        meta = value._meta.concrete_model._meta
+        return ModelIdentity(meta.app_label, meta.model_name, value.pk)
+
+    from django.db.models.manager import BaseManager
+    from django.db.models.query import QuerySet
+    from django.http import HttpRequest
+    from django.utils.functional import LazyObject, Promise
+
+    if isinstance(value, (list, dict, set, bytearray)):
+        raise PermissionConditionError(
+            'Mutable container %s cannot be a permission-condition '
+            'constant; snapshot an immutable scalar or saved model.'
+            % type(value).__name__
+        )
+    if isinstance(value, (QuerySet, BaseManager)):
+        raise PermissionConditionError(
+            'QuerySet/Manager captures cannot be permission-condition '
+            'constants.'
+        )
+    if isinstance(value, (HttpRequest, LazyObject, Promise)):
+        raise PermissionConditionError(
+            'Lazy or request objects cannot be permission-condition '
+            'constants.'
+        )
+    if callable(value) and not isinstance(value, type):
+        raise PermissionConditionError(
+            'Callables cannot be permission-condition constants.'
+        )
+    raise PermissionConditionError(
+        'Constant of type %s is not a durable permission-condition value.'
+        % type(value).__name__
+    )
+
+
+def normalize_expression(node):
+    """Rewrite ``Const`` values to durable IR; keep identical nodes when possible."""
+    if isinstance(node, Const):
+        normalized = _normalize_const_value(node.value)
+        if normalized is node.value:
+            return node
+        return Const(normalized)
+    if isinstance(node, (Eq, Ne, And, Or)):
+        left = normalize_expression(node.left)
+        right = normalize_expression(node.right)
+        if left is node.left and right is node.right:
+            return node
+        return type(node)(left, right)
+    if isinstance(node, Ref):
+        return node
+    return node
+
+
 def as_node(value):
     if isinstance(value, Expr):
         return value
+    if isinstance(value, ModelIdentity):
+        return Const(value)
     if isinstance(value, _LITERAL_TYPES):
+        return Const(_normalize_const_value(value))
+    if isinstance(value, _immutable_extra_types()):
         return Const(value)
     if isinstance(value, Model):
-        return Const(value)
+        return Const(_normalize_const_value(value))
     _unsupported('Constant of type %s' % type(value).__name__)
 
 
@@ -552,6 +687,11 @@ def _spec_from_field(field):
 def _spec_from_const(value):
     if value is None:
         return ('null', None, 'None')
+    if isinstance(value, ModelIdentity):
+        from django.apps import apps as django_apps
+
+        model = django_apps.get_model(value.app_label, value.model_name)
+        return ('instance', model, '%s.%s' % (value.app_label, value.model_name))
     if isinstance(value, Model):
         return ('instance', value.__class__, value._meta.label)
     if isinstance(value, bool):
@@ -731,6 +871,15 @@ def _resolve_runtime(node, user, perm, obj, model):
     )
 
 
+def _values_equal(left, right):
+    """Equality that honors ``ModelIdentity`` from either side."""
+    if isinstance(left, ModelIdentity):
+        return left == right
+    if isinstance(right, ModelIdentity):
+        return right == left
+    return left == right
+
+
 def evaluate_expression(node, user, perm, obj, model=None):
     """Evaluate a captured expression against a real principal/permission/object."""
     if model is None:
@@ -744,12 +893,14 @@ def evaluate_expression(node, user, perm, obj, model=None):
             evaluate_expression(node.right, user, perm, obj, model)
         )
     if isinstance(node, Eq):
-        return _resolve_runtime(node.left, user, perm, obj, model) == (
-            _resolve_runtime(node.right, user, perm, obj, model)
+        return _values_equal(
+            _resolve_runtime(node.left, user, perm, obj, model),
+            _resolve_runtime(node.right, user, perm, obj, model),
         )
     if isinstance(node, Ne):
-        return _resolve_runtime(node.left, user, perm, obj, model) != (
-            _resolve_runtime(node.right, user, perm, obj, model)
+        return not _values_equal(
+            _resolve_runtime(node.left, user, perm, obj, model),
+            _resolve_runtime(node.right, user, perm, obj, model),
         )
     raise PermissionConditionError(
         'Permission condition did not produce a comparison expression.'
@@ -795,7 +946,14 @@ def _always_false():
     return Q(pk__in=())
 
 
+def _sql_const(value):
+    if isinstance(value, ModelIdentity):
+        return value.pk
+    return value
+
+
 def _q_eq_lookup(lookup, value):
+    value = _sql_const(value)
     if value is None:
         return Q(**{'%s__isnull' % lookup: True})
     return Q(**{lookup: value})
@@ -803,6 +961,7 @@ def _q_eq_lookup(lookup, value):
 
 def _q_ne_lookup(lookup, value):
     # Match Python: ``None != x`` is True when ``x is not None``.
+    value = _sql_const(value)
     if value is None:
         return Q(**{'%s__isnull' % lookup: False})
     return Q(**{'%s__isnull' % lookup: True}) | ~Q(**{lookup: value})
@@ -837,7 +996,9 @@ def _compile_comparison(node, model, user, perm):
     right = _classify(node.right, model, user, perm)
     equal = isinstance(node, Eq)
     if isinstance(left, _Bound) and isinstance(right, _Bound):
-        matches = (left.value == right.value) if equal else (left.value != right.value)
+        matches = _values_equal(left.value, right.value)
+        if not equal:
+            matches = not matches
         return _always_true() if matches else _always_false()
     if isinstance(left, _Unbound) and isinstance(right, _Bound):
         lookup, value = left.lookup, right.value
@@ -912,19 +1073,44 @@ def _unknown_condition_error(model, cond_code):
 
 
 class ConditionRecord(object):
-    """Registered condition: an ``Expr`` tree or a legacy callable.
+    """Registered condition: normalized ``Expr`` IR only.
 
     ``model`` is retained so a registration can be validated by the
     system check after all apps have loaded. This record is
-    implementation-neutral: it does not name Zero nouns.
+    implementation-neutral: it does not name Zero nouns. The builder
+    callable is never stored.
     """
 
-    __slots__ = ('expr', 'func', 'model')
+    __slots__ = ('expr', 'model')
 
-    def __init__(self, expr=None, func=None, model=None):
+    def __init__(self, expr=None, model=None):
         self.expr = expr
-        self.func = func
         self.model = model
+
+
+def _invoke_condition_builder(builder):
+    """Invoke a trusted registration-time builder exactly once."""
+    u, p, o = condition_refs()
+    try:
+        expr = builder(u, p, o)
+    except PermissionConditionError:
+        raise
+    except TypeError as exc:
+        raise PermissionConditionError(
+            'Permission condition builder must accept symbolic (u, p, o): %s'
+            % exc
+        ) from exc
+    except Exception as exc:
+        raise PermissionConditionError(
+            'Permission condition builder failed: %s' % exc
+        ) from exc
+    if isinstance(expr, bool) or not isinstance(expr, Expr):
+        raise PermissionConditionError(
+            'Permission condition builder must return a V1 comparison '
+            '(==, != combined with & / |), not %r.'
+            % (type(expr).__name__,)
+        )
+    return expr
 
 
 class ConditionRegistry(object):
@@ -935,9 +1121,9 @@ class ConditionRegistry(object):
     condition code on *this* instance, so two registries never share or
     overwrite each other.
 
-    Registration dispatches by type and never invokes a callable.
-    Model-aware semantic validation is a system check, not an exception
-    from ``register_permission_condition``.
+    A callable is a registration-time builder: invoked once with
+    symbolic refs, then discarded. A transitional prebuilt ``Expr`` is
+    still accepted. Field/type validation runs here (zero SQL).
     """
 
     def __init__(self):
@@ -946,31 +1132,31 @@ class ConditionRegistry(object):
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model``.
 
-        Pass an ``Expr`` built from ``condition_refs()`` to opt into V1
-        compile/evaluate. Pass a callable to keep the historical
-        object-only ``has_perm`` path. Dispatch is by type: callables
-        are never invoked with symbolic ``Ref`` arguments.
-
-        Construction-time shape errors (bare non-predicate ``Expr``, a
-        value that is neither ``Expr`` nor callable) still raise here.
-        Model-aware semantic validation is reported by the registered
-        Django system check as ``CheckMessage``s, not raised from this
-        method, so ``SILENCED_SYSTEM_CHECKS`` can filter the diagnostic.
+        Pass a builder ``callable(u, p, o)`` or, in Stage A, a prebuilt
+        ``Expr``. The builder is invoked exactly once. The stored record
+        is normalized IR only.
         """
         if isinstance(condition, Expr):
-            if not is_predicate(condition):
-                raise PermissionConditionError(
-                    'Registered expression must be a V1 comparison '
-                    '(==, != combined with & / |), not %r.' % (condition,)
-                )
-            record = ConditionRecord(expr=condition, model=model)
+            expr = condition
         elif callable(condition):
-            record = ConditionRecord(func=condition, model=model)
+            expr = _invoke_condition_builder(condition)
         else:
             raise TypeError(
-                'register_permission_condition expected an Expr or a '
-                'callable, got %r.' % (type(condition).__name__,)
+                'register_permission_condition expected a builder callable '
+                'or a transitional Expr, got %r.'
+                % (type(condition).__name__,)
             )
+        if not is_predicate(expr):
+            raise PermissionConditionError(
+                'Registered expression must be a V1 comparison '
+                '(==, != combined with & / |), not %r.' % (expr,)
+            )
+        expr = normalize_expression(expr)
+        from django.apps import apps as django_apps
+
+        if getattr(model, '_meta', None) is not None and django_apps.models_ready:
+            validate_expression(expr, model)
+        record = ConditionRecord(expr=expr, model=model)
         self._records[(_condition_model_key(model), cond_code)] = record
         return record
 
@@ -990,9 +1176,8 @@ class ConditionRegistry(object):
     def compile_registered_condition_q(self, model, perm, user):
         """Compile a ``:condition`` suffix to ``Q``, or raise fail-closed.
 
-        Unregistered codes raise ``AttributeError``. Callables raise
-        ``PermissionConditionNotQueryable`` without being invoked.
-        Registered ``Expr`` trees that are not valid V1 fail closed.
+        Unregistered codes raise ``AttributeError``. Unbound records
+        raise ``PermissionConditionError``. Invalid stored IR fails closed.
         """
         cond = permission_condition_code(perm)
         record = self.get_permission_condition_record(model, cond)
@@ -1000,13 +1185,8 @@ class ConditionRegistry(object):
             raise _unknown_condition_error(model, cond)
         if record.expr is None:
             label = getattr(getattr(model, '_meta', None), 'label', model)
-            raise PermissionConditionNotQueryable(
-                'Queryable permission conditions do not support '
-                'condition %r on %s. Register an Expr from condition_refs() '
-                'to compile a V1 declarative expression. Callables remain '
-                'object-only via has_perm; queryset compilation refuses them '
-                'so the underlying grant cannot be returned without the '
-                'condition.' % (perm, label)
+            raise PermissionConditionError(
+                'Permission condition %r on %s is unbound.' % (perm, label)
             )
         grant = perm.split(':', 1)[0] if isinstance(perm, str) else perm
         return compile_expression_q(record.expr, model, user, grant)
@@ -1014,31 +1194,20 @@ class ConditionRegistry(object):
     def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
         """Evaluate one registered condition against a real object.
 
-        Unregistered codes raise ``AttributeError``. Callables are
-        invoked only when ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS``
-        is True; otherwise they fail closed without being called.
+        Unregistered codes raise ``AttributeError``. The stored IR is
+        evaluated; builders are never invoked here.
         """
         record = self.get_permission_condition_record(model, cond_code)
         if record is None:
             raise _unknown_condition_error(model, cond_code)
-        if record.expr is not None:
-            return evaluate_registered_expression(
-                record.expr, user, perm, obj, model=model,
-            )
-        if record.func is None:
+        if record.expr is None:
             raise PermissionConditionError(
                 'Permission condition %r on %s is unbound.'
                 % (cond_code, getattr(getattr(model, '_meta', None), 'label', model))
             )
-        if not legacy_permission_callbacks_allowed():
-            raise PermissionConditionError(
-                'Callable permission conditions are disabled. Set '
-                'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True to use '
-                'the object-only has_perm path, or register an Expr from '
-                'condition_refs(). Silencing trusts.E002 does not enable '
-                'the callback.'
-            )
-        return record.func(user, perm, obj)
+        return evaluate_registered_expression(
+            record.expr, user, perm, obj, model=model,
+        )
 
 
 from trusts.core import ConditionLookup  # noqa: E402
