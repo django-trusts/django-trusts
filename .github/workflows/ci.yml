@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero #142 Z-convert companion PR #26 head. Do not pair this
-  # Stage A core with the pre-convert Zero pin.
-  COMPANION_ZERO_SHA: fdd165d70a4c710c6dbc76e961e452a984d80636
+  # Exact Zero #142 Z-convert companion PR #26 head (rebased onto Zero tip
+  # dev). Do not pair this Stage A core with the pre-convert Zero pin.
+  COMPANION_ZERO_SHA: 3449268d8d091c56d6e8ad3ab98506a50247ddd0
 
 jobs:
   tests:
