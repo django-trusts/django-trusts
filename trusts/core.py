@@ -2226,7 +2226,8 @@ class TrustsRegistry(object):
 
         A callable is a registration-time builder. A frozen instance
         raises ``TrustsConfigurationError`` before the builder is
-        invoked. A prebuilt ``Expr`` is accepted transitionally.
+        invoked. A prebuilt ``Expr`` is rejected by the condition
+        store with ``TypeError`` before mutation.
         """
         if self._frozen:
             raise TrustsConfigurationError(
@@ -2531,14 +2532,15 @@ class BackendHandle:
     registry: object
     compiler: object
 
-    def register_permission_condition(self, model, code, builder_or_expr):
+    def register_permission_condition(self, model, code, builder):
         """Application API: register a named condition on this handle.
 
         Thin-forwards to the handle registry. A frozen/finalized handle
         raises ``TrustsConfigurationError`` before a builder is invoked.
+        A prebuilt ``Expr`` is not accepted.
         """
         return self.registry.register_permission_condition(
-            model, code, builder_or_expr,
+            model, code, builder,
         )
 
     @property

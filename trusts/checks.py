@@ -87,7 +87,7 @@ def _messages_for_obsolete_callback_setting():
         'permission callbacks are removed. The setting does not enable '
         'callbacks. Register a builder '
         '(handle.register_permission_condition(model, code, '
-        'lambda u, p, o: ...)) or a transitional Expr.',
+        'lambda u, p, o: ...)).',
         hint=(
             'Remove TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS from settings. '
             'It cannot restore object-only has_perm callbacks. '

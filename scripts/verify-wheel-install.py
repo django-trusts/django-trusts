@@ -83,7 +83,11 @@ def main() -> int:
         filter_authorized_scopes,
     )
     from trusts.query import AuthorizedManager, AuthorizedQuerySet
-    from django_trusts import TQ, condition_refs
+    from trusts.conditions import (
+        PermissionConditionError,
+        permission_condition_code,
+        permission_has_condition,
+    )
 
     trusts_file = Path(trusts.__file__).resolve()
     if checkout == trusts_file or checkout in trusts_file.parents:
@@ -185,8 +189,34 @@ def main() -> int:
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
     print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
-    print('TQ', TQ)
-    print('condition_refs', condition_refs)
+    print('permission_has_condition', permission_has_condition)
+    print('permission_condition_code', permission_condition_code)
+    print('PermissionConditionError', PermissionConditionError)
+    try:
+        from django_trusts import TQ  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        raise SystemExit('django_trusts still exports TQ')
+    try:
+        from django_trusts import condition_refs  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        raise SystemExit('django_trusts still exports condition_refs')
+    try:
+        from trusts.conditions import Expr  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        raise SystemExit('trusts.conditions still exports Expr')
+    try:
+        from trusts.conditions import condition_refs  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        raise SystemExit('trusts.conditions still exports condition_refs')
+    print('public construction imports fail')
     import importlib.util
 
     def _find_spec(name):
