@@ -297,16 +297,16 @@ a missing object produces 404 and an existing unauthorized object produces
 Object checks, permission enumeration, queryset filtering, and view protection
 consume the same normalized registrations.
 
-Named queryable conditions
---------------------------
+Named filters
+-------------
 
-A named filter, carried by the existing ``:condition`` permission suffix,
-further constrains an existing permission. Add its builder with
-``backend.add_named_filter``. Core invokes that callable exactly once
-with symbolic ``(u, p, o)`` refs, validates the returned comparison, and
-stores only the normalized predicate. The callable is not kept as policy
-and is never run during ``has_perm``, permission enumeration, or queryset
-filtering.
+A named filter further constrains an existing permission. Register its
+builder with ``backend.add_named_filter``. The backend invokes the builder
+exactly once with symbolic ``(u, p, o)`` references. Operations on those
+references construct a closed expression tree; Core validates and normalizes
+that result, stores only the immutable IR, and discards the callable. Core
+does not inspect the callable's Python source, and the callable never runs
+during ``has_perm``, permission enumeration, or queryset filtering.
 
 Builders are trusted startup code, like ``AppConfig.ready()``. Do not query,
 perform I/O, or read request state inside them. Core itself adds no SQL
@@ -314,7 +314,9 @@ during registration.
 
 The ``DocumentsConfig.ready()`` example above registers
 ``non_confidential`` against ``Document.confidential``. A ``lambda`` and
-an equivalent named function are accepted identically.
+an equivalent named function are accepted identically. Native object checks
+select one named filter with the existing ``:name`` suffix; the
+``authorization_required`` decorator accepts an explicit tuple of names.
 
 .. code-block:: python
 
@@ -340,11 +342,12 @@ the team receives access to content through another model. The registered user
 path can traverse those relationships without copying the resulting
 permissions into a separate user-object table.
 
-Conditions can further constrain a permission path. A condition may require
-the user and content to belong to the same organization, or require a
-requested operation to appear in a team's allowed operations. Conditions
-narrow an existing permission relationship; they cannot create permission by
-themselves.
+The ``condition=`` argument on ``register_relationship`` can further constrain
+that relationship branch. It may require the user and content to belong to the
+same organization, or require a requested operation to appear in a team's
+allowed operations. A relationship condition is always applied to its branch;
+a named filter is selected by an authorization caller. Neither can create
+permission by itself.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either complete
