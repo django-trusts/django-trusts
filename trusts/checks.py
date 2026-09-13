@@ -396,22 +396,22 @@ def _authorization_check_handles():
 
 @django_checks.register()
 def check_authorization_required_conditions(app_configs, **kwargs):
-    """Report incomplete ``authorization_required`` name sets.
+    """Report unsupported or incomplete ``authorization_required`` guards.
 
-    Uses the same per-participating-backend completeness rule as first
-    use: only handles whose applicable plan terminates on
-    ``auth.Permission`` participate, and one of those backends must
-    register every selected name. A global union of names across
-    registries is not enough. Guards whose model app is not installed
-    are skipped so a host that does not load that app (pair Zero,
-    isolated Apps) is not failed by imported fixtures. Silencing
-    ``trusts.E008`` hides only the diagnostic; first use still fails
-    closed and never falls back to the unconditioned grant. Zero SQL.
+    Uses the same zero-SQL preflight as first use: at least one
+    applicable ``auth.Permission`` plan is required, and when names
+    are selected one participating backend must own the complete
+    queryable tuple. A global union of names across registries is
+    not enough. Guards whose model app is not installed are skipped
+    so a host that does not load that app (pair Zero, isolated Apps)
+    is not failed by imported fixtures. Silencing ``trusts.E008``
+    hides only the diagnostic; first use still fails closed before
+    the superuser shortcut and never falls back to an unconditioned
+    grant.
     """
     from django.apps import apps as django_apps
     from trusts.decorators import (
-        _auth_permission_plan_for_model,
-        _backend_has_selected_conditions,
+        _authorization_preflight_state,
         _declared_authorization_guards,
     )
 
@@ -419,8 +419,6 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
-        if not conditions:
-            continue
         app_label = getattr(getattr(model, '_meta', None), 'app_label', None)
         try:
             django_apps.get_app_config(app_label)
@@ -430,14 +428,24 @@ def check_authorization_required_conditions(app_configs, **kwargs):
         if key in seen:
             continue
         seen.add(key)
-        complete = False
-        for handle in handles:
-            if _auth_permission_plan_for_model(handle, model) is None:
-                continue
-            if _backend_has_selected_conditions(handle, model, conditions):
-                complete = True
-                break
-        if complete:
+        participating, complete = _authorization_preflight_state(
+            handles, model, conditions,
+        )
+        if participating and complete:
+            continue
+        if not participating:
+            messages.append(django_checks.Error(
+                'authorization_required has no applicable auth.Permission '
+                'plan for %s.' % _model_label(model),
+                hint=(
+                    'Register an auth.Permission plan for this model on a '
+                    'configured Trusts backend. Silencing trusts.E008 '
+                    'suppresses only this diagnostic; first use still '
+                    'fails closed.'
+                ),
+                obj=model,
+                id=CHECK_ID_AUTHORIZATION_REQUIRED,
+            ))
             continue
         messages.append(django_checks.Error(
             'authorization_required conditions %r are not registered '

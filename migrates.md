@@ -103,7 +103,11 @@ is omitted; its unconditioned grant does not participate. Backend order
 does not change the result. Selected names that no participating auth.Permission backend
 registers together still fail closed (`TrustsConfigurationError` /
 `trusts.E008`). E008 uses that same per-backend completeness rule;
-a global union of names across registries is not enough.
+a global union of names across registries is not enough. A model
+with no applicable auth.Permission plan also fails closed, including
+when no names are selected. That structural preflight runs with zero
+SQL before the active-superuser existence shortcut; superusers bypass
+only valid grants and conditions.
 
 Migration-bot checklist:
 

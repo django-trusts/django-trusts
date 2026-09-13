@@ -220,9 +220,23 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         def _bad(request, pk):
             return 'no'
 
-        with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                _bad(_request(self.alice), pk=self.open_doc.pk)
+        for user in (self.alice, self.superuser):
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError):
+                    _bad(_request(user), pk=self.open_doc.pk)
+
+    def test_unsupported_model_fails_closed_without_sql(self):
+        entry = (DocumentGrant, 'myapp.change_documentgrant', ())
+        self.addCleanup(self._forget_guard, entry)
+
+        @authorization_required(DocumentGrant, 'myapp.change_documentgrant')
+        def _unsupported(request, pk):
+            return 'no'
+
+        for user in (self.alice, self.superuser):
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError):
+                    _unsupported(_request(user), pk=1)
 
     def test_system_check_reports_unknown_guard_condition(self):
         entry = (Document, 'myapp.change_document', ('missing_check_138',))
@@ -237,6 +251,23 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
             message for message in run_checks()
             if getattr(message, 'id', None) == 'trusts.E008'
             and 'missing_check_138' in message.msg
+        ]
+        self.assertTrue(messages)
+        self.assertIsInstance(messages[0], Error)
+
+    def test_system_check_reports_unsupported_model(self):
+        entry = (DocumentGrant, 'myapp.change_documentgrant', ())
+        self.addCleanup(self._forget_guard, entry)
+
+        @authorization_required(DocumentGrant, 'myapp.change_documentgrant')
+        def _unused(request, pk):
+            return 'no'
+
+        self.assertIn(entry, _declared_authorization_guards)
+        messages = [
+            message for message in run_checks()
+            if getattr(message, 'id', None) == 'trusts.E008'
+            and 'DocumentGrant' in message.msg
         ]
         self.assertTrue(messages)
         self.assertIsInstance(messages[0], Error)
@@ -355,6 +386,9 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         User = get_user_model()
         self.alice = User.objects.create_user(username='alice-138b', password='x')
         self.bob = User.objects.create_user(username='bob-138b', password='x')
+        self.superuser = User.objects.create_superuser(
+            username='root-138b', password='x', email='rootb@example.com',
+        )
         self.change = Permission.objects.get_or_create(
             content_type=ContentType.objects.get_for_model(Document),
             codename='change_document',
@@ -492,13 +526,15 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
             messages = self._e008_messages('split_a_138', 'split_b_138')
             self.assertTrue(messages)
             self.assertIsInstance(messages[0], Error)
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    _split(_request(self.alice), pk=self.open_doc.pk)
-            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
+            for user in (self.alice, self.superuser):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
-                        _split(_request(self.alice), pk=self.open_doc.pk)
+                        _split(_request(user), pk=self.open_doc.pk)
+            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
+                for user in (self.alice, self.superuser):
+                    with self.assertNumQueries(0):
+                        with self.assertRaises(TrustsConfigurationError):
+                            _split(_request(user), pk=self.open_doc.pk)
 
     def test_e008_name_only_on_incompatible_permission_terminal(self):
         primary = _document_backend()
@@ -526,10 +562,12 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
             messages = self._e008_messages('only_other_138')
             self.assertTrue(messages)
             self.assertIsInstance(messages[0], Error)
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    _other(_request(self.alice), pk=self.open_doc.pk)
-            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
+            for user in (self.alice, self.superuser):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
-                        _other(_request(self.alice), pk=self.open_doc.pk)
+                        _other(_request(user), pk=self.open_doc.pk)
+            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
+                for user in (self.alice, self.superuser):
+                    with self.assertNumQueries(0):
+                        with self.assertRaises(TrustsConfigurationError):
+                            _other(_request(user), pk=self.open_doc.pk)

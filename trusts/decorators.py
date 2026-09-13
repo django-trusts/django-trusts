@@ -376,6 +376,43 @@ def _backend_has_selected_conditions(handle, model, conditions):
     return True
 
 
+def _authorization_preflight_state(handles, model, conditions):
+    """Return ``(participating, complete)`` with zero SQL.
+
+    ``participating`` is True when at least one handle has an applicable
+    ``auth.Permission`` plan for ``model``. ``complete`` is True when one
+    of those backends also owns every selected name as a queryable
+    condition (the same rule as ``trusts.E008``). The active-superuser
+    existence shortcut must not run until this returns a complete pair.
+    """
+    participating = False
+    for handle in handles:
+        if _auth_permission_plan_for_model(handle, model) is None:
+            continue
+        participating = True
+        if _backend_has_selected_conditions(handle, model, conditions):
+            return True, True
+    return participating, False
+
+
+def _assert_authorization_preflight(handles, model, conditions):
+    """Fail closed on unsupported or incomplete guard configuration."""
+    participating, complete = _authorization_preflight_state(
+        handles, model, conditions,
+    )
+    if participating and complete:
+        return
+    if not participating:
+        raise TrustsConfigurationError(
+            'authorization_required has no applicable auth.Permission '
+            'plan for %s.' % (model._meta.label,)
+        )
+    raise TrustsConfigurationError(
+        'authorization_required condition %r is not registered on %s.'
+        % (conditions[0], model._meta.label)
+    )
+
+
 def _overlay_for_backend(handle, model, permission, conditions, user):
     """Compose this backend's selected names, or None if any name is missing."""
     lookup = getattr(handle.registry, 'condition_lookup', None)
@@ -457,21 +494,24 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
     if not is_superuser and not is_active_principal(user):
         raise PermissionDenied
 
+    if not django_apps.ready:
+        raise TrustsConfigurationError(
+            'authorization_required cannot authorize before Django apps '
+            'are ready.'
+        )
+    handles = configured_implementation_handles()
+    _assert_authorization_preflight(handles, model, conditions)
+
     candidates = model._default_manager.filter(pk=pk)
     if is_superuser:
         if not candidates.exists():
             raise Http404
         return
 
-    if not django_apps.ready:
-        raise TrustsConfigurationError(
-            'authorization_required cannot authorize before Django apps '
-            'are ready.'
-        )
     app_label, codename = permission.split('.', 1)
     binding = _permission_binding(model, app_label, codename)
     granted_q = _authorization_grant_q(
-        configured_implementation_handles(),
+        handles,
         candidates,
         user,
         model,
@@ -494,8 +534,14 @@ def authorization_required(model, permission, conditions=()):
     """Trusts-only view guard: explicit model, pk URL kwarg, optional names.
 
     Candidate identity is only ``view_kwargs["pk"]`` bound to
-    ``model._meta.pk``. Only applicable plans whose permission terminal
-    is ``django.contrib.auth.models.Permission`` participate. Each of
+    ``model._meta.pk``. Structural configuration is checked with zero
+    SQL before any candidate query: at least one applicable
+    ``auth.Permission`` plan is required, and selected names must be
+    owned together by one participating backend. Active superusers
+    then take one existence query and bypass grants and conditions;
+    invalid configuration never reaches that shortcut. Only applicable
+    plans whose permission terminal is
+    ``django.contrib.auth.models.Permission`` participate. Each of
     those backends composes its own grant with its own selected names
     before the backends are OR'd; backend order does not change the
     result. Does not use Django backend OR, ``user.has_perm``, or the
