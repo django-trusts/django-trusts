@@ -85,9 +85,10 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('.registry.register_strategy(', text)
         self.assertIn('Along(', text)
         self.assertIn('OrderedFold(', text)
+        self.assertIn('register_strategy(', text)
         self.assertIn('register_strategy(OrderedFold', text)
         self.assertIn('handle.register(DocumentGrant', text)
-        self.assertIn('handle.register_strategy(Ace, OrderedFold(', text)
+        self.assertIn('handle.register(Ace, strategy=OrderedFold(', text)
         self.assertIn('## Archaeology', text)
         self.assertIn(
             'https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md',

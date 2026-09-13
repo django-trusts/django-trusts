@@ -1,9 +1,9 @@
-"""#131 C1 / C1-fold: BackendHandle public AnyPath and OrderedFold APIs.
+"""#131 C1 / C-unify: BackendHandle public AnyPath and OrderedFold APIs.
 
 Handle-bound Django ``__`` paths, string condition leaves,
-``along=(path, bound)``, and ``register_strategy(source_model,
-OrderedFold(...))``. ``Ref`` input is TypeError. Freeze raises before
-path resolution. Dual handles stay isolated. Internal
+``along=(path, bound)``, and ``register(source_model,
+strategy=OrderedFold(...))``. ``Ref`` input is TypeError. Freeze
+raises before path resolution. Dual handles stay isolated. Internal
 ``TrustsRegistry.register(Ref)`` and ``register_strategy(OrderedFold)``
 remain for compiler tests.
 """
@@ -51,12 +51,12 @@ def _handle(registry=None, path='tests.core.handle-a'):
 
 
 class HandleRegisterSurfaceTest(SimpleTestCase):
-    def test_register_and_register_strategy_are_handle_methods(self):
+    def test_register_is_the_public_donation_verb(self):
         handle = _handle()
         self.assertTrue(hasattr(BackendHandle, 'register'))
-        self.assertTrue(hasattr(BackendHandle, 'register_strategy'))
+        self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
         self.assertTrue(hasattr(handle, 'register'))
-        self.assertTrue(hasattr(handle, 'register_strategy'))
+        self.assertFalse(hasattr(handle, 'register_strategy'))
         self.assertTrue(hasattr(handle.registry, 'register'))
         self.assertTrue(hasattr(handle.registry, 'register_strategy'))
 
@@ -340,7 +340,31 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         handle = _handle()
         strategy = _public_direct_fold(Ace, Permission, Document)
         with self.assertRaises(TypeError):
-            handle.register_strategy(strategy)
+            handle.register(strategy=strategy)
+        self.assertEqual(handle.registry.strategies, ())
+
+    def test_anypath_and_strategy_are_mutually_exclusive(self):
+        Permission, Document, Ace = _direct_models()
+        handle = _handle()
+        strategy = _public_direct_fold(Ace, Permission, Document)
+        with self.assertRaises(TypeError):
+            handle.register(
+                Ace,
+                user='user',
+                permission='permission',
+                content='document',
+                strategy=strategy,
+            )
+        with self.assertRaises(TypeError):
+            handle.register(Ace, along=('document', 8), strategy=strategy)
+        self.assertEqual(handle.registry.strategies, ())
+        self.assertEqual(handle.registry.records, ())
+
+    def test_incomplete_anypath_is_type_error(self):
+        handle = _handle()
+        with self.assertRaises(TypeError):
+            handle.register(DocumentGrant, user='user')
+        self.assertEqual(handle.registry.records, ())
         self.assertEqual(handle.registry.strategies, ())
 
     def test_string_strategy_matches_internal_ref_record(self):
@@ -348,8 +372,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         via_ref = TrustsRegistry()
         expected = _register_direct(via_ref, Ace, Permission, Document)
         handle = _handle()
-        compiled = handle.register_strategy(
-            Ace, _public_direct_fold(Ace, Permission, Document),
+        compiled = handle.register(Ace, strategy=_public_direct_fold(Ace, Permission, Document),
         )
         self.assertEqual(compiled, expected)
         self.assertIs(compiled.content_model, Document)
@@ -364,11 +387,10 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         doc = Ref(Document)
         user = Ref(get_user_model())
         with self.assertRaises(TypeError):
-            handle.register_strategy(
-                ace, _public_direct_fold(Ace, Permission, Document),
+            handle.register(ace, strategy=_public_direct_fold(Ace, Permission, Document),
             )
         with self.assertRaises(TypeError):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content=doc,
                 descriptor='',
                 order='ace_order',
@@ -383,7 +405,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
                 domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
             ))
         with self.assertRaises(TypeError):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='document',
                 descriptor='',
                 source=ace,
@@ -400,7 +422,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
                 domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
             ))
         with self.assertRaises(TypeError):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='document',
                 descriptor='',
                 order='ace_order',
@@ -415,7 +437,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
                 domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
             ))
         with self.assertRaises(TypeError):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='document',
                 descriptor='',
                 order='ace_order',
@@ -446,7 +468,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         ):
             with self.subTest(path=path):
                 with self.assertRaises(TrustsConfigurationError):
-                    handle.register_strategy(Ace, OrderedFold(
+                    handle.register(Ace, strategy=OrderedFold(
                         content=path,
                         descriptor='',
                         order='ace_order',
@@ -519,7 +541,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
             domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
         ))
         handle = _handle()
-        compiled = handle.register_strategy(Ace, OrderedFold(
+        compiled = handle.register(Ace, strategy=OrderedFold(
             content='node',
             descriptor='security_descriptor',
             order='ace_order',
@@ -546,7 +568,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         Permission, Document, Ace = _direct_models()
         handle = _handle()
         with self.assertRaises(TypeError):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='document',
                 descriptor='',
                 order='ace_order',
@@ -570,7 +592,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
                 app_label = 'trusts_tests'
 
         with self.assertRaises(TypeError):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='document',
                 descriptor='',
                 order='ace_order',
@@ -714,7 +736,7 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
             domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
         ))
         handle = _handle()
-        compiled = handle.register_strategy(Ace, OrderedFold(
+        compiled = handle.register(Ace, strategy=OrderedFold(
             content='wrapper__document',
             descriptor='',
             order='ace_order',
@@ -745,7 +767,7 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
         )
         handle = _handle()
         with self.assertRaises(TrustsConfigurationError):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='wrapper__document',
                 descriptor='',
                 order='ace_order',
@@ -770,7 +792,7 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
         )
         handle = _handle()
         with self.assertRaisesRegex(TrustsConfigurationError, r'member triad'):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='wrapper__document',
                 descriptor='',
                 order='ace_order',
@@ -786,7 +808,7 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
                 domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
             ))
         with self.assertRaisesRegex(TrustsConfigurationError, r'member triad'):
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='wrapper__document',
                 descriptor='',
                 order='ace_order',
@@ -829,9 +851,7 @@ class HandleRegisterStrategyFreezeTest(SimpleTestCase):
                         wraps=validate_ordered_fold,
                     ) as validate:
                         with self.assertRaises(TrustsConfigurationError) as ctx:
-                            handle.register_strategy(
-                                Ace,
-                                _public_direct_fold(Ace, Permission, Document),
+                            handle.register(Ace, strategy=_public_direct_fold(Ace, Permission, Document),
                             )
         self.assertIn('frozen', str(ctx.exception).lower())
         segments.assert_not_called()
@@ -846,7 +866,7 @@ class HandleRegisterStrategyFreezeTest(SimpleTestCase):
         handle = _handle(registry)
         registry.freeze()
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            handle.register_strategy(Ace, OrderedFold(
+            handle.register(Ace, strategy=OrderedFold(
                 content='',
                 descriptor='',
                 order='ace_order',
@@ -870,13 +890,11 @@ class HandleRegisterStrategyIsolationTest(SimpleTestCase):
         Permission, Document, Ace = _direct_models()
         left = _handle(path='tests.core.fold-left')
         right = _handle(path='tests.core.fold-right')
-        left.register_strategy(
-            Ace, _public_direct_fold(Ace, Permission, Document),
+        left.register(Ace, strategy=_public_direct_fold(Ace, Permission, Document),
         )
         self.assertEqual(len(left.registry.strategies), 1)
         self.assertEqual(right.registry.strategies, ())
-        right.register_strategy(
-            Ace, _public_direct_fold(Ace, Permission, Document),
+        right.register(Ace, strategy=_public_direct_fold(Ace, Permission, Document),
         )
         self.assertEqual(len(left.registry.strategies), 1)
         self.assertEqual(len(right.registry.strategies), 1)
