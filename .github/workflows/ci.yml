@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  # Exact Zero #28 six-name compatibility squash-merge SHA.
-  COMPANION_ZERO_SHA: 18e87a63ff5079298e1ee330b888b4ff86551e1f
+  # Exact Zero #151 Z2 squash-merge SHA (production-clean of _ir bind).
+  COMPANION_ZERO_SHA: 841004af49687c31c466ed03dbfd4f8ce9c7f153
 
 jobs:
   tests:
@@ -90,7 +90,7 @@ jobs:
       run: python -m tests.runtests tests.core.test_issue100
 
   pair-iia:
-    name: pair with Zero #37 STAGE 1
+    name: pair with Zero #151 Z2
     runs-on: ubuntu-latest
     env:
       ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero
@@ -105,7 +105,7 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Install core 1.0.0.dev3 then Zero STAGE 1
+    - name: Install core 1.0.0.dev3 then Zero Z2
       run: |
         python -m pip install --upgrade pip
         python -m pip install "Django>=6.1,<6.2" coverage
@@ -153,7 +153,7 @@ jobs:
         WORK="$(mktemp -d)"
         cd "$WORK"
         python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
-    - name: Companion C2 + Z1 wheels
+    - name: Companion Core + Zero Z2 wheels
       run: |
         python -m pip install build
         python -m build --wheel --outdir .deps/django-trusts-zero/dist .deps/django-trusts-zero
