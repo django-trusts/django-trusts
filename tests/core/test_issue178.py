@@ -3,9 +3,12 @@
 Public ``user.*permission*`` and mixin methods only. A registered
 Document relationship stays live. Enumeration comes from that same
 plan as ``has_perm``. The first configured Trusts path on an owner is
-the sole QuerySet coordinator. Cache compatibility is not a second
-authorization source. Private helpers and ``_trust_perm_cache``
-contents are not the assertion.
+the sole QuerySet coordinator. A repeated
+``AUTHENTICATION_BACKENDS`` string is two Django backend instances
+of that path, not a second registration; each instance is one
+evaluation. Cache compatibility is not a second authorization
+source. Private helpers and ``_trust_perm_cache`` contents are not
+the assertion.
 """
 
 from django.contrib.auth import get_user_model
@@ -167,6 +170,10 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
         finally:
             owner.trusts_backend_paths = saved
 
+        # Repeated path string → two Django instances, not two registrations.
+        # The one-SQL bound is per backend evaluation. Public dispatch
+        # naturally runs both Document instances (two SQL). That is not a
+        # Core contract failure.
         with override_settings(AUTHENTICATION_BACKENDS=(
             HOST_BACKEND, DOCUMENT_BACKEND, DOCUMENT_BACKEND,
         )):
@@ -178,7 +185,8 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
             with self.assertNumQueries(0):
                 self.assertEqual(self.host.get_all_permissions(self.alice, qs), set())
                 self.assertFalse(self.host.has_perm(self.alice, PERM, qs))
-            self.assertEqual(self.alice.get_all_permissions(qs), {PERM})
+            with self.assertNumQueries(2):
+                self.assertEqual(self.alice.get_all_permissions(qs), {PERM})
 
     def test_defensive_inputs_are_false_empty_with_zero_sql(self):
         self.alice.user_permissions.add(self.change)
