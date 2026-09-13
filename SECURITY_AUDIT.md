@@ -1,10 +1,8 @@
 # Security audit guide
 
-> **Living pre-1.0 map.** This draft describes the security boundary that
-> implementation and documentation changes are expected to preserve. Until the
-> API freezes, every material change should state whether it moves the
-> implementation closer to or farther from this document and should identify
-> any discrepancy rather than silently changing the meaning of the guide.
+This guide describes the security boundary that implementation and
+documentation changes are expected to preserve. It is an audit map, not a
+substitute for reviewing the application, its data, or its deployment.
 
 ## Security claim
 
@@ -94,16 +92,15 @@ the resolved comparison identity, duplicate-row behavior, and whether
 compiled from every segment; no implementation may validate the complete path
 and then query only its first hop.
 
-Public relationship paths may not be empty. Empty paths appear only in
+The `user`, `permission`, and `content` relationship path arguments may not be empty. Empty paths appear only in
 specifically documented OrderedFold/token positions where the model instance
 itself is the identity.
 
 ### Ordered allow and deny
 
 `register_ordered_fold(source_model, OrderedFold(...))` selects the
-OrderedFold evaluator. It is not merely an enum or a relationship traversal
-option. It has its own declaration, validation, stored plan, and PostgreSQL
-remaining-bits renderer.
+OrderedFold evaluator. It has its own declaration, validation, stored plan,
+and PostgreSQL remaining-bits renderer.
 
 The declaration identifies:
 
@@ -121,9 +118,10 @@ comparison identity. Malformed, unknown, null, negative, or out-of-domain state
 must fail closed according to the documented evaluator contract.
 
 At the current 1.0 boundary, one protected model in one configured backend may
-use relationship authorization or OrderedFold, not both. Do not describe
-mixed-family OR composition as shipped until its PostgreSQL result, projection
-parity, and fixed-query behavior are tested.
+use relationship authorization or OrderedFold, not both. This describes the
+shipping implementation, not a decision that mixed-family authorization can
+never be added. Do not describe mixed-family OR composition as supported until
+its PostgreSQL result, projection parity, and fixed-query behavior are tested.
 
 An OrderedFold deny rejects that evaluator's grant. It cannot revoke a grant
 returned by another configured Django authentication backend.
@@ -140,9 +138,11 @@ backend.add_named_filter(
 )
 ```
 
-The callable is trusted startup code. Core invokes it once with symbolic
-principal, permission, and object references, normalizes and validates the
-result, stores the immutable predicate, and discards the callable. Do not query,
+The callable is a trusted registration-time builder. The backend invokes it
+once with symbolic principal, permission, and object references. Operations on
+those references construct a closed expression tree; Core validates and
+normalizes that result, stores only the immutable IR, and discards the
+callable. Core does not inspect or parse the callable's Python source. Do not query,
 perform I/O, capture request state, or rely on mutable captured values inside
 the predicate.
 
@@ -166,8 +166,8 @@ A rule that changes ACE eligibility or recursive evaluation belongs in the
 closed OrderedFold grammar. It must not be hidden in an object filter.
 
 Unknown, unbound, or untranslatable named filters fail closed. A filter cannot
-create a grant. Permission enumeration returns bare permissions rather than
-enumerating a power set of possible filtered names.
+create a grant. Permission enumeration returns bare permissions rather than every possible
+combination of permission and filter names.
 
 ### Runtime callbacks are unsupported
 
@@ -242,15 +242,21 @@ Its selected named filters are AND restrictions. Active superusers bypass
 grants and filters only after configuration preflight and still require the
 candidate to exist.
 
-The historical Zero `permission_required`, `P`, `K`, `G`, and `O`
-surface remains legacy/experimental compatibility. It is not the frozen Core
-guard API and must not be presented as such.
 
-Fixed-query behavior is a tested implementation property, not proof that
-application data is trustworthy. Review the actual generated query whenever a
-registration shape, Django version, database backend, or compiler changes.
+Fixed-query behavior is intentional: registration-time structure and
+parameterized runtime bindings keep the authorization surface closed and
+inspectable. It is not proof that application data, neighboring backends, or
+deployment choices are trustworthy. Review the actual generated query whenever
+a registration shape, Django version, database backend, or compiler changes.
 
 ## More expressive policies
+
+### Many-to-many paths
+
+A terminal membership hop may multiply permission-bearing rows. Review
+cardinality, identity fields, through-model constraints, duplicate elimination,
+and whether a similarly named reverse accessor is actually the query name
+resolved by Django metadata.
 
 ### Bounded inherited relationships
 
@@ -267,19 +273,12 @@ bounded reachability. Audit:
 The current Along renderer is verified only for the database combinations
 listed in the support matrix.
 
-### OrderedFold
+### OrderedFold PostgreSQL renderer
 
 OrderedFold is currently rendered for PostgreSQL. Its SQL contains a recursive
 ordered remaining-bits evaluation that Django treats as a custom expression.
 PostgreSQL execution tests—not string inspection alone—are required for nested
 `OuterRef`, alias scoping, aggregation, enumeration, and composition changes.
-
-### Many-to-many paths
-
-A terminal membership hop may multiply permission-bearing rows. Review
-cardinality, identity fields, through-model constraints, duplicate elimination,
-and whether a similarly named reverse accessor is actually the query name
-resolved by Django metadata.
 
 ## Fail-closed expectations
 
@@ -317,76 +316,6 @@ Reference repositories validate bounded portions of the Core contract:
 A passing reference implementation proves only its declared schema and tested
 operations. It is not a universal security proof for applications that adapt
 the example.
-
-## Change sizing and surface discovery
-
-Design tasks must estimate the complete implementation and review surface before
-implementation is authorized. Use the Fibonacci scale
-`1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144`. This is a comparative
-risk/complexity size, not an hour estimate or a count of changed lines.
-
-Every design review must surface sizing near the top in three layers:
-
-- the entire controlling ticket, with a realistic range covering all known and
-  not-yet-designed stages;
-- completed points from accepted subtasks; and
-- the current proposed subtask, with one size or a bounded range.
-
-Do not hide unplanned stages inside a precise-looking total. Mark them
-`unknown`, give a reasoned comparison where possible, and widen the whole-task
-range accordingly. For example:
-
-```text
-#247 — v3.7 automatic relationship extraction
-Whole ticket: 34–144
-Completed: 5 (S1 accepted)
-Current: S2 — size 8
-S3–S7 — unknown; command, validation, stability, migration,
-and consumer surfaces remain unbounded
-```
-
-Completed points are the sum of the final reviewed sizes of accepted subtasks.
-If a subtask was re-sized during implementation, count its final size and show
-the change. If historical work was never sized, label it `unscored` or
-`retrospective estimate`; do not invent precision.
-
-The whole-task range is a planning envelope, not a mechanical sum of subtask
-points. It should include integration, discoveries between stages, review
-rounds, cross-repository sequencing, and final acceptance proof. Completed
-points show progress but must not be subtracted mechanically from that range to
-claim a precise remaining size while stages remain unknown.
-
-The calibration anchor for a **3** is
-[Core #129 / PR #140](https://github.com/django-trusts/django-trusts/pull/140):
-a bounded one-repository cleanup with no intended API change that nevertheless
-required migration wording, package and companion-wheel proof, preservation of
-historical evidence, a focused review correction, and the full Core matrix.
-[PR #124](https://github.com/django-trusts/django-trusts/pull/124), a
-one-file Read the Docs configuration using an already-proven build, is a useful
-**1** reference.
-
-Estimate the surface that must be understood and proved, including:
-
-- public API and migration consequences;
-- grant-producing semantics and fail-closed behavior;
-- object, queryset, enumeration, and decorator projections;
-- relationship identity, many-to-many, recursion, and database dialects;
-- registry lifecycle, startup, and zero-SQL guarantees;
-- affected consumer repositories and exact-version staging;
-- documentation, packaging, CI, deployment, and rollback proof; and
-- uncertainty about existing behavior or historical compatibility.
-
-A design handoff must state the subtask size, whole-ticket range, comparison
-task used as its anchor, surface drivers, proposed proof, and the known/unknown
-status of later stages. A size is not a promise that discovery will stop. If
-implementation or review exposes a material surface that the estimate omitted,
-stop expanding the patch, report the discovery, and re-size both the current
-subtask and the whole-ticket range before continuing.
-
-A task estimated at **13 or larger** is not implementation-ready. Split it at
-clean dependency or release boundaries and size the resulting tasks
-independently. A task that grows to 13 during implementation follows the same
-rule.
 
 ## Validation and review discipline
 
