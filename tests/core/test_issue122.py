@@ -64,12 +64,14 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'Named filters are outer restrictions',
             'Runtime callbacks are unsupported',
             'Django treats an active superuser as globally authorized',
-            'Django grants when any configured authentication backend grants',
+            'Trusts cannot revoke authorization supplied by another backend',
             'Discrepancies must be surfaced in the PR',
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, guide)
-        self.assertIn('not part of the 1.0 public contract', guide)
+        self.assertIn('future policy manifest/lockfile', guide)
+        self.assertIn('not part', guide)
+        self.assertIn('of the 1.0 public contract', guide)
         self.assertNotIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True', guide)
         self.assertNotIn('## Change sizing and surface discovery', guide)
 
