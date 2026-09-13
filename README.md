@@ -67,7 +67,6 @@ from django.contrib.auth.backends import ModelBackend
 
 from trusts.apps import TrustsImplementationConfig
 from trusts.backends import TrustModelBackendMixin
-from trusts.conditions._ir import RegistryConditionLookup
 from trusts.core import Ref
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
@@ -96,9 +95,6 @@ class DocumentConfig(TrustsImplementationConfig):
             Document,
             'non_confidential',
             lambda u, p, o: o.confidential != True,
-        )
-        handle.registry.set_condition_lookup(
-            RegistryConditionLookup(handle.registry),
         )
 
 INSTALLED_APPS = (

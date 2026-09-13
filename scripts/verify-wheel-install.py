@@ -188,6 +188,13 @@ def main() -> int:
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
+    standalone = TrustsRegistry()
+    bound = standalone.condition_lookup
+    if bound is None:
+        raise SystemExit('TrustsRegistry did not self-bind condition lookup')
+    if bound.conditions is not standalone.conditions:
+        raise SystemExit('self-bound lookup does not wrap registry.conditions')
+    print('condition lookup self-bound')
     print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
     print('permission_has_condition', permission_has_condition)
     print('permission_condition_code', permission_condition_code)

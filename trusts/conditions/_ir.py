@@ -39,7 +39,6 @@ from io import IOBase
 from uuid import UUID
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
-from django.db.models import options as model_options
 from django.db.models import (
     F,
     Manager,
@@ -60,6 +59,10 @@ from django.db.models import (
     UUIDField,
 )
 from django.db.models.fields import GenericIPAddressField
+
+from trusts._meta_options import _ensure_permission_conditions_option
+
+_ensure_permission_conditions_option()
 
 
 class PermissionConditionError(Exception):
@@ -82,24 +85,6 @@ class PermissionConditionNotQueryable(ValueError):
 
     Generic core exception. Import this name from ``trusts.conditions``.
     """
-
-
-def _ensure_permission_conditions_option():
-    """Register generic ``Meta.permission_conditions`` idempotently.
-
-    Must run at import, before Django constructs participating model
-    classes. Repeated import/setup must not duplicate the name.
-    """
-    names = model_options.DEFAULT_NAMES
-    if 'permission_conditions' in names:
-        return
-    if isinstance(names, tuple):
-        model_options.DEFAULT_NAMES = names + ('permission_conditions',)
-    else:
-        names.append('permission_conditions')
-
-
-_ensure_permission_conditions_option()
 
 
 def permission_has_condition(perm):
@@ -1223,10 +1208,10 @@ from trusts.core import ConditionLookup  # noqa: E402
 class RegistryConditionLookup(ConditionLookup):
     """Generic ``ConditionLookup`` over a ``ConditionRegistry``.
 
-    Bind with ``handle.registry.set_condition_lookup(
-    RegistryConditionLookup(handle.registry))``. Accepts a
-    ``ConditionRegistry`` or any object with a ``conditions`` store
-    (a ``TrustsRegistry``). Core never imports Zero nouns.
+    ``TrustsRegistry`` self-binds this adapter at construct. Applications
+    register builders; they do not import or construct this type.
+    Accepts a ``ConditionRegistry`` or any object with a ``conditions``
+    store (a ``TrustsRegistry``). Core never imports Zero nouns.
     """
 
     def __init__(self, registry):

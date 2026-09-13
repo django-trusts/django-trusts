@@ -277,8 +277,16 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn('handle.register_permission_condition(', readme)
         self.assertIn('o.confidential != True', readme)
         self.assertIn('handle.register_permission_condition(', apps)
-        self.assertIn('RegistryConditionLookup', readme)
-        self.assertIn('RegistryConditionLookup', apps)
+        self.assertNotIn('RegistryConditionLookup', readme)
+        self.assertNotIn('RegistryConditionLookup', apps)
+        self.assertNotIn('trusts.conditions._ir', readme)
+        self.assertNotIn('trusts.conditions._ir', apps)
+        self.assertNotIn('set_condition_lookup', readme)
+        self.assertNotIn('set_condition_lookup', apps)
+        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
+        self.assertNotIn('RegistryConditionLookup', rst)
+        self.assertNotIn('trusts.conditions._ir', rst)
+        self.assertNotIn('set_condition_lookup', rst)
         views = (ROOT / 'tests' / 'myapp' / 'views.py').read_text()
         self.assertIn(
             "@permission_required('myapp.change_document', fieldlookups_kwargs={'pk': 'pk'})",
