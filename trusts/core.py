@@ -1217,16 +1217,26 @@ class Along(object):
         return 'Along(%r, bound=%r)' % (self.ref, self.bound)
 
 
+def _is_condition_operand(value):
+    """True for an internal ``Ref`` or a public Django ``__`` path string."""
+    return isinstance(value, (str, Ref))
+
+
 class Equal(object):
-    """Closed equality of two root-relative single-valued refs."""
+    """Closed equality of two root-relative single-valued refs.
+
+    Isolated registry tests may pass ``Ref`` operands. Public
+    ``BackendHandle.register`` accepts Django ``__`` path strings and
+    binds them to the registration root before validation.
+    """
 
     __slots__ = ('left', 'right')
 
     def __init__(self, left, right):
-        if not isinstance(left, Ref) or not isinstance(right, Ref):
+        if not _is_condition_operand(left) or not _is_condition_operand(right):
             raise TrustsConfigurationError(
-                'Equal left and right must be root-relative Refs, not %r '
-                'and %r.' % (left, right)
+                'Equal left and right must be root-relative Refs or Django '
+                'path strings, not %r and %r.' % (left, right)
             )
         object.__setattr__(self, 'left', left)
         object.__setattr__(self, 'right', right)
@@ -1262,10 +1272,10 @@ class PermissionIn(object):
                 'permission_in requires one or more refs.'
             )
         for ref in refs:
-            if not isinstance(ref, Ref):
+            if not _is_condition_operand(ref):
                 raise TrustsConfigurationError(
-                    'permission_in refs must be root-relative Refs, not %r.'
-                    % (ref,)
+                    'permission_in refs must be root-relative Refs or Django '
+                    'path strings, not %r.' % (ref,)
                 )
         object.__setattr__(self, 'refs', refs)
 
@@ -2533,6 +2543,87 @@ class TrustsRegistry(object):
         ).filter_content(queryset, user, permission)
 
 
+def _public_path_segments(value, role):
+    """Split a public Django ``__`` path. Reject before ``Ref`` / resolve."""
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django path string, not a Ref.' % (role,)
+        )
+    if not isinstance(value, str):
+        raise TrustsConfigurationError(
+            '%s must be a Django path string, not %r.' % (role, value)
+        )
+    if (
+        not value
+        or value.startswith('__')
+        or value.endswith('__')
+        or '.' in value
+    ):
+        raise TrustsConfigurationError(
+            '%s path %r is not a valid Django __ relationship path.'
+            % (role, value)
+        )
+    segments = value.split('__')
+    if any(segment == '' for segment in segments):
+        raise TrustsConfigurationError(
+            '%s path %r is not a valid Django __ relationship path.'
+            % (role, value)
+        )
+    return tuple(segments)
+
+
+def _public_ref(root, value, role):
+    return Ref(root, _public_path_segments(value, role))
+
+
+def _bind_public_condition(condition, root):
+    """Rewrite string condition leaves to root-relative ``Ref`` nodes."""
+    if condition is None:
+        return None
+    if isinstance(condition, All):
+        return All(*(
+            _bind_public_condition(predicate, root)
+            for predicate in condition.predicates
+        ))
+    if isinstance(condition, Equal):
+        return Equal(
+            _public_ref(root, condition.left, 'Equal left'),
+            _public_ref(root, condition.right, 'Equal right'),
+        )
+    if isinstance(condition, PermissionIn):
+        return PermissionIn(*(
+            _public_ref(root, ref, 'permission_in')
+            for ref in condition.refs
+        ))
+    if isinstance(condition, Ref):
+        raise TypeError(
+            'condition must be All, Equal, or permission_in, not a Ref.'
+        )
+    raise TrustsConfigurationError(
+        'condition is not supported; omit it or pass None.'
+    )
+
+
+def _bind_public_along(root, along):
+    """Normalize ``(path, bound)`` to an internal ``Along``."""
+    if along is None:
+        return None
+    if isinstance(along, Along):
+        raise TypeError(
+            'along must be a (path, bound) pair, not an Along instance.'
+        )
+    if isinstance(along, Ref):
+        raise TypeError(
+            'along must be a (path, bound) pair, not a Ref.'
+        )
+    if not isinstance(along, tuple) or len(along) != 2:
+        raise TrustsConfigurationError(
+            'along must be a (path, bound) pair, not %r.' % (along,)
+        )
+    path, bound = along
+    return Along(_public_ref(root, path, 'along'), bound)
+
+
 @dataclass(frozen=True, slots=True)
 class BackendHandle:
     """Exact configured path, exact registry identity, and class compiler."""
@@ -2540,6 +2631,31 @@ class BackendHandle:
     path: str
     registry: object
     compiler: object
+
+    def register(self, root, *, user, permission, content, condition=None,
+                 along=None):
+        """Application API: register one AnyPath relation on this handle.
+
+        Public paths are Django ``__`` strings. ``condition`` leaves are
+        path strings on ``Equal`` / ``permission_in`` / ``All``. ``along``
+        is ``(path, bound)``. Passing a ``Ref`` is ``TypeError``. A frozen
+        handle raises ``TrustsConfigurationError`` before path parsing.
+        """
+        if getattr(self.registry, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        if isinstance(root, Ref):
+            raise TypeError(
+                'register root must be a Django model class, not a Ref.'
+            )
+        return self.registry.register(
+            content=_public_ref(root, content, 'content'),
+            user=_public_ref(root, user, 'user'),
+            permission=_public_ref(root, permission, 'permission'),
+            condition=_bind_public_condition(condition, root),
+            along=_bind_public_along(root, along),
+        )
 
     def register_permission_condition(self, model, code, builder):
         """Application API: register a named condition on this handle.

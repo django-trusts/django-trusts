@@ -67,7 +67,6 @@ from django.contrib.auth.backends import ModelBackend
 
 from trusts.apps import TrustsImplementationConfig
 from trusts.backends import TrustModelBackendMixin
-from trusts.core import Ref
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
 
@@ -84,12 +83,11 @@ class DocumentConfig(TrustsImplementationConfig):
         from tests.myapp.models import Document, DocumentGrant
 
         handle = self.configured_backend()
-        registry = handle.registry
-        j = Ref(DocumentGrant)
-        registry.register(
-            content=j.document,
-            user=j.user,
-            permission=j.permission,
+        handle.register(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
         )
         handle.register_permission_condition(
             Document,
@@ -112,7 +110,7 @@ Do not add `'trusts'` to `INSTALLED_APPS`.
 
 ## Declare and authorize
 
-Ordinary application-owned models plus the `Ref` registration above.
+Ordinary application-owned models plus the `handle.register` declaration above.
 Grant mutation happens through those models; core has no generic
 grant/revoke workflow.
 

@@ -291,7 +291,7 @@ class ClosedPredicateRegistrationTest(TestCase):
             with self.assertRaisesRegex(TrustsConfigurationError, r'Refs'):
                 Equal(1, 2)
             with self.assertRaisesRegex(TrustsConfigurationError, r'Refs'):
-                permission_in('team.permission_bundles.operations')
+                permission_in(1)
             with self.assertRaisesRegex(TrustsConfigurationError, r'nodes'):
                 All(object())
             with self.assertRaisesRegex(TrustsConfigurationError, r'Q-object|nodes|not supported'):
