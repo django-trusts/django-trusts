@@ -26,6 +26,11 @@ database combinations are recorded in
 [the support matrix](docs/support-matrix.md). Build and test dependencies are
 not part of the runtime authorization boundary.
 
+Django selects and loads the database backend and driver configured by the
+application; Core does not import, select, or manage database drivers. The
+application and deployment therefore own driver provenance and versioning,
+secure connection settings, and operational availability.
+
 Core supplies no Django application or concrete permission schema. Do not add
 `"trusts"` to `INSTALLED_APPS`. Install the application or package that owns
 the concrete Trusts implementation instead.
