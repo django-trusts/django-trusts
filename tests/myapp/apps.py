@@ -18,13 +18,13 @@ class DocumentConfig(TrustsImplementationConfig):
         registry = handle.registry
         if getattr(self, '_document_grant_registry_id', None) is registry:
             return
-        handle.register(
+        handle.register_relationship(
             DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register_permission_condition(
+        handle.add_named_filter(
             Document,
             'non_confidential',
             lambda u, p, o: o.confidential != True,
