@@ -174,7 +174,8 @@ def any_plan_records(handles, content):
     return False
 
 
-def granted(handles, candidates, user, permission, *, kind='complete'):
+def granted(handles, candidates, user, permission, *, kind='complete',
+            filter=()):
     """OR each applicable handle compiler's complete (or group) predicate.
 
     Noun-blind: this builder does not know Trust, Group, Guardian, or
@@ -185,7 +186,15 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
     ``permission`` may be a permission instance or an unevaluated lookup
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
+
+    ``filter=`` is a request-filter tuple. It is validated before any
+    compiler work. The overlay ANDs onto the grant and never creates one.
     """
+    from trusts.request_filters import compile_request_filter_q
+
+    overlay = compile_request_filter_q(
+        handles, candidates, user, permission, filter,
+    )
     parts = []
     for handle in handles:
         plan = _plan_for_permission(handle, candidates, user, permission)
@@ -199,9 +208,59 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
         parts.append(part)
     if not parts:
         return None
-    if len(parts) == 1:
-        return parts[0]
-    return reduce(or_, parts)
+    granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
+    if overlay is not None:
+        granted_q = granted_q & overlay
+    return granted_q
+
+
+def check(user, permission, obj, *, filter=()):
+    """Trusts-only object check. ``from trusts import check``.
+
+    Positional order is ``(user, permission, obj, filter=())``.
+    Aggregates ``configured_implementation_handles()`` only. No
+    ModelBackend. No superuser short-circuit. One SQL.
+    """
+    from django.contrib.auth.models import Permission
+    from django.db.models import QuerySet as DjangoQuerySet
+
+    from trusts.apps import configured_implementation_handles
+    from trusts.query import is_active_principal
+    from trusts.request_filters import validate_request_filter
+
+    validate_request_filter(filter)
+    if not isinstance(obj, (Model, DjangoQuerySet)):
+        return False
+    handles = configured_implementation_handles()
+    if filter:
+        from trusts.request_filters import compile_request_filter_q
+        compile_request_filter_q(handles, obj, user, permission, filter)
+    if not is_active_principal(user):
+        return False
+    if isinstance(permission, str):
+        from django.contrib.contenttypes.models import ContentType
+        from django.db.models import Subquery
+        from trusts import utils
+        applabel, modelname, action, _cond = utils.parse_perm_code(permission)
+        binding = Subquery(
+            Permission.objects.filter(
+                codename='%s_%s' % (action, modelname),
+                content_type__app_label=applabel.lower(),
+                content_type__model=modelname,
+            ).values('pk')[:1]
+        )
+    elif isinstance(permission, Permission):
+        binding = permission
+    elif isinstance(permission, Model):
+        binding = permission
+    else:
+        return False
+    matched = all_match(
+        handles, obj, user, binding, kind='complete', filter=filter,
+    )
+    if matched is None:
+        return False
+    return bool(matched)
 
 
 class ConditionLookup(object):
@@ -251,7 +310,8 @@ def _scope_prefix_lookups(record, scope_model):
     return tuple(lookups)
 
 
-def filter_authorized_scopes(queryset, user, permission, *, content, handles=None):
+def filter_authorized_scopes(queryset, user, permission, *, content,
+                             handles=None, filter=()):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -304,16 +364,32 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     if not parts:
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
+    from trusts.request_filters import compile_request_filter_q
+    overlay = compile_request_filter_q(
+        handles, content, user, permission, filter,
+    )
+    if overlay is not None:
+        granted_q = granted_q & overlay
     return queryset.filter(granted_q).distinct()
 
 
-def all_match(handles, candidates, user, permission, *, kind='complete', extra_q=None):
+def all_match(handles, candidates, user, permission, *, kind='complete', extra_q=None,
+              filter=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
     One SQL. ``None`` when no handle applies so the caller may use the
     undeclared fallback. ``extra_q`` is an optional overlay (AND); it
-    never creates a grant.
+    never creates a grant. ``filter=`` is validated before compiler work.
     """
+    from trusts.request_filters import (
+        combine_extra_q,
+        compile_request_filter_q,
+    )
+
+    overlay = compile_request_filter_q(
+        handles, candidates, user, permission, filter,
+    )
+    extra_q = combine_extra_q(extra_q, overlay)
     granted_q = granted(handles, candidates, user, permission, kind=kind)
     if granted_q is None:
         return None
@@ -327,12 +403,23 @@ def all_match(handles, candidates, user, permission, *, kind='complete', extra_q
     return stats['total'] > 0 and stats['lacking'] == 0
 
 
-def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None):
+def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None,
+                   filter=()):
     """One grant EXISTS for ``obj`` through ``handle`` only.
 
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
-    overlay (AND); it never creates a grant.
+    overlay (AND); it never creates a grant. ``filter=`` is validated
+    before compiler work.
     """
+    from trusts.request_filters import (
+        combine_extra_q,
+        compile_request_filter_q,
+    )
+
+    overlay = compile_request_filter_q(
+        (handle,), obj, user, permission, filter,
+    )
+    extra_q = combine_extra_q(extra_q, overlay)
     granted_q = granted((handle,), obj, user, permission, kind=kind)
     if granted_q is None:
         return None
@@ -1074,6 +1161,10 @@ def _validate_condition(condition, root, permission_model,
             permission_target=permission_target,
         )
         return condition
+    if isinstance(condition, PathFilterCondition):
+        from trusts.path_filters import _validate_local_ir
+        _validate_local_ir(root, condition.ir)
+        return condition
     raise TrustsConfigurationError(
         'condition is not supported; omit it or pass None.'
     )
@@ -1105,6 +1196,40 @@ def _compile_predicate(node, record):
                 _lookup_text(ref._path): F(record.permission_field),
             })
         return compiled
+    if isinstance(node, PathFilterCondition):
+        return _compile_path_filter_ir(node.ir, record)
+    raise TrustsConfigurationError(
+        'condition is not supported; omit it or pass None.'
+    )
+
+
+def _compile_path_filter_ir(node, record):
+    from trusts.path_filters import PFAnd, PFEqual, PFIn, PFNotEqual, PFOr
+
+    if isinstance(node, PFAnd):
+        parts = [_compile_path_filter_ir(part, record) for part in node.parts]
+        compiled = parts[0]
+        for part in parts[1:]:
+            compiled &= part
+        return compiled
+    if isinstance(node, PFOr):
+        parts = [_compile_path_filter_ir(part, record) for part in node.parts]
+        compiled = parts[0]
+        for part in parts[1:]:
+            compiled |= part
+        return compiled
+    if isinstance(node, PFEqual):
+        return Q(**{
+            _lookup_text(node.left): F(_lookup_text(node.right)),
+        })
+    if isinstance(node, PFNotEqual):
+        return ~Q(**{
+            _lookup_text(node.left): F(_lookup_text(node.right)),
+        })
+    if isinstance(node, PFIn):
+        return Q(**{
+            _lookup_text(node.right): F(record.permission_field),
+        })
     raise TrustsConfigurationError(
         'condition is not supported; omit it or pass None.'
     )
@@ -1334,6 +1459,34 @@ class All(object):
 
     def __repr__(self):
         return 'All(%s)' % ', '.join(repr(pred) for pred in self.predicates)
+
+
+class PathFilterCondition(object):
+    """Private condition tree produced by a named path filter.
+
+    Holds IR that cannot lower to public All / Equal / permission_in
+    (``!=`` or ``|``). Public application code does not construct this.
+    """
+
+    __slots__ = ('ir',)
+
+    def __init__(self, ir):
+        object.__setattr__(self, 'ir', ir)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('PathFilterCondition is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('PathFilterCondition is immutable.')
+
+    def __eq__(self, other):
+        return isinstance(other, PathFilterCondition) and self.ir == other.ir
+
+    def __hash__(self):
+        return hash((PathFilterCondition, self.ir))
+
+    def __repr__(self):
+        return 'PathFilterCondition(%r)' % (self.ir,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2206,6 +2359,7 @@ class TrustsRegistry(object):
         self._order = []
         self._strategies = {}
         self._strategy_order = []
+        self._path_filters = {}
         self._frozen = False
         self._condition_lookup = None
         self.conditions = ConditionRegistry()
@@ -2256,6 +2410,32 @@ class TrustsRegistry(object):
             )
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
+        )
+
+    def register_path_filter(self, root_model, name, builder):
+        """Declare a named always-on path filter (Phase 1)."""
+        from trusts.path_filters import register_path_filter
+        return register_path_filter(self, root_model, name, builder)
+
+    def register_request_filter(self, content_model, name, builder):
+        """Declare a named request filter on a content type."""
+        from trusts.request_filters import validate_filter_name
+        name = validate_filter_name(name, role='request filter')
+        if self.get_permission_condition_record(content_model, name) is not None:
+            raise TrustsConfigurationError(
+                'Duplicate request filter %r on %s.'
+                % (
+                    name,
+                    getattr(getattr(content_model, '_meta', None), 'label', content_model),
+                )
+            )
+        return self.register_permission_condition(content_model, name, builder)
+
+    def bind_named_path_filter(self, root_model, name, permission_path):
+        """Phase 2: attach a named path filter to a registration."""
+        from trusts.path_filters import bind_named_path_filter
+        return bind_named_path_filter(
+            self, root_model, name, permission_path,
         )
 
     def get_permission_condition_record(self, model, cond_code):
@@ -2528,20 +2708,30 @@ class TrustsRegistry(object):
             content, user=user, permission=permission,
         ).has_permission(user, content, permission)
 
-    def filter_authorized(self, queryset, user, permission):
+    def filter_authorized(self, queryset, user, permission, *, filter=()):
         """Lazy queryset of rows ``user`` holds ``permission`` on.
 
         Consumes ``RelationPlan.content_exists`` through ``filter_content``.
+        ``filter=`` is a request-filter tuple ANDed onto the result.
         """
+        from trusts.request_filters import compile_request_filter_q
+
         if not isinstance(queryset, QuerySet):
             raise TrustsConfigurationError(
                 'filter_authorized requires a QuerySet, not %r.' % (queryset,)
             )
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
-        return self.plan_for(
+        qs = self.plan_for(
             queryset, user=user, permission=permission,
         ).filter_content(queryset, user, permission)
+        overlay = compile_request_filter_q(
+            (BackendHandle(path='', registry=self, compiler=None),),
+            queryset, user, permission, filter,
+        )
+        if overlay is None:
+            return qs
+        return qs.filter(overlay)
 
 
 def _public_path_segments(value, role, *, allow_empty=False):
@@ -2733,14 +2923,19 @@ def _bind_public_condition(condition, root):
         ))
     if isinstance(condition, Equal):
         return Equal(
-            _public_ref(root, condition.left, 'Equal left'),
-            _public_ref(root, condition.right, 'Equal right'),
+            condition.left if isinstance(condition.left, Ref)
+            else _public_ref(root, condition.left, 'Equal left'),
+            condition.right if isinstance(condition.right, Ref)
+            else _public_ref(root, condition.right, 'Equal right'),
         )
     if isinstance(condition, PermissionIn):
         return PermissionIn(*(
-            _public_ref(root, ref, 'permission_in')
+            ref if isinstance(ref, Ref)
+            else _public_ref(root, ref, 'permission_in')
             for ref in condition.refs
         ))
+    if isinstance(condition, PathFilterCondition):
+        return condition
     if isinstance(condition, Ref):
         raise TypeError(
             'condition must be All, Equal, or permission_in, not a Ref.'
@@ -2779,13 +2974,14 @@ class BackendHandle:
     compiler: object
 
     def register(self, root, *, user, permission, content, condition=None,
-                 along=None):
+                 along=None, filter=None):
         """Application API: register one AnyPath relation on this handle.
 
         Public paths are Django ``__`` strings. ``condition`` leaves are
         path strings on ``Equal`` / ``permission_in`` / ``All``. ``along``
-        is ``(path, bound)``. Passing a ``Ref`` is ``TypeError``. A frozen
-        handle raises ``TrustsConfigurationError`` before path parsing.
+        is ``(path, bound)``. ``filter`` is one declared path-filter
+        name. Passing a ``Ref`` is ``TypeError``. A frozen handle raises
+        ``TrustsConfigurationError`` before path parsing.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
@@ -2795,12 +2991,44 @@ class BackendHandle:
             raise TypeError(
                 'register root must be a Django model class, not a Ref.'
             )
+        if filter is not None and condition is not None:
+            raise TypeError(
+                'register() accepts condition= or filter=, not both.'
+            )
+        if filter is not None:
+            if callable(filter) or not isinstance(filter, str):
+                raise TypeError(
+                    'register(..., filter=) must be one str name, not %r.'
+                    % (type(filter).__name__,)
+                )
+            permission_path = _public_path_segments(permission, 'permission')
+            condition = self.registry.bind_named_path_filter(
+                root, filter, permission_path,
+            )
         return self.registry.register(
             content=_public_ref(root, content, 'content'),
             user=_public_ref(root, user, 'user'),
             permission=_public_ref(root, permission, 'permission'),
             condition=_bind_public_condition(condition, root),
             along=_bind_public_along(root, along),
+        )
+
+    def register_path_filter(self, root_model, name, builder):
+        """Declare a named always-on path filter on this handle."""
+        if getattr(self.registry, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register a path filter on a frozen TrustsRegistry.'
+            )
+        return self.registry.register_path_filter(root_model, name, builder)
+
+    def register_request_filter(self, content_model, name, builder):
+        """Declare a named request filter on this handle."""
+        if getattr(self.registry, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register a request filter on a frozen TrustsRegistry.'
+            )
+        return self.registry.register_request_filter(
+            content_model, name, builder,
         )
 
     def register_strategy(self, source_model, strategy=None):

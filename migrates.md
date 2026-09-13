@@ -82,6 +82,47 @@ Migration-bot search list:
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.
 
+## Named filters (#131 C-unify)
+
+| Old | New |
+| --- | --- |
+| `app.codename:own` / colon parse on Trusts request APIs | `"app.codename"` + `filter=("own",)` on `trusts.check` / `.authorized` / `granted` / `all_match` / `instance_match` / `filter_authorized` / `filter_authorized_scopes` |
+| `user.has_perm("app.x:y", obj)` | `check(user, "app.x", obj, filter=("y",))` for the Trusts-only path; mixin `has_perm` stays bare and still parses `:` until #138 |
+| `register_permission_condition(Model, "own", builder)` | `register_request_filter(Model, "own", builder)` |
+| `register(..., condition=permission_in(...) / All / Equal)` | `register_path_filter` + `register(..., filter="name")` |
+| `register(..., filter=lambda r: ...)` | illegal; lambdas only on `register_path_filter` |
+| `trusts.check` vs `has_object_perm` / `instance_match` | public name is `trusts.check` |
+| `conditions=` | never shipped; do not alias |
+
+`filter=` on request APIs is exactly `tuple[str, ...]`. A bare string,
+list, set, or other iterable is `TypeError` before any name walk.
+Omitted / `()` is the Trusts bare grant. Multiple names AND on each
+applicable branch. Query identity validates first, then sorts.
+
+`register(..., filter=)` is exactly one `str` path-filter name. Path
+filters and request filters are separate stores. Registration
+fingerprints include resolved path-filter IR, not the filter name.
+Unused named filters remain catalog entries.
+
+`require_authorization` and removal of Core `permission_required` / `P`
+are #138, not this change.
+
+Migration-bot search list:
+
+- `:non_confidential`
+- `:own`
+- `parse_perm_code`
+- `permission_has_condition`
+- `permission_condition_code`
+- `condition=`
+- `permission_in(`
+- `has_perm('...:`
+- `register_permission_condition(`
+- `register(..., filter=lambda`
+- `conditions=`
+- `where=`
+- `NamedConditions`
+
 ## Archaeology
 
 Chronology of unpublished development stairs lives in the annotated

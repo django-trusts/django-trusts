@@ -33,7 +33,7 @@ class AuthorizedQuerySet(QuerySet):
     no ``.get_permission``.
     """
 
-    def authorized(self, user, permission, extra_q=None):
+    def authorized(self, user, permission, extra_q=None, *, filter=()):
         from trusts.apps import configured_implementation_handles
         from trusts.core import TrustsConfigurationError, granted
 
@@ -43,7 +43,7 @@ class AuthorizedQuerySet(QuerySet):
             )
         granted_q = granted(
             configured_implementation_handles(),
-            self, user, permission, kind='complete',
+            self, user, permission, kind='complete', filter=filter,
         )
         if granted_q is None:
             return self.none()

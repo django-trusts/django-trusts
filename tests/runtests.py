@@ -41,6 +41,7 @@ KERNEL_SUITE = [
     'tests.core.test_issue122',
     'tests.core.test_issue129',
     'tests.core.test_issue131',
+    'tests.core.test_issue131_cunify',
     'tests.core.test_issue151',
 ]
 
@@ -71,6 +72,7 @@ PAIR_KERNEL_SUITE = [
     'tests.core.test_issue108',
     'tests.core.test_issue129',
     'tests.core.test_issue131',
+    'tests.core.test_issue131_cunify',
     'tests.core.test_issue151',
 ]
 
