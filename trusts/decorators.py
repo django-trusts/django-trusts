@@ -5,9 +5,11 @@ from operator import and_, or_
 from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME
 from django.contrib.auth.views import redirect_to_login
-from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
+from django.contrib.auth.models import Permission
+from django.core.exceptions import PermissionDenied, ObjectDoesNotExist, ValidationError
 from django.shortcuts import resolve_url
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import Model, Subquery
 from django.http import Http404
 
 from trusts import utils
@@ -215,3 +217,215 @@ def permission_required(perm, raise_exception=True, login_url=None, **fieldlooku
         return _check(perm, request, kwargs, raise_exception, **fieldlookups)
 
     return request_passes_test(_check_perms, login_url=login_url)
+
+
+# --- Core 1.0 guard (issue #138 / #169 v2). Legacy permission_required / P / K / G / O stay above. ---
+
+from trusts.core import TrustsConfigurationError, granted
+from trusts.query import is_active_principal
+
+
+CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
+
+_declared_authorization_guards = []
+
+
+def _guard_model(model):
+    if not isinstance(model, type) or not issubclass(model, Model):
+        raise TypeError(
+            'authorization_required model must be a Django model class, not %r.'
+            % (model,)
+        )
+    return model
+
+
+def _guard_permission(model, permission):
+    if not isinstance(permission, str):
+        raise TypeError(
+            'authorization_required permission must be an app_label.codename '
+            'string, not %r.' % (type(permission).__name__,)
+        )
+    if ':' in permission or permission.count('.') != 1:
+        raise TrustsConfigurationError(
+            'authorization_required permission must be one base '
+            '"app_label.codename" string without a colon: %r.' % (permission,)
+        )
+    app_label, codename = permission.split('.')
+    if not app_label or not codename:
+        raise TrustsConfigurationError(
+            'authorization_required permission must be one base '
+            '"app_label.codename" string, not %r.' % (permission,)
+        )
+    if app_label.lower() != model._meta.app_label.lower():
+        raise TrustsConfigurationError(
+            'authorization_required permission app_label %r does not match '
+            'model %s.' % (app_label, model._meta.label)
+        )
+    return app_label, codename
+
+
+def _guard_conditions(conditions):
+    if type(conditions) is not tuple:
+        raise TypeError(
+            'authorization_required conditions must be an exact tuple, not %r.'
+            % (type(conditions).__name__,)
+        )
+    seen = set()
+    for name in conditions:
+        if not isinstance(name, str) or not name or name != name.strip() or ':' in name:
+            raise TrustsConfigurationError(
+                'authorization_required condition name is malformed: %r.'
+                % (name,)
+            )
+        if name in seen:
+            raise TrustsConfigurationError(
+                'authorization_required conditions must not contain duplicates: %r.'
+                % (name,)
+            )
+        seen.add(name)
+    return conditions
+
+
+def _remember_authorization_guard(model, permission, conditions):
+    entry = (model, permission, conditions)
+    if entry not in _declared_authorization_guards:
+        _declared_authorization_guards.append(entry)
+
+
+def _coerce_pk(model, raw):
+    if raw is None:
+        raise Http404
+    if isinstance(raw, str) and raw.strip() == '':
+        raise Http404
+    field = model._meta.pk
+    try:
+        value = field.to_python(raw)
+    except (ValidationError, ValueError, TypeError):
+        raise Http404
+    if value is None:
+        raise Http404
+    try:
+        field.get_prep_value(value)
+    except (ValidationError, ValueError, TypeError):
+        raise Http404
+    return value
+
+
+def _permission_binding(model, app_label, codename):
+    return Subquery(
+        Permission.objects.filter(
+            content_type__app_label=app_label.lower(),
+            content_type__model=model._meta.model_name,
+            codename=codename,
+        ).values('pk')[:1]
+    )
+
+
+def _resolve_condition_overlay(model, permission, conditions, user):
+    if not conditions:
+        return None
+    from django.apps import apps as django_apps
+    from trusts.apps import configured_implementation_handles
+
+    if not django_apps.ready:
+        raise TrustsConfigurationError(
+            'authorization_required cannot resolve condition names before '
+            'Django apps are ready.'
+        )
+    handles = configured_implementation_handles()
+    extra_q = None
+    for name in conditions:
+        record = None
+        compile_q = None
+        for handle in handles:
+            lookup = getattr(handle.registry, 'condition_lookup', None)
+            if lookup is None:
+                continue
+            found = lookup.record_for(model, name)
+            if found is not None:
+                record = found
+                compile_q = lookup.compile_q
+                break
+        if record is None or compile_q is None:
+            raise TrustsConfigurationError(
+                'authorization_required condition %r is not registered on %s.'
+                % (name, model._meta.label)
+            )
+        if getattr(record, 'expr', None) is None:
+            raise TrustsConfigurationError(
+                'authorization_required condition %r on %s is unsupported.'
+                % (name, model._meta.label)
+            )
+        part = compile_q(model, '%s:%s' % (permission, name), user)
+        extra_q = part if extra_q is None else extra_q & part
+    return extra_q
+
+
+def _authorize_candidate(request, view_kwargs, model, permission, conditions):
+    from django.apps import apps as django_apps
+    from trusts.apps import configured_implementation_handles
+
+    user = getattr(request, 'user', None)
+    raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None
+    if 'pk' not in view_kwargs:
+        raise Http404
+    pk = _coerce_pk(model, raw_pk)
+
+    is_superuser = bool(
+        user is not None
+        and getattr(user, 'is_active', False)
+        and getattr(user, 'is_superuser', False)
+        and not getattr(user, 'is_anonymous', False)
+    )
+    if not is_superuser and not is_active_principal(user):
+        raise PermissionDenied
+
+    candidates = model._default_manager.filter(pk=pk)
+    if is_superuser:
+        if not candidates.exists():
+            raise Http404
+        return
+
+    if not django_apps.ready:
+        raise TrustsConfigurationError(
+            'authorization_required cannot authorize before Django apps '
+            'are ready.'
+        )
+    extra_q = _resolve_condition_overlay(model, permission, conditions, user)
+    app_label, codename = permission.split('.', 1)
+    binding = _permission_binding(model, app_label, codename)
+    handles = configured_implementation_handles()
+    granted_q = granted(handles, candidates, user, binding, kind='complete')
+    if granted_q is None:
+        if candidates.exists():
+            raise PermissionDenied
+        raise Http404
+    if extra_q is not None:
+        granted_q = granted_q & extra_q
+    if candidates.filter(granted_q).exists():
+        return
+    if candidates.exists():
+        raise PermissionDenied
+    raise Http404
+
+
+def authorization_required(model, permission, conditions=()):
+    """Trusts-only view guard: explicit model, pk URL kwarg, optional names.
+
+    Candidate identity is only ``view_kwargs["pk"]`` bound to
+    ``model._meta.pk``. Does not use Django backend OR, ``user.has_perm``,
+    or the legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
+    surface.
+    """
+    model = _guard_model(model)
+    _guard_permission(model, permission)
+    conditions = _guard_conditions(conditions)
+    _remember_authorization_guard(model, permission, conditions)
+
+    def decorator(view_func):
+        @wraps(view_func)
+        def _wrapped_view(request, *args, **kwargs):
+            _authorize_candidate(request, kwargs, model, permission, conditions)
+            return view_func(request, *args, **kwargs)
+        return _wrapped_view
+    return decorator

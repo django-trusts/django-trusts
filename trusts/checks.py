@@ -28,6 +28,7 @@ CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
+CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -360,6 +361,49 @@ def permission_condition_check_messages(entries):
 def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
     """Fail loud if the deleted runtime-callback setting is still True."""
     return _messages_for_obsolete_callback_setting()
+
+
+@django_checks.register()
+def check_authorization_required_conditions(app_configs, **kwargs):
+    """Report unknown names selected by imported ``authorization_required`` guards.
+
+    Declaration-time syntax is validated by the decorator. This check
+    resolves registered names after apps are ready. Silencing
+    ``trusts.E008`` hides only the diagnostic; first use still fails
+    closed and never falls back to the unconditioned grant. Zero SQL.
+    """
+    from trusts.decorators import _declared_authorization_guards
+
+    known = {}
+    for model, cond_code, _record in iter_live_permission_conditions():
+        known.setdefault(model, set()).add(cond_code)
+
+    messages = []
+    seen = set()
+    for model, _permission, conditions in _declared_authorization_guards:
+        for name in conditions:
+            key = (model, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            if name in known.get(model, ()):
+                continue
+            messages.append(django_checks.Error(
+                'authorization_required condition %r is not registered on %s.'
+                % (name, _model_label(model)),
+                hint=(
+                    'Register the name with handle.register_permission_condition '
+                    'in AppConfig.ready(). Silencing trusts.E008 suppresses only '
+                    'this diagnostic; first use still fails closed.'
+                ),
+                obj=model,
+                id=CHECK_ID_AUTHORIZATION_REQUIRED,
+            ))
+    messages.sort(key=lambda message: (
+        getattr(getattr(message.obj, '_meta', None), 'label', ''),
+        message.msg,
+    ))
+    return messages
 
 
 @django_checks.register(django_checks.Tags.models)
