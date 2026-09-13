@@ -18,12 +18,13 @@ exactly one terminal M2M membership hop after zero or more forward
 single-valued hops. Validation is registration-time ``_meta`` only
 (zero SQL).
 
-``register_strategy(OrderedFold(...))`` is a parallel closed family.
-Ordinary ``register()`` stays the AnyPath ``EXISTS`` fast path. One
-content terminal may use AnyPath xor one OrderedFold. The first
-OrderedFold renderer is PostgreSQL; other vendors fail closed before
-fold SQL. Import ``OrderedFold``, ``PermissionMaskDomain``,
-``MaskEntry``, ``PolarityMap``, and ``FlatToken`` from ``trusts.core``.
+``handle.register_strategy(source_model, OrderedFold(...))`` is a
+parallel closed family. Ordinary ``handle.register()`` stays the
+AnyPath ``EXISTS`` fast path. One content terminal may use AnyPath xor
+one OrderedFold. The first OrderedFold renderer is PostgreSQL; other
+vendors fail closed before fold SQL. Import ``OrderedFold``,
+``PermissionMaskDomain``, ``MaskEntry``, ``PolarityMap``, and
+``FlatToken`` from ``trusts.core``.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
@@ -2543,7 +2544,7 @@ class TrustsRegistry(object):
         ).filter_content(queryset, user, permission)
 
 
-def _public_path_segments(value, role):
+def _public_path_segments(value, role, *, allow_empty=False):
     """Split a public Django ``__`` path. Reject before ``Ref`` / resolve."""
     if isinstance(value, Ref):
         raise TypeError(
@@ -2553,9 +2554,15 @@ def _public_path_segments(value, role):
         raise TrustsConfigurationError(
             '%s must be a Django path string, not %r.' % (role, value)
         )
+    if not value:
+        if allow_empty:
+            return ()
+        raise TrustsConfigurationError(
+            '%s path %r is not a valid Django __ relationship path.'
+            % (role, value)
+        )
     if (
-        not value
-        or value.startswith('__')
+        value.startswith('__')
         or value.endswith('__')
         or '.' in value
     ):
@@ -2572,8 +2579,147 @@ def _public_path_segments(value, role):
     return tuple(segments)
 
 
-def _public_ref(root, value, role):
-    return Ref(root, _public_path_segments(value, role))
+def _public_ref(root, value, role, *, allow_empty=False):
+    return Ref(root, _public_path_segments(
+        value, role, allow_empty=allow_empty,
+    ))
+
+
+def _public_model_class(value, role):
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django model class, not a Ref.' % (role,)
+        )
+    if isinstance(value, str):
+        raise TypeError(
+            '%s must be a Django model class, not a path string.' % (role,)
+        )
+    if not _is_model_class(value):
+        raise TrustsConfigurationError(
+            '%s must be a Django model class, not %r.' % (role, value)
+        )
+    return value
+
+
+def _reject_public_ref(value, role):
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django path string, not a Ref.' % (role,)
+        )
+    return value
+
+
+def _bind_public_flat_token(token):
+    """Bind public FlatToken model/path fields to independent Ref roots."""
+    from trusts.ordered_fold import FlatToken
+
+    if not isinstance(token, FlatToken):
+        return token
+    principal = _public_model_class(token.principal, 'principal')
+    principal_user = _public_ref(
+        principal, token.principal_user, 'principal_user', allow_empty=True,
+    )
+    principal_identity = _public_ref(
+        principal, token.principal_identity, 'principal_identity',
+        allow_empty=True,
+    )
+    member = token.member
+    member_identity = token.member_identity
+    member_group = token.member_group
+    if member is None and member_identity is None and member_group is None:
+        return FlatToken(
+            principal=Ref(principal),
+            principal_user=principal_user,
+            principal_identity=principal_identity,
+        )
+    if member is None:
+        _reject_public_ref(member_identity, 'member_identity')
+        _reject_public_ref(member_group, 'member_group')
+        return FlatToken(
+            principal=Ref(principal),
+            principal_user=principal_user,
+            principal_identity=principal_identity,
+            member=None,
+            member_identity=member_identity,
+            member_group=member_group,
+        )
+    member = _public_model_class(member, 'member')
+    if member_identity is not None:
+        member_identity = _public_ref(
+            member, member_identity, 'member_identity',
+        )
+    else:
+        _reject_public_ref(member_identity, 'member_identity')
+    if member_group is not None:
+        member_group = _public_ref(member, member_group, 'member_group')
+    else:
+        _reject_public_ref(member_group, 'member_group')
+    return FlatToken(
+        principal=Ref(principal),
+        principal_user=principal_user,
+        principal_identity=principal_identity,
+        member=Ref(member),
+        member_identity=member_identity,
+        member_group=member_group,
+    )
+
+
+def _bind_public_polarity(source_model, polarity):
+    from trusts.ordered_fold import PolarityMap
+
+    if not isinstance(polarity, PolarityMap):
+        return polarity
+    if isinstance(polarity.field, Ref):
+        raise TypeError(
+            'PolarityMap.field must be a Django path string, not a Ref.'
+        )
+    return PolarityMap(
+        _public_ref(source_model, polarity.field, 'polarity'),
+        allow_value=polarity.allow_value,
+        deny_value=polarity.deny_value,
+    )
+
+
+def _bind_public_ordered_fold(source_model, strategy):
+    """Normalize public OrderedFold strings to today's internal Refs."""
+    from trusts.ordered_fold import OrderedFold
+
+    if not isinstance(strategy, OrderedFold):
+        raise TrustsConfigurationError(
+            'register_strategy requires OrderedFold, not %r.' % (strategy,)
+        )
+    if isinstance(strategy.source, Ref) or isinstance(
+        strategy.source_descriptor, Ref,
+    ):
+        raise TypeError(
+            'register_strategy does not accept Ref fields; pass Django '
+            'path strings.'
+        )
+    if strategy.source is not None or strategy.source_descriptor is not None:
+        raise TrustsConfigurationError(
+            'source and source_descriptor are derived from the source '
+            'model and content path.'
+        )
+    content_path = _public_path_segments(strategy.content, 'content')
+    _path, related, _lookup, _target = _resolve_forward_singles(
+        source_model, content_path, 'content',
+    )
+    content_model = related._meta.concrete_model
+    return OrderedFold(
+        content=Ref(content_model),
+        descriptor=_public_ref(
+            content_model, strategy.descriptor, 'descriptor',
+            allow_empty=True,
+        ),
+        source=Ref(source_model),
+        source_descriptor=Ref(source_model, content_path),
+        order=_public_ref(source_model, strategy.order, 'order'),
+        polarity=_bind_public_polarity(source_model, strategy.polarity),
+        mask=_public_ref(source_model, strategy.mask, 'mask'),
+        trustee=_public_ref(source_model, strategy.trustee, 'trustee'),
+        token=_bind_public_flat_token(strategy.token),
+        domain=strategy.domain,
+    )
 
 
 def _bind_public_condition(condition, root):
@@ -2655,6 +2801,41 @@ class BackendHandle:
             permission=_public_ref(root, permission, 'permission'),
             condition=_bind_public_condition(condition, root),
             along=_bind_public_along(root, along),
+        )
+
+    def register_strategy(self, source_model, strategy=None):
+        """Application API: register one OrderedFold plan on this handle.
+
+        The positional source model is required. Public ``content``,
+        ``order``, ``mask``, ``trustee``, and ``PolarityMap.field`` are
+        Django ``__`` paths on that source. ``content`` also supplies
+        the content terminal; ``descriptor`` is a path on that terminal
+        and may be ``""``. ``FlatToken.principal`` and optional
+        ``member`` are independent model classes. Passing a ``Ref`` is
+        ``TypeError``. A frozen handle raises
+        ``TrustsConfigurationError`` before path parsing.
+        """
+        if getattr(self.registry, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        if strategy is None:
+            raise TypeError(
+                'register_strategy requires (source_model, OrderedFold); '
+                'the no-root form is not supported.'
+            )
+        if isinstance(source_model, Ref):
+            raise TypeError(
+                'register_strategy source must be a Django model class, '
+                'not a Ref.'
+            )
+        if not _is_model_class(source_model):
+            raise TrustsConfigurationError(
+                'register_strategy source must be a Django model class, '
+                'not %r.' % (source_model,)
+            )
+        return self.registry.register_strategy(
+            _bind_public_ordered_fold(source_model, strategy),
         )
 
     def register_permission_condition(self, model, code, builder):
