@@ -307,6 +307,30 @@ def _extra_grant_models():
     INSTALLED_APPS=INSTALLED_APPS,
 )
 class AuthorizationRequiredCompositionTest(TransactionTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        (
+            cls.ExtraDocumentGrant,
+            cls.OtherPermission,
+            cls.OtherPermissionGrant,
+        ) = _extra_grant_models()
+
+    @classmethod
+    def tearDownClass(cls):
+        from django.apps import apps as django_apps
+
+        for model in (
+            cls.ExtraDocumentGrant,
+            cls.OtherPermissionGrant,
+            cls.OtherPermission,
+        ):
+            django_apps.all_models[model._meta.app_label].pop(
+                model._meta.model_name, None,
+            )
+        django_apps.clear_cache()
+        super().tearDownClass()
+
     def setUp(self):
         User = get_user_model()
         self.alice = User.objects.create_user(username='alice-138b', password='x')
@@ -338,11 +362,10 @@ class AuthorizationRequiredCompositionTest(TransactionTestCase):
                         view(_request(self.alice), pk=pk)
 
     def test_dual_backend_condition_order_does_not_broaden(self):
-        ExtraDocumentGrant, _OtherPermission, _OtherGrant = _extra_grant_models()
         primary = _document_backend()
         extra = _extra_handle()
         extra.register(
-            ExtraDocumentGrant,
+            self.ExtraDocumentGrant,
             user='user',
             permission='permission',
             content='document',
@@ -352,7 +375,7 @@ class AuthorizationRequiredCompositionTest(TransactionTestCase):
             'non_confidential',
             lambda u, p, o: o.title != 'nope',
         )
-        with _tables(ExtraDocumentGrant):
+        with _tables(self.ExtraDocumentGrant):
             self._assert_both_orders(
                 primary, extra, _edit_non_confidential, self.secret.pk, False,
             )
@@ -361,17 +384,16 @@ class AuthorizationRequiredCompositionTest(TransactionTestCase):
             )
 
     def test_incomplete_second_backend_grant_is_omitted(self):
-        ExtraDocumentGrant, _OtherPermission, _OtherGrant = _extra_grant_models()
         primary = _document_backend()
         extra = _extra_handle()
         extra.register(
-            ExtraDocumentGrant,
+            self.ExtraDocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        with _tables(ExtraDocumentGrant):
-            ExtraDocumentGrant.objects.create(
+        with _tables(self.ExtraDocumentGrant):
+            self.ExtraDocumentGrant.objects.create(
                 document=self.secret, user=self.alice, permission=self.change,
             )
             self._assert_both_orders(
@@ -379,20 +401,17 @@ class AuthorizationRequiredCompositionTest(TransactionTestCase):
             )
 
     def test_incompatible_permission_terminal_cannot_collide(self):
-        _ExtraDocumentGrant, OtherPermission, OtherPermissionGrant = (
-            _extra_grant_models()
-        )
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-perm')
         extra.register(
-            OtherPermissionGrant,
+            self.OtherPermissionGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        with _tables(OtherPermission, OtherPermissionGrant):
-            OtherPermission.objects.create(pk=self.change.pk, label='collide')
-            OtherPermissionGrant.objects.create(
+        with _tables(self.OtherPermission, self.OtherPermissionGrant):
+            self.OtherPermission.objects.create(pk=self.change.pk, label='collide')
+            self.OtherPermissionGrant.objects.create(
                 document=self.open_doc,
                 user=self.bob,
                 permission_id=self.change.pk,
