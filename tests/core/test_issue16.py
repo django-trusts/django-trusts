@@ -220,7 +220,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertEqual(log.calls, [])
         self.assertIsNone(registry.get_permission_condition_record(Note, 'own'))
 
-    def test_handle_register_forwards_and_freeze_is_before_builder(self):
+    def test_handle_add_named_filter_and_freeze_is_before_builder(self):
         Note, _Memo = _note_models()
         registry = TrustsRegistry()
         handle = BackendHandle(
@@ -229,7 +229,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
             compiler=object(),
         )
         log = _BuilderLog()
-        record = handle.register_permission_condition(Note, 'own', log)
+        record = handle.add_named_filter(Note, 'own', log)
         self.assertIs(
             registry.get_permission_condition_record(Note, 'own'), record,
         )
@@ -237,7 +237,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         registry.freeze()
         late = _BuilderLog()
         with self.assertRaises(TrustsConfigurationError):
-            handle.register_permission_condition(Note, 'late', late)
+            handle.add_named_filter(Note, 'late', late)
         self.assertEqual(late.calls, [])
 
     def test_generic_lookup_binds_without_reinvoking_builder(self):

@@ -1,7 +1,7 @@
 """Private condition IR and compiler (issue #4 V1 / #142 Stage B).
 
 This module is not an application-facing import. Register named
-conditions as builders on ``BackendHandle.register_permission_condition``.
+conditions as builders on ``BackendHandle.add_named_filter``.
 ``from trusts.conditions import Expr`` must fail.
 
 A callable argument to condition registration is a **builder**: Core
@@ -18,7 +18,7 @@ Prebuilt ``Expr`` trees are not accepted at register.
 
 Permission-condition records live on an instantiable
 ``ConditionRegistry`` (also exposed on each ``TrustsRegistry`` and
-``BackendHandle.register_permission_condition``). There is no
+``BackendHandle.add_named_filter``). There is no
 process-global store: each implementation handle owns its own records
 so owners cannot share or overwrite each other.
 
@@ -508,7 +508,7 @@ def condition_refs():
     """Return symbolic ``(u, p, o)`` for private compiler tests.
 
     Application code registers a builder with
-    ``handle.register_permission_condition``. These objects are policy
+    ``backend.add_named_filter``. These objects are policy
     data, not live principals or content rows. This helper is not a
     public import.
     """

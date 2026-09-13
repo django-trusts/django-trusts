@@ -40,8 +40,8 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
    named filters through `backend.add_named_filter(model, code, predicate)`
    in `AppConfig.ready()` before finalization. The application-facing
    object is the configured backend from `configured_backend()`.
-   `register(...)` and `register_permission_condition(...)` remain only
-   as temporary compatibility forwarders.
+   `BackendHandle.register(...)` and
+   `register_permission_condition(...)` are removed.
 4. Import only the six public `trusts.conditions` names:
    `PermissionConditionBooleanError`, `PermissionConditionError`,
    `PermissionConditionNotQueryable`, `PermissionConditionUnsupported`,
@@ -64,12 +64,12 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 | Named filter | `handle.register_permission_condition(Document, "non_confidential", builder)` | `backend.add_named_filter(Document, "non_confidential", predicate=builder)` |
 | OrderedFold | `.registry.register_strategy(OrderedFold(...Ref...))` or `handle.register_strategy(Ace, OrderedFold(...))` or `handle.register(Ace, strategy=OrderedFold(content="document", descriptor="", ...))` | `backend.register_ordered_fold(Ace, OrderedFold(content=Document, descriptor="", source_descriptor="document", order="ace_order", polarity=PolarityMap("ace_type", allow_value=ALLOW, deny_value=DENY), mask="access_mask", trustee="user", token=FlatToken(principal=User, principal_user="", principal_identity=""), domain=PermissionMaskDomain(Permission, masks)))` |
 
-`handle.registry` remains temporarily so unconverted consumers still
-compile. `backend.register_relationship`,
+`handle.registry` remains temporarily so unconverted internal
+compiler tests still compile. `backend.register_relationship`,
 `backend.register_ordered_fold`, and `backend.add_named_filter` are
-the public 1.0 methods. `register(...)` and
-`register_permission_condition(...)` are temporary undocumented
-forwarders. There is no public `register_strategy` alias. Public
+the public 1.0 methods. `BackendHandle.register(...)` and
+`BackendHandle.register_permission_condition(...)` are removed.
+There is no public `register_strategy` alias. Public
 OrderedFold `content` is the content model class, not a path on the
 ACE. `descriptor` is content-relative and may be `""`.
 `source_descriptor` is a required source-relative Django `__` path.
@@ -80,7 +80,9 @@ Convergent shared-descriptor form (Windows-shaped
 `content=WinNode`, `descriptor="security_descriptor"`,
 `source_descriptor="descriptor"`.
 
-Migration-bot search list:
+Migration-bot search list (Core plus the four active consumers:
+`django-trusts-zero`, `django-trusts-gh-permissions`,
+`django-trusts-windows-acl`, `django-trusts-zero-example`):
 
 - `from trusts.core import Ref`
 - `Ref(`
@@ -94,6 +96,19 @@ Migration-bot search list:
 - `register(..., strategy=`
 - `.register(`
 - `register_permission_condition(`
+- `handle.register(`
+- `backend.register(`
+- `handle.register_permission_condition(`
+- `backend.register_permission_condition(`
+
+Classify internal `TrustsRegistry.register` /
+`TrustsRegistry.register_permission_condition`, Django
+`admin.site.register`, and `BaseCommand.handle` separately. Merged
+consumer heads with no remaining application calls:
+Zero `2e3cccedb92b4cf85e9d6a3cd2d51821aad1d716`, example
+`ac62897da26b493356cc149154d878018ee6a5fb`, Windows
+`1a9dc9c2b299dd15ee3aa5dcf083168050606d13`. GH permissions remains
+README-only.
 
 ## View guard (#138)
 
