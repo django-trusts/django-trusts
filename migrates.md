@@ -100,8 +100,10 @@ Only configured backends whose applicable plan uses
 backends composes its own grant with its own selected names before the
 backends are OR'd. A backend that does not register every selected name
 is omitted; its unconditioned grant does not participate. Backend order
-does not change the result. A name that no participating backend
-registers still fails closed (`TrustsConfigurationError` / `trusts.E008`).
+does not change the result. Selected names that no participating auth.Permission backend
+registers together still fail closed (`TrustsConfigurationError` /
+`trusts.E008`). E008 uses that same per-backend completeness rule;
+a global union of names across registries is not enough.
 
 Migration-bot checklist:
 

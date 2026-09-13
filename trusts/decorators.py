@@ -321,6 +321,18 @@ def _permission_binding(model, app_label, codename):
     )
 
 
+def _plan_is_auth_permission(plan):
+    """True when ``plan`` is applicable and terminates on auth.Permission."""
+    permission_model = getattr(plan, 'permission_model', None)
+    if permission_model is None:
+        return False
+    if permission_model._meta.concrete_model is not Permission:
+        return False
+    if not plan.records and getattr(plan, 'strategy', None) is None:
+        return False
+    return True
+
+
 def _auth_permission_plan(handle, candidates, user):
     """Applicable plan only when the permission terminal is auth.Permission.
 
@@ -330,14 +342,38 @@ def _auth_permission_plan(handle, candidates, user):
     id. Those plans are omitted from this string-permission guard.
     """
     plan = handle.registry.plan_for(candidates, user=user)
-    permission_model = getattr(plan, 'permission_model', None)
-    if permission_model is None:
-        return None
-    if permission_model._meta.concrete_model is not Permission:
-        return None
-    if not plan.records and getattr(plan, 'strategy', None) is None:
+    if not _plan_is_auth_permission(plan):
         return None
     return plan
+
+
+def _auth_permission_plan_for_model(handle, model):
+    """Zero-SQL applicable auth.Permission plan for this content model."""
+    registry = getattr(handle, 'registry', None)
+    plan_for = getattr(registry, 'plan_for', None)
+    if not callable(plan_for):
+        return None
+    plan = plan_for(model)
+    if not _plan_is_auth_permission(plan):
+        return None
+    return plan
+
+
+def _backend_has_selected_conditions(handle, model, conditions):
+    """True when this handle registers every selected name with a queryable expr."""
+    if not conditions:
+        return True
+    lookup = getattr(getattr(handle, 'registry', None), 'condition_lookup', None)
+    if lookup is None:
+        return False
+    record_for = getattr(lookup, 'record_for', None)
+    if not callable(record_for):
+        return False
+    for name in conditions:
+        record = record_for(model, name)
+        if record is None or getattr(record, 'expr', None) is None:
+            return False
+    return True
 
 
 def _overlay_for_backend(handle, model, permission, conditions, user):

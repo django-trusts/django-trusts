@@ -369,6 +369,19 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
             document=self.secret, user=self.alice, permission=self.change,
         )
 
+    def _forget_guard(self, entry):
+        try:
+            _declared_authorization_guards.remove(entry)
+        except ValueError:
+            pass
+
+    def _e008_messages(self, *needles):
+        return [
+            message for message in run_checks()
+            if getattr(message, 'id', None) == 'trusts.E008'
+            and all(needle in message.msg for needle in needles)
+        ]
+
     def _assert_both_orders(self, primary, extra, view, pk, expect_ok):
         for handles in ((primary, extra), (extra, primary)):
             with patch(
@@ -447,3 +460,76 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
                         _edit(_request(self.alice), pk=self.open_doc.pk),
                         'ok',
                     )
+
+    def test_e008_split_names_across_backends_fail_closed(self):
+        handle_a = _extra_handle(path='tests.core.issue138-split-a')
+        handle_b = _extra_handle(path='tests.core.issue138-split-b')
+        for handle in (handle_a, handle_b):
+            handle.register(
+                self.ExtraDocumentGrant,
+                user='user',
+                permission='permission',
+                content='document',
+            )
+        handle_a.register_permission_condition(
+            Document, 'split_a_138', lambda u, p, o: o.confidential != True,
+        )
+        handle_b.register_permission_condition(
+            Document, 'split_b_138', lambda u, p, o: o.confidential != True,
+        )
+        names = ('split_a_138', 'split_b_138')
+        entry = (Document, 'myapp.change_document', names)
+        self.addCleanup(self._forget_guard, entry)
+
+        @authorization_required(Document, 'myapp.change_document', names)
+        def _split(request, pk):
+            return 'no'
+
+        with patch(
+            'trusts.apps.configured_implementation_handles',
+            return_value=(handle_a, handle_b),
+        ):
+            messages = self._e008_messages('split_a_138', 'split_b_138')
+            self.assertTrue(messages)
+            self.assertIsInstance(messages[0], Error)
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError):
+                    _split(_request(self.alice), pk=self.open_doc.pk)
+            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
+                with self.assertNumQueries(0):
+                    with self.assertRaises(TrustsConfigurationError):
+                        _split(_request(self.alice), pk=self.open_doc.pk)
+
+    def test_e008_name_only_on_incompatible_permission_terminal(self):
+        primary = _document_backend()
+        extra = _extra_handle(path='tests.core.issue138-other-e008')
+        extra.register(
+            self.OtherPermissionGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        extra.register_permission_condition(
+            Document, 'only_other_138', lambda u, p, o: o.confidential != True,
+        )
+        entry = (Document, 'myapp.change_document', ('only_other_138',))
+        self.addCleanup(self._forget_guard, entry)
+
+        @authorization_required(Document, 'myapp.change_document', ('only_other_138',))
+        def _other(request, pk):
+            return 'no'
+
+        with patch(
+            'trusts.apps.configured_implementation_handles',
+            return_value=(primary, extra),
+        ):
+            messages = self._e008_messages('only_other_138')
+            self.assertTrue(messages)
+            self.assertIsInstance(messages[0], Error)
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError):
+                    _other(_request(self.alice), pk=self.open_doc.pk)
+            with override_settings(SILENCED_SYSTEM_CHECKS=['trusts.E008']):
+                with self.assertNumQueries(0):
+                    with self.assertRaises(TrustsConfigurationError):
+                        _other(_request(self.alice), pk=self.open_doc.pk)
