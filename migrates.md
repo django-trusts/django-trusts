@@ -35,10 +35,11 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
    `TrustModelBackendMixin`. Call `super().ready()`.
 3. Register protected models through `handle.register(root, user=...,
    permission=..., content=...)`, ordered strategies through
-   `handle.register_strategy(source_model, OrderedFold(...))`, and
-   named-condition **builders** through
-   `handle.register_permission_condition` in `AppConfig.ready()` before
-   finalization.
+   `handle.register_strategy(source_model, OrderedFold(...))`, named
+   path filters through `handle.register_path_filter`, and named
+   request filters through `handle.register_request_filter` (or the
+   unpublished `handle.register_permission_condition` forwarder) in
+   `AppConfig.ready()` before finalization.
 4. Import only the six public `trusts.conditions` names:
    `PermissionConditionBooleanError`, `PermissionConditionError`,
    `PermissionConditionNotQueryable`, `PermissionConditionUnsupported`,
@@ -78,6 +79,63 @@ Migration-bot search list:
 - `Along(`
 - `OrderedFold(`
 - `register_strategy(OrderedFold`
+
+## Named filters and `trusts.check` (#131 C-unify)
+
+| | Old | New |
+| --- | --- | --- |
+| `app.codename:own` / colon parse | `"app.codename"` + `filter=("own",)` on Trusts request APIs |
+| `"app.x:non_confidential:editable"` as one code | `filter=("non_confidential", "editable")` |
+| `user.has_perm("app.x:y", obj)` | `check(user, "app.x", obj, filter=("y",))` |
+| Core `@permission_required(...)` / inference | removed later (#138); `@require_authorization(Model, K(...), perm, filter=())` |
+| Core `P(perm, **fieldlookups)` | removed from Core 1.0 guard (#138) |
+| historical Zero decorator / `P` / `:own` | explicit `trusts.zero.*` import (`#138`) |
+| `register_permission_condition` | `register_request_filter` |
+| `register(..., condition=permission_in/All/Equal)` | `register_path_filter` + `register(..., filter="name")` |
+| `register(..., filter=lambda r: ...)` | illegal (named-only B) |
+| `trusts.check` vs `has_object_perm` / `instance_match` | public name is `trusts.check` |
+| bare Core guard via `user.has_perms` | Trusts-only `check` (loses ModelBackend / superuser) |
+| `where=` / `NamedConditions` / `conditions=` | never shipped; do not alias |
+
+`require_authorization` is #138 and is **not** implemented in C-unify.
+When it lands, the signature is identity-before-permission:
+
+```python
+require_authorization(
+    content_model,
+    candidate_identity,
+    permission,
+    filter=(),
+)
+```
+
+Direct object checks stay `check(user, permission, obj, filter=())`.
+`filter=` on request APIs is exactly `tuple[str, ...]`. A bare string,
+list, set, generator, or mapping is `TypeError` — do not coerce a
+string into characters. Path attach is named-only:
+`register(..., filter="name")`. Path-filter and request-filter stores
+are separate; there is no cross-store lookup and no colon grammar.
+
+Migration-bot search list:
+
+- `:non_confidential`
+- `:own`
+- `parse_perm_code`
+- `permission_has_condition`
+- `permission_condition_code`
+- `condition_code=`
+- `condition=`
+- `permission_in(`
+- `has_perm('...:`
+- `register_permission_condition(`
+- `register_strategy(`
+- `where=`
+- `NamedConditions`
+- `conditions=`
+- `.registry`
+- `Ref(`
+- `permission_required(`
+- `from trusts.decorators import P`
 
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.

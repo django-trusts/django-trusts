@@ -27,13 +27,15 @@ class AuthorizedQuerySet(QuerySet):
     *codenames* raise ``TrustsConfigurationError`` with zero SQL. This
     method does not parse ``:condition``, does not call
     ``is_active_principal``, and does not call ``get_permission``.
+    Keyword-only ``filter`` is a request-name tuple validated before
+    any iteration or coercion.
 
     Callers that need Django inactivity checks or string permissions wrap
     this; they do not belong on this class. There is no ``.permitted`` and
     no ``.get_permission``.
     """
 
-    def authorized(self, user, permission, extra_q=None):
+    def authorized(self, user, permission, extra_q=None, *, filter=()):
         from trusts.apps import configured_implementation_handles
         from trusts.core import TrustsConfigurationError, granted
 
@@ -43,7 +45,7 @@ class AuthorizedQuerySet(QuerySet):
             )
         granted_q = granted(
             configured_implementation_handles(),
-            self, user, permission, kind='complete',
+            self, user, permission, kind='complete', filter=filter,
         )
         if granted_q is None:
             return self.none()

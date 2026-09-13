@@ -155,19 +155,21 @@ class ConditionRegistryShapeTest(SimpleTestCase):
             registry.register_permission_condition(Note, 'bad', 'not-a-condition')
         self.assertEqual(len(log.calls), 1)
 
-    def test_duplicate_condition_overwrites_same_identity(self):
+    def test_duplicate_request_filter_leaves_store_unchanged(self):
         Note, _Memo = _note_models()
         registry = TrustsRegistry()
-        registry.register_permission_condition(
+        first = registry.register_permission_condition(
             Note, 'named', lambda u, p, o: u == o.owner,
         )
-        registry.register_permission_condition(
-            Note, 'named', lambda u, p, o: o.title == 'keep',
-        )
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register_permission_condition(
+                Note, 'named', lambda u, p, o: o.title == 'keep',
+            )
         record = registry.get_permission_condition_record(Note, 'named')
+        self.assertIs(record, first)
         self.assertEqual(
             record.expr.to_tuple(),
-            ('eq', ('ref', 'object', ('title',)), ('const', 'keep')),
+            ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))),
         )
         rows = list(registry.iter_permission_conditions())
         self.assertEqual(len(rows), 1)
