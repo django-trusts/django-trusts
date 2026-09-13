@@ -2,8 +2,10 @@
 
 Baseline: Core `dev` `73519bc6e67cf0e5759ebb5d3c816d39fb84d859`.
 Zero pair pin: `2e3cccedb92b4cf85e9d6a3cd2d51821aad1d716` (CI `COMPANION_ZERO_SHA`).
-Disposition: Thomas (chat 2026-09-13) prefer raise when `obj` is a QuerySet.
+Disposition: Thomas (chat 2026-09-13) prefer raise when `obj` is a QuerySet;
+follow-up: do not force the raise if messy — consider the **5th method** next.
 Result: **STOP**. No production raise landed. Blast radius **exceeds 3**.
+This spike does **not** invent the 5th-method redesign.
 
 ## Hypothesis
 
@@ -179,16 +181,30 @@ raise.
 | Decide `get_*_permissions(qs)` (leave asymmetric vs raise/redesign) | sibling API / possible `migrates.md` |
 | **This spike** | **exceeds 3** |
 
-Whole-ticket note (provisional, for Chat): a later raise still looks like
-a focused Core change **after** Zero is re-issued to drop QS `has_perm`
-parity and the decorator either stops passing a QuerySet or is documented
-as the one remaining collection caller. That sequencing is not this PR.
+Whole-ticket note (provisional, for Chat): do **not** force a Core-only
+raise. Thomas’s follow-up: if QS-in-`has_perm` is messy, the next
+consideration is his **5th method** — collection→collection list inquiry
+(`.authorized` / “objects permitted on this screen”). That is a different
+question from bool `has_perm`. The other four natural APIs may need to
+depend on it. This spike does not design that foundation.
+
+A later raise of `has_perm(..., qs)` would still be a focused Core change
+only **after** Zero is re-issued and the decorator/`get_*_permissions(qs)`
+question is sequenced. That is not this PR.
 
 ## Residual risk if someone lands Core-only raise anyway
 
 Pair CI red. Documented `permission_required` 500s/TypeError on every
 fieldlookup view. Asymmetric `get_*_permissions(qs)`. PR #183 stays
 parked and becomes moot for `has_perm(..., qs)` named-filter overlay.
+
+## Next (not this spike)
+
+Thomas: if the raise is messy, do not force it. Consider the **5th method**
+next — `.authorized` as the collection→collection list foundation (“objects
+permitted on this screen”). Bool `has_perm` stays singular. Do not invent
+that redesign here. `get_all_permissions(qs)` / Zero / `migrates.md` stay
+out of this branch.
 
 ## CI
 
