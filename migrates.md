@@ -3615,5 +3615,92 @@ binds a lookup. No schema rollback.
 - [ ] Do not implement Z2, C2, #152, #145, #146, #138, #131, or
       #137 in this PR.
 
+# Issue #151 C2: companion Zero pin to merged Z2 (1.0.0.dev3)
+
+This record covers the **Core C2** pin-only closure of
+[django-trusts#151](https://github.com/django-trusts/django-trusts/issues/151)
+accepted against
+[r2](https://github.com/django-trusts/django-trusts/issues/151#issuecomment-5649416301)
+and
+[C2 assignment](https://github.com/django-trusts/django-trusts/issues/151#issuecomment-5649771831).
+Package version stays **1.0.0.dev3**. No model, field, table,
+migration-loader key, content type, permission row, stored
+authorization fact, package identity, app label, public API, or
+runtime-behavior change.
+
+This PR pairs against Zero
+`841004af49687c31c466ed03dbfd4f8ce9c7f153` (merged Z2 / Zero #29).
+
+## Decision
+
+Retarget Core companion Zero provenance from Zero #28
+`18e87a63ff5079298e1ee330b888b4ff86551e1f` to merged Z2. Drop the
+temporary Core pair-runner omit of Zero
+`tests.legacy.test_issue54.ConditionLookupBindTest.test_unbound_is_none_and_bind_is_zero_sql`.
+The complete final Zero suite runs. No self-bind or public-surface
+edit.
+
+## No change to these public call sites
+
+- `handle.register_permission_condition(Model, "code", lambda u, p, o: …)`
+- `User.has_perm` / `has_perms` / `get_*_permissions` signatures
+- `TrustModelBackendMixin` grant matching
+- Package version `1.0.0.dev3`
+- Stored identity: app label `trusts`, Zero migration keys, tables,
+  content types, permissions, and rows
+- Six-name `trusts.conditions` surface
+- Construct-time Core self-bind from C1
+
+## Changes
+
+### 68. Companion Zero pin is merged Z2
+
+| | |
+| --- | --- |
+| Previous | `COMPANION_ZERO_SHA` / `ZERO_HEAD` named Zero #28 `18e87a63ff5079298e1ee330b888b4ff86551e1f`. The pair runner omitted Zero's pre-C1 unbound-default assertion. |
+| New | Active pairing files name merged Z2 `841004af49687c31c466ed03dbfd4f8ce9c7f153`. The pair runner runs the complete Zero suite. |
+| Replacement | Pin Core CI and companion-wheel proofs to that immutable Zero merge. |
+| Affected | `.github/workflows/ci.yml`, `scripts/verify-companion-wheels.py`, `scripts/run-z1-pair-tests.py`, and the C1 pin/omit regression. |
+| Authorization | Unchanged. |
+
+## Old vs new behavior
+
+| Situation | C1 (paired to Zero #28) | C2 (paired to merged Z2) |
+| --- | --- | --- |
+| Companion Zero pin | `18e87a63ff5079298e1ee330b888b4ff86551e1f` | `841004af49687c31c466ed03dbfd4f8ce9c7f153` |
+| Pair runner | Omits Zero `test_unbound_is_none_and_bind_is_zero_sql` | Complete Zero suite |
+| Default lookup | Self-bound at construct | Unchanged |
+| `trusts.conditions` | Six names | Unchanged |
+| Authorization | Fail-closed unknown/unbound/malformed | Unchanged |
+
+## Fail-closed rollout
+
+1. Core C1 `b6eebc9273bf30048d410305a53249bdb51679f0` and Zero Z2
+   `841004af49687c31c466ed03dbfd4f8ce9c7f153` are already merged.
+2. Land this Core C2 PR on `dev`. Core CI then certifies
+   production-clean Zero, not obsolete Zero #28.
+3. Do not start #152, #145, #146, #138, #131, or #137 here.
+
+## Rollback
+
+Revert this Core PR. Companion pin and the temporary omit return to
+the C1 pairing against Zero #28. No schema rollback.
+
+## Migration-bot checklist
+
+- [ ] Confirm `COMPANION_ZERO_SHA` and `ZERO_HEAD` are
+      `841004af49687c31c466ed03dbfd4f8ce9c7f153`.
+- [ ] Confirm active pairing files do not name Zero #28
+      `18e87a63ff5079298e1ee330b888b4ff86551e1f`.
+- [ ] Confirm `scripts/run-z1-pair-tests.py` has no
+      `OMIT_ZERO_UNBOUND_DEFAULT` and does not omit
+      `test_unbound_is_none_and_bind_is_zero_sql`.
+- [ ] Confirm the six-name `trusts.conditions` surface and C1
+      self-bind are unchanged.
+- [ ] Do not apply a new Trusts schema or data migration; none was
+      added.
+- [ ] Leave package version at `1.0.0.dev3`.
+- [ ] Do not implement #152, #145, #146, #138, #131, or #137 in
+      this PR.
 
 
