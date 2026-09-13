@@ -193,7 +193,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         )
         self.assertNotIn('"organizations"', pyproject)
 
-    def test_user_readme_is_not_internal_status(self):
+    def test_user_readme_is_a_concise_rst_front_door(self):
         readme = (ROOT / 'README.md').read_text()
         forbidden = (
             'Step I',
@@ -207,101 +207,57 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
             'code budget',
             'kernel_config',
             'trusts.core_backends',
-            'from trusts.backends import TrustModelBackend\n',
             'from trusts.models import Trust',
             'trusts.models.Trust',
             '1.0.0.dev1',
             '1.0.0.dev2',
             '1.0.0.dev3',
-            '11058641',
-            'f0b25c55',
-            '94e0fa1',
+            'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS',
+            'permission_required',
+            'P(',
+            'K(',
+            'G(',
+            'O(',
             'pip install django-trusts',
             'auth.read_group',
             'tests.kernel_host',
             'HostTrustModelBackend',
             'isolate_live_registry',
         )
-        offenders = [needle for needle in forbidden if needle in readme]
-        self.assertEqual(offenders, [])
-        self.assertNotIn("'trusts',", readme)
-        self.assertIn("Do **not** list `'trusts'` in `INSTALLED_APPS`", readme)
-        self.assertIn('non-standalone Python dependency', readme)
-        self.assertIn('python -m pip install .', readme)
-        self.assertIn('TrustsImplementationConfig', readme)
-        self.assertIn('from trusts.backends import TrustModelBackendMixin', readme)
-        self.assertNotIn('from trusts.core import Ref', readme)
-        self.assertNotIn('.registry.register(', readme)
-        self.assertIn('backend.register_relationship(', readme)
-        self.assertIn('super().ready()', readme)
-        self.assertIn("'tests.myapp.apps.DocumentConfig'", readme)
-        self.assertIn("'tests.myapp.backends.DocumentBackend'", readme)
-        self.assertIn("user.has_perm('myapp.change_document', document)", readme)
-        self.assertIn('Document.objects.authorized(user, change_permission)', readme)
-        self.assertIn("app_label = 'myapp'", readme)
+        self.assertEqual([needle for needle in forbidden if needle in readme], [])
+        self.assertLess(len(readme.splitlines()), 80)
+        self.assertIn('django-trusts-mascot.png', readme)
+        self.assertIn('## How permissions are represented', readme)
+        self.assertIn('## Usage', readme)
         self.assertIn(
-            "@permission_required('myapp.change_document', fieldlookups_kwargs={'pk': 'pk'})",
+            'https://django-trusts.readthedocs.io/en/latest/#installation',
             readme,
         )
+        self.assertIn('[Security audit guide](SECURITY_AUDIT.md)', readme)
+        self.assertIn('[Core 1.x migration router](migrates.md)', readme)
+        self.assertIn('DEV.md', readme)
         self.assertIn('django-trusts-zero', readme)
         self.assertIn('django-trusts-gh-permissions', readme)
-        self.assertIn('migrates.md', readme)
-        self.assertIn('forthcoming', readme.lower())
-        self.assertIn('not complete', readme.lower())
-        self.assertIn('BeeDesk, Inc., 2015–2026 (BSD-2-Clause)', readme)
-        self.assertIn('DEV.md', readme)
-        dev = (ROOT / 'DEV.md').read_text()
-        self.assertIn('internal', dev[:800].lower())
-        self.assertIn('development', dev[:800].lower())
-        self.assertIn('README.md', dev[:800])
+        self.assertIn('django-trusts-windows-acl', readme)
+        self.assertIn('django-trusts-zero-example', readme)
+        self.assertIn('Copyright BeeDesk, Inc., 2015–2026.', readme)
 
-    def test_readme_examples_match_consumer_modules(self):
+    def test_readme_routes_to_the_executable_rst_guide(self):
         readme = (ROOT / 'README.md').read_text()
-        settings_text = (ROOT / 'tests' / 'myapp' / 'settings.py').read_text()
-        self.assertIn("'tests.myapp.apps.DocumentConfig'", settings_text)
-        self.assertIn("'tests.myapp.backends.DocumentBackend'", settings_text)
-        self.assertNotIn("'trusts',", settings_text)
-        self.assertIn(settings_text.strip(), readme)
-        backends = (ROOT / 'tests' / 'myapp' / 'backends.py').read_text()
-        self.assertIn(
-            'class DocumentBackend(TrustModelBackendMixin, ModelBackend):',
-            backends,
-        )
-        self.assertIn(DOCUMENT_BACKEND, readme)
-        apps = (ROOT / 'tests' / 'myapp' / 'apps.py').read_text()
-        self.assertIn('class DocumentConfig(TrustsImplementationConfig):', apps)
-        self.assertIn('super().ready()', apps)
-        self.assertIn("content='document'", apps)
-        self.assertIn("content='document'", readme)
-        self.assertIn('handle.register(', apps)
-        self.assertNotIn('from trusts.core import Ref', apps)
-        self.assertNotIn('.registry.register(', apps)
-        models_text = (ROOT / 'tests' / 'myapp' / 'models.py').read_text()
-        self.assertIn('confidential = models.BooleanField(default=False)', models_text)
-        self.assertIn('confidential = models.BooleanField(default=False)', readme)
-        self.assertIn('backend.add_named_filter(', readme)
-        self.assertIn('o.confidential != True', readme)
-        self.assertIn('handle.register_permission_condition(', apps)
-        self.assertIn('backend.register_relationship(', readme)
-        self.assertNotIn('RegistryConditionLookup', readme)
-        self.assertNotIn('RegistryConditionLookup', apps)
-        self.assertNotIn('trusts.conditions._ir', readme)
-        self.assertNotIn('trusts.conditions._ir', apps)
-        self.assertNotIn('set_condition_lookup', readme)
-        self.assertNotIn('set_condition_lookup', apps)
         rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
+
+        self.assertNotIn('.. code-block::', readme)
+        self.assertIn('Define the models', rst)
+        self.assertIn('TrustsImplementationConfig', rst)
+        self.assertIn('TrustModelBackendMixin', rst)
+        self.assertIn('backend.register_relationship(', rst)
+        self.assertIn('backend.register_ordered_fold(', rst)
+        self.assertIn('backend.add_named_filter(', rst)
+        self.assertIn('Document.objects.authorized(', rst)
+        self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertNotIn('RegistryConditionLookup', rst)
         self.assertNotIn('trusts.conditions._ir', rst)
         self.assertNotIn('set_condition_lookup', rst)
-        views = (ROOT / 'tests' / 'myapp' / 'views.py').read_text()
-        self.assertIn(
-            "@permission_required('myapp.change_document', fieldlookups_kwargs={'pk': 'pk'})",
-            views,
-        )
-        default_settings = (ROOT / 'tests' / 'settings.py').read_text()
-        self.assertIn("'tests.myapp.apps.DocumentConfig'", default_settings)
-        self.assertIn("'tests.myapp.backends.DocumentBackend'", default_settings)
-        self.assertNotIn("'trusts',", default_settings)
 
     def test_no_test_modules_in_installable_trusts_package(self):
         import importlib.util
