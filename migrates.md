@@ -63,7 +63,11 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 `handle.registry` remains temporarily so unconverted consumers still
 compile. `handle.register_strategy` is the public OrderedFold entry.
 The positional source model is required; do not call
-`register_strategy(OrderedFold(...))` without that root.
+`register_strategy(OrderedFold(...))` without that root. A non-empty
+`descriptor` is content-relative; the derived source descriptor is the
+content path plus those segments (`content="node"`,
+`descriptor="security_descriptor"` → internal
+`Ace.node.security_descriptor`).
 
 Migration-bot search list:
 

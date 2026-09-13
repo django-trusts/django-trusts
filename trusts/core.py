@@ -2698,21 +2698,21 @@ def _bind_public_ordered_fold(source_model, strategy):
     if strategy.source is not None or strategy.source_descriptor is not None:
         raise TrustsConfigurationError(
             'source and source_descriptor are derived from the source '
-            'model and content path.'
+            'model, content path, and descriptor.'
         )
     content_path = _public_path_segments(strategy.content, 'content')
+    descriptor_path = _public_path_segments(
+        strategy.descriptor, 'descriptor', allow_empty=True,
+    )
     _path, related, _lookup, _target = _resolve_forward_singles(
         source_model, content_path, 'content',
     )
     content_model = related._meta.concrete_model
     return OrderedFold(
         content=Ref(content_model),
-        descriptor=_public_ref(
-            content_model, strategy.descriptor, 'descriptor',
-            allow_empty=True,
-        ),
+        descriptor=Ref(content_model, descriptor_path),
         source=Ref(source_model),
-        source_descriptor=Ref(source_model, content_path),
+        source_descriptor=Ref(source_model, content_path + descriptor_path),
         order=_public_ref(source_model, strategy.order, 'order'),
         polarity=_bind_public_polarity(source_model, strategy.polarity),
         mask=_public_ref(source_model, strategy.mask, 'mask'),
@@ -2808,9 +2808,10 @@ class BackendHandle:
 
         The positional source model is required. Public ``content``,
         ``order``, ``mask``, ``trustee``, and ``PolarityMap.field`` are
-        Django ``__`` paths on that source. ``content`` also supplies
-        the content terminal; ``descriptor`` is a path on that terminal
-        and may be ``""``. ``FlatToken.principal`` and optional
+        Django ``__`` paths on that source. ``content`` supplies the
+        content terminal. ``descriptor`` is a path on that terminal and
+        may be ``""``; the derived source descriptor is the content
+        path plus those segments. ``FlatToken.principal`` and optional
         ``member`` are independent model classes. Passing a ``Ref`` is
         ``TypeError``. A frozen handle raises
         ``TrustsConfigurationError`` before path parsing.

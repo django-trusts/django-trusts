@@ -100,9 +100,11 @@ class OrderedFold:
     """Closed typed remaining-bits strategy for one content terminal.
 
     ``BackendHandle.register_strategy(source_model, OrderedFold(...))``
-    derives ``source`` and ``source_descriptor`` from the positional
-    source model and the public ``content`` path. Isolated registry
-    tests still pass those fields as root-relative ``Ref`` values.
+    derives ``source`` from the positional source model and
+    ``source_descriptor`` from the public ``content`` path plus the
+    content-relative ``descriptor`` segments (empty ``descriptor``
+    keeps today's content path). Isolated registry tests still pass
+    those fields as root-relative ``Ref`` values.
     """
 
     content: object

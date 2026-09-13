@@ -466,6 +466,82 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
                     ))
         self.assertEqual(handle.registry.strategies, ())
 
+    def test_nonempty_descriptor_matches_internal_ref_record(self):
+        User = get_user_model()
+
+        class SecurityDescriptor(models.Model):
+            name = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Node(models.Model):
+            title = models.CharField(max_length=40)
+            security_descriptor = models.ForeignKey(
+                SecurityDescriptor, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Ace(models.Model):
+            node = models.ForeignKey(Node, on_delete=models.CASCADE)
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        via_ref = TrustsRegistry()
+        ace = Ref(Ace)
+        node = Ref(Node)
+        user = Ref(User)
+        expected = via_ref.register_strategy(OrderedFold(
+            content=node,
+            descriptor=node.security_descriptor,
+            source=ace,
+            source_descriptor=ace.node.security_descriptor,
+            order=ace.ace_order,
+            polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+            mask=ace.access_mask,
+            trustee=ace.user,
+            token=FlatToken(
+                principal=user, principal_user=user, principal_identity=user,
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+        handle = _handle()
+        compiled = handle.register_strategy(Ace, OrderedFold(
+            content='node',
+            descriptor='security_descriptor',
+            order='ace_order',
+            polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
+            mask='access_mask',
+            trustee='user',
+            token=FlatToken(
+                principal=User,
+                principal_user='',
+                principal_identity='',
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+        self.assertEqual(compiled, expected)
+        self.assertIs(compiled.content_model, Node)
+        self.assertEqual(compiled.content_desc_path, ('security_descriptor',))
+        self.assertGreater(len(compiled.source_desc_hops), 1)
+        self.assertEqual(
+            tuple(hop.name for hop in compiled.source_desc_hops),
+            ('node', 'security_descriptor'),
+        )
+
     def test_string_principal_or_member_is_type_error(self):
         Permission, Document, Ace = _direct_models()
         handle = _handle()
