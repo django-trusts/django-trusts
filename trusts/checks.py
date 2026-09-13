@@ -10,7 +10,8 @@ still validate and fail closed.
 
 ``trusts.E007`` reports the deleted runtime-callback setting still
 being ``True``. That setting never enables callbacks. ``trusts.E002``
-and ``trusts.W001`` are retired.
+and ``trusts.W001`` are retired. ``trusts.E008`` reports invalid
+``authorization_required`` condition configuration.
 """
 
 from django.core import checks as django_checks
@@ -28,6 +29,7 @@ CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
+CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -498,6 +500,20 @@ def _live_ordered_fold_strategies(config):
             continue
         found.extend(getattr(handle.registry, 'strategies', ()))
     return found
+
+
+@django_checks.register()
+def check_authorization_required(app_configs, **kwargs):
+    """Report unknown or unsupported ``authorization_required`` names.
+
+    Declaration syntax is validated when the decorator is applied.
+    Registered-name resolution runs here after apps are ready. Silencing
+    ``trusts.E008`` hides only this diagnostic; first use still
+    fail-closes and never falls back to the base grant. Zero SQL.
+    """
+    from trusts.decorators import authorization_required_check_messages
+
+    return authorization_required_check_messages()
 
 
 @django_checks.register(django_checks.Tags.database)
