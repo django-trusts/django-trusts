@@ -11,7 +11,7 @@ from django.core.checks import Error, run_checks
 from django.db import connection, models
 from django.http import Http404, HttpRequest
 from django.test import TestCase, TransactionTestCase
-from django.test.utils import override_settings
+from django.test.utils import isolate_apps, override_settings
 
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
@@ -278,14 +278,14 @@ def _extra_grant_models():
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
         class Meta:
-            app_label = 'myapp'
+            app_label = 'trusts_tests'
             db_table = 'issue138_extra_document_grant'
 
     class OtherPermission(models.Model):
         label = models.CharField(max_length=40, blank=True)
 
         class Meta:
-            app_label = 'myapp'
+            app_label = 'trusts_tests'
             db_table = 'issue138_other_permission'
 
     class OtherPermissionGrant(models.Model):
@@ -296,12 +296,13 @@ def _extra_grant_models():
         )
 
         class Meta:
-            app_label = 'myapp'
+            app_label = 'trusts_tests'
             db_table = 'issue138_other_permission_grant'
 
     return ExtraDocumentGrant, OtherPermission, OtherPermissionGrant
 
 
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 @override_settings(
     AUTHENTICATION_BACKENDS=AUTHENTICATION_BACKENDS,
     INSTALLED_APPS=INSTALLED_APPS,

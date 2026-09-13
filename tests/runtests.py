@@ -49,6 +49,9 @@ KERNEL_SUITE = [
 # Kernel modules that remain valid against an installed Zero owner.
 # Historical Trust/Content/Junction/Role coverage runs from the Zero
 # checkout (see scripts/run-z1-pair-tests.py), not from core paths.
+# test_issue138 stays kernel-only: module-level authorization_required
+# guards need DocumentConfig, and trusts.E008 fires when only Zero is
+# installed.
 PAIR_KERNEL_SUITE = [
     'tests.core.test_issue4',
     'tests.core.test_issue16',
@@ -73,7 +76,6 @@ PAIR_KERNEL_SUITE = [
     'tests.core.test_issue108',
     'tests.core.test_issue129',
     'tests.core.test_issue131',
-    'tests.core.test_issue138',
     'tests.core.test_issue151',
     'tests.core.test_issue160',
 ]
