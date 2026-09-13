@@ -33,10 +33,10 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 1. Install the library. Core ships no Django app.
 2. Provide `TrustsImplementationConfig` and a backend that subclasses
    `TrustModelBackendMixin`. Call `super().ready()`.
-3. Register protected models and named-condition **builders** through
+3. Register protected models through `handle.register(root, user=...,
+   permission=..., content=...)` and named-condition **builders** through
    `handle.register_permission_condition` in `AppConfig.ready()` before
-   finalization. `register(...)` remains the public registration entry
-   for implementation wiring.
+   finalization.
 4. Import only the six public `trusts.conditions` names:
    `PermissionConditionBooleanError`, `PermissionConditionError`,
    `PermissionConditionNotQueryable`, `PermissionConditionUnsupported`,
@@ -48,6 +48,25 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
    and does not enable callbacks.
 7. Object checks use `user.has_perm`. List filtering uses the
    consumer queryset's `.authorized` / registered plans.
+
+## Relation registration (#131)
+
+| | Old | New |
+| --- | --- | --- |
+| Relation register | `from trusts.core import Ref` + `handle.registry.register(content=j.document, ...)` | `handle.register(DocumentGrant, user="user", permission="permission", content="document")` |
+| Along | `along=Along(j.parent, 8)` | `along=("parent", 8)` |
+| Closed condition | `Equal(t.team.organization, t.repository.organization)` | `Equal("team__organization", "repository__organization")` |
+
+`handle.registry` remains temporarily so unconverted consumers still
+compile. `handle.register_strategy` is not a public method yet.
+
+Migration-bot search list:
+
+- `from trusts.core import Ref`
+- `Ref(`
+- `.registry.register(`
+- `.registry.register_strategy(`
+- `Along(`
 
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.

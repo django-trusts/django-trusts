@@ -350,6 +350,41 @@ class LongPathRegistrationTest(TestCase):
         )
         self.assertGreaterEqual(len(clustered.condition.refs[0]._path), 6)
 
+    def test_handle_string_paths_match_ref_registration(self):
+        models_ = _long_path_models()
+        Placement = models_[-1]
+        via_ref = TrustsRegistry()
+        via_handle = TrustsRegistry()
+        handle = BackendHandle(
+            path='tests.core.longpath',
+            registry=via_handle,
+            compiler=PlanQueryCompiler(),
+        )
+        with self.assertNumQueries(0):
+            ref_direct = _direct_ceiling(via_ref, Placement)
+            ref_cluster = _cluster_ceiling(via_ref, Placement)
+            handle_direct = handle.register(
+                Placement,
+                user='actor',
+                permission='token',
+                content='artifact',
+                condition=permission_in(
+                    'wing__floor__building__hall__badges',
+                ),
+            )
+            handle_cluster = handle.register(
+                Placement,
+                user='actor',
+                permission='token',
+                content='artifact',
+                condition=permission_in(
+                    'wing__floor__building__hall__clusters__tokens',
+                ),
+            )
+        self.assertEqual(handle_direct, ref_direct)
+        self.assertEqual(handle_cluster, ref_cluster)
+        self.assertGreaterEqual(len(handle_cluster.condition.refs[0]._path), 6)
+
     def test_exact_duplicate_rejects_and_leaves_store_unchanged(self):
         models_ = _long_path_models()
         Placement = models_[-1]
