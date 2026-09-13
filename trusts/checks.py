@@ -28,6 +28,7 @@ CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
+CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -360,6 +361,110 @@ def permission_condition_check_messages(entries):
 def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
     """Fail loud if the deleted runtime-callback setting is still True."""
     return _messages_for_obsolete_callback_setting()
+
+
+def _authorization_check_handles():
+    """Configured handles for E008. Isolated test configs may omit helpers."""
+    from trusts.apps import configured_implementation_handles, implementation_configs
+    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+
+    try:
+        return tuple(configured_implementation_handles())
+    except AttributeError:
+        pass
+
+    handles = []
+    for config in implementation_configs():
+        getter = getattr(config, 'configured_handles', None)
+        if callable(getter):
+            try:
+                handles.extend(getter())
+                continue
+            except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
+                pass
+        try:
+            paths = config._configured_trusts_paths()
+        except (TrustsConfigurationError, AttributeError):
+            continue
+        for path in paths:
+            try:
+                handles.append(config.configured_backend(path))
+            except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
+                continue
+    return tuple(handles)
+
+
+@django_checks.register()
+def check_authorization_required_conditions(app_configs, **kwargs):
+    """Report unsupported or incomplete ``authorization_required`` guards.
+
+    Uses the same zero-SQL preflight as first use: at least one
+    applicable ``auth.Permission`` plan is required, and when names
+    are selected one participating backend must own the complete
+    queryable tuple. A global union of names across registries is
+    not enough. Guards whose model app is not installed are skipped
+    so a host that does not load that app (pair Zero, isolated Apps)
+    is not failed by imported fixtures. Silencing ``trusts.E008``
+    hides only the diagnostic; first use still fails closed before
+    the superuser shortcut and never falls back to an unconditioned
+    grant.
+    """
+    from django.apps import apps as django_apps
+    from trusts.decorators import (
+        _authorization_preflight_state,
+        _declared_authorization_guards,
+    )
+
+    handles = _authorization_check_handles()
+    messages = []
+    seen = set()
+    for model, _permission, conditions in _declared_authorization_guards:
+        app_label = getattr(getattr(model, '_meta', None), 'app_label', None)
+        try:
+            django_apps.get_app_config(app_label)
+        except LookupError:
+            continue
+        key = (model, conditions)
+        if key in seen:
+            continue
+        seen.add(key)
+        participating, complete = _authorization_preflight_state(
+            handles, model, conditions,
+        )
+        if participating and complete:
+            continue
+        if not participating:
+            messages.append(django_checks.Error(
+                'authorization_required has no applicable auth.Permission '
+                'plan for %s.' % _model_label(model),
+                hint=(
+                    'Register an auth.Permission plan for this model on a '
+                    'configured Trusts backend. Silencing trusts.E008 '
+                    'suppresses only this diagnostic; first use still '
+                    'fails closed.'
+                ),
+                obj=model,
+                id=CHECK_ID_AUTHORIZATION_REQUIRED,
+            ))
+            continue
+        messages.append(django_checks.Error(
+            'authorization_required conditions %r are not registered '
+            'together on any auth.Permission backend for %s.'
+            % (conditions, _model_label(model)),
+            hint=(
+                'Register the complete name set on one auth.Permission '
+                'backend with handle.register_permission_condition in '
+                'AppConfig.ready(). Silencing trusts.E008 suppresses only '
+                'this diagnostic; first use still fails closed.'
+            ),
+            obj=model,
+            id=CHECK_ID_AUTHORIZATION_REQUIRED,
+        ))
+    messages.sort(key=lambda message: (
+        getattr(getattr(message.obj, '_meta', None), 'label', ''),
+        message.msg,
+    ))
+    return messages
 
 
 @django_checks.register(django_checks.Tags.models)
