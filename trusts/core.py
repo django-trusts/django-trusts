@@ -241,6 +241,11 @@ def check(user, permission, obj, *, filter=()):
         from django.contrib.contenttypes.models import ContentType
         from django.db.models import Subquery
         from trusts import utils
+        if ':' in permission:
+            raise TypeError(
+                'check() does not parse colon suffixes; pass '
+                'filter=("name",).'
+            )
         applabel, modelname, action, _cond = utils.parse_perm_code(permission)
         binding = Subquery(
             Permission.objects.filter(
@@ -2923,15 +2928,12 @@ def _bind_public_condition(condition, root):
         ))
     if isinstance(condition, Equal):
         return Equal(
-            condition.left if isinstance(condition.left, Ref)
-            else _public_ref(root, condition.left, 'Equal left'),
-            condition.right if isinstance(condition.right, Ref)
-            else _public_ref(root, condition.right, 'Equal right'),
+            _public_ref(root, condition.left, 'Equal left'),
+            _public_ref(root, condition.right, 'Equal right'),
         )
     if isinstance(condition, PermissionIn):
         return PermissionIn(*(
-            ref if isinstance(ref, Ref)
-            else _public_ref(root, ref, 'permission_in')
+            _public_ref(root, ref, 'permission_in')
             for ref in condition.refs
         ))
     if isinstance(condition, PathFilterCondition):
@@ -3002,14 +3004,16 @@ class BackendHandle:
                     % (type(filter).__name__,)
                 )
             permission_path = _public_path_segments(permission, 'permission')
-            condition = self.registry.bind_named_path_filter(
+            bound_condition = self.registry.bind_named_path_filter(
                 root, filter, permission_path,
             )
+        else:
+            bound_condition = _bind_public_condition(condition, root)
         return self.registry.register(
             content=_public_ref(root, content, 'content'),
             user=_public_ref(root, user, 'user'),
             permission=_public_ref(root, permission, 'permission'),
-            condition=_bind_public_condition(condition, root),
+            condition=bound_condition,
             along=_bind_public_along(root, along),
         )
 

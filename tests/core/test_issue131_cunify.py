@@ -18,6 +18,7 @@ from trusts.core import (
     BackendHandle,
     Equal,
     PlanQueryCompiler,
+    Ref,
     TrustsConfigurationError,
     TrustsRegistry,
     check,
@@ -52,14 +53,14 @@ def _grant_models():
         permissions = models.ManyToManyField(Permission)
 
         class Meta:
-            app_label = 'cunify_tests'
+            app_label = 'trusts_tests'
 
     class Item(models.Model):
         title = models.CharField(max_length=20)
         confidential = models.BooleanField(default=False)
 
         class Meta:
-            app_label = 'cunify_tests'
+            app_label = 'trusts_tests'
 
     class ItemGrant(models.Model):
         item = models.ForeignKey(Item, on_delete=models.CASCADE)
@@ -73,7 +74,7 @@ def _grant_models():
         bundle = models.ForeignKey(Bundle, on_delete=models.CASCADE)
 
         class Meta:
-            app_label = 'cunify_tests'
+            app_label = 'trusts_tests'
 
     return Bundle, Item, ItemGrant
 
@@ -109,8 +110,8 @@ class RequestFilterTupleTest(SimpleTestCase):
             request_filter_query_identity('own')
 
 
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class PathFilterDeclarationTest(SimpleTestCase):
-    @isolate_apps('cunify_tests')
     def test_named_only_and_phase2_permission_bind(self):
         Bundle, Item, ItemGrant = _grant_models()
         handle = _handle()
@@ -143,16 +144,13 @@ class PathFilterDeclarationTest(SimpleTestCase):
             filter='bundle_ceiling',
         )
         self.assertEqual(record.condition, permission_in(
-            __import__('trusts.core', fromlist=['Ref']).Ref(
-                ItemGrant, ('bundle', 'permissions'),
-            )
+            Ref(ItemGrant, ('bundle', 'permissions')),
         ))
         self.assertEqual(
             registration_fingerprint(record)[4],
             record.condition,
         )
 
-    @isolate_apps('cunify_tests')
     def test_phase2_rejects_wrong_permission_field(self):
         Bundle, Item, ItemGrant = _grant_models()
         handle = _handle()
@@ -171,7 +169,6 @@ class PathFilterDeclarationTest(SimpleTestCase):
             )
         self.assertFalse(handle.registry.records)
 
-    @isolate_apps('cunify_tests')
     def test_python_and_or_in_fail_loud(self):
         Bundle, Item, ItemGrant = _grant_models()
         handle = _handle()
@@ -190,7 +187,6 @@ class PathFilterDeclarationTest(SimpleTestCase):
         with self.assertRaises(TrustsConfigurationError):
             handle.register_path_filter(ItemGrant, 'bad_in', bad_in)
 
-    @isolate_apps('cunify_tests')
     def test_duplicate_and_unknown_and_condition_mutex(self):
         Bundle, Item, ItemGrant = _grant_models()
         handle = _handle()
@@ -223,7 +219,6 @@ class PathFilterDeclarationTest(SimpleTestCase):
                 condition=Equal('permission', 'other_permission'),
             )
 
-    @isolate_apps('cunify_tests')
     def test_same_ir_same_fingerprint_name_is_not_identity(self):
         Bundle, Item, ItemGrant = _grant_models()
         left = _handle(path='tests.core.handle-left')
@@ -249,7 +244,6 @@ class PathFilterDeclarationTest(SimpleTestCase):
             registration_fingerprint(rec_b)[4],
         )
 
-    @isolate_apps('cunify_tests')
     def test_stores_do_not_cross_talk(self):
         Bundle, Item, ItemGrant = _grant_models()
         handle = _handle()
@@ -266,7 +260,6 @@ class PathFilterDeclarationTest(SimpleTestCase):
                 filter='bundle_ceiling',
             )
 
-    @isolate_apps('cunify_tests')
     def test_frozen_raises_before_builder(self):
         Bundle, Item, ItemGrant = _grant_models()
         handle = _handle()
@@ -349,6 +342,14 @@ class CheckAndAuthorizedFilterTest(TestCase):
             check(
                 self.alice, 'myapp.change_document', self.document,
                 filter='non_confidential',
+            )
+
+    def test_check_rejects_colon_permission_suffix(self):
+        with self.assertRaises(TypeError):
+            check(
+                self.alice,
+                'myapp.change_document:non_confidential',
+                self.document,
             )
 
     def test_check_unknown_name_fails_closed(self):
