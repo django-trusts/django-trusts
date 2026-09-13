@@ -320,26 +320,36 @@ implementation is authorized. Use the Fibonacci scale
 `1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144`. This is a comparative
 risk/complexity size, not an hour estimate or a count of changed lines.
 
-Every design review must surface sizing near the top in two layers:
+Every design review must surface sizing near the top in three layers:
 
-- the current proposed subtask, with one size or a bounded range; and
 - the entire controlling ticket, with a realistic range covering all known and
-  not-yet-designed stages.
+  not-yet-designed stages;
+- completed points from accepted subtasks; and
+- the current proposed subtask, with one size or a bounded range.
 
 Do not hide unplanned stages inside a precise-looking total. Mark them
 `unknown`, give a reasoned comparison where possible, and widen the whole-task
 range accordingly. For example:
 
 ```text
-#247 — v3.7 automatic relationship extraction (whole: 34–144)
-S1 — inspect models and emit candidates (size: 5)
-S2–S7 — unknown; provisionally comparable to S1, with command,
-validation, stability, migration, and consumer surfaces still unbounded
+#247 — v3.7 automatic relationship extraction
+Whole ticket: 34–144
+Completed: 5 (S1 accepted)
+Current: S2 — size 8
+S3–S7 — unknown; command, validation, stability, migration,
+and consumer surfaces remain unbounded
 ```
+
+Completed points are the sum of the final reviewed sizes of accepted subtasks.
+If a subtask was re-sized during implementation, count its final size and show
+the change. If historical work was never sized, label it `unscored` or
+`retrospective estimate`; do not invent precision.
 
 The whole-task range is a planning envelope, not a mechanical sum of subtask
 points. It should include integration, discoveries between stages, review
-rounds, cross-repository sequencing, and final acceptance proof.
+rounds, cross-repository sequencing, and final acceptance proof. Completed
+points show progress but must not be subtracted mechanically from that range to
+claim a precise remaining size while stages remain unknown.
 
 The calibration anchor for a **3** is
 [Core #129 / PR #140](https://github.com/django-trusts/django-trusts/pull/140):
