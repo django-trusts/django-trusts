@@ -36,7 +36,7 @@ ordered allow/deny policies.
 ## Other documents
 
 - [Security audit guide](SECURITY_AUDIT.md)
-- [Migration router](migrates.md)
+- [Core 1.x migration router](migrates.md)
 - [Supported Python, Django, and database combinations](docs/support-matrix.md)
 - [Development and contribution guide](DEV.md)
 - [BSD 2-Clause License](LICENSE)
