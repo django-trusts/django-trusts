@@ -154,26 +154,55 @@ Register the model paths when the application starts:
 
            from .models import Document, DocumentPermission
 
-           handle = self.configured_backend()
-           handle.register(
+           backend = self.configured_backend()
+           backend.register_relationship(
                DocumentPermission,
                user="user",
                permission="permission",
                content="document",
            )
-           handle.register_permission_condition(
+           backend.add_named_filter(
                Document,
                "non_confidential",
-               lambda u, p, o: o.confidential != True,
+               predicate=lambda u, p, o: o.confidential != True,
            )
 
 ``DocumentPermission`` is the permission-bearing root. The three Django
 ``__`` relationship paths identify the user, permission, and protected
 content associated with each row.
 
-The same ``register`` verb donates an OrderedFold plan as
-``handle.register(Ace, strategy=OrderedFold(...))``. AnyPath arguments
-and ``strategy=`` are mutually exclusive.
+``register_ordered_fold`` donates an OrderedFold plan.
+``content`` is the protected model class. ``descriptor`` is a
+content-relative Django ``__`` path and may be ``""``.
+``source_descriptor`` is a required source-relative path. Direct and
+convergent shared-descriptor graphs use that one spelling:
+
+.. code-block:: python
+
+   backend.register_ordered_fold(
+       Ace,
+       OrderedFold(
+           content=Document,
+           descriptor="",
+           source_descriptor="document",
+           order="ace_order",
+           polarity=PolarityMap("ace_type", allow_value=ALLOW, deny_value=DENY),
+           mask="access_mask",
+           trustee="user",
+           token=FlatToken(
+               principal=User,
+               principal_user="",
+               principal_identity="",
+           ),
+           domain=PermissionMaskDomain(Permission, masks),
+       ),
+   )
+
+A Windows-shaped graph whose ACE and node both point at one security
+descriptor uses the same fields with distinct paths
+(``content=WinNode``, ``descriptor="security_descriptor"``,
+``source_descriptor="descriptor"``). Relationship arguments and an
+OrderedFold plan are separate methods.
 
 The declaration is validated when it is registered. Invalid or unsupported
 paths raise a configuration error instead of becoming an authorization rule.
@@ -261,7 +290,7 @@ Named queryable conditions
 --------------------------
 
 A named ``:condition`` further constrains an existing permission. Register a
-builder on the configured handle. Core invokes that callable exactly once
+builder with ``backend.add_named_filter``. Core invokes that callable exactly once
 with symbolic ``(u, p, o)`` refs, validates the returned comparison, and
 stores only the normalized predicate. The callable is not kept as policy
 and is never run during ``has_perm``, permission enumeration, or queryset
@@ -313,7 +342,8 @@ Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Permissions may also be inherited through hierarchical relationships. The
-Along walk is registered as ``along=("parent", 8)`` on ``handle.register``.
+Along walk is registered as ``along=("parent", 8)`` on
+``backend.register_relationship``.
 It uses a bounded hierarchy with a recursive common table expression,
 allowing a permission attached to one node to apply to related ancestors
 or descendants without traversing the hierarchy in Python.

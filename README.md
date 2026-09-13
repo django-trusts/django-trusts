@@ -82,17 +82,17 @@ class DocumentConfig(TrustsImplementationConfig):
         super().ready()
         from tests.myapp.models import Document, DocumentGrant
 
-        handle = self.configured_backend()
-        handle.register(
+        backend = self.configured_backend()
+        backend.register_relationship(
             DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register_permission_condition(
+        backend.add_named_filter(
             Document,
             'non_confidential',
-            lambda u, p, o: o.confidential != True,
+            predicate=lambda u, p, o: o.confidential != True,
         )
 
 INSTALLED_APPS = (
@@ -110,7 +110,7 @@ Do not add `'trusts'` to `INSTALLED_APPS`.
 
 ## Declare and authorize
 
-Ordinary application-owned models plus the `handle.register` declaration above.
+Ordinary application-owned models plus the `backend.register_relationship` declaration above.
 Grant mutation happens through those models; core has no generic
 grant/revoke workflow.
 

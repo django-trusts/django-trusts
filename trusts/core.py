@@ -18,12 +18,16 @@ exactly one terminal M2M membership hop after zero or more forward
 single-valued hops. Validation is registration-time ``_meta`` only
 (zero SQL).
 
-``handle.register(source_model, strategy=OrderedFold(...))`` is the
-parallel closed family. Ordinary ``handle.register()`` stays the
-AnyPath ``EXISTS`` fast path. AnyPath arguments and ``strategy=`` are
-mutually exclusive. One content terminal may use AnyPath xor one
-OrderedFold. The first OrderedFold renderer is PostgreSQL; other
-vendors fail closed before fold SQL. Import ``OrderedFold``,
+The configured backend exposes three public registration methods.
+``register_relationship`` is the AnyPath ``EXISTS`` fast path.
+``register_ordered_fold`` is the parallel closed remaining-bits
+family. ``add_named_filter`` binds a named restricting predicate and
+is not an authorization source. One content terminal may use AnyPath
+xor one OrderedFold. Public ``OrderedFold.content`` is the content
+model class; ``descriptor`` is content-relative and may be ``""``;
+``source_descriptor`` is a required source-relative Django ``__``
+path. The first OrderedFold renderer is PostgreSQL; other vendors
+fail closed before fold SQL. Import ``OrderedFold``,
 ``PermissionMaskDomain``, ``MaskEntry``, ``PolarityMap``, and
 ``FlatToken`` from ``trusts.core``.
 
@@ -1228,7 +1232,7 @@ class Equal(object):
     """Closed equality of two root-relative single-valued refs.
 
     Isolated registry tests may pass ``Ref`` operands. Public
-    ``BackendHandle.register`` accepts Django ``__`` path strings and
+    ``register_relationship`` accepts Django ``__`` path strings and
     binds them to the registration root before validation.
     """
 
@@ -2682,39 +2686,38 @@ def _bind_public_polarity(source_model, polarity):
 
 
 def _bind_public_ordered_fold(source_model, strategy):
-    """Normalize public OrderedFold strings to today's internal Refs."""
+    """Normalize public OrderedFold models/paths to today's internal Refs."""
     from trusts.ordered_fold import OrderedFold
 
     if not isinstance(strategy, OrderedFold):
         raise TrustsConfigurationError(
-            'register(..., strategy=) requires OrderedFold, not %r.'
+            'register_ordered_fold requires OrderedFold, not %r.'
             % (strategy,)
         )
     if isinstance(strategy.source, Ref) or isinstance(
         strategy.source_descriptor, Ref,
     ):
         raise TypeError(
-            'register(..., strategy=) does not accept Ref fields; pass '
+            'register_ordered_fold does not accept Ref fields; pass '
             'Django path strings.'
         )
-    if strategy.source is not None or strategy.source_descriptor is not None:
+    if strategy.source is not None:
         raise TrustsConfigurationError(
-            'source and source_descriptor are derived from the source '
-            'model, content path, and descriptor.'
+            'source is derived from the source model passed to '
+            'register_ordered_fold.'
         )
-    content_path = _public_path_segments(strategy.content, 'content')
+    content_model = _public_model_class(strategy.content, 'content')
     descriptor_path = _public_path_segments(
         strategy.descriptor, 'descriptor', allow_empty=True,
     )
-    _path, related, _lookup, _target = _resolve_forward_singles(
-        source_model, content_path, 'content',
+    source_descriptor_path = _public_path_segments(
+        strategy.source_descriptor, 'source_descriptor',
     )
-    content_model = related._meta.concrete_model
     return OrderedFold(
         content=Ref(content_model),
         descriptor=Ref(content_model, descriptor_path),
         source=Ref(source_model),
-        source_descriptor=Ref(source_model, content_path + descriptor_path),
+        source_descriptor=Ref(source_model, source_descriptor_path),
         order=_public_ref(source_model, strategy.order, 'order'),
         polarity=_bind_public_polarity(source_model, strategy.polarity),
         mask=_public_ref(source_model, strategy.mask, 'mask'),
@@ -2783,26 +2786,15 @@ class BackendHandle:
     registry: object
     compiler: object
 
-    def register(self, root, *, user=_UNSET, permission=_UNSET, content=_UNSET,
-                 condition=_UNSET, along=_UNSET, strategy=_UNSET):
-        """Application API: donate one permission policy on this handle.
+    def register_relationship(self, root, *, user, permission, content,
+                              condition=None, along=None):
+        """Donate one AnyPath permission relationship on this backend.
 
-        AnyPath form: Django ``__`` strings for ``user`` / ``permission``
-        / ``content``. ``condition`` leaves are path strings on
-        ``Equal`` / ``permission_in`` / ``All``. ``along`` is
-        ``(path, bound)``.
-
-        OrderedFold form: ``register(source_model, strategy=OrderedFold(...))``.
-        Public ``content``, ``order``, ``mask``, ``trustee``, and
-        ``PolarityMap.field`` are Django ``__`` paths on that source.
-        ``descriptor`` is a path on the content terminal and may be
-        ``""``. ``FlatToken.principal`` and optional ``member`` are
-        independent model classes.
-
-        AnyPath arguments and ``strategy=`` are mutually exclusive.
-        Passing a ``Ref`` is ``TypeError``. A frozen handle raises
-        ``TrustsConfigurationError`` before path parsing. Mixed or
-        incomplete forms raise before mutation.
+        Django ``__`` strings for ``user`` / ``permission`` / ``content``.
+        ``condition`` leaves are path strings on ``Equal`` /
+        ``permission_in`` / ``All``. ``along`` is ``(path, bound)``.
+        Passing a ``Ref`` is ``TypeError``. A frozen backend raises
+        ``TrustsConfigurationError`` before path parsing.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
@@ -2810,7 +2802,75 @@ class BackendHandle:
             )
         if isinstance(root, Ref):
             raise TypeError(
-                'register root must be a Django model class, not a Ref.'
+                'register_relationship root must be a Django model class, '
+                'not a Ref.'
+            )
+        if not _is_model_class(root):
+            raise TrustsConfigurationError(
+                'register_relationship root must be a Django model class, '
+                'not %r.' % (root,)
+            )
+        return self.registry.register(
+            content=_public_ref(root, content, 'content'),
+            user=_public_ref(root, user, 'user'),
+            permission=_public_ref(root, permission, 'permission'),
+            condition=_bind_public_condition(condition, root),
+            along=_bind_public_along(root, along),
+        )
+
+    def register_ordered_fold(self, source_model, fold):
+        """Donate one OrderedFold plan on this backend.
+
+        The positional ``source_model`` is the source root. Public
+        ``fold.content`` is the content model class. ``descriptor`` is
+        a Django ``__`` path on that content model and may be ``""``.
+        ``source_descriptor``, ``order``, ``mask``, ``trustee``, and
+        ``PolarityMap.field`` are Django ``__`` paths on the source.
+        ``FlatToken.principal`` and optional ``member`` are independent
+        model classes. Passing a ``Ref`` is ``TypeError``. A frozen
+        backend raises ``TrustsConfigurationError`` before path parsing.
+        """
+        if getattr(self.registry, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        if isinstance(source_model, Ref):
+            raise TypeError(
+                'register_ordered_fold source must be a Django model '
+                'class, not a Ref.'
+            )
+        if not _is_model_class(source_model):
+            raise TrustsConfigurationError(
+                'register_ordered_fold source must be a Django model '
+                'class, not %r.' % (source_model,)
+            )
+        return self.registry.register_strategy(
+            _bind_public_ordered_fold(source_model, fold),
+        )
+
+    def add_named_filter(self, model, code, predicate):
+        """Bind a named restricting predicate on this backend.
+
+        Forwards the current registration-time permission-condition
+        builder. A frozen/finalized backend raises
+        ``TrustsConfigurationError`` before ``predicate`` is invoked.
+        A prebuilt ``Expr`` is not accepted. The filter grants nothing
+        independently.
+        """
+        if getattr(self.registry, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register a permission condition on a frozen '
+                'TrustsRegistry.'
+            )
+        return self.registry.register_permission_condition(
+            model, code, predicate,
+        )
+
+    def register(self, root, *, user=_UNSET, permission=_UNSET, content=_UNSET,
+                 condition=_UNSET, along=_UNSET, strategy=_UNSET):
+        if getattr(self.registry, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
             )
         anypath_supplied = any(
             value is not _UNSET
@@ -2821,14 +2881,7 @@ class BackendHandle:
                 'register() accepts AnyPath arguments or strategy=, not both.'
             )
         if strategy is not _UNSET:
-            if not _is_model_class(root):
-                raise TrustsConfigurationError(
-                    'register(..., strategy=) source must be a Django '
-                    'model class, not %r.' % (root,)
-                )
-            return self.registry.register_strategy(
-                _bind_public_ordered_fold(root, strategy),
-            )
+            return self.register_ordered_fold(root, strategy)
         if user is _UNSET or permission is _UNSET or content is _UNSET:
             raise TypeError(
                 'register() requires user=, permission=, and content=, '
@@ -2838,24 +2891,13 @@ class BackendHandle:
             condition = None
         if along is _UNSET:
             along = None
-        return self.registry.register(
-            content=_public_ref(root, content, 'content'),
-            user=_public_ref(root, user, 'user'),
-            permission=_public_ref(root, permission, 'permission'),
-            condition=_bind_public_condition(condition, root),
-            along=_bind_public_along(root, along),
+        return self.register_relationship(
+            root, user=user, permission=permission, content=content,
+            condition=condition, along=along,
         )
 
     def register_permission_condition(self, model, code, builder):
-        """Application API: register a named condition on this handle.
-
-        Thin-forwards to the handle registry. A frozen/finalized handle
-        raises ``TrustsConfigurationError`` before a builder is invoked.
-        A prebuilt ``Expr`` is not accepted.
-        """
-        return self.registry.register_permission_condition(
-            model, code, builder,
-        )
+        return self.add_named_filter(model, code, builder)
 
     @property
     def historical_fallback(self):
