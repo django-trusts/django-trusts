@@ -51,13 +51,21 @@ def _check_metadata(meta_text: str, origin: str) -> None:
     if 'BSD-2-Clause' not in license_expr:
         raise SystemExit('%s license is %r, expected BSD-2-Clause' % (origin, license_expr))
     description = meta.get('Description') or meta_text
-    if 'non-standalone Python dependency' not in description:
-        raise SystemExit('%s long description is not the user README' % origin)
-    if "Do **not** list `'trusts'` in `INSTALLED_APPS`" not in description:
-        raise SystemExit('%s long description missing INSTALLED_APPS warning' % origin)
+    readme_markers = (
+        '# django-trusts',
+        '## How permissions are represented',
+        'Installation in the complete usage guide',
+        '[Security audit guide](SECURITY_AUDIT.md)',
+    )
+    for marker in readme_markers:
+        if marker not in description:
+            raise SystemExit(
+                '%s long description is not the concise user README: %s'
+                % (origin, marker)
+            )
     if 'pip install django-trusts' in description:
         raise SystemExit('%s long description still has a bare PyPI install' % origin)
-    if 'BeeDesk, Inc., 2015–2026 (BSD-2-Clause)' not in description:
+    if 'Copyright BeeDesk, Inc., 2015–2026.' not in description:
         raise SystemExit('%s long description missing BeeDesk 2015–2026 notice' % origin)
     for needle in FORBIDDEN_LONG_DESC:
         if needle in description:
@@ -121,8 +129,11 @@ def _check_sdist(sdist: Path) -> None:
         if readme_name is None:
             raise SystemExit('sdist missing README.md')
         readme = tf.extractfile(readme_name).read().decode()
-        if 'non-standalone Python dependency' not in readme:
-            raise SystemExit('sdist README.md is not the user README')
+        if (
+            '# django-trusts' not in readme
+            or 'Installation in the complete usage guide' not in readme
+        ):
+            raise SystemExit('sdist README.md is not the concise user README')
         if any(name.endswith('/DEV.md') for name in names):
             pass
         else:
