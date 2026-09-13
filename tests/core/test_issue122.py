@@ -57,7 +57,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
     def test_security_audit_records_the_frozen_boundary(self):
         guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
         for needle in (
-            'Living pre-1.0 map',
+            'security boundary that implementation and',
             'register_relationship(...)',
             'register_ordered_fold(...)',
             'add_named_filter(...)',
@@ -71,6 +71,12 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
                 self.assertIn(needle, guide)
         self.assertIn('not part of the 1.0 public contract', guide)
         self.assertNotIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True', guide)
+        self.assertNotIn('## Change sizing and surface discovery', guide)
+
+        dev = (ROOT / 'DEV.md').read_text()
+        self.assertIn('## Change sizing and surface discovery', dev)
+        self.assertIn('Whole ticket: 34–144', dev)
+        self.assertIn('Completed: 5 (S1 accepted)', dev)
 
     def test_sphinx_and_package_metadata_point_to_current_docs(self):
         conf = (ROOT / 'docs' / 'source' / 'conf.py').read_text()
