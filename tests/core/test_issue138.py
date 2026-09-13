@@ -13,7 +13,10 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from trusts.core import TrustsConfigurationError
-from trusts.decorators import authorization_required
+from trusts.decorators import (
+    _declared_authorization_guards,
+    authorization_required,
+)
 from trusts.apps import implementation_for_path
 
 
@@ -174,7 +177,16 @@ class AuthorizationRequiredTest(TestCase):
         with self.assertRaises(PermissionDenied):
             _publish(_request(self.alice), pk=self.secret.pk)
 
+    def _forget_guard(self, entry):
+        try:
+            _declared_authorization_guards.remove(entry)
+        except ValueError:
+            pass
+
     def test_unknown_condition_fails_closed_on_first_use(self):
+        entry = (Document, 'myapp.change_document', ('missing_138',))
+        self.addCleanup(self._forget_guard, entry)
+
         @authorization_required(Document, 'myapp.change_document', ('missing_138',))
         def _bad(request, pk):
             return 'no'
@@ -184,16 +196,14 @@ class AuthorizationRequiredTest(TestCase):
                 _bad(_request(self.alice), pk=self.open_doc.pk)
 
     def test_system_check_reports_unknown_guard_condition(self):
-        from trusts.decorators import _declared_authorization_guards
+        entry = (Document, 'myapp.change_document', ('missing_check_138',))
+        self.addCleanup(self._forget_guard, entry)
 
         @authorization_required(Document, 'myapp.change_document', ('missing_check_138',))
         def _unused(request, pk):
             return 'no'
 
-        self.assertIn(
-            (Document, 'myapp.change_document', ('missing_check_138',)),
-            _declared_authorization_guards,
-        )
+        self.assertIn(entry, _declared_authorization_guards)
         messages = [
             message for message in run_checks()
             if getattr(message, 'id', None) == 'trusts.E008'
