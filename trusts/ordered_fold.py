@@ -97,7 +97,15 @@ class FlatToken:
 
 @dataclass(frozen=True)
 class OrderedFold:
-    """Closed typed remaining-bits strategy for one content terminal."""
+    """Closed typed remaining-bits strategy for one content terminal.
+
+    ``BackendHandle.register_strategy(source_model, OrderedFold(...))``
+    derives ``source`` from the positional source model and
+    ``source_descriptor`` from the public ``content`` path plus the
+    content-relative ``descriptor`` segments (empty ``descriptor``
+    keeps today's content path). Isolated registry tests still pass
+    those fields as root-relative ``Ref`` values.
+    """
 
     content: object
     descriptor: object
@@ -109,6 +117,31 @@ class OrderedFold:
     trustee: object
     token: object
     domain: object
+
+    def __init__(
+        self,
+        content,
+        descriptor,
+        source=None,
+        source_descriptor=None,
+        *,
+        order,
+        polarity,
+        mask,
+        trustee,
+        token,
+        domain,
+    ):
+        object.__setattr__(self, 'content', content)
+        object.__setattr__(self, 'descriptor', descriptor)
+        object.__setattr__(self, 'source', source)
+        object.__setattr__(self, 'source_descriptor', source_descriptor)
+        object.__setattr__(self, 'order', order)
+        object.__setattr__(self, 'polarity', polarity)
+        object.__setattr__(self, 'mask', mask)
+        object.__setattr__(self, 'trustee', trustee)
+        object.__setattr__(self, 'token', token)
+        object.__setattr__(self, 'domain', domain)
 
 
 @dataclass(frozen=True, slots=True)
