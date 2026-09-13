@@ -5,49 +5,44 @@ unsupported or superseded states. The user-facing package introduction
 is [README.md](README.md). `pyproject.toml` long-description metadata
 points at `README.md`, not this file.
 
-## Current pairing
+## Current architecture
 
-This tree is `django-trusts==1.0.0.dev3`, the final core-library cut
-([#112](https://github.com/django-trusts/django-trusts/pull/112)
-merge `11058641b533e0f8489598e0b1f5cbe5d42a81db`). That mark is a
-development-line identifier, not a production 1.0 release. See
-[docs/development-version.md](docs/development-version.md).
-
-The completed Zero user path is django-trusts-zero
-[#14](https://github.com/django-trusts/django-trusts-zero/pull/14)
-merge `f0b25c5562c4f9803d861503dd2acac21613119d`
-(`django-trusts-zero==1.0.0.dev0`).
+Historical django-trusts 0.x was the concrete Trust / Content / group
+implementation. Current django-trusts is the schema-neutral Core
+library. [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
+is the continuation and bridge for that historical concrete behavior.
+Package-version identity for this tree is recorded in
+[docs/development-version.md](docs/development-version.md), not here.
 
 Core is a Python dependency only: do **not** list `'trusts'` in
-`INSTALLED_APPS`. Final core ships no Django `AppConfig`, no
+`INSTALLED_APPS`. Current Core ships no Django `AppConfig`, no
 `kernel_config()`, and no `trusts.backends.TrustModelBackend`. The
 mixin stays at `trusts.backends.TrustModelBackendMixin`. Historical
 Trust / Content / settlor / trustee models and the concrete backend
 live only in `django-trusts-zero`.
 
-Pair CI pins the Zero #37 STAGE 1 destination
-`73b74b4213f6040f0e71c4c46d7a509804975672` so historical tests run
-from Zero `tests/legacy/`, not from core package paths.
+Pair CI runs historical tests from the pinned Zero companion
+`tests/legacy/`, not from core package paths. Exact companion pins
+are in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## What this package is not
 
 Earlier top-level README copy described django-trusts itself as a
 multiple-organization Trust/settlor/trustee add-on with concrete
-`Content` / `Group` models. That product description is false for this
-library after the final core cut. Readers who want that 0.x behavior
-should use [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
+`Content` / `Group` models. That product description is false for
+current Core. Readers who want that 0.x behavior should use
+[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
 
 ## Supported versions
 
-The `1.0.0.dev3` development line requires **Python 3.12–3.14** and
-**Django 6.1**. Sources checked on 2026-09-07 and the rationale are in
-[docs/support-matrix.md](docs/support-matrix.md).
+Supported Python, Django, and database versions are in
+[docs/support-matrix.md](docs/support-matrix.md). Exact test and
+companion pins are in CI and project metadata. User installation is
+in [README.md](README.md).
 
-This is not a published PyPI release. Install from a local checkout or
-sdist/wheel built from this tree.
+Install from a local checkout with current project metadata:
 
 ```
-python -m pip install "Django>=6.1,<6.2"
 python -m pip install .
 ```
 
@@ -63,14 +58,12 @@ AUTHENTICATION_BACKENDS = (
 )
 ```
 
-API and compatibility notes for this modernization are in
-[migrates.md](migrates.md).
+API and compatibility notes are in [migrates.md](migrates.md).
 
 ## Test
 
 ```
-python -m pip install "Django>=6.1,<6.2" coverage
-python -m pip install -e .
+python -m pip install -e ".[test]"
 python -m tests.runtests
 python -m django check --settings=tests.settings
 ```
