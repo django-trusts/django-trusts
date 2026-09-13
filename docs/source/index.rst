@@ -24,7 +24,10 @@ entry, or another relational structure owned by the application.
 ``django-trusts`` compiles these declarations into database queries, keeping
 permission decisions based on persisted truth. The same declarations support
 object checks, authorized querysets, permission enumeration, and decorators
-for protecting views.
+for protecting views. The separate `security audit guide
+<https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
+defines the boundary these APIs enforce and the responsibilities that remain
+with the application.
 
 How permissions are represented
 --------------------------------
@@ -265,7 +268,7 @@ Filter a queryset to the objects authorized for a particular permission:
        change_document,
    )
 
-Protect a view with the same permission:
+Protect a view with the Trusts-only primary-key guard:
 
 .. code-block:: python
 
@@ -273,24 +276,33 @@ Protect a view with the same permission:
 
    from django.http import HttpResponse
 
-   from trusts.decorators import permission_required
+   from trusts.decorators import authorization_required
+
+   from .models import Document
 
 
-   @permission_required(
+   @authorization_required(
+       Document,
        "documents.change_document",
-       fieldlookups_kwargs={"pk": "pk"},
+       ("non_confidential",),
    )
    def edit_document(request, pk):
        return HttpResponse("Authorized")
 
+The guard binds only the URL keyword argument named ``pk`` to the model's
+primary-key field. It performs configuration preflight before candidate lookup;
+a missing object produces 404 and an existing unauthorized object produces
+403.
+
 Object checks, permission enumeration, queryset filtering, and view protection
-all use the registered permission relationship.
+consume the same normalized registrations.
 
 Named queryable conditions
 --------------------------
 
-A named ``:condition`` further constrains an existing permission. Register a
-builder with ``backend.add_named_filter``. Core invokes that callable exactly once
+A named filter, carried by the existing ``:condition`` permission suffix,
+further constrains an existing permission. Add its builder with
+``backend.add_named_filter``. Core invokes that callable exactly once
 with symbolic ``(u, p, o)`` refs, validates the returned comparison, and
 stores only the normalized predicate. The callable is not kept as policy
 and is never run during ``has_perm``, permission enumeration, or queryset
@@ -352,12 +364,14 @@ Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
 Policies that require ordered allow and deny entries can use the
-``OrderedFold`` strategy. It evaluates persisted entries in order while
+``OrderedFold`` evaluator. It evaluates persisted entries in order while
 tracking which requested permission bits remain undecided.
 
-Evaluation strategies use the same object-check, permission-enumeration, and
-queryset interfaces as direct permission paths. Database support varies by
-strategy; see the support matrix for the currently verified combinations.
+Both policy families use the same object-check, permission-enumeration, and
+queryset interfaces. At the current 1.0 boundary, one protected model in one
+configured backend uses relationship authorization or OrderedFold, not both.
+Database support varies by evaluator; see the support matrix for the currently
+verified combinations.
 
 Reference implementations
 -------------------------
@@ -392,8 +406,8 @@ Ordered access-control entries
 permissions using persisted access-control entries with ordering, allow and
 deny effects, permission masks, and inheritance.
 
-It demonstrates how an ACL-style permission system can select an ordered
-evaluation strategy while retaining the same Django-facing permission APIs.
+It demonstrates how an ACL-style permission system can select the ordered-fold
+evaluator while retaining the same Django-facing permission APIs.
 
 The project is intended to prove that this class of permission system can be
 implemented with ``django-trusts``. It is not intended to reproduce every
