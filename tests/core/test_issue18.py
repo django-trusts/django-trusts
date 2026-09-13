@@ -363,7 +363,7 @@ class LongPathRegistrationTest(TestCase):
         with self.assertNumQueries(0):
             ref_direct = _direct_ceiling(via_ref, Placement)
             ref_cluster = _cluster_ceiling(via_ref, Placement)
-            handle_direct = handle.register(
+            handle_direct = handle.register_relationship(
                 Placement,
                 user='actor',
                 permission='token',
@@ -372,7 +372,7 @@ class LongPathRegistrationTest(TestCase):
                     'wing__floor__building__hall__badges',
                 ),
             )
-            handle_cluster = handle.register(
+            handle_cluster = handle.register_relationship(
                 Placement,
                 user='actor',
                 permission='token',

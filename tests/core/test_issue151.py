@@ -123,18 +123,18 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertTrue(permission_has_condition('change_note:own'))
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
-    def test_companion_pin_is_merged_z2(self):
-        z2 = '841004af49687c31c466ed03dbfd4f8ce9c7f153'
-        stale = '18e87a63ff5079298e1ee330b888b4ff86551e1f'
+    def test_companion_pin_is_merged_z_methods(self):
+        z_methods = '2e3cccedb92b4cf85e9d6a3cd2d51821aad1d716'
+        stale = '841004af49687c31c466ed03dbfd4f8ce9c7f153'
         pairing = {
             'ci': (ROOT / '.github' / 'workflows' / 'ci.yml').read_text(),
             'wheels': (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text(),
             'runner': (ROOT / 'scripts' / 'run-z1-pair-tests.py').read_text(),
         }
-        self.assertIn(z2, pairing['ci'])
-        self.assertIn(z2, pairing['wheels'])
-        self.assertIn('COMPANION_ZERO_SHA: %s' % z2, pairing['ci'])
-        self.assertIn("ZERO_HEAD = '%s'" % z2, pairing['wheels'])
+        self.assertIn(z_methods, pairing['ci'])
+        self.assertIn(z_methods, pairing['wheels'])
+        self.assertIn('COMPANION_ZERO_SHA: %s' % z_methods, pairing['ci'])
+        self.assertIn("ZERO_HEAD = '%s'" % z_methods, pairing['wheels'])
         for name, text in pairing.items():
             self.assertNotIn(stale, text, name)
         self.assertNotIn('OMIT_ZERO_UNBOUND_DEFAULT', pairing['runner'])

@@ -87,7 +87,7 @@ def _messages_for_obsolete_callback_setting():
         'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS is True, but runtime '
         'permission callbacks are removed. The setting does not enable '
         'callbacks. Register a builder '
-        '(handle.register_permission_condition(model, code, '
+        '(backend.add_named_filter(model, code, '
         'lambda u, p, o: ...)).',
         hint=(
             'Remove TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS from settings. '
@@ -453,7 +453,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
             % (conditions, _model_label(model)),
             hint=(
                 'Register the complete name set on one auth.Permission '
-                'backend with handle.register_permission_condition in '
+                'backend with backend.add_named_filter in '
                 'AppConfig.ready(). Silencing trusts.E008 suppresses only '
                 'this diagnostic; first use still fails closed.'
             ),

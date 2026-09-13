@@ -2775,9 +2775,6 @@ def _bind_public_along(root, along):
     return Along(_public_ref(root, path, 'along'), bound)
 
 
-_UNSET = object()
-
-
 @dataclass(frozen=True, slots=True)
 class BackendHandle:
     """Exact configured path, exact registry identity, and class compiler."""
@@ -2865,39 +2862,6 @@ class BackendHandle:
         return self.registry.register_permission_condition(
             model, code, predicate,
         )
-
-    def register(self, root, *, user=_UNSET, permission=_UNSET, content=_UNSET,
-                 condition=_UNSET, along=_UNSET, strategy=_UNSET):
-        if getattr(self.registry, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
-        anypath_supplied = any(
-            value is not _UNSET
-            for value in (user, permission, content, condition, along)
-        )
-        if strategy is not _UNSET and anypath_supplied:
-            raise TypeError(
-                'register() accepts AnyPath arguments or strategy=, not both.'
-            )
-        if strategy is not _UNSET:
-            return self.register_ordered_fold(root, strategy)
-        if user is _UNSET or permission is _UNSET or content is _UNSET:
-            raise TypeError(
-                'register() requires user=, permission=, and content=, '
-                'or strategy=.'
-            )
-        if condition is _UNSET:
-            condition = None
-        if along is _UNSET:
-            along = None
-        return self.register_relationship(
-            root, user=user, permission=permission, content=content,
-            condition=condition, along=along,
-        )
-
-    def register_permission_condition(self, model, code, builder):
-        return self.add_named_filter(model, code, builder)
 
     @property
     def historical_fallback(self):
