@@ -317,9 +317,19 @@ or descendants without traversing the hierarchy in Python.
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Policies that require ordered allow and deny entries can use the
-``OrderedFold`` strategy. It evaluates persisted entries in order while
-tracking which requested permission bits remain undecided.
+Policies that require ordered allow and deny entries register an
+``OrderedFold`` strategy on the same ``handle.register`` verb:
+
+.. code-block:: python
+
+   handle.register(
+       Ace,
+       strategy=OrderedFold(...),
+   )
+
+AnyPath arguments and ``strategy=`` are mutually exclusive. The strategy
+evaluates persisted entries in order while tracking which requested
+permission bits remain undecided.
 
 Evaluation strategies use the same object-check, permission-enumeration, and
 queryset interfaces as direct permission paths. Database support varies by
