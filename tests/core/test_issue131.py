@@ -1,9 +1,11 @@
-"""#131 C1 / C-unify: BackendHandle public AnyPath and OrderedFold APIs.
+"""#131 C-methods: public AnyPath and OrderedFold binder APIs.
 
-Handle-bound Django ``__`` paths, string condition leaves,
+Configured-backend Django ``__`` paths, string condition leaves,
 ``along=(path, bound)``, and ``register(source_model,
-strategy=OrderedFold(...))``. ``Ref`` input is TypeError. Freeze
-raises before path resolution. Dual handles stay isolated. Internal
+strategy=OrderedFold(...))``. Public OrderedFold ``content`` is the
+content model class; ``source_descriptor`` is a required
+source-relative path. ``Ref`` input is TypeError. Freeze raises
+before path resolution. Dual backends stay isolated. Internal
 ``TrustsRegistry.register(Ref)`` and ``register_strategy(OrderedFold)``
 remain for compiler tests.
 """
@@ -318,8 +320,9 @@ def _public_direct_fold(Ace, Permission, Document, *, token=None):
             principal_identity='',
         )
     return OrderedFold(
-        content='document',
+        content=Document,
         descriptor='',
+        source_descriptor='document',
         order='ace_order',
         polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
         mask='access_mask',
@@ -377,6 +380,9 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         self.assertEqual(compiled, expected)
         self.assertIs(compiled.content_model, Document)
         self.assertIs(compiled.source_model, Ace)
+        self.assertEqual(compiled.content_desc_path, ())
+        self.assertEqual(len(compiled.source_desc_hops), 1)
+        self.assertEqual(len(compiled.source_desc_hops), len(expected.source_desc_hops))
         self.assertTrue(compiled.principal_is_user)
         self.assertIsNone(compiled.member_model)
 
@@ -393,6 +399,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
             handle.register(Ace, strategy=OrderedFold(
                 content=doc,
                 descriptor='',
+                source_descriptor='document',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -406,7 +413,7 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
             ))
         with self.assertRaises(TypeError):
             handle.register(Ace, strategy=OrderedFold(
-                content='document',
+                content=Document,
                 descriptor='',
                 source=ace,
                 source_descriptor=ace.document,
@@ -423,8 +430,9 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
             ))
         with self.assertRaises(TypeError):
             handle.register(Ace, strategy=OrderedFold(
-                content='document',
+                content=Document,
                 descriptor='',
+                source_descriptor='document',
                 order='ace_order',
                 polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -438,8 +446,9 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
             ))
         with self.assertRaises(TypeError):
             handle.register(Ace, strategy=OrderedFold(
-                content='document',
+                content=Document,
                 descriptor='',
+                source_descriptor='document',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -453,7 +462,58 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
             ))
         self.assertEqual(handle.registry.strategies, ())
 
-    def test_invalid_public_path_grammar_is_rejected(self):
+    def test_content_path_string_is_type_error(self):
+        Permission, Document, Ace = _direct_models()
+        handle = _handle()
+        with self.assertRaises(TypeError):
+            handle.register(Ace, strategy=OrderedFold(
+                content='document',
+                descriptor='',
+                source_descriptor='document',
+                order='ace_order',
+                polarity=PolarityMap(
+                    'ace_type', allow_value=ALLOW, deny_value=DENY,
+                ),
+                mask='access_mask',
+                trustee='user',
+                token=FlatToken(
+                    principal=get_user_model(),
+                    principal_user='',
+                    principal_identity='',
+                ),
+                domain=PermissionMaskDomain(
+                    Permission, (MaskEntry('read', 1),),
+                ),
+            ))
+        self.assertEqual(handle.registry.strategies, ())
+
+    def test_derived_source_argument_is_rejected(self):
+        Permission, Document, Ace = _direct_models()
+        handle = _handle()
+        with self.assertRaises(TrustsConfigurationError):
+            handle.register(Ace, strategy=OrderedFold(
+                content=Document,
+                descriptor='',
+                source=Ace,
+                source_descriptor='document',
+                order='ace_order',
+                polarity=PolarityMap(
+                    'ace_type', allow_value=ALLOW, deny_value=DENY,
+                ),
+                mask='access_mask',
+                trustee='user',
+                token=FlatToken(
+                    principal=get_user_model(),
+                    principal_user='',
+                    principal_identity='',
+                ),
+                domain=PermissionMaskDomain(
+                    Permission, (MaskEntry('read', 1),),
+                ),
+            ))
+        self.assertEqual(handle.registry.strategies, ())
+
+    def test_invalid_source_descriptor_grammar_is_rejected(self):
         Permission, Document, Ace = _direct_models()
         handle = _handle()
         for path in (
@@ -469,8 +529,9 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
             with self.subTest(path=path):
                 with self.assertRaises(TrustsConfigurationError):
                     handle.register(Ace, strategy=OrderedFold(
-                        content=path,
+                        content=Document,
                         descriptor='',
+                        source_descriptor=path,
                         order='ace_order',
                         polarity=PolarityMap(
                             'ace_type', allow_value=ALLOW, deny_value=DENY,
@@ -542,8 +603,9 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         ))
         handle = _handle()
         compiled = handle.register(Ace, strategy=OrderedFold(
-            content='node',
+            content=Node,
             descriptor='security_descriptor',
+            source_descriptor='node__security_descriptor',
             order='ace_order',
             polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
             mask='access_mask',
@@ -558,10 +620,98 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         self.assertEqual(compiled, expected)
         self.assertIs(compiled.content_model, Node)
         self.assertEqual(compiled.content_desc_path, ('security_descriptor',))
+        self.assertEqual(len(compiled.source_desc_hops), len(expected.source_desc_hops))
         self.assertGreater(len(compiled.source_desc_hops), 1)
         self.assertEqual(
             tuple(hop.name for hop in compiled.source_desc_hops),
             ('node', 'security_descriptor'),
+        )
+
+    def test_convergent_shared_descriptor_matches_internal_ref_record(self):
+        User = get_user_model()
+
+        class SecurityDescriptor(models.Model):
+            name = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class WinNode(models.Model):
+            title = models.CharField(max_length=40)
+            security_descriptor = models.ForeignKey(
+                SecurityDescriptor, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class WinAce(models.Model):
+            descriptor = models.ForeignKey(
+                SecurityDescriptor, on_delete=models.CASCADE,
+            )
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+            trustee_sid = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        via_ref = TrustsRegistry()
+        ace = Ref(WinAce)
+        node = Ref(WinNode)
+        user = Ref(User)
+        expected = via_ref.register_strategy(OrderedFold(
+            content=node,
+            descriptor=node.security_descriptor,
+            source=ace,
+            source_descriptor=ace.descriptor,
+            order=ace.ace_order,
+            polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+            mask=ace.access_mask,
+            trustee=ace.trustee_sid,
+            token=FlatToken(
+                principal=user, principal_user=user, principal_identity=user,
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+        handle = _handle()
+        compiled = handle.register(WinAce, strategy=OrderedFold(
+            content=WinNode,
+            descriptor='security_descriptor',
+            source_descriptor='descriptor',
+            order='ace_order',
+            polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
+            mask='access_mask',
+            trustee='trustee_sid',
+            token=FlatToken(
+                principal=User,
+                principal_user='',
+                principal_identity='',
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+        self.assertEqual(compiled, expected)
+        self.assertIs(compiled.content_model, WinNode)
+        self.assertIs(compiled.source_model, WinAce)
+        self.assertEqual(compiled.content_desc_path, ('security_descriptor',))
+        self.assertEqual(len(compiled.source_desc_hops), 1)
+        self.assertEqual(len(compiled.content_desc_hops), 1)
+        self.assertEqual(len(compiled.source_desc_hops), len(expected.source_desc_hops))
+        self.assertEqual(len(compiled.content_desc_hops), len(expected.content_desc_hops))
+        self.assertEqual(
+            tuple(hop.name for hop in compiled.source_desc_hops),
+            ('descriptor',),
+        )
+        self.assertLess(
+            len(compiled.source_desc_hops),
+            len(('node', 'security_descriptor')),
         )
 
     def test_string_principal_or_member_is_type_error(self):
@@ -569,8 +719,9 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaises(TypeError):
             handle.register(Ace, strategy=OrderedFold(
-                content='document',
+                content=Document,
                 descriptor='',
+                source_descriptor='document',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -593,8 +744,9 @@ class HandleRegisterStrategySurfaceTest(SimpleTestCase):
 
         with self.assertRaises(TypeError):
             handle.register(Ace, strategy=OrderedFold(
-                content='document',
+                content=Document,
                 descriptor='',
+                source_descriptor='document',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -737,8 +889,9 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
         ))
         handle = _handle()
         compiled = handle.register(Ace, strategy=OrderedFold(
-            content='wrapper__document',
+            content=Document,
             descriptor='',
+            source_descriptor='wrapper__document',
             order='ace_order',
             polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
             mask='access_mask',
@@ -768,8 +921,9 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaises(TrustsConfigurationError):
             handle.register(Ace, strategy=OrderedFold(
-                content='wrapper__document',
+                content=Document,
                 descriptor='',
+                source_descriptor='wrapper__document',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -793,8 +947,9 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
         handle = _handle()
         with self.assertRaisesRegex(TrustsConfigurationError, r'member triad'):
             handle.register(Ace, strategy=OrderedFold(
-                content='wrapper__document',
+                content=Document,
                 descriptor='',
+                source_descriptor='wrapper__document',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -809,8 +964,9 @@ class HandleRegisterStrategyTokenTest(SimpleTestCase):
             ))
         with self.assertRaisesRegex(TrustsConfigurationError, r'member triad'):
             handle.register(Ace, strategy=OrderedFold(
-                content='wrapper__document',
+                content=Document,
                 descriptor='',
+                source_descriptor='wrapper__document',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',
@@ -867,8 +1023,9 @@ class HandleRegisterStrategyFreezeTest(SimpleTestCase):
         registry.freeze()
         with self.assertRaises(TrustsConfigurationError) as ctx:
             handle.register(Ace, strategy=OrderedFold(
-                content='',
+                content=Document,
                 descriptor='',
+                source_descriptor='',
                 order='ace_order',
                 polarity=PolarityMap('ace_type', allow_value=ALLOW, deny_value=DENY),
                 mask='access_mask',

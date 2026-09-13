@@ -18,12 +18,15 @@ exactly one terminal M2M membership hop after zero or more forward
 single-valued hops. Validation is registration-time ``_meta`` only
 (zero SQL).
 
-``handle.register(source_model, strategy=OrderedFold(...))`` is the
-parallel closed family. Ordinary ``handle.register()`` stays the
+``backend.register(source_model, strategy=OrderedFold(...))`` is the
+parallel closed family. Ordinary ``backend.register()`` stays the
 AnyPath ``EXISTS`` fast path. AnyPath arguments and ``strategy=`` are
 mutually exclusive. One content terminal may use AnyPath xor one
-OrderedFold. The first OrderedFold renderer is PostgreSQL; other
-vendors fail closed before fold SQL. Import ``OrderedFold``,
+OrderedFold. Public ``OrderedFold.content`` is the content model
+class; ``descriptor`` is content-relative and may be ``""``;
+``source_descriptor`` is a required source-relative Django ``__``
+path. The first OrderedFold renderer is PostgreSQL; other vendors
+fail closed before fold SQL. Import ``OrderedFold``,
 ``PermissionMaskDomain``, ``MaskEntry``, ``PolarityMap``, and
 ``FlatToken`` from ``trusts.core``.
 
@@ -2682,7 +2685,7 @@ def _bind_public_polarity(source_model, polarity):
 
 
 def _bind_public_ordered_fold(source_model, strategy):
-    """Normalize public OrderedFold strings to today's internal Refs."""
+    """Normalize public OrderedFold models/paths to today's internal Refs."""
     from trusts.ordered_fold import OrderedFold
 
     if not isinstance(strategy, OrderedFold):
@@ -2697,24 +2700,22 @@ def _bind_public_ordered_fold(source_model, strategy):
             'register(..., strategy=) does not accept Ref fields; pass '
             'Django path strings.'
         )
-    if strategy.source is not None or strategy.source_descriptor is not None:
+    if strategy.source is not None:
         raise TrustsConfigurationError(
-            'source and source_descriptor are derived from the source '
-            'model, content path, and descriptor.'
+            'source is derived from the source model passed to register.'
         )
-    content_path = _public_path_segments(strategy.content, 'content')
+    content_model = _public_model_class(strategy.content, 'content')
     descriptor_path = _public_path_segments(
         strategy.descriptor, 'descriptor', allow_empty=True,
     )
-    _path, related, _lookup, _target = _resolve_forward_singles(
-        source_model, content_path, 'content',
+    source_descriptor_path = _public_path_segments(
+        strategy.source_descriptor, 'source_descriptor',
     )
-    content_model = related._meta.concrete_model
     return OrderedFold(
         content=Ref(content_model),
         descriptor=Ref(content_model, descriptor_path),
         source=Ref(source_model),
-        source_descriptor=Ref(source_model, content_path + descriptor_path),
+        source_descriptor=Ref(source_model, source_descriptor_path),
         order=_public_ref(source_model, strategy.order, 'order'),
         polarity=_bind_public_polarity(source_model, strategy.polarity),
         mask=_public_ref(source_model, strategy.mask, 'mask'),
@@ -2793,11 +2794,12 @@ class BackendHandle:
         ``(path, bound)``.
 
         OrderedFold form: ``register(source_model, strategy=OrderedFold(...))``.
-        Public ``content``, ``order``, ``mask``, ``trustee``, and
-        ``PolarityMap.field`` are Django ``__`` paths on that source.
-        ``descriptor`` is a path on the content terminal and may be
-        ``""``. ``FlatToken.principal`` and optional ``member`` are
-        independent model classes.
+        Public ``content`` is the content model class. ``descriptor``
+        is a Django ``__`` path on that content model and may be
+        ``""``. ``source_descriptor``, ``order``, ``mask``,
+        ``trustee``, and ``PolarityMap.field`` are Django ``__`` paths
+        on the source. ``FlatToken.principal`` and optional ``member``
+        are independent model classes.
 
         AnyPath arguments and ``strategy=`` are mutually exclusive.
         Passing a ``Ref`` is ``TypeError``. A frozen handle raises

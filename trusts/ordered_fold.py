@@ -99,12 +99,13 @@ class FlatToken:
 class OrderedFold:
     """Closed typed remaining-bits strategy for one content terminal.
 
-    ``BackendHandle.register(source_model, strategy=OrderedFold(...))``
-    derives ``source`` from the positional source model and
-    ``source_descriptor`` from the public ``content`` path plus the
-    content-relative ``descriptor`` segments (empty ``descriptor``
-    keeps today's content path). Isolated registry tests still pass
-    those fields as root-relative ``Ref`` values.
+    ``backend.register(source_model, strategy=OrderedFold(...))``
+    derives ``source`` from the positional source model. Public
+    ``content`` is the content model class. ``descriptor`` is a
+    content-relative Django ``__`` path and may be ``""``.
+    ``source_descriptor`` is a required source-relative Django ``__``
+    path. Isolated registry tests still pass those fields as
+    root-relative ``Ref`` values.
     """
 
     content: object
