@@ -90,12 +90,12 @@ class _TrustsRegistryOwner(object):
         return registry
 
     def configured_backend(self, path=None):
-        """Return a handle for one exact configured Trusts path.
+        """Return the configured backend for one exact Trusts path.
 
         With one Trusts path, ``path`` may be omitted. With zero or
         several, omission fails loud. An unconfigured path fails loud.
         After this AppConfig's Apps instance is ready, the stored
-        registry is frozen before the handle is returned.
+        registry is frozen before the backend is returned.
         """
         from django.utils.module_loading import import_string
 

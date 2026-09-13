@@ -1,13 +1,14 @@
-"""#131 C-methods: public AnyPath and OrderedFold binder APIs.
+"""#131 C-methods: public relationship, OrderedFold, and named-filter APIs.
 
 Configured-backend Django ``__`` paths, string condition leaves,
-``along=(path, bound)``, and ``register(source_model,
-strategy=OrderedFold(...))``. Public OrderedFold ``content`` is the
-content model class; ``source_descriptor`` is a required
-source-relative path. ``Ref`` input is TypeError. Freeze raises
-before path resolution. Dual backends stay isolated. Internal
-``TrustsRegistry.register(Ref)`` and ``register_strategy(OrderedFold)``
-remain for compiler tests.
+``along=(path, bound)``, ``register_relationship``,
+``register_ordered_fold``, and ``add_named_filter``. Public OrderedFold
+``content`` is the content model class; ``source_descriptor`` is a
+required source-relative path. ``register`` /
+``register_permission_condition`` remain compatibility forwarders.
+``Ref`` input is TypeError. Freeze raises before path resolution.
+Dual backends stay isolated. Internal ``TrustsRegistry.register(Ref)``
+and ``register_strategy(OrderedFold)`` remain for compiler tests.
 """
 
 from unittest.mock import patch
@@ -55,7 +56,11 @@ def _handle(registry=None, path='tests.core.handle-a'):
 class HandleRegisterSurfaceTest(SimpleTestCase):
     def test_register_is_the_public_donation_verb(self):
         handle = _handle()
+        self.assertTrue(hasattr(BackendHandle, 'register_relationship'))
+        self.assertTrue(hasattr(BackendHandle, 'register_ordered_fold'))
+        self.assertTrue(hasattr(BackendHandle, 'add_named_filter'))
         self.assertTrue(hasattr(BackendHandle, 'register'))
+        self.assertTrue(hasattr(BackendHandle, 'register_permission_condition'))
         self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
         self.assertTrue(hasattr(handle, 'register'))
         self.assertFalse(hasattr(handle, 'register_strategy'))
@@ -1061,3 +1066,401 @@ class HandleRegisterStrategyIsolationTest(SimpleTestCase):
         self.assertEqual(
             left.registry.strategies[0], right.registry.strategies[0],
         )
+
+
+class _PredicateLog:
+    def __init__(self, impl=None):
+        self.impl = impl or (lambda u, p, o: o.confidential != True)
+        self.calls = []
+
+    def __call__(self, u, p, o):
+        self.calls.append((u, p, o))
+        return self.impl(u, p, o)
+
+
+class CMethodsPublicSurfaceTest(SimpleTestCase):
+    def test_three_public_methods_and_no_register_strategy(self):
+        backend = _handle()
+        self.assertTrue(callable(backend.register_relationship))
+        self.assertTrue(callable(backend.register_ordered_fold))
+        self.assertTrue(callable(backend.add_named_filter))
+        self.assertFalse(hasattr(backend, 'register_strategy'))
+        self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
+
+    def test_register_relationship_matches_internal_ref_record(self):
+        via_ref = TrustsRegistry()
+        j = Ref(DocumentGrant)
+        expected = via_ref.register(
+            content=j.document,
+            user=j.user,
+            permission=j.permission,
+        )
+        backend = _handle()
+        record = backend.register_relationship(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        self.assertEqual(record, expected)
+        self.assertIs(record.content_model, Document)
+        self.assertEqual(record.user_path, ('user',))
+        self.assertEqual(record.content_field, 'document')
+
+    def test_wrong_family_keywords_are_type_error(self):
+        Permission, FoldDocument, Ace = _direct_models()
+        backend = _handle()
+        fold = _public_direct_fold(Ace, Permission, FoldDocument)
+        with self.assertRaises(TypeError):
+            backend.register_relationship(
+                DocumentGrant,
+                user='user',
+                permission='permission',
+                content='document',
+                strategy=fold,
+            )
+        with self.assertRaises(TypeError):
+            backend.register_ordered_fold(
+                Ace, fold, user='user', permission='permission',
+                content='document',
+            )
+        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.registry.strategies, ())
+
+    def test_incomplete_signatures_are_type_error(self):
+        Permission, FoldDocument, Ace = _direct_models()
+        backend = _handle()
+        with self.assertRaises(TypeError):
+            backend.register_relationship(DocumentGrant, user='user')
+        with self.assertRaises(TypeError):
+            backend.register_ordered_fold(Ace)
+        with self.assertRaises(TypeError):
+            backend.add_named_filter(Document, 'non_confidential')
+        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.registry.strategies, ())
+
+    def test_register_relationship_ref_is_type_error(self):
+        backend = _handle()
+        j = Ref(DocumentGrant)
+        with self.assertRaises(TypeError):
+            backend.register_relationship(
+                j, user='user', permission='permission', content='document',
+            )
+        self.assertEqual(backend.registry.records, ())
+
+    def test_compatibility_register_still_forwards(self):
+        via_new = _handle()
+        expected = via_new.register_relationship(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        backend = _handle()
+        record = backend.register(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        self.assertEqual(record, expected)
+
+    def test_duplicate_relationship_leaves_store_unchanged(self):
+        backend = _handle()
+        first = backend.register_relationship(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
+            backend.register_relationship(
+                DocumentGrant,
+                user='user',
+                permission='permission',
+                content='document',
+            )
+        self.assertEqual(backend.registry.records, (first,))
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class CMethodsRelationshipLongPathTest(SimpleTestCase):
+    def test_long_relationship_path_matches_internal_ref(self):
+        from tests.core.test_issue98 import _gh_models, _register_team
+
+        models_ = _gh_models()
+        TeamRepoGrant = models_[6]
+        via_ref = TrustsRegistry()
+        expected = _register_team(via_ref, TeamRepoGrant)
+        backend = _handle()
+        record = backend.register_relationship(
+            TeamRepoGrant,
+            user='team__members',
+            permission='operation',
+            content='repository',
+            condition=All(
+                permission_in('team__permission_bundles__operations'),
+                Equal(
+                    'team__organization',
+                    'repository__organization',
+                ),
+            ),
+        )
+        self.assertEqual(record, expected)
+        self.assertEqual(record.user_path, ('team', 'members'))
+        self.assertEqual(record.user_field, 'team__members')
+
+    def test_along_tuple_on_register_relationship(self):
+        from tests.core.test_issue92 import _node_graph_models
+
+        _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
+            _node_graph_models()
+        )
+        via_ref = TrustsRegistry()
+        j = Ref(Grant)
+        expected = via_ref.register(
+            content=j.node,
+            user=j.user,
+            permission=j.permission,
+            along=Along(j.node.parent, bound=8),
+        )
+        backend = _handle()
+        record = backend.register_relationship(
+            Grant,
+            user='user',
+            permission='permission',
+            content='node',
+            along=('node__parent', 8),
+        )
+        self.assertEqual(record, expected)
+        self.assertEqual(record.along.shape, 'S')
+        self.assertEqual(record.along.bound, 8)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class CMethodsOrderedFoldContractTest(SimpleTestCase):
+    def test_direct_empty_descriptor_matches_internal_ref(self):
+        Permission, FoldDocument, Ace = _direct_models()
+        via_ref = TrustsRegistry()
+        expected = _register_direct(via_ref, Ace, Permission, FoldDocument)
+        backend = _handle()
+        compiled = backend.register_ordered_fold(
+            Ace, _public_direct_fold(Ace, Permission, FoldDocument),
+        )
+        self.assertEqual(compiled, expected)
+        self.assertIs(compiled.content_model, FoldDocument)
+        self.assertIs(compiled.source_model, Ace)
+        self.assertEqual(compiled.content_desc_path, ())
+        self.assertEqual(len(compiled.source_desc_hops), 1)
+        self.assertEqual(
+            len(compiled.source_desc_hops), len(expected.source_desc_hops),
+        )
+
+    def test_convergent_shared_descriptor_matches_internal_ref(self):
+        User = get_user_model()
+
+        class SecurityDescriptor(models.Model):
+            name = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class WinNode(models.Model):
+            title = models.CharField(max_length=40)
+            security_descriptor = models.ForeignKey(
+                SecurityDescriptor, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class WinAce(models.Model):
+            descriptor = models.ForeignKey(
+                SecurityDescriptor, on_delete=models.CASCADE,
+            )
+            ace_order = models.IntegerField()
+            ace_type = models.IntegerField()
+            access_mask = models.BigIntegerField()
+            trustee_sid = models.ForeignKey(User, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Permission(models.Model):
+            codename = models.CharField(max_length=64)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        via_ref = TrustsRegistry()
+        ace = Ref(WinAce)
+        node = Ref(WinNode)
+        user = Ref(User)
+        expected = via_ref.register_strategy(OrderedFold(
+            content=node,
+            descriptor=node.security_descriptor,
+            source=ace,
+            source_descriptor=ace.descriptor,
+            order=ace.ace_order,
+            polarity=PolarityMap(ace.ace_type, allow_value=ALLOW, deny_value=DENY),
+            mask=ace.access_mask,
+            trustee=ace.trustee_sid,
+            token=FlatToken(
+                principal=user, principal_user=user, principal_identity=user,
+            ),
+            domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+        ))
+        backend = _handle()
+        compiled = backend.register_ordered_fold(
+            WinAce,
+            OrderedFold(
+                content=WinNode,
+                descriptor='security_descriptor',
+                source_descriptor='descriptor',
+                order='ace_order',
+                polarity=PolarityMap(
+                    'ace_type', allow_value=ALLOW, deny_value=DENY,
+                ),
+                mask='access_mask',
+                trustee='trustee_sid',
+                token=FlatToken(
+                    principal=User,
+                    principal_user='',
+                    principal_identity='',
+                ),
+                domain=PermissionMaskDomain(Permission, (MaskEntry('read', 1),)),
+            ),
+        )
+        self.assertEqual(compiled, expected)
+        self.assertIs(compiled.content_model, WinNode)
+        self.assertEqual(len(compiled.source_desc_hops), 1)
+        self.assertEqual(len(compiled.content_desc_hops), 1)
+        self.assertEqual(
+            len(compiled.source_desc_hops), len(expected.source_desc_hops),
+        )
+        self.assertEqual(
+            tuple(hop.name for hop in compiled.source_desc_hops),
+            ('descriptor',),
+        )
+
+    def test_non_fold_is_rejected_without_mutation(self):
+        Permission, FoldDocument, Ace = _direct_models()
+        backend = _handle()
+        with self.assertRaises(TrustsConfigurationError):
+            backend.register_ordered_fold(Ace, object())
+        self.assertEqual(backend.registry.strategies, ())
+
+    def test_freeze_blocks_ordered_fold_before_validation(self):
+        Permission, FoldDocument, Ace = _direct_models()
+        registry = TrustsRegistry()
+        backend = _handle(registry)
+        registry.freeze()
+        with patch(
+            'trusts.core._public_path_segments',
+            wraps=_public_path_segments,
+        ) as segments:
+            with patch(
+                'trusts.ordered_fold.validate_ordered_fold',
+                wraps=validate_ordered_fold,
+            ) as validate:
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    backend.register_ordered_fold(
+                        Ace,
+                        _public_direct_fold(Ace, Permission, FoldDocument),
+                    )
+        self.assertIn('frozen', str(ctx.exception).lower())
+        segments.assert_not_called()
+        validate.assert_not_called()
+        self.assertEqual(registry.strategies, ())
+
+
+class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
+    def test_predicate_runs_once_at_registration(self):
+        backend = _handle()
+        log = _PredicateLog()
+        record = backend.add_named_filter(Document, 'non_confidential', log)
+        self.assertEqual(len(log.calls), 1)
+        self.assertIs(
+            backend.registry.get_permission_condition_record(
+                Document, 'non_confidential',
+            ),
+            record,
+        )
+        self.assertEqual(len(log.calls), 1)
+        again = _handle()
+        forwarded = again.register_permission_condition(
+            Document, 'non_confidential', _PredicateLog(),
+        )
+        self.assertIsNotNone(forwarded)
+
+    def test_non_callable_predicate_is_rejected(self):
+        backend = _handle()
+        with self.assertRaises(TypeError):
+            backend.add_named_filter(
+                Document, 'non_confidential', 'not-a-predicate',
+            )
+        self.assertIsNone(
+            backend.registry.get_permission_condition_record(
+                Document, 'non_confidential',
+            ),
+        )
+
+
+class CMethodsFreezeAndIsolationTest(SimpleTestCase):
+    def test_freeze_blocks_relationship_and_filter_before_validation(self):
+        registry = TrustsRegistry()
+        backend = _handle(registry)
+        registry.freeze()
+        log = _PredicateLog()
+        with patch(
+            'trusts.core._public_path_segments',
+            wraps=_public_path_segments,
+        ) as segments:
+            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+                with patch(
+                    'trusts.core._validate_condition',
+                    wraps=_validate_condition,
+                ) as validate:
+                    with self.assertRaises(TrustsConfigurationError) as rel:
+                        backend.register_relationship(
+                            DocumentGrant,
+                            user='user',
+                            permission='permission',
+                            content='document',
+                        )
+                    with self.assertRaises(TrustsConfigurationError) as named:
+                        backend.add_named_filter(
+                            Document, 'non_confidential', log,
+                        )
+        self.assertIn('frozen', str(rel.exception).lower())
+        self.assertIn('frozen', str(named.exception).lower())
+        segments.assert_not_called()
+        resolve.assert_not_called()
+        validate.assert_not_called()
+        self.assertEqual(log.calls, [])
+        self.assertEqual(registry.records, ())
+        self.assertIsNone(
+            registry.get_permission_condition_record(
+                Document, 'non_confidential',
+            ),
+        )
+
+    def test_dual_backend_relationship_does_not_leak(self):
+        left = _handle(path='tests.core.cmethods-left')
+        right = _handle(path='tests.core.cmethods-right')
+        left.register_relationship(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        self.assertEqual(len(left.registry.records), 1)
+        self.assertEqual(right.registry.records, ())
+        right.register_relationship(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        self.assertEqual(len(left.registry.records), 1)
+        self.assertEqual(len(right.registry.records), 1)

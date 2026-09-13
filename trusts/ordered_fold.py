@@ -99,7 +99,7 @@ class FlatToken:
 class OrderedFold:
     """Closed typed remaining-bits strategy for one content terminal.
 
-    ``backend.register(source_model, strategy=OrderedFold(...))``
+    ``backend.register_ordered_fold(source_model, OrderedFold(...))``
     derives ``source`` from the positional source model. Public
     ``content`` is the content model class. ``descriptor`` is a
     content-relative Django ``__`` path and may be ``""``.

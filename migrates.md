@@ -33,14 +33,15 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 1. Install the library. Core ships no Django app.
 2. Provide `TrustsImplementationConfig` and a backend that subclasses
    `TrustModelBackendMixin`. Call `super().ready()`.
-3. Register protected models through `backend.register(root, user=...,
-   permission=..., content=...)` or ordered strategies through
-   `backend.register(source_model, strategy=OrderedFold(...))`, and
-   named-condition **builders** through
-   `backend.register_permission_condition` in `AppConfig.ready()` before
-   finalization. AnyPath arguments and `strategy=` are mutually
-   exclusive. The application-facing object is the configured backend
-   from `configured_backend()`.
+3. Register protected models through
+   `backend.register_relationship(root, user=..., permission=...,
+   content=...)`, ordered plans through
+   `backend.register_ordered_fold(source_model, OrderedFold(...))`, and
+   named filters through `backend.add_named_filter(model, code, predicate)`
+   in `AppConfig.ready()` before finalization. The application-facing
+   object is the configured backend from `configured_backend()`.
+   `register(...)` and `register_permission_condition(...)` remain only
+   as temporary compatibility forwarders.
 4. Import only the six public `trusts.conditions` names:
    `PermissionConditionBooleanError`, `PermissionConditionError`,
    `PermissionConditionNotQueryable`, `PermissionConditionUnsupported`,
@@ -57,19 +58,22 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 
 | | Old | New |
 | --- | --- | --- |
-| Relation register | `from trusts.core import Ref` + `handle.registry.register(content=j.document, ...)` | `backend.register(DocumentGrant, user="user", permission="permission", content="document")` |
+| Relation register | `from trusts.core import Ref` + `handle.registry.register(content=j.document, ...)` or `handle.register(...)` / `backend.register(...)` | `backend.register_relationship(DocumentGrant, user="user", permission="permission", content="document")` |
 | Along | `along=Along(j.parent, 8)` | `along=("parent", 8)` |
 | Closed condition | `Equal(t.team.organization, t.repository.organization)` | `Equal("team__organization", "repository__organization")` |
-| OrderedFold | `.registry.register_strategy(OrderedFold(...Ref...))` or `handle.register_strategy(Ace, OrderedFold(...))` or `handle.register(Ace, strategy=OrderedFold(content="document", descriptor="", ...))` | `backend.register(Ace, strategy=OrderedFold(content=Document, descriptor="", source_descriptor="document", order="ace_order", polarity=PolarityMap("ace_type", allow_value=ALLOW, deny_value=DENY), mask="access_mask", trustee="user", token=FlatToken(principal=User, principal_user="", principal_identity=""), domain=PermissionMaskDomain(Permission, masks)))` |
+| Named filter | `handle.register_permission_condition(Document, "non_confidential", builder)` | `backend.add_named_filter(Document, "non_confidential", predicate=builder)` |
+| OrderedFold | `.registry.register_strategy(OrderedFold(...Ref...))` or `handle.register_strategy(Ace, OrderedFold(...))` or `handle.register(Ace, strategy=OrderedFold(content="document", descriptor="", ...))` | `backend.register_ordered_fold(Ace, OrderedFold(content=Document, descriptor="", source_descriptor="document", order="ace_order", polarity=PolarityMap("ace_type", allow_value=ALLOW, deny_value=DENY), mask="access_mask", trustee="user", token=FlatToken(principal=User, principal_user="", principal_identity=""), domain=PermissionMaskDomain(Permission, masks)))` |
 
 `handle.registry` remains temporarily so unconverted consumers still
-compile. `backend.register(..., strategy=)` is the public OrderedFold
-entry. The positional source model is required; do not call
-`register(strategy=OrderedFold(...))` without that root. There is no
-public `register_strategy` alias. Public `content` is the content
-model class, not a path on the ACE. `descriptor` is content-relative
-and may be `""`. `source_descriptor` is a required source-relative
-Django `__` path. Do not derive it from a content path. Direct form:
+compile. `backend.register_relationship`,
+`backend.register_ordered_fold`, and `backend.add_named_filter` are
+the public 1.0 methods. `register(...)` and
+`register_permission_condition(...)` are temporary undocumented
+forwarders. There is no public `register_strategy` alias. Public
+OrderedFold `content` is the content model class, not a path on the
+ACE. `descriptor` is content-relative and may be `""`.
+`source_descriptor` is a required source-relative Django `__` path.
+Do not derive it from a content path. Direct form:
 `content=Document`, `descriptor=""`, `source_descriptor="document"`.
 Convergent shared-descriptor form (Windows-shaped
 `Ace.descriptor -> SecurityDescriptor <- Node.security_descriptor`):
@@ -87,6 +91,9 @@ Migration-bot search list:
 - `OrderedFold(content="`
 - `register_strategy(`
 - `register_strategy(OrderedFold`
+- `register(..., strategy=`
+- `.register(`
+- `register_permission_condition(`
 
 ## View guard (#138)
 
