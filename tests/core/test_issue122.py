@@ -32,7 +32,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('class DocumentPermission(models.Model)', rst)
         self.assertIn('Document.objects.authorized(', rst)
         self.assertIn('user.get_all_permissions(document)', rst)
-        self.assertIn('from trusts.decorators import permission_required', rst)
+        self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertIn('add_named_filter', rst)
         self.assertIn('register_relationship', rst)
         self.assertIn('register_ordered_fold', rst)
@@ -53,6 +53,24 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('django-trusts-gh-permissions', rst)
         self.assertIn('django-trusts-windows-acl', rst)
         self.assertIn('django-trusts-zero-example', rst)
+
+    def test_security_audit_records_the_frozen_boundary(self):
+        guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
+        for needle in (
+            'Living pre-1.0 map',
+            'register_relationship(...)',
+            'register_ordered_fold(...)',
+            'add_named_filter(...)',
+            'Named filters are outer restrictions',
+            'Runtime callbacks are unsupported',
+            'Django treats an active superuser as globally authorized',
+            'Django grants when any configured authentication backend grants',
+            'Discrepancies must be surfaced in the PR',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, guide)
+        self.assertIn('not part of the 1.0 public contract', guide)
+        self.assertNotIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True', guide)
 
     def test_sphinx_and_package_metadata_point_to_current_docs(self):
         conf = (ROOT / 'docs' / 'source' / 'conf.py').read_text()
