@@ -99,7 +99,7 @@ class FlatToken:
 class OrderedFold:
     """Closed typed remaining-bits strategy for one content terminal.
 
-    ``BackendHandle.register_strategy(source_model, OrderedFold(...))``
+    ``BackendHandle.register(source_model, strategy=OrderedFold(...))``
     derives ``source`` from the positional source model and
     ``source_descriptor`` from the public ``content`` path plus the
     content-relative ``descriptor`` segments (empty ``descriptor``

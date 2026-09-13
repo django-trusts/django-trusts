@@ -171,6 +171,10 @@ Register the model paths when the application starts:
 ``__`` relationship paths identify the user, permission, and protected
 content associated with each row.
 
+The same ``register`` verb donates an OrderedFold plan as
+``handle.register(Ace, strategy=OrderedFold(...))``. AnyPath arguments
+and ``strategy=`` are mutually exclusive.
+
 The declaration is validated when it is registered. Invalid or unsupported
 paths raise a configuration error instead of becoming an authorization rule.
 
