@@ -394,7 +394,7 @@ def authorization_required_check_messages():
     """System-check messages for every declared Core guard."""
     from django.core import checks as django_checks
 
-    if not _apps_ready():
+    if not _apps_ready() or not _AUTHORIZATION_REQUIRED:
         return []
     messages = []
     handles = _configured_handles()

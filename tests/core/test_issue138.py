@@ -111,10 +111,11 @@ class AuthorizationRequiredSignatureTest(SimpleTestCase):
     def test_permission_identity_does_not_use_codename_model_split(self):
         from trusts.decorators import _permission_identity
 
-        names = _permission_identity.__code__.co_names
-        self.assertNotIn('parse_perm_code', names)
-        self.assertIn('codename', names)
-        self.assertIn('model_name', names)
+        source = inspect.getsource(_permission_identity)
+        self.assertNotIn('parse_perm_code', source)
+        self.assertIn('codename=codename', source)
+        self.assertIn('model._meta.model_name', source)
+        self.assertNotIn('action', source)
 
     def test_legacy_permission_required_is_still_importable(self):
         self.assertTrue(callable(permission_required))
@@ -224,16 +225,15 @@ class AuthorizationRequiredCheckAndFirstUseTest(KernelHostRequiredMixin, SimpleT
         self.assertEqual(sentinel, [])
 
     def test_silenced_check_still_fail_closes_at_first_use(self):
-        from django.core.checks import run_checks
+        from io import StringIO
+
+        from django.core.management import call_command
 
         view = self._guarded(('still_missing_138',))
         with override_settings(
             SILENCED_SYSTEM_CHECKS=['trusts.E008', 'fields.W342'],
         ):
-            self.assertNotIn(
-                CHECK_ID_AUTHORIZATION_REQUIRED,
-                [message.id for message in run_checks()],
-            )
+            call_command('check', stdout=StringIO(), stderr=StringIO())
             with self.assertRaises(TrustsConfigurationError):
                 view(_request(AnonymousUser()), pk=1)
 
