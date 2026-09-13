@@ -1184,6 +1184,80 @@ class Ref(object):
         return 'Ref(%s).%s' % (self._root.__name__, '.'.join(self._path))
 
 
+def _is_ref_or_public_path(value):
+    return isinstance(value, (Ref, str))
+
+
+def _public_path_to_ref(root, path, role):
+    """Normalize one public Django ``__`` path to an internal ``Ref``."""
+    if isinstance(path, Ref):
+        raise TypeError(
+            '%s must be a Django __ path string, not a Ref.' % role
+        )
+    if not isinstance(path, str):
+        raise TypeError(
+            '%s must be a Django __ path string, not %r.' % (role, path)
+        )
+    if (
+        not path
+        or path.startswith('__')
+        or path.endswith('__')
+        or '.' in path
+    ):
+        raise TrustsConfigurationError(
+            '%s path %r is not a Django __ relationship path.' % (role, path)
+        )
+    segments = path.split('__')
+    if not segments or any(not part for part in segments):
+        raise TrustsConfigurationError(
+            '%s path %r contains an empty segment.' % (role, path)
+        )
+    return Ref(root, tuple(segments))
+
+
+def _bind_handle_condition_leaf(root, value, role):
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django __ path string, not a Ref.' % role
+        )
+    return _public_path_to_ref(root, value, role)
+
+
+def _bind_handle_condition(root, condition):
+    """Rewrite public string leaves to ``Ref``s against ``root``."""
+    if condition is None:
+        return None
+    if isinstance(condition, All):
+        return All(*(
+            _bind_handle_condition(root, predicate)
+            for predicate in condition.predicates
+        ))
+    if isinstance(condition, Equal):
+        return Equal(
+            _bind_handle_condition_leaf(root, condition.left, 'Equal left'),
+            _bind_handle_condition_leaf(root, condition.right, 'Equal right'),
+        )
+    if isinstance(condition, PermissionIn):
+        return PermissionIn(*(
+            _bind_handle_condition_leaf(root, ref, 'permission_in')
+            for ref in condition.refs
+        ))
+    return condition
+
+
+def _bind_handle_along(root, along):
+    if along is None:
+        return None
+    if isinstance(along, Along):
+        raise TypeError('along must be a (path, bound) tuple, not Along.')
+    if not isinstance(along, tuple) or len(along) != 2:
+        raise TypeError(
+            'along must be a (path, bound) tuple, not %r.' % (along,)
+        )
+    path, bound = along
+    return Along(_public_path_to_ref(root, path, 'along'), bound)
+
+
 class Along(object):
     """Bounded directed walk that replaces equality at one walk-site.
 
@@ -1223,10 +1297,10 @@ class Equal(object):
     __slots__ = ('left', 'right')
 
     def __init__(self, left, right):
-        if not isinstance(left, Ref) or not isinstance(right, Ref):
+        if not _is_ref_or_public_path(left) or not _is_ref_or_public_path(right):
             raise TrustsConfigurationError(
-                'Equal left and right must be root-relative Refs, not %r '
-                'and %r.' % (left, right)
+                'Equal left and right must be root-relative Refs or path '
+                'strings, not %r and %r.' % (left, right)
             )
         object.__setattr__(self, 'left', left)
         object.__setattr__(self, 'right', right)
@@ -1262,10 +1336,10 @@ class PermissionIn(object):
                 'permission_in requires one or more refs.'
             )
         for ref in refs:
-            if not isinstance(ref, Ref):
+            if not _is_ref_or_public_path(ref):
                 raise TrustsConfigurationError(
-                    'permission_in refs must be root-relative Refs, not %r.'
-                    % (ref,)
+                    'permission_in refs must be root-relative Refs or path '
+                    'strings, not %r.' % (ref,)
                 )
         object.__setattr__(self, 'refs', refs)
 
@@ -2550,6 +2624,28 @@ class BackendHandle:
         """
         return self.registry.register_permission_condition(
             model, code, builder,
+        )
+
+    def register(
+        self, root, *, user, permission, content, condition=None, along=None,
+    ):
+        """Application API: register one AnyPath relation on this handle.
+
+        ``user``, ``permission``, and ``content`` are Django ``__`` path
+        strings from ``root``. ``condition`` leaves and ``along`` use the
+        same grammar. A ``Ref`` or ``Along`` instance is ``TypeError``.
+        Freeze is checked before path binding or ``_meta`` resolution.
+        """
+        if self.registry.frozen:
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        return self.registry.register(
+            content=_public_path_to_ref(root, content, 'content'),
+            user=_public_path_to_ref(root, user, 'user'),
+            permission=_public_path_to_ref(root, permission, 'permission'),
+            condition=_bind_handle_condition(root, condition),
+            along=_bind_handle_along(root, along),
         )
 
     @property

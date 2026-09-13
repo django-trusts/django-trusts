@@ -1,5 +1,4 @@
 from trusts.apps import TrustsImplementationConfig
-from trusts.core import Ref
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
 
@@ -19,11 +18,11 @@ class DocumentConfig(TrustsImplementationConfig):
         registry = handle.registry
         if getattr(self, '_document_grant_registry_id', None) is registry:
             return
-        j = Ref(DocumentGrant)
-        registry.register(
-            content=j.document,
-            user=j.user,
-            permission=j.permission,
+        handle.register(
+            DocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
         )
         handle.register_permission_condition(
             Document,

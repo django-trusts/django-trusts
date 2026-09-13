@@ -75,6 +75,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('# Core migration record', text[:80])
         self.assertIn('## Audiences', text)
         self.assertIn('## Public Core 1.x actions', text)
+        self.assertIn('## Public relation registration', text)
+        self.assertIn('handle.register(', text)
         self.assertIn('## Archaeology', text)
         self.assertIn(
             'https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md',

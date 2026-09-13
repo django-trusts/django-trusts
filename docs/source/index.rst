@@ -141,7 +141,6 @@ Register the model paths when the application starts:
    # documents/apps.py
 
    from trusts.apps import TrustsImplementationConfig
-   from trusts.core import Ref
 
 
    class DocumentsConfig(TrustsImplementationConfig):
@@ -156,11 +155,11 @@ Register the model paths when the application starts:
            from .models import Document, DocumentPermission
 
            handle = self.configured_backend()
-           relation = Ref(DocumentPermission)
-           handle.registry.register(
-               user=relation.user,
-               permission=relation.permission,
-               content=relation.document,
+           handle.register(
+               DocumentPermission,
+               user="user",
+               permission="permission",
+               content="document",
            )
            handle.register_permission_condition(
                Document,
@@ -168,9 +167,9 @@ Register the model paths when the application starts:
                lambda u, p, o: o.confidential != True,
            )
 
-``Ref(DocumentPermission)`` begins a declaration from the permission-bearing
-model. The three paths identify the user, permission, and protected content
-associated with each row.
+``handle.register`` begins a declaration from the permission-bearing
+model. The three Django ``__`` paths identify the user, permission, and
+protected content associated with each row.
 
 The declaration is validated when it is registered. Invalid or unsupported
 paths raise a configuration error instead of becoming an authorization rule.

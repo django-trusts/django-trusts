@@ -4,6 +4,11 @@ Additive registration and projection surface for issues #57, #60, #65,
 #83, #92, #98, and the first historical reader in #67. Import from `trusts.core`.
 This slice does **not** re-export a process-global registry from `trusts`.
 
+Application `AppConfig.ready()` registers through
+`configured_backend().register(root, user=..., permission=..., content=...)`
+with Django `__` path strings. This file documents the isolated
+`TrustsRegistry` compiler primitive and its internal `Ref` objects.
+
 `TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
 permission-bearing relation root; attribute access builds a root-relative
 path, including ordinary field names such as `root` and `path`. `register`

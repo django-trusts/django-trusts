@@ -52,6 +52,33 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.
 
+## Public relation registration
+
+`BackendHandle.register` is the application registration entry for
+AnyPath relations. Path strings use Django `__` grammar. `Ref` input
+on the handle is `TypeError`. `handle.registry` remains only for
+unconverted companion trees.
+
+| | Previous | Current |
+| --- | --- | --- |
+| Relation register | `from trusts.core import Ref` plus `handle.registry.register(content=j.document, ...)` | `handle.register(DocumentGrant, user="user", permission="permission", content="document")` |
+| Along | `along=Along(j.parent, 8)` | `along=("parent", 8)` |
+| Closed condition | `Equal(t.team.organization, t.repository.organization)` | `Equal("team__organization", "repository__organization")` |
+
+Named `:condition` builders stay `handle.register_permission_condition`.
+The six-name `trusts.conditions` API is unchanged. Isolated
+`TrustsRegistry.register` still accepts internal `Ref` objects.
+
+Migration-bot checklist:
+
+- [ ] Search for `from trusts.core import Ref` in application `ready()` / README / RST.
+- [ ] Search for `Ref(`.
+- [ ] Search for `.registry.register(`.
+- [ ] Search for `.registry.register_strategy(`.
+- [ ] Search for `Along(`.
+- [ ] Retarget application relation registration to `handle.register` with `__` paths.
+- [ ] Keep named-condition builders on `handle.register_permission_condition`.
+
 ## Archaeology
 
 Chronology of unpublished development stairs lives in the annotated
