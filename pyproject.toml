@@ -39,6 +39,7 @@ Homepage = "https://github.com/django-trusts/django-trusts"
 Repository = "https://github.com/django-trusts/django-trusts"
 Issues = "https://github.com/django-trusts/django-trusts/issues"
 Documentation = "https://github.com/django-trusts/django-trusts/blob/dev/docs/source/index.rst"
+Migration = "https://github.com/django-trusts/django-trusts/blob/dev/migrates.md"
 "Legacy baseline" = "https://github.com/django-trusts/django-trusts/blob/dev/docs/legacy-baseline.md"
 "Support matrix" = "https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md"
 

@@ -64,3 +64,64 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('schema-neutral dependency', current)
         self.assertIn('TrustModelBackendMixin', current)
         self.assertIn('trusts.zero.apps.ZeroConfig', current)
+
+    def test_live_router_points_at_merged_zero_and_rejects_zero_schema(self):
+        path = ROOT / 'migrates.md'
+        text = path.read_text()
+        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
+        readme = (ROOT / 'README.md').read_text()
+        pyproject = (ROOT / 'pyproject.toml').read_text()
+
+        self.assertIn('# Core migration record', text[:80])
+        self.assertIn('## Audiences', text)
+        self.assertIn('## Public Core 1.x actions', text)
+        self.assertIn('## Archaeology', text)
+        self.assertIn(
+            'https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md',
+            text,
+        )
+        self.assertIn(
+            'https://github.com/django-trusts/django-trusts-zero/blob/'
+            '88a515e0956a820b2244bcc8982cf2d5ab9efd70/migrates.md',
+            text,
+        )
+        self.assertIn(
+            'https://github.com/django-trusts/django-trusts/blob/'
+            'migration-archive-pre-1.0/migrates.md',
+            text,
+        )
+        self.assertIn(
+            'https://github.com/django-trusts/django-trusts/blob/'
+            '7414886263faafb6edfb44c0c5fcf9fc8fa14e79/migrates.md',
+            text,
+        )
+        self.assertIn('1.x migration router', readme)
+        self.assertIn(
+            'https://github.com/django-trusts/django-trusts/blob/dev/migrates.md',
+            rst,
+        )
+        self.assertIn(
+            'Migration = "https://github.com/django-trusts/'
+            'django-trusts/blob/dev/migrates.md"',
+            pyproject,
+        )
+        self.assertLess(path.stat().st_size, 211222 // 4)
+        for banned in (
+            'create_trust_root',
+            'grandfather_trust_group_permissions',
+            'update_roles_permissions',
+            'TrustUserPermission',
+            'TrustGroupPermission',
+            '0002_trustgroup',
+            "include('trusts.urls')",
+            'trusts_zero/',
+            'Content.grant',
+            'associate_group',
+            'HistoricalGroupQueryCompiler',
+            '# Issue #151 C1',
+            '# Issue #8 recovery',
+            '2.0.0.dev2',
+            '# Archived: unpublished',
+        ):
+            with self.subTest(banned=banned):
+                self.assertNotIn(banned, text)
