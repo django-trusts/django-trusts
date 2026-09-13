@@ -382,6 +382,9 @@ migration identities are preserved. Python imports and Django settings move to
 the explicit ``trusts.zero`` paths described in the `Zero migration guide
 <https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
+The Core 1.x migration router is `migrates.md
+<https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_.
+
 A runnable application using that implementation is available in
 `django-trusts-zero-example
 <https://github.com/django-trusts/django-trusts-zero-example/tree/dev>`_.

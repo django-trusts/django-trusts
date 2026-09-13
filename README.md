@@ -173,7 +173,7 @@ callbacks; if it is still `True`, Django system checks report
 
 ## Documentation
 
-- [migrates.md](migrates.md) — core API migration guide
+- [migrates.md](migrates.md) — 1.x migration router
 - [docs/source/index.rst](docs/source/index.rst) — full docs
 - [docs/support-matrix.md](docs/support-matrix.md) — Python / Django matrix
 - [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero) — 0.x continuation
