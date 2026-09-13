@@ -368,10 +368,14 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     """Report unknown names selected by imported ``authorization_required`` guards.
 
     Declaration-time syntax is validated by the decorator. This check
-    resolves registered names after apps are ready. Silencing
-    ``trusts.E008`` hides only the diagnostic; first use still fails
-    closed and never falls back to the unconditioned grant. Zero SQL.
+    resolves registered names after apps are ready. Guards whose model
+    app is not installed are skipped so a host that does not load that
+    app (pair Zero, isolated Apps) is not failed by imported fixtures.
+    Silencing ``trusts.E008`` hides only the diagnostic; first use still
+    fails closed and never falls back to the unconditioned grant. Zero
+    SQL.
     """
+    from django.apps import apps as django_apps
     from trusts.decorators import _declared_authorization_guards
 
     known = {}
@@ -381,6 +385,11 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
+        app_label = getattr(getattr(model, '_meta', None), 'app_label', None)
+        try:
+            django_apps.get_app_config(app_label)
+        except LookupError:
+            continue
         for name in conditions:
             key = (model, name)
             if key in seen:

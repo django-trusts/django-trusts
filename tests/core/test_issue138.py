@@ -10,9 +10,10 @@ from django.core.exceptions import PermissionDenied
 from django.core.checks import Error, run_checks
 from django.db import connection, models
 from django.http import Http404, HttpRequest
-from django.test import TestCase, TransactionTestCase
-from django.test.utils import isolate_apps, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from django.test.utils import override_settings
 
+from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
@@ -75,11 +76,46 @@ def _publish(request, pk):
     return 'ok'
 
 
+class AuthorizationRequiredDeclarationTest(SimpleTestCase):
+    def test_declaration_rejects_non_tuple_conditions_and_colon_permission(self):
+        with self.assertRaises(TypeError):
+            authorization_required(Document, 'myapp.change_document', 'non_confidential')
+        with self.assertRaises(TypeError):
+            authorization_required(Document, 'myapp.change_document', ['non_confidential'])
+        with self.assertRaises(TypeError):
+            authorization_required(object, 'myapp.change_document')
+        with self.assertRaises(TrustsConfigurationError):
+            authorization_required(Document, 'myapp.change_document:non_confidential')
+        with self.assertRaises(TrustsConfigurationError):
+            authorization_required(
+                Document, 'myapp.change_document', ('non_confidential', 'non_confidential'),
+            )
+        with self.assertRaises(TrustsConfigurationError):
+            authorization_required(Document, 'otherapp.change_document')
+
+    def test_system_check_skips_guards_when_model_app_is_absent(self):
+        from django.apps import apps as django_apps
+
+        real_get = django_apps.get_app_config
+
+        def _missing(label):
+            if label == Document._meta.app_label:
+                raise LookupError(label)
+            return real_get(label)
+
+        with patch.object(django_apps, 'get_app_config', side_effect=_missing):
+            messages = [
+                message for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E008'
+            ]
+        self.assertFalse(messages)
+
+
 @override_settings(
     AUTHENTICATION_BACKENDS=AUTHENTICATION_BACKENDS,
     INSTALLED_APPS=INSTALLED_APPS,
 )
-class AuthorizationRequiredTest(TestCase):
+class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
     def setUp(self):
         User = get_user_model()
         self.alice = User.objects.create_user(username='alice-138', password='x')
@@ -105,22 +141,6 @@ class AuthorizationRequiredTest(TestCase):
         DocumentGrant.objects.create(
             document=self.open_doc, user=self.alice, permission=self.publish,
         )
-
-    def test_declaration_rejects_non_tuple_conditions_and_colon_permission(self):
-        with self.assertRaises(TypeError):
-            authorization_required(Document, 'myapp.change_document', 'non_confidential')
-        with self.assertRaises(TypeError):
-            authorization_required(Document, 'myapp.change_document', ['non_confidential'])
-        with self.assertRaises(TypeError):
-            authorization_required(object, 'myapp.change_document')
-        with self.assertRaises(TrustsConfigurationError):
-            authorization_required(Document, 'myapp.change_document:non_confidential')
-        with self.assertRaises(TrustsConfigurationError):
-            authorization_required(
-                Document, 'myapp.change_document', ('non_confidential', 'non_confidential'),
-            )
-        with self.assertRaises(TrustsConfigurationError):
-            authorization_required(Document, 'otherapp.change_document')
 
     def test_authorized_hit_is_one_combined_query(self):
         with self.assertNumQueries(1):
@@ -302,12 +322,11 @@ def _extra_grant_models():
     return ExtraDocumentGrant, OtherPermission, OtherPermissionGrant
 
 
-@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 @override_settings(
     AUTHENTICATION_BACKENDS=AUTHENTICATION_BACKENDS,
     INSTALLED_APPS=INSTALLED_APPS,
 )
-class AuthorizationRequiredCompositionTest(TransactionTestCase):
+class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
