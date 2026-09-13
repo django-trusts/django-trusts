@@ -1,4 +1,4 @@
-from functools import wraps
+from functools import reduce, wraps
 from urllib.parse import urlparse
 from operator import and_, or_
 
@@ -321,44 +321,85 @@ def _permission_binding(model, app_label, codename):
     )
 
 
-def _resolve_condition_overlay(model, permission, conditions, user):
-    if not conditions:
-        return None
-    from django.apps import apps as django_apps
-    from trusts.apps import configured_implementation_handles
+def _auth_permission_plan(handle, candidates, user):
+    """Applicable plan only when the permission terminal is auth.Permission.
 
-    if not django_apps.ready:
-        raise TrustsConfigurationError(
-            'authorization_required cannot resolve condition names before '
-            'Django apps are ready.'
-        )
-    handles = configured_implementation_handles()
+    ``granted()`` does not pass a Subquery into ``plan_for(..., permission=)``.
+    A plan whose permission model is not ``auth.Permission`` would compare
+    its integer FK to ``auth_permission.pk`` and could grant on a colliding
+    id. Those plans are omitted from this string-permission guard.
+    """
+    plan = handle.registry.plan_for(candidates, user=user)
+    permission_model = getattr(plan, 'permission_model', None)
+    if permission_model is None:
+        return None
+    if permission_model._meta.concrete_model is not Permission:
+        return None
+    if not plan.records and getattr(plan, 'strategy', None) is None:
+        return None
+    return plan
+
+
+def _overlay_for_backend(handle, model, permission, conditions, user):
+    """Compose this backend's selected names, or None if any name is missing."""
+    lookup = getattr(handle.registry, 'condition_lookup', None)
+    if lookup is None:
+        return None
     extra_q = None
     for name in conditions:
-        record = None
-        compile_q = None
-        for handle in handles:
-            lookup = getattr(handle.registry, 'condition_lookup', None)
-            if lookup is None:
-                continue
-            found = lookup.record_for(model, name)
-            if found is not None:
-                record = found
-                compile_q = lookup.compile_q
-                break
-        if record is None or compile_q is None:
-            raise TrustsConfigurationError(
-                'authorization_required condition %r is not registered on %s.'
-                % (name, model._meta.label)
-            )
+        record = lookup.record_for(model, name)
+        if record is None:
+            return None
         if getattr(record, 'expr', None) is None:
             raise TrustsConfigurationError(
                 'authorization_required condition %r on %s is unsupported.'
                 % (name, model._meta.label)
             )
-        part = compile_q(model, '%s:%s' % (permission, name), user)
+        part = lookup.compile_q(model, '%s:%s' % (permission, name), user)
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
+
+
+def _authorization_grant_q(handles, candidates, user, model, permission,
+                           conditions, binding):
+    """OR each auth-Permission backend's grant composed with its own names.
+
+    Backends that do not register every selected name are omitted; their
+    unconditioned grants do not participate. Backend order does not change
+    the predicate. If no backend registers the complete name set, fail
+    closed instead of falling back to an unconditioned grant.
+    """
+    parts = []
+    complete = 0
+    for handle in handles:
+        if _auth_permission_plan(handle, candidates, user) is None:
+            continue
+        if conditions:
+            overlay = _overlay_for_backend(
+                handle, model, permission, conditions, user,
+            )
+            if overlay is None:
+                continue
+            complete += 1
+            part = granted((handle,), candidates, user, binding, kind='complete')
+            if part is None:
+                continue
+            parts.append(part & overlay)
+            continue
+        part = granted((handle,), candidates, user, binding, kind='complete')
+        if part is None:
+            continue
+        parts.append(part)
+    if conditions and complete == 0:
+        raise TrustsConfigurationError(
+            'authorization_required condition %r is not registered on %s.'
+            % (conditions[0], model._meta.label)
+        )
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return reduce(or_, parts)
 
 
 def _authorize_candidate(request, view_kwargs, model, permission, conditions):
@@ -391,17 +432,21 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
             'authorization_required cannot authorize before Django apps '
             'are ready.'
         )
-    extra_q = _resolve_condition_overlay(model, permission, conditions, user)
     app_label, codename = permission.split('.', 1)
     binding = _permission_binding(model, app_label, codename)
-    handles = configured_implementation_handles()
-    granted_q = granted(handles, candidates, user, binding, kind='complete')
+    granted_q = _authorization_grant_q(
+        configured_implementation_handles(),
+        candidates,
+        user,
+        model,
+        permission,
+        conditions,
+        binding,
+    )
     if granted_q is None:
         if candidates.exists():
             raise PermissionDenied
         raise Http404
-    if extra_q is not None:
-        granted_q = granted_q & extra_q
     if candidates.filter(granted_q).exists():
         return
     if candidates.exists():
@@ -413,8 +458,12 @@ def authorization_required(model, permission, conditions=()):
     """Trusts-only view guard: explicit model, pk URL kwarg, optional names.
 
     Candidate identity is only ``view_kwargs["pk"]`` bound to
-    ``model._meta.pk``. Does not use Django backend OR, ``user.has_perm``,
-    or the legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
+    ``model._meta.pk``. Only applicable plans whose permission terminal
+    is ``django.contrib.auth.models.Permission`` participate. Each of
+    those backends composes its own grant with its own selected names
+    before the backends are OR'd; backend order does not change the
+    result. Does not use Django backend OR, ``user.has_perm``, or the
+    legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
     surface.
     """
     model = _guard_model(model)

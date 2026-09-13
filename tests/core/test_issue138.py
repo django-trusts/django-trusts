@@ -1,18 +1,27 @@
 """#138: authorization_required Trusts-only pk guard."""
 
+from contextlib import contextmanager
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from django.core.checks import Error, run_checks
+from django.db import connection, models
 from django.http import Http404, HttpRequest
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import override_settings
 
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
-from trusts.core import TrustsConfigurationError
+from trusts.core import (
+    BackendHandle,
+    PlanQueryCompiler,
+    TrustsConfigurationError,
+    TrustsRegistry,
+)
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -233,3 +242,169 @@ class AuthorizationRequiredTest(TestCase):
                 Document, 'non_confidential',
             ),
         )
+
+
+@contextmanager
+def _tables(*model_classes):
+    with connection.schema_editor() as editor:
+        for model in model_classes:
+            editor.create_model(model)
+    try:
+        yield
+    finally:
+        with connection.schema_editor() as editor:
+            for model in reversed(model_classes):
+                editor.delete_model(model)
+
+
+def _document_backend():
+    return implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+
+
+def _extra_handle(path='tests.core.issue138-extra'):
+    return BackendHandle(
+        path=path,
+        registry=TrustsRegistry(),
+        compiler=PlanQueryCompiler(),
+    )
+
+
+def _extra_grant_models():
+    User = get_user_model()
+
+    class ExtraDocumentGrant(models.Model):
+        document = models.ForeignKey(Document, on_delete=models.CASCADE)
+        user = models.ForeignKey(User, on_delete=models.CASCADE)
+        permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'myapp'
+            db_table = 'issue138_extra_document_grant'
+
+    class OtherPermission(models.Model):
+        label = models.CharField(max_length=40, blank=True)
+
+        class Meta:
+            app_label = 'myapp'
+            db_table = 'issue138_other_permission'
+
+    class OtherPermissionGrant(models.Model):
+        document = models.ForeignKey(Document, on_delete=models.CASCADE)
+        user = models.ForeignKey(User, on_delete=models.CASCADE)
+        permission = models.ForeignKey(
+            OtherPermission, on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'myapp'
+            db_table = 'issue138_other_permission_grant'
+
+    return ExtraDocumentGrant, OtherPermission, OtherPermissionGrant
+
+
+@override_settings(
+    AUTHENTICATION_BACKENDS=AUTHENTICATION_BACKENDS,
+    INSTALLED_APPS=INSTALLED_APPS,
+)
+class AuthorizationRequiredCompositionTest(TransactionTestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.alice = User.objects.create_user(username='alice-138b', password='x')
+        self.bob = User.objects.create_user(username='bob-138b', password='x')
+        self.change = Permission.objects.get_or_create(
+            content_type=ContentType.objects.get_for_model(Document),
+            codename='change_document',
+            defaults={'name': 'Can change document'},
+        )[0]
+        self.open_doc = Document.objects.create(title='open', confidential=False)
+        self.secret = Document.objects.create(title='secret', confidential=True)
+        DocumentGrant.objects.create(
+            document=self.open_doc, user=self.alice, permission=self.change,
+        )
+        DocumentGrant.objects.create(
+            document=self.secret, user=self.alice, permission=self.change,
+        )
+
+    def _assert_both_orders(self, primary, extra, view, pk, expect_ok):
+        for handles in ((primary, extra), (extra, primary)):
+            with patch(
+                'trusts.apps.configured_implementation_handles',
+                return_value=handles,
+            ):
+                if expect_ok:
+                    self.assertEqual(view(_request(self.alice), pk=pk), 'ok')
+                else:
+                    with self.assertRaises(PermissionDenied):
+                        view(_request(self.alice), pk=pk)
+
+    def test_dual_backend_condition_order_does_not_broaden(self):
+        ExtraDocumentGrant, _OtherPermission, _OtherGrant = _extra_grant_models()
+        primary = _document_backend()
+        extra = _extra_handle()
+        extra.register(
+            ExtraDocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        extra.register_permission_condition(
+            Document,
+            'non_confidential',
+            lambda u, p, o: o.title != 'nope',
+        )
+        with _tables(ExtraDocumentGrant):
+            self._assert_both_orders(
+                primary, extra, _edit_non_confidential, self.secret.pk, False,
+            )
+            self._assert_both_orders(
+                primary, extra, _edit_non_confidential, self.open_doc.pk, True,
+            )
+
+    def test_incomplete_second_backend_grant_is_omitted(self):
+        ExtraDocumentGrant, _OtherPermission, _OtherGrant = _extra_grant_models()
+        primary = _document_backend()
+        extra = _extra_handle()
+        extra.register(
+            ExtraDocumentGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        with _tables(ExtraDocumentGrant):
+            ExtraDocumentGrant.objects.create(
+                document=self.secret, user=self.alice, permission=self.change,
+            )
+            self._assert_both_orders(
+                primary, extra, _edit_non_confidential, self.secret.pk, False,
+            )
+
+    def test_incompatible_permission_terminal_cannot_collide(self):
+        _ExtraDocumentGrant, OtherPermission, OtherPermissionGrant = (
+            _extra_grant_models()
+        )
+        primary = _document_backend()
+        extra = _extra_handle(path='tests.core.issue138-other-perm')
+        extra.register(
+            OtherPermissionGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        with _tables(OtherPermission, OtherPermissionGrant):
+            OtherPermission.objects.create(pk=self.change.pk, label='collide')
+            OtherPermissionGrant.objects.create(
+                document=self.open_doc,
+                user=self.bob,
+                permission_id=self.change.pk,
+            )
+            for handles in ((primary, extra), (extra, primary)):
+                with patch(
+                    'trusts.apps.configured_implementation_handles',
+                    return_value=handles,
+                ):
+                    with self.assertRaises(PermissionDenied):
+                        _edit(_request(self.bob), pk=self.open_doc.pk)
+                    self.assertEqual(
+                        _edit(_request(self.alice), pk=self.open_doc.pk),
+                        'ok',
+                    )

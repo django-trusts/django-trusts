@@ -82,6 +82,36 @@ Migration-bot search list:
 - `register_strategy(`
 - `register_strategy(OrderedFold`
 
+## View guard (#138)
+
+| | Old | New |
+| --- | --- | --- |
+| Trusts-only object view | `permission_required(...)` (Django backend OR / `user.has_perm`) or a hand-rolled check | `authorization_required(Document, "myapp.change_document")` |
+| Named condition on a view | colon suffix on the permission string, or `P` / `K` / `G` / `O` lookups | `authorization_required(Document, "myapp.change_document", ("non_confidential",))` |
+| Candidate identity | `K` / `G` / `O`, GET, POST, or a custom kwarg | URL `kwargs["pk"]` only, bound to `model._meta.pk` |
+
+`permission_required`, `P`, `K`, `G`, and `O` stay imported and
+behavior-compatible. They are not the 1.0 guard. `authorization_required`
+does not call `user.has_perm` and does not OR Django authentication
+backends.
+
+Only configured backends whose applicable plan uses
+`django.contrib.auth.models.Permission` participate. Each of those
+backends composes its own grant with its own selected names before the
+backends are OR'd. A backend that does not register every selected name
+is omitted; its unconditioned grant does not participate. Backend order
+does not change the result. A name that no participating backend
+registers still fails closed (`TrustsConfigurationError` / `trusts.E008`).
+
+Migration-bot checklist:
+
+- `authorization_required(`
+- `from trusts.decorators import authorization_required`
+- `permission_required(`
+- `from trusts.decorators import permission_required`
+- `P(` / `K(` / `G(` / `O(`
+- colon permission strings in views (`app_label.codename:name`)
+
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.
 
