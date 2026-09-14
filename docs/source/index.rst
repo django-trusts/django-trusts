@@ -179,7 +179,7 @@ Register the model paths when the application starts:
 permission, and protected content associated with each trust record.
 
 ``user``, ``permission``, and ``content`` each accept either a one-argument
-path builder (the ``lambda`` form in ``ready()`` above) or a Django ``__``
+path lambda (the form in ``ready()`` above) or a Django ``__``
 path string. Both forms of the same registration are valid; the string
 equivalent is:
 
@@ -316,7 +316,7 @@ API also supports paths through multiple relationships:
    )
 
 The ``condition=`` argument on ``register`` is a one-argument symbolic
-callable rooted at the trust model. django-trusts invokes it once during
+predicate rooted at the trust model. django-trusts invokes it once during
 registration and stores no callable. The 1.0 grammar is path equality
 (``==``), collection-rooted membership (``.contains(member)``), and
 conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.

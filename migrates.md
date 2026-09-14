@@ -51,8 +51,8 @@ backend.register(
 )
 ```
 
-The builder runs once after the freeze check, in the same `AppConfig.ready()`
-world as path builders. The stored overlay is private `Equal` /
+The predicate runs once after the freeze check, in the same `AppConfig.ready()`
+world as path lambdas. The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. Literal Python `in` is
 unsupported and is not recovered through AST, bytecode, `dis`, or a
 `__contains__` side channel. Public `register(condition=...)` rejects
@@ -60,8 +60,8 @@ prebuilt `All` / `Equal` / `permission_in` values (`TypeError`). Internal
 `TrustsRegistry.register` may still accept those private records.
 
 `.contains` is a reserved method on the condition proxy. A model field
-actually named `contains` cannot be walked in `condition=`. Path-role
-builders (`user=` / `permission=` / `content=`) do not grow `.contains`.
+actually named `contains` cannot be walked in `condition=`. Path lambdas
+(`user=` / `permission=` / `content=`) do not grow `.contains`.
 
 Consumer Zero group-ceiling registrations and the GH conjunction stay on the
 post-#208 / #210 consumer train. Do not migrate them in the django-trusts
