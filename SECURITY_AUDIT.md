@@ -39,7 +39,7 @@ part of each release.
 
 ## Models and persisted facts
 
-The application owns all protected models and permission-bearing rows. It must
+The application owns all protected models and trust records. It must
 enforce their database constraints, tenancy rules, valid state transitions, and
 authorized write paths.
 
@@ -59,7 +59,7 @@ overlay:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register_relationship(...)` | Register paths from a permission-bearing model to user, permission, and protected content | Yes |
+| `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
 Ordered allow/deny registration lives in
@@ -73,17 +73,25 @@ registry freezes; late mutation is rejected.
 
 ### Relationship authorization
 
-A relationship registration names three non-empty Django `__` paths from one
-permission-bearing root:
+A trust registration has the public signature
+`register(*, trust, user, permission, content, condition=None, along=None)`.
+The required `trust=` model is the root of the three non-empty paths:
 
 ```python
-backend.register_relationship(
-    DocumentPermission,
-    user="user",
-    permission="permission",
-    content="document",
+backend.register(
+    trust=DocumentPermission,
+    user=lambda t: t.user,
+    permission=lambda t: t.permission,
+    content=lambda t: t.document,
 )
 ```
+
+Each path accepts either a Django `__` string or a one-argument symbolic path
+builder. A builder is called once during registration and must return a path
+rooted at the supplied symbolic trust value. Trusts validates and normalizes
+the complete path with Django model metadata and stores no callable. Builder
+exceptions, foreign symbolic roots, constants, empty paths, and unsupported
+relationship shapes fail closed with zero SQL and no partial mutation.
 
 A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and
