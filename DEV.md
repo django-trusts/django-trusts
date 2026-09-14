@@ -113,7 +113,7 @@ Estimate the surface that must be understood and proved, including:
 - grant-producing semantics and fail-closed behavior;
 - object, queryset, enumeration, and decorator projections;
 - relationship identity, many-to-many, recursion, and database dialects;
-- registry lifecycle, startup, and zero-SQL guarantees;
+- registry lifecycle, startup, and tested zero-SQL behavior;
 - affected consumer repositories and exact-version staging;
 - documentation, packaging, CI, deployment, and rollback proof; and
 - uncertainty about existing behavior or historical compatibility.
