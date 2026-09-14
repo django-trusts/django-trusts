@@ -192,23 +192,6 @@ equivalent is:
        content="document",
    )
 
-A path builder is contextually typed as the model passed to ``trust=``, so
-type-aware editors can infer the lambda parameter and offer model-field
-completion. Trusts calls the builder once during registration with a symbolic
-proxy. Attribute access on the proxy records a rooted model path; other
-operations on the proxy are unsupported. Trusts validates the returned complete
-path with Django model metadata, stores only its normalized ``__`` path, and
-discards the callable before authorization.
-
-The builder runs in the same application-startup context as the surrounding
-``AppConfig.ready()`` code and receives no additional authority from Trusts.
-Trusts does not inspect or sandbox unrelated Python in its body; the application
-could perform the same SQL, I/O, or side effect immediately before calling
-``register()``. Trusts itself issues no SQL while validating the returned path. Python itself does not
-prove that a lambda attribute exists, so Trusts' setup-time validation remains
-authoritative. A builder exception, missing or foreign returned path, empty
-path, or unsupported relationship shape fails registration without partial
-registry mutation. Trusts cannot roll back side effects the builder performed.
 
 Configure Django
 ----------------
