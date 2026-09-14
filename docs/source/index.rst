@@ -339,34 +339,12 @@ support is recorded in the `support matrix
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Ordered allow and deny support is provisional. Policies that require it belong
-in `django-trusts-ordered-fold
-<https://github.com/django-trusts/django-trusts-ordered-fold>`_, not
-django-trusts. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
-``MaskEntry``, ``PolarityMap``, ``FlatToken``,
-``register_ordered_fold()``, ``TrustsOrderedFoldModelBackend``, and
-the PostgreSQL remaining-bits renderer. django-trusts does not import, depend
-on, auto-discover, or fallback-import it.
-
+`django-trusts-ordered-fold
+<https://github.com/django-trusts/django-trusts-ordered-fold>`_ is a
+provisional extension of django-trusts for ordered allow and deny policies.
 An example Windows declaration lives in
 `django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
-
-Object-level ``user.has_perm`` uses Django's ordered
-``AUTHENTICATION_BACKENDS`` OR. A relationship grant or an OrderedFold
-grant on another configured backend can authorize that single object.
-An OrderedFold deny on another backend does not veto an independent
-relationship grant returned by a relationship backend.
-
-django-trusts list, guard, and common-permission helpers are relationship-family
-local. ``Model.objects.authorized``, ``authorization_required``,
-``filter_authorized_scopes``, and module-level ``granted`` /
-``common_permissions`` include only handles whose implementation
-``_authorization_family`` is ``"relationship"``. They do not compile a
-mixed-family one-SQL OR and must not be read as Django's object-level
-backend OR. A future combined list projection belongs in the
-OrderedFold package, not django-trusts. Database support varies by evaluator;
-see the support matrix for the currently verified combinations.
 
 Reference implementations
 -------------------------
