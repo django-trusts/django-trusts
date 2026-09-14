@@ -364,12 +364,16 @@ def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
 
 
 def _authorization_check_handles():
-    """Configured handles for E008. Isolated test configs may omit helpers."""
-    from trusts.apps import configured_implementation_handles, implementation_configs
+    """Relationship-family handles for E008. Isolated configs may omit helpers."""
+    from trusts.apps import (
+        _relationship_family_handles,
+        configured_implementation_handles,
+        implementation_configs,
+    )
     from trusts.core import TrustsCompilerError, TrustsConfigurationError
 
     try:
-        return tuple(configured_implementation_handles())
+        return _relationship_family_handles(tuple(configured_implementation_handles()))
     except AttributeError:
         pass
 
@@ -391,7 +395,7 @@ def _authorization_check_handles():
                 handles.append(config.configured_backend(path))
             except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
                 continue
-    return tuple(handles)
+    return _relationship_family_handles(tuple(handles))
 
 
 @django_checks.register()

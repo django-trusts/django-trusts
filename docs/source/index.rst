@@ -350,13 +350,26 @@ relationship-registration path. A complete working declaration and its
 security assumptions live in `django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
-Both evaluator families use the same object-check, permission-enumeration, and
-queryset interfaces. Relationship registrations and one OrderedFold strategy
-may coexist on the same protected model in one configured backend when their
-resolved user, permission, and content identities are coherent. Authorization
-is the family-local OR: an OrderedFold deny settles only the OrderedFold branch
-and does not veto an independent relationship grant. Database support varies by
-evaluator; see the support matrix for the currently verified combinations.
+Object-level ``user.has_perm`` uses Django's ordered
+``AUTHENTICATION_BACKENDS`` OR. A relationship grant or an OrderedFold
+grant on another configured backend can authorize that single object.
+An OrderedFold deny does not veto an independent relationship grant
+returned by another backend.
+
+Core list, guard, and common-permission helpers are relationship-family
+local. ``Model.objects.authorized``, ``authorization_required``,
+``filter_authorized_scopes``, and module-level ``granted`` /
+``common_permissions`` include only handles whose implementation
+``_authorization_family`` is ``"relationship"``. They do not compile a
+mixed-family one-SQL OR and must not be read as Django's object-level
+backend OR.
+
+Until the OrderedFold engine leaves Core, one exact relationship backend
+path may still hold both families on one plan. That same-path family-local OR
+is a provisional deferral, not the 1.0 QuerySet or view-guard
+contract. A future combined list projection belongs in the OrderedFold
+package, not Core. Database support varies by evaluator; see the support
+matrix for the currently verified combinations.
 
 Reference implementations
 -------------------------

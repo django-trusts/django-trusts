@@ -175,7 +175,11 @@ Migration-bot checklist:
 
 Instance and QuerySet `has_perm` / enumeration stay backend-local. A missing runtime `:name` is fail-closed, not a raise. Malformed or unbound policy owned by an applicable backend still raises.
 
-`.authorized`, `filter_authorized_scopes`, and `authorization_required` keep their existing cross-handle aggregation. That is a separate design track.
+`.authorized`, `filter_authorized_scopes`, `authorization_required`,
+module-level `granted`, and module-level `common_permissions` are
+relationship-family local (see Family-local Core aggregates below).
+Django's object-level `user.has_perm` OR across authentication backends
+is a different layer.
 
 Migration-bot checklist:
 
@@ -185,6 +189,8 @@ Migration-bot checklist:
 - colon named-filter permission strings (`app_label.codename:name`)
 - `_is_collection_coordinator(`
 - `configured_handles()` used to authorize a QuerySet
+- `configured_implementation_handles()` used to authorize a QuerySet
+  or view guard
 
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.
@@ -194,7 +200,7 @@ Zero schema, UI, admin, or management-command steps.
 | | Old | New |
 | --- | --- | --- |
 | Second family on one terminal | The second of `register_relationship` / `register_ordered_fold` (either order) raised `TrustsConfigurationError` (`AnyPath and OrderedFold cannot share one terminal`) | Both families may coexist on one content terminal of one exact backend path when user and permission terminals match |
-| Authorization | One family per plan | Family-local OR: `relationship_grant OR ordered_fold_grant` |
+| Authorization | One family per plan | Same-path family-local OR: `relationship_grant OR ordered_fold_grant`. This is the provisional same-path deferral while the engine still lives in Core. 1.0 list/guard aggregation is relationship-family local (#194); object-level Django backend OR is a different layer |
 | OrderedFold deny | N/A on a mixed plan (XOR blocked registration) | Settles only the OrderedFold branch. It does not veto an independent relationship grant |
 | Named filter | Restricting overlay; never a grant | Unchanged |
 | Malformed / unsupported renderer | Fail-closed; no silent drop | Unchanged. A configured OrderedFold branch is not omitted when the renderer is unsupported |
@@ -209,6 +215,53 @@ Migration-bot checklist:
 - separate backends or registries used only to XOR-workaround coexistence
 - projection tests that assume a second family cannot register
 - workaround code that copied relationship grants into ACE rows (or the reverse) solely to escape XOR
+
+This file is the Core 1.x router only. It does not document concrete
+Zero schema, UI, admin, or management-command steps.
+
+## Family-local Core aggregates (#194 / #181)
+
+| | Old | New |
+| --- | --- | --- |
+| Cross-handle list/guard aggregate | `.authorized`, `authorization_required`, and `filter_authorized_scopes` OR'd compiler predicates from every configured implementation handle in one SQL, including a co-installed fold-family plan | Those Core-owned helpers include relationship-family handles only (`implementation_for_path(handle.path)._authorization_family == "relationship"`). Fold-family handles are omitted, not ORed |
+| `granted` / module-level `common_permissions` | Noun-blind OR of every given handle | Same compilation, after dropping owned non-relationship-family handles. Unowned isolated test handles stay (default `"relationship"`) |
+| Mixin `has_perm` / `get_*_permissions` | Exact-path `_own_handle()` | Unchanged. Mixin projection still evaluates the own handle even when that handle's family is not `"relationship"` |
+| Django `user.has_perm` | Ordered authentication-backend OR of object results | Unchanged. Do not read this as Core list/guard aggregation |
+| Protected factories | `_ensure()` constructed `TrustsRegistry()`; `configured_backend()` constructed `BackendHandle` | `_create_registry(path)` and `_create_handle(path, registry, compiler)` on `TrustsImplementationConfig`. Freeze-on-first-live-read and exact-path ownership are unchanged |
+| Family discriminator | None | Protected provisional `_authorization_family`, default `"relationship"`. Not a public family API |
+| Applicability | Mixin and `common_permissions` hard-wired `plan.records or plan.strategy` | `QueryCompiler.applies(plan)`; relationship default is `bool(plan.records)`. Inapplicable backends stay 0 SQL before `:name` overlay. One authorization SQL per applicable backend invocation |
+| `any_plan_records` | Consulted `plan.records or plan.strategy` | Same consult while the provisional engine still lives in Core. This is a support gate, not a mixed-family one-SQL contract. C2 drops the `strategy` arm |
+
+QuerySet / common-permission / guard consequences:
+
+- `Document.objects.authorized(user, permission)` no longer includes rows
+  granted only by a fold-family handle.
+- `authorization_required` preflight and grant composition see only
+  relationship-family `auth.Permission` plans. A fold-only plan on a
+  fold-family handle does not open the Core guard.
+- Module-level `common_permissions` and `filter_authorized_scopes` omit
+  fold-family handles. Mixin `get_all_permissions` / `get_group_permissions`
+  stay path-local.
+- Object-level `user.has_perm` can still be True when either a
+  relationship backend or a fold backend grants that object.
+
+Migration-bot checklist:
+
+- `.authorized(`
+- `authorization_required(`
+- `filter_authorized_scopes(`
+- `granted(`
+- `common_permissions(`
+- `configured_implementation_handles()` used to authorize a QuerySet
+  or view guard
+- `_authorization_family`
+- `_create_registry(`
+- `_create_handle(`
+- `QueryCompiler.applies`
+- `plan.records or plan.strategy`
+- `family-local OR`
+- `cross-handle aggregation`
+- `separate design track`
 
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.

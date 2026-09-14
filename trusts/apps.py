@@ -75,11 +75,30 @@ class _TrustsRegistryOwner(object):
         apps_registry = getattr(self, 'apps', None)
         return bool(apps_registry is not None and apps_registry.ready)
 
-    def _ensure(self, path):
+    def _create_registry(self, path):
+        """Construct the path-owned registry. Protected / provisional.
+
+        The default is Core ``TrustsRegistry``. An extension config may
+        return a family-owned store. ``path`` is the exact configured
+        backend string; the relationship default does not key on it.
+        """
         from trusts.core import TrustsRegistry
 
+        return TrustsRegistry()
+
+    def _create_handle(self, path, registry, compiler):
+        """Construct the path-owned handle. Protected / provisional.
+
+        The default is Core ``BackendHandle``. An extension config may
+        return a family-owned handle. Not a public family API.
+        """
+        from trusts.core import BackendHandle
+
+        return BackendHandle(path=path, registry=registry, compiler=compiler)
+
+    def _ensure(self, path):
         if path not in self.registries:
-            self.registries[path] = TrustsRegistry()
+            self.registries[path] = self._create_registry(path)
         return self.registries[path]
 
     def _exposed_registry(self, path):
@@ -99,7 +118,7 @@ class _TrustsRegistryOwner(object):
         """
         from django.utils.module_loading import import_string
 
-        from trusts.core import BackendHandle, TrustsConfigurationError, compiler_for_class
+        from trusts.core import TrustsConfigurationError, compiler_for_class
 
         paths = self._configured_trusts_paths()
         if path is None:
@@ -121,10 +140,10 @@ class _TrustsRegistryOwner(object):
                 '%r is not a configured Trusts backend' % (path,)
             )
         cls = import_string(path)
-        return BackendHandle(
-            path=path,
-            registry=self._exposed_registry(path),
-            compiler=compiler_for_class(cls),
+        return self._create_handle(
+            path,
+            self._exposed_registry(path),
+            compiler_for_class(cls),
         )
 
     def configured_handles(self):
@@ -201,10 +220,19 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
     Host implementations (Zero, GH, Windows, or a project app) subclass
     this and declare ``trusts_backend_paths``. Core ships no AppConfig
     and no Django app label; do not list ``'trusts'`` in INSTALLED_APPS.
+
+    Protected provisional hooks ``_create_registry``, ``_create_handle``,
+    and ``_authorization_family`` are backend plumbing for first-party
+    extensions. They are not a public family API.
     """
 
     default = False
     trusts_backend_paths = ()
+    # Protected / provisional family discriminator. Not a public API.
+    # Relationship-family configs keep the default; an extension config
+    # may override it. Core list/guard/common-permission aggregates
+    # include only ``"relationship"`` handles.
+    _authorization_family = 'relationship'
 
     def __init__(self, *args, **kwargs):
         super(TrustsImplementationConfig, self).__init__(*args, **kwargs)
@@ -275,12 +303,49 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
 def configured_implementation_handles(apps_registry=None):
     """Handles from every installed implementation, in owner then path order.
 
-    Empty when no ``TrustsImplementationConfig`` is installed.
+    Empty when no ``TrustsImplementationConfig`` is installed. This
+    listing is not the Core list/guard aggregate: callers that authorize
+    a QuerySet, view guard, or common-permission set must use
+    ``_relationship_implementation_handles``.
     """
     handles = []
     for config in implementation_configs(apps_registry):
         handles.extend(config.configured_handles())
     return tuple(handles)
+
+
+def _handle_authorization_family(handle, apps_registry=None):
+    """Family of the implementation that owns ``handle.path``.
+
+    Unowned or pathless handles default to ``"relationship"`` so isolated
+    compiler tests stay on the Core contract. Missing owners do not raise.
+    """
+    from trusts.core import TrustsConfigurationError
+
+    path = getattr(handle, 'path', None)
+    if not path:
+        return 'relationship'
+    try:
+        config = implementation_for_path(path, apps_registry)
+    except TrustsConfigurationError:
+        return 'relationship'
+    return getattr(config, '_authorization_family', 'relationship')
+
+
+def _relationship_family_handles(handles, apps_registry=None):
+    """Keep handles whose owned family is ``"relationship"``."""
+    return tuple(
+        handle for handle in handles
+        if _handle_authorization_family(handle, apps_registry) == 'relationship'
+    )
+
+
+def _relationship_implementation_handles(apps_registry=None):
+    """Configured handles that participate in Core list/guard aggregates."""
+    return _relationship_family_handles(
+        configured_implementation_handles(apps_registry),
+        apps_registry,
+    )
 
 
 def implementation_configs(apps_registry=None):
