@@ -117,32 +117,6 @@ and then query only its first hop.
 The `user`, `permission`, and `content` relationship path arguments may
 not be empty.
 
-### Ordered allow and deny
-
-OrderedFold is not a django-trusts engine. Import the five construction types and
-`register_ordered_fold(...)` from `trusts_ordered_fold`, list
-`TrustsOrderedFoldModelBackend` (or a subclass such as Windows
-`WinfsBackend`), and own that path with
-`OrderedFoldImplementationConfig`. Vendor diagnostics are
-`trusts_ordered_fold.E001`, not django-trusts `trusts.E006`.
-
-At the current 1.0 boundary, object-level ``user.has_perm`` uses Django's
-ordered authentication-backend OR. A relationship grant or an OrderedFold
-grant on another configured backend can authorize that single object.
-An OrderedFold deny cannot veto an independent relationship grant or
-revoke a grant returned by another configured Django authentication
-backend.
-
-django-trusts list, guard, and common-permission helpers are relationship-family
-local. ``Model.objects.authorized``, ``authorization_required``,
-``filter_authorized_scopes``, and module-level ``granted`` /
-``common_permissions`` include only handles whose implementation
-``_authorization_family`` is ``"relationship"``. They do not compile a
-mixed-family one-SQL OR. Django's object-level backend OR is a different
-layer and must not be read as django-trusts list/guard aggregation. Same-path
-family-local OR of relationship and OrderedFold on one django-trusts plan is
-removed.
-
 ### Named filters are outer restrictions
 
 A named filter is registered against the protected model:
