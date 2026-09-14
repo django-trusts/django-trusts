@@ -154,6 +154,28 @@ Migration-bot checklist:
 - `P(` / `K(` / `G(` / `O(`
 - colon permission strings in views (`app_label.codename:name`)
 
+## QuerySet authorization (#181)
+
+| | Old | New |
+| --- | --- | --- |
+| QuerySet evaluator | First configured Trusts path on an owner was the collection coordinator and combined `configured_handles()` | Each exact `AUTHENTICATION_BACKENDS` dotted path evaluates only `self._own_handle()` |
+| Sibling grants | Coordinator ORed applicable handle predicates, then applied all-candidates / common-permissions in one SQL | Django alone ORs backend **results**. A backend that grants only row 1 and a sibling that grants only row 2 both deny `qs` of both rows; the permission is absent from the union of backend-local common-permission sets |
+| Named filter | Lookup used the coordinator's `handles[0].registry`. Host raised `AttributeError` for Document's `non_confidential` on a QuerySet or instance and blocked later backends | Lookup uses this path's registry only. An inapplicable backend returns false / empty **before** `:name` lookup (instance or QuerySet, 0 SQL). An applicable backend missing that local name is a fail-closed non-match (`False` / empty, 0 SQL), not a raise that stops Django siblings. Malformed or unbound policy this backend owns still raises. Declared `authorization_required` names stay covered by `trusts.E008`; ad-hoc `has_perm` strings are not scanned |
+| Query bound | One SQL on the coordinator; other same-owner paths were 0 SQL | At most one authorization SQL per applicable Trusts backend invocation. Inapplicable / unknown-local-name: 0 SQL. The same path listed twice is two Django invocations / two queries (#180 stays closed) |
+
+Instance and QuerySet `has_perm` / enumeration stay backend-local. A missing runtime `:name` is fail-closed, not a raise. Malformed or unbound policy owned by an applicable backend still raises.
+
+`.authorized`, `filter_authorized_scopes`, and `authorization_required` keep their existing cross-handle aggregation. That is a separate design track.
+
+Migration-bot checklist:
+
+- `has_perm(` with a `QuerySet`
+- `get_all_permissions(` with a `QuerySet`
+- `get_group_permissions(` with a `QuerySet`
+- colon named-filter permission strings (`app_label.codename:name`)
+- `_is_collection_coordinator(`
+- `configured_handles()` used to authorize a QuerySet
+
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.
 

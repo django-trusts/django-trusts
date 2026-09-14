@@ -2,13 +2,12 @@
 
 Public ``user.*permission*`` and mixin methods only. A registered
 Document relationship stays live. Enumeration comes from that same
-plan as ``has_perm``. The first configured Trusts path on an owner is
-the sole QuerySet coordinator. A repeated
-``AUTHENTICATION_BACKENDS`` string is two Django backend instances
-of that path, not a second registration; each instance is one
-evaluation. Cache compatibility is not a second authorization
-source. Private helpers and ``_trust_perm_cache`` contents are not
-the assertion.
+plan as ``has_perm``. Each exact backend path evaluates only its own
+handle. A repeated ``AUTHENTICATION_BACKENDS`` string is two Django
+backend instances of that path, not a second registration; each
+instance is one evaluation. Cache compatibility is not a second
+authorization source. Private helpers and ``_trust_perm_cache``
+contents are not the assertion.
 """
 
 from django.contrib.auth import get_user_model
@@ -147,7 +146,7 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
                 self.assertFalse(self.host.has_perm(self.alice, PERM, many))
             self.assertEqual(self.alice.get_all_permissions(many), {PERM})
 
-    def test_noncoordinator_and_duplicate_path_stay_empty_or_one_sql(self):
+    def test_other_path_and_duplicate_path_stay_empty_or_one_sql(self):
         qs = self._granted_qs(self.document)
         owner = implementation_for_path(DOCUMENT_BACKEND)
         saved = owner.trusts_backend_paths

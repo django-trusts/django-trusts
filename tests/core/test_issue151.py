@@ -123,9 +123,10 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertTrue(permission_has_condition('change_note:own'))
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
-    def test_companion_pin_is_merged_z_methods(self):
-        z_methods = '2e3cccedb92b4cf85e9d6a3cd2d51821aad1d716'
+    def test_companion_pin_is_181_compat(self):
+        z_methods = 'f50946f7112702a41bd63a3e044b44a0d4ec3297'
         stale = '841004af49687c31c466ed03dbfd4f8ce9c7f153'
+        prior_merged_zero = '2e3cccedb92b4cf85e9d6a3cd2d51821aad1d716'
         pairing = {
             'ci': (ROOT / '.github' / 'workflows' / 'ci.yml').read_text(),
             'wheels': (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text(),
@@ -137,6 +138,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertIn("ZERO_HEAD = '%s'" % z_methods, pairing['wheels'])
         for name, text in pairing.items():
             self.assertNotIn(stale, text, name)
+            self.assertNotIn(prior_merged_zero, text, name)
         self.assertNotIn('OMIT_ZERO_UNBOUND_DEFAULT', pairing['runner'])
         self.assertNotIn(
             'test_unbound_is_none_and_bind_is_zero_sql',
@@ -250,11 +252,11 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         backend = DocumentBackend()
         document = Document(title='probe')
         user = get_user_model()(username='probe-151')
-        with self.assertRaises(AttributeError) as ctx:
-            backend._condition_overlay(
-                'myapp.change_document:missing', document, user,
-            )
-        self.assertIn('missing', str(ctx.exception))
+        record, extra_q = backend._condition_overlay(
+            'myapp.change_document:missing', document, user,
+        )
+        self.assertIsNone(record)
+        self.assertIsNone(extra_q)
 
     def test_explicit_unbind_fail_closes_named_condition_overlay(self):
         backend = DocumentBackend()

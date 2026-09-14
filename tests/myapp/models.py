@@ -20,3 +20,14 @@ class DocumentGrant(models.Model):
 
     class Meta:
         app_label = 'myapp'
+
+
+class DocumentAltGrant(models.Model):
+    """Second Document grant table for share-nothing split-path proofs."""
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'myapp'
