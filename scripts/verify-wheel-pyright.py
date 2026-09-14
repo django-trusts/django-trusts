@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Installed-wheel Pyright proof for contextual ``trust=`` inference.
+"""Installed-wheel Pyright proof for public ``configured_backend()`` inference.
 
 Must run from outside the checkout after installing the built wheel.
 A valid consumer must be clean; ``t.not_a_field`` must be a diagnostic.
+The consumer uses the documented ``TrustsImplementationConfig`` path and
+does not import or annotate ``BackendHandle``.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,7 +21,7 @@ from pathlib import Path
 OK_SOURCE = '''\
 from django.db import models
 
-from trusts.core import BackendHandle
+from trusts.apps import TrustsImplementationConfig
 
 
 class AnnotatedGrant(models.Model):
@@ -30,19 +33,27 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
-def check(handle: BackendHandle) -> None:
-    handle.register(
-        trust=AnnotatedGrant,
-        user=lambda t: t.user,
-        permission=lambda t: t.permission,
-        content=lambda t: t.document,
+class DocumentsConfig(TrustsImplementationConfig):
+    name = "pyright_proof"
+    trusts_backend_paths = (
+        "documents.backends.DocumentBackend",
     )
+
+    def ready(self):
+        super().ready()
+        backend = self.configured_backend()
+        backend.register(
+            trust=AnnotatedGrant,
+            user=lambda t: t.user,
+            permission=lambda t: t.permission,
+            content=lambda t: t.document,
+        )
 '''
 
 MISSING_SOURCE = '''\
 from django.db import models
 
-from trusts.core import BackendHandle
+from trusts.apps import TrustsImplementationConfig
 
 
 class AnnotatedGrant(models.Model):
@@ -54,13 +65,21 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
-def check(handle: BackendHandle) -> None:
-    handle.register(
-        trust=AnnotatedGrant,
-        user=lambda t: t.not_a_field,
-        permission=lambda t: t.permission,
-        content=lambda t: t.document,
+class DocumentsConfig(TrustsImplementationConfig):
+    name = "pyright_proof"
+    trusts_backend_paths = (
+        "documents.backends.DocumentBackend",
     )
+
+    def ready(self):
+        super().ready()
+        backend = self.configured_backend()
+        backend.register(
+            trust=AnnotatedGrant,
+            user=lambda t: t.not_a_field,
+            permission=lambda t: t.permission,
+            content=lambda t: t.document,
+        )
 '''
 
 CONFIG = '''\
@@ -70,6 +89,13 @@ CONFIG = '''\
   "reportMissingImports": "warning"
 }
 '''
+
+
+def _reject_handle_annotation(source: str, label: str) -> None:
+    if 'BackendHandle' in source:
+        raise SystemExit(
+            '%s consumer must not import or annotate BackendHandle' % label
+        )
 
 
 def main() -> int:
@@ -84,6 +110,9 @@ def main() -> int:
             % cwd
         )
 
+    _reject_handle_annotation(OK_SOURCE, 'valid')
+    _reject_handle_annotation(MISSING_SOURCE, 'missing-attribute')
+
     ok = Path('register_ok.py')
     missing = Path('register_missing.py')
     ok.write_text(OK_SOURCE)
@@ -94,11 +123,15 @@ def main() -> int:
     if pyright is None:
         raise SystemExit('pyright is not installed')
 
+    env = dict(os.environ)
+    env['PYTHONPATH'] = ''
+
     ok_run = subprocess.run(
         [pyright, '--outputjson', str(ok)],
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
     if ok_run.returncode != 0:
         raise SystemExit(
@@ -111,6 +144,7 @@ def main() -> int:
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
     payload = json.loads(miss_run.stdout or '{}')
     diagnostics = payload.get('generalDiagnostics') or []
