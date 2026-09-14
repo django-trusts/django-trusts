@@ -29,7 +29,11 @@ model class; ``descriptor`` is content-relative and may be ``""``;
 path. The first OrderedFold renderer is PostgreSQL; other vendors
 fail closed before fold SQL. Import ``OrderedFold``,
 ``PermissionMaskDomain``, ``MaskEntry``, ``PolarityMap``, and
-``FlatToken`` from ``trusts.core``.
+``FlatToken`` from ``trusts.core``. Those five declarations and
+``BackendHandle.register_ordered_fold`` are the complete supported OrderedFold
+surface. They are provisional and excluded from the normal 1.x compatibility
+guarantee; other OrderedFold compiler, validation, expression, and renderer
+names are implementation details.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
@@ -2818,6 +2822,10 @@ class BackendHandle:
     def register_ordered_fold(self, source_model, fold):
         """Donate one OrderedFold plan on this backend.
 
+        Provisional API: this method is excluded from the normal 1.x
+        compatibility guarantee. Its signature or location may change, or it
+        may be removed, in a future feature release.
+
         The positional ``source_model`` is the source root. Public
         ``fold.content`` is the content model class. ``descriptor`` is
         a Django ``__`` path on that content model and may be ``""``.
@@ -2878,22 +2886,16 @@ from trusts.ordered_fold import (  # noqa: E402
     FlatToken,
     MaskEntry,
     OrderedFold,
-    OrderedFoldAllowed,
     PermissionMaskDomain,
     PolarityMap,
-    RegisteredStrategy,
-    ordered_fold_connection_supported,
 )
 
 for _exported in (
     FlatToken,
     MaskEntry,
     OrderedFold,
-    OrderedFoldAllowed,
     PermissionMaskDomain,
     PolarityMap,
-    RegisteredStrategy,
-    ordered_fold_connection_supported,
 ):
     _exported.__module__ = 'trusts.core'
 del _exported
