@@ -93,17 +93,22 @@ backend.register(
 )
 ```
 
-Each path accepts either a Django `__` string or a one-argument non-executing
-path builder; both forms of the same registration are shown above (the usage
-guide pairs them the same way under “Register the trust”). Trusts never invokes
-the path function. On the supported CPython versions it structurally accepts
-only a rooted attribute-chain body, `parameter.attr[.attr...]`. Calls,
-operators, indexing, globals, closures, control flow, tuple selection, and
-every other instruction shape are rejected before application code can run.
-Trusts extracts the attribute names, validates and normalizes the complete path
-with Django model metadata, and stores no callable. Unsupported function
-shapes, foreign or missing paths, empty paths, and unsupported relationship
-shapes fail closed with zero SQL and no partial registry mutation.
+Each path accepts either a Django `__` string or a one-argument registration-
+time path builder; both forms of the same registration are shown above (the
+usage guide pairs them the same way under “Register the trust”). Trusts invokes
+the builder once with a symbolic proxy. Attribute access on that proxy records
+a rooted model path; other operations on the proxy are unsupported. Trusts
+validates and normalizes the returned complete path with Django model metadata
+and stores no callable.
+
+The application owns and trusts its `AppConfig.ready()` code, including the
+builder body. Trusts does not inspect or sandbox unrelated Python in that body;
+it may perform SQL, I/O, or other side effects just as application code before
+the `register()` call may. The zero-SQL guarantee covers Trusts’ own path
+validation, not application-supplied builder code. A builder exception,
+foreign or missing returned path, empty path, or unsupported relationship shape
+fails registration without partial registry mutation, but Trusts cannot undo
+side effects already performed by the builder.
 
 A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and
