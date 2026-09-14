@@ -12,6 +12,11 @@ split is not produced by a documented public configuration without a
 test-only compiler or private patching.
 """
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -19,20 +24,17 @@ from django.core.exceptions import PermissionDenied
 from django.http import Http404, HttpRequest
 from django.test import SimpleTestCase, TestCase
 
-from tests.apps import override_apps_ready
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import implementation_for_path
 from trusts.core import TrustsConfigurationError
-from trusts.decorators import (
-    _declared_authorization_guards,
-    authorization_required,
-)
+from trusts.decorators import authorization_required
 
 
 PERM = 'myapp.change_document'
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _request(user):
@@ -53,16 +55,86 @@ def _permission(model, codename, name):
     return permission
 
 
-def _forget_guard(entry):
-    try:
-        _declared_authorization_guards.remove(entry)
-    except ValueError:
-        pass
+def _run_isolated(source):
+    env = os.environ.copy()
+    env.pop('DJANGO_SETTINGS_MODULE', None)
+    pythonpath = [str(ROOT)]
+    existing = env.get('PYTHONPATH')
+    if existing:
+        pythonpath.append(existing)
+    env['PYTHONPATH'] = os.pathsep.join(pythonpath)
+    result = subprocess.run(
+        [sys.executable, '-c', source],
+        cwd=str(ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stdout + result.stderr)
+    return result.stdout
+
+
+_NOT_READY_POPULATE_SOURCE = """\
+from django.conf import settings
+settings.configure(
+    SECRET_KEY='issue201-not-ready',
+    USE_TZ=True,
+    DEFAULT_AUTO_FIELD='django.db.models.AutoField',
+    INSTALLED_APPS=(
+        'django.contrib.contenttypes',
+        'django.contrib.auth',
+        'tests.myapp.apps.DocumentConfig',
+        'tests.core.issue201_not_ready.NotReadyPopulateProbeConfig',
+    ),
+    AUTHENTICATION_BACKENDS=(
+        'tests.myapp.backends.DocumentBackend',
+    ),
+    DATABASES={
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
+    },
+    MIGRATION_MODULES={'myapp': None},
+)
+import django
+django.setup()
+"""
+
+
+_PARTIAL_DECLARATION_SOURCE = """\
+import os
+os.environ['DJANGO_SETTINGS_MODULE'] = 'tests.settings'
+import django
+django.setup()
+from django.core.checks import run_checks
+from tests.myapp.models import Document
+from trusts.core import TrustsConfigurationError
+from trusts.decorators import authorization_required
+
+try:
+    authorization_required(
+        Document, 'myapp.change_document', ('partial_201', ''),
+    )
+except TrustsConfigurationError:
+    pass
+else:
+    raise SystemExit('expected TrustsConfigurationError')
+
+messages = [
+    message for message in run_checks()
+    if getattr(message, 'id', None) == 'trusts.E008'
+]
+for message in messages:
+    if 'partial_201' in message.msg:
+        raise SystemExit('partial declaration leaked into trusts.E008')
+print('partial-declaration-ok')
+"""
 
 
 class AuthorizationRequiredDeclarationTest(TestCase):
     def test_declaration_rejects_invalid_permission_and_names_at_zero_sql(self):
-        before = list(_declared_authorization_guards)
         with self.assertNumQueries(0):
             with self.assertRaises(TypeError) as ctx:
                 authorization_required(Document, None)
@@ -89,32 +161,16 @@ class AuthorizationRequiredDeclarationTest(TestCase):
                 authorization_required(
                     Document, PERM, ('non_confidential', ' bad'),
                 )
-        self.assertEqual(_declared_authorization_guards, before)
 
-    def test_failed_declaration_does_not_leave_a_usable_partial_guard(self):
-        before = list(_declared_authorization_guards)
-        with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError):
-                authorization_required(
-                    Document, PERM, ('proof_201', ''),
-                )
-        self.assertEqual(_declared_authorization_guards, before)
-        self.assertNotIn(
-            (Document, PERM, ('proof_201',)),
-            _declared_authorization_guards,
-        )
-        self.assertNotIn(
-            (Document, PERM, ('proof_201', '')),
-            _declared_authorization_guards,
-        )
+    def test_failed_declaration_is_absent_from_public_system_checks(self):
+        stdout = _run_isolated(_PARTIAL_DECLARATION_SOURCE)
+        self.assertIn('partial-declaration-ok', stdout)
 
-        entry = (Document, PERM, ('proof_201',))
-        self.addCleanup(_forget_guard, entry)
-        with self.assertNumQueries(0):
-            @authorization_required(Document, PERM, ('proof_201',))
-            def _ok(request, pk):
-                return 'ok'
-        self.assertIn(entry, _declared_authorization_guards)
+
+class AuthorizationRequiredPopulateReadinessTest(SimpleTestCase):
+    def test_populate_window_fails_closed_at_zero_sql(self):
+        stdout = _run_isolated(_NOT_READY_POPULATE_SOURCE)
+        self.assertIn('not-ready-populate-ok', stdout)
 
 
 class AuthorizationRequiredReadinessPreflightTest(
@@ -140,28 +196,9 @@ class AuthorizationRequiredReadinessPreflightTest(
             document=self.secret, user=self.alice, permission=self.change,
         )
 
-    def test_not_ready_apps_fail_closed_at_zero_sql(self):
-        entry = (Document, PERM, ())
-        self.addCleanup(_forget_guard, entry)
-
-        @authorization_required(Document, PERM)
-        def _edit(request, pk):
-            return 'ok'
-
-        with override_apps_ready(False):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    _edit(_request(self.alice), pk=self.open_doc.pk)
-                self.assertIn('before Django apps', str(ctx.exception))
-                with self.assertRaises(TrustsConfigurationError):
-                    _edit(_request(self.superuser), pk=self.open_doc.pk)
-
     def test_missing_and_unbound_selected_name_fail_before_candidate_or_superuser(
         self,
     ):
-        missing_entry = (Document, PERM, ('missing_201',))
-        self.addCleanup(_forget_guard, missing_entry)
-
         @authorization_required(Document, PERM, ('missing_201',))
         def _missing(request, pk):
             return 'no'
@@ -171,9 +208,6 @@ class AuthorizationRequiredReadinessPreflightTest(
                 with self.assertRaises(TrustsConfigurationError) as ctx:
                     _missing(_request(user), pk=self.open_doc.pk)
                 self.assertIn('missing_201', str(ctx.exception))
-
-        filtered_entry = (Document, PERM, ('non_confidential',))
-        self.addCleanup(_forget_guard, filtered_entry)
 
         @authorization_required(Document, PERM, ('non_confidential',))
         def _filtered(request, pk):
@@ -204,11 +238,6 @@ class AuthorizationRequiredReadinessPreflightTest(
     def test_supported_grant_stays_one_sql_and_conditions_do_not_create_grants(
         self,
     ):
-        entry = (Document, PERM, ())
-        filtered_entry = (Document, PERM, ('non_confidential',))
-        self.addCleanup(_forget_guard, entry)
-        self.addCleanup(_forget_guard, filtered_entry)
-
         @authorization_required(Document, PERM)
         def _edit(request, pk):
             return 'ok'
