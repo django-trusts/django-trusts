@@ -5,7 +5,7 @@ development-version mark only. It is not a production 1.0 release, not a PyPI
 publication, and not a claim that the declarative permission model has been
 validated. `1.0.0.dev3` identifies the library cutover (#111). `1.0.0.dev2`
 remains the merged implementation-owned registry bridge (#108). `1.0.0.dev1`
-remains the merged `trusts.core_backends` checkpoint (#103 / #106).
+remains the merged transitional backend-module checkpoint (#103 / #106).
 
 ## Why a new major version
 
@@ -38,14 +38,13 @@ API and method changes for the modernization are recorded in
 
 ## Internal registration and projection primitive
 
-`trusts.core` keeps an isolated `TrustsRegistry`, root-relative `Ref`,
-and noun-neutral compiler/query machinery. Live registries are owned by
-installed `TrustsImplementationConfig` subclasses. Core ships no AppConfig
-and no `kernel_config()`. The generic mixin lives only at
-`from trusts.backends import TrustModelBackendMixin`.
-`trusts.core_backends` is gone. Historical concrete models and
-`TrustModelBackend` live under `trusts.zero.*`. See
-[core-registry.md](core-registry.md).
+Registration and projection internals remain behind the configured backend
+API. Live registries are owned by installed `TrustsImplementationConfig`
+subclasses. django-trusts ships no AppConfig and no `kernel_config()`. The
+generic mixin lives only at
+`from trusts.backends import TrustModelBackendMixin`. The transitional backend
+module is gone. Historical concrete models and `TrustModelBackend` live under
+`trusts.zero.*`. See [registry.md](registry.md).
 
 ## Preserved legacy source
 
