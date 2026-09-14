@@ -46,6 +46,7 @@ ordered allow/deny policies.
 - [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero) — continuation of the concrete django-trusts 0.x model
 - [django-trusts-zero-example](https://github.com/django-trusts/django-trusts-zero-example) — runnable application using Zero
 - [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions) — organization, team, and repository relationship reference
-- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) — ordered allow/deny reference
+- [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold) — PostgreSQL ordered allow/deny backend
+- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) — Windows ACL consumer of OrderedFold
 
 Copyright BeeDesk, Inc., 2015–2026. Released under the BSD 2-Clause License.

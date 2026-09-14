@@ -27,8 +27,10 @@ declares one matrix and tests it in CI.
 
 CI (`.github/workflows/ci.yml`) runs kernel-only authorization tests, a
 fresh migrate (no Trusts schema), and `manage.py check` on **each**
-declared Python version with Django 6.1, plus the OrderedFold PostgreSQL
-job, the Core/Zero pair job, and a `package` job. The `package` job
+declared Python version with Django 6.1, plus the Core/Zero pair job
+and a `package` job. OrderedFold PostgreSQL proof lives in
+[django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold).
+The `package` job
 (sdist/wheel build, `twine check`, metadata/LICENSE proof, and an
 out-of-checkout wheel import) runs on **Python 3.12** as a representative
 install of the declared range. Core still retains
