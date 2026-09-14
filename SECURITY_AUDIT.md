@@ -4,7 +4,7 @@ This guide describes the security boundary that implementation and
 documentation changes are expected to preserve. It is an audit map, not a
 substitute for reviewing the application, its data, or its deployment.
 
-## Security claim
+## Security model
 
 django-trusts answers object-permission questions from explicitly registered
 paths over persisted relational facts. Registration uses a small set of closed,
@@ -62,9 +62,10 @@ overlay:
 | `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
-Registration must issue no SQL. Unsupported paths, types, constants, and
-combinations fail during setup. Registration closes when the configured
-registry freezes; late mutation is rejected.
+django-trusts registration is intended not to issue SQL. Unsupported paths,
+types, constants, and combinations are intended to be rejected during setup.
+Registration closes when the configured registry freezes; late mutation is
+rejected.
 
 ### Relationship authorization
 
@@ -146,15 +147,16 @@ AND
 NamedFilter(object, user, permission)
 ```
 
-Unknown, unbound, or untranslatable named filters fail closed. A filter cannot
-create a grant. Permission enumeration returns bare permissions rather than every possible
+Unknown, unbound, or untranslatable named filters are intended to produce no
+grant. A filter restricts an existing grant; it is not intended to create one.
+Permission enumeration returns bare permissions rather than every possible
 combination of permission and filter names.
 
 ### Runtime callbacks are unsupported
 
 Arbitrary runtime permission callbacks are not part of the public surface. They
-cannot provide object/queryset parity, startup validation, deterministic
-inspection, or fixed-query proof.
+are outside the supported object/queryset parity, startup-validation,
+deterministic-inspection, and fixed-query model.
 
 The obsolete `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` setting does not
 restore callbacks. If it remains true, Django's system checks report
@@ -251,8 +253,8 @@ bounded reachability. Audit:
 - the supported database renderer; and
 - agreement among object, queryset, and enumeration projections.
 
-The current Along renderer is verified only for the database combinations
-listed in the support matrix.
+Current CI exercises Along only for the database combinations listed in the
+support matrix.
 
 ## Fail-closed principle
 
@@ -288,16 +290,17 @@ Reference repositories validate bounded portions of the django-trusts contract:
   demonstrates direct and team-derived relationship grants, ceilings, and
   organization alignment.
 
-A passing reference implementation proves only its declared schema and tested
-operations. It is not a universal security proof for applications that adapt
-the example.
+Each reference repository provides an example for its listed schema and
+operations. It should not be read as a security assessment of applications
+adapted from it.
 
 ## Validation and review discipline
 
 Run the complete supported test matrix, warning-fatal documentation build,
 package/fresh-install checks, Django system checks, and exact companion tests
-required by the changed surface. API changes require a same-PR
-`migrates.md` entry and migration-bot checklist.
+required by the changed surface. API changes require review of their migration
+impact. Compatibility instructions for 0.x belong in
+`django-trusts-zero`.
 
 For every material implementation or documentation change, reviewers should
 answer:
@@ -305,7 +308,7 @@ answer:
 1. Which statement in this guide does the change implement or preserve?
 2. Does the change expand the grant-producing surface?
 3. Do object, queryset, enumeration, and guard projections still agree?
-4. Does registration remain zero-SQL and fail before partial mutation?
+4. Does the change introduce registration-time database access or partial mutation?
 5. Is the final authorization query still within its tested statement bound?
 6. Did any unsupported database, callback, private registry, or private IR
    surface become reachable?
@@ -314,6 +317,3 @@ answer:
 
 Discrepancies must be surfaced in the PR rather than resolved implicitly.
 
-A future policy manifest/lockfile may make normalized declarations and generated
-SQL independently reviewable. That work is tracked separately and is not part
-of the 1.0 public contract.
