@@ -34,13 +34,13 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 2. Provide `TrustsImplementationConfig` and a backend that subclasses
    `TrustModelBackendMixin`. Call `super().ready()`.
 3. Register protected models through
-   `backend.register_relationship(root, user=..., permission=...,
-   content=...)` and named filters through
+   `backend.register(trust=..., user=..., permission=..., content=...)`
+   and named filters through
    `backend.add_named_filter(model, code, predicate)` in
    `AppConfig.ready()` before finalization. The application-facing
    object is the configured backend from `configured_backend()`.
-   `BackendHandle.register(...)`, `register_permission_condition(...)`,
-   and `BackendHandle.register_ordered_fold(...)` are removed. Ordered
+   `register_permission_condition(...)` and
+   `BackendHandle.register_ordered_fold(...)` are removed. Ordered
    allow/deny construction lives in `django-trusts-ordered-fold`
    (`from trusts_ordered_fold import OrderedFold, PermissionMaskDomain,
    MaskEntry, PolarityMap, FlatToken, register_ordered_fold,
@@ -58,6 +58,40 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 7. Object checks use `user.has_perm`. List filtering uses the
    consumer queryset's `.authorized` / registered plans.
 
+## Trust registration vocabulary and path builders (final pre-RC API)
+
+| | Old | New |
+| --- | --- | --- |
+| Relationship registration | `backend.register_relationship(DocumentPermission, user=..., permission=..., content=...)` | `backend.register(trust=DocumentPermission, user=..., permission=..., content=...)` |
+| Path spelling | Django `__` strings only | A Django `__` string or a one-argument symbolic path builder for each of `user`, `permission`, and `content` |
+| Domain vocabulary | permission-bearing relation / root | trust model; one persisted row is a trust record |
+| Named filters | `backend.add_named_filter(...)` | unchanged |
+
+`trust=` is required and keyword-only. `register_relationship` is removed;
+there is no compatibility forwarder. This is a pre-1.0 API replacement.
+
+A symbolic path builder is called exactly once during registration with a value
+typed as the `trust=` model. Attribute access records a path; no application
+row is loaded. The result is validated using Django model metadata and
+normalized to the same internal `__` path as the string spelling. The callable
+is never stored or invoked during authorization. Invalid builder results,
+exceptions, paths from another symbolic root, empty paths, and unsupported
+relationship shapes raise `TrustsConfigurationError` with zero SQL and no
+partial registry mutation.
+
+The lowercase term **trust model** describes the role of the registered
+application model. It does not require or imply the concrete
+`trusts.zero.models.Trust` class.
+
+Migration-bot checklist across Core and active consumers:
+
+- `.register_relationship(`
+- positional relationship root arguments
+- `user=`, `permission=`, and `content=` path strings
+- prose using “permission-bearing relation”, “permission-bearing root”, or
+  ambiguous bare “root” for the public trust model
+- package typing metadata and built-wheel visibility of inline annotations
+
 ## Relation registration (#131)
 
 | | Old | New |
@@ -68,11 +102,14 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 | Named filter | `handle.register_permission_condition(Document, "non_confidential", builder)` | `backend.add_named_filter(Document, "non_confidential", predicate=builder)` |
 | OrderedFold | `.registry.register_strategy(OrderedFold(...Ref...))` or `handle.register_strategy(Ace, OrderedFold(...))` or `handle.register(Ace, strategy=OrderedFold(content="document", descriptor="", ...))` | `backend.register_ordered_fold(Ace, OrderedFold(content=Document, descriptor="", source_descriptor="document", order="ace_order", polarity=PolarityMap("ace_type", allow_value=ALLOW, deny_value=DENY), mask="access_mask", trustee="user", token=FlatToken(principal=User, principal_user="", principal_identity=""), domain=PermissionMaskDomain(Permission, masks)))` |
 
-`handle.registry` remains temporarily so unconverted internal
-compiler tests still compile. `backend.register_relationship`,
-`backend.register_ordered_fold`, and `backend.add_named_filter` are
-the public 1.0 methods. `BackendHandle.register(...)` and
-`BackendHandle.register_permission_condition(...)` are removed.
+`handle.registry` remains temporarily so unconverted internal compiler tests
+still compile. `backend.register_relationship` was the intermediate pre-RC
+relationship method. It is replaced by the final
+`backend.register(trust=...)` API above. `backend.add_named_filter` remains
+public; OrderedFold registration now lives in `django-trusts-ordered-fold`.
+The earlier untyped `BackendHandle.register(...)` positional/strategy forms and
+`BackendHandle.register_permission_condition(...)` remain removed; the final
+keyword-only `register(*, trust=...)` is not a compatibility restoration.
 There is no public `register_strategy` alias. Public
 OrderedFold `content` is the content model class, not a path on the
 ACE. `descriptor` is content-relative and may be `""`.
