@@ -25,8 +25,8 @@ Package metadata lives in `pyproject.toml`. `setup.py` is a thin setuptools
 wrapper. Obsolete Python 2 classifiers and `six` / `funcsigs` / `mock` / `pbr`
 install dependencies are removed.
 
-API and method changes for the modernization are recorded in
-[../migrates.md](../migrates.md).
+The 0.x compatibility boundary and the historical migration archive are
+recorded in [../migrates.md](../migrates.md).
 
 ## What this line still does not do
 
@@ -34,7 +34,6 @@ API and method changes for the modernization are recorded in
 - No PyPI publication
 - No move or replacement of existing tags, including `v0.10.3` and
   `legacy-pre-modernization`
-- No permission-model redesign
 
 ## Internal registration and projection primitive
 
