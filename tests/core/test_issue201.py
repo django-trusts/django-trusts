@@ -96,22 +96,22 @@ class AuthorizationRequiredDeclarationTest(TestCase):
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 authorization_required(
-                    Document, PERM, ('non_confidential', ''),
+                    Document, PERM, ('proof_201', ''),
                 )
         self.assertEqual(_declared_authorization_guards, before)
         self.assertNotIn(
-            (Document, PERM, ('non_confidential',)),
+            (Document, PERM, ('proof_201',)),
             _declared_authorization_guards,
         )
         self.assertNotIn(
-            (Document, PERM, ('non_confidential', '')),
+            (Document, PERM, ('proof_201', '')),
             _declared_authorization_guards,
         )
 
-        entry = (Document, PERM, ('non_confidential',))
+        entry = (Document, PERM, ('proof_201',))
         self.addCleanup(_forget_guard, entry)
         with self.assertNumQueries(0):
-            @authorization_required(Document, PERM, ('non_confidential',))
+            @authorization_required(Document, PERM, ('proof_201',))
             def _ok(request, pk):
                 return 'ok'
         self.assertIn(entry, _declared_authorization_guards)
