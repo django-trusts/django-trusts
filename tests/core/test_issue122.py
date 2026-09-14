@@ -73,7 +73,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'Trusts cannot revoke authorization supplied by another backend',
             'may coexist on the same protected model',
             'family-local OR',
-            'cannot veto an independent relationship grant',
+            'It cannot veto an',
+            'independent relationship grant',
             'Discrepancies must be surfaced in the PR',
         ):
             with self.subTest(needle=needle):
