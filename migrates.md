@@ -179,6 +179,30 @@ Migration-bot checklist:
 This file is the Core 1.x router only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.
 
+## Family-local OR (#187)
+
+| | Old | New |
+| --- | --- | --- |
+| Second family on one terminal | The second of `register_relationship` / `register_ordered_fold` (either order) raised `TrustsConfigurationError` (`AnyPath and OrderedFold cannot share one terminal`) | Both families may coexist on one content terminal of one exact backend path when user and permission terminals match |
+| Authorization | One family per plan | Family-local OR: `relationship_grant OR ordered_fold_grant` |
+| OrderedFold deny | N/A on a mixed plan (XOR blocked registration) | Settles only the OrderedFold branch. It does not veto an independent relationship grant |
+| Named filter | Restricting overlay; never a grant | Unchanged |
+| Malformed / unsupported renderer | Fail-closed; no silent drop | Unchanged. A configured OrderedFold branch is not omitted when the renderer is unsupported |
+| Duplicate OrderedFold | `TrustsConfigurationError` | Unchanged |
+| Group projection | Membership-hop relationship records only; OrderedFold-only plans have no group slice | Unchanged: OrderedFold does not become a group grant merely because it shares the plan |
+
+Migration-bot checklist:
+
+- `AnyPath and OrderedFold cannot share one terminal`
+- `already has an OrderedFold strategy`
+- `already has an AnyPath registration`
+- separate backends or registries used only to XOR-workaround coexistence
+- projection tests that assume a second family cannot register
+- workaround code that copied relationship grants into ACE rows (or the reverse) solely to escape XOR
+
+This file is the Core 1.x router only. It does not document concrete
+Zero schema, UI, admin, or management-command steps.
+
 ## Archaeology
 
 Chronology of unpublished development stairs lives in the annotated

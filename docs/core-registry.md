@@ -340,7 +340,10 @@ terminal, empty handles, or a scope model not on the path return
 `PlanQueryCompiler.group_exists` compiles the membership-hop subset of
 the same plan (user path ending in M2M) via `RelationPlan.content_exists`.
 Direct FK / O2O / reverse user hops stay out of the group slice.
-An OrderedFold `strategy` makes `group_exists` inapplicable (`None`).
+A mixed plan keeps that relationship membership slice available; an
+OrderedFold `strategy` does not become a group grant and does not
+suppress `group_exists`. Fold-only plans (no membership records) still
+make `group_exists` inapplicable (`None`).
 
 `ConditionLookup` (`record_for`, `compile_q`) is self-bound at
 `TrustsRegistry` construct. `set_condition_lookup` remains for tests
