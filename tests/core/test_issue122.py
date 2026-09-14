@@ -33,6 +33,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('Document.objects.authorized(', rst)
         self.assertIn('user.get_all_permissions(document)', rst)
         self.assertIn('from trusts.decorators import authorization_required', rst)
+        self.assertNotIn('from trusts.decorators import permission_required', rst)
+        self.assertNotIn('from trusts.decorators import P', rst)
         self.assertIn('add_named_filter', rst)
         self.assertIn('register_relationship', rst)
         self.assertIn('register_ordered_fold', rst)
@@ -133,6 +135,16 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('backend.register_relationship(DocumentGrant', text)
         self.assertIn('backend.register_ordered_fold(Ace, OrderedFold(', text)
         self.assertIn('backend.add_named_filter(', text)
+        self.assertIn(
+            'from trusts.decorators import P, R, K, G, O, permission_required',
+            text,
+        )
+        self.assertIn(
+            'from trusts.zero.decorators import P, R, K, G, O, permission_required',
+            text,
+        )
+        self.assertIn('does not forward, lazy-import, fall back', text)
+        self.assertNotIn('stay imported and', text)
         self.assertIn('register_permission_condition(', text)
         self.assertIn('OrderedFold(content="', text)
         self.assertIn('source_descriptor="document"', text)

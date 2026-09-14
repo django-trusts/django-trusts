@@ -153,7 +153,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
         with self.assertNumQueries(0):
             owner.ready()
 
-    def test_permission_required_uses_the_same_permission(self):
+    def test_authorization_required_uses_the_same_permission(self):
         allowed = edit_document(_request(self.alice), pk=self.document.pk)
         self.assertEqual(allowed, 'ok')
         with self.assertRaises(PermissionDenied):

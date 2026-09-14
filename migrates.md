@@ -118,18 +118,22 @@ Zero `2e3cccedb92b4cf85e9d6a3cd2d51821aad1d716`, example
 `1a9dc9c2b299dd15ee3aa5dcf083168050606d13`. GH permissions remains
 README-only.
 
-## View guard (#138)
+## View guard (#138 / #191)
 
 | | Old | New |
 | --- | --- | --- |
+| Legacy request family | `from trusts.decorators import P, R, K, G, O, permission_required` | `from trusts.zero.decorators import P, R, K, G, O, permission_required` |
 | Trusts-only object view | `permission_required(...)` (Django backend OR / `user.has_perm`) or a hand-rolled check | `authorization_required(Document, "myapp.change_document")` |
 | Named condition on a view | colon suffix on the permission string, or `P` / `K` / `G` / `O` lookups | `authorization_required(Document, "myapp.change_document", ("non_confidential",))` |
 | Candidate identity | `K` / `G` / `O`, GET, POST, or a custom kwarg | URL `kwargs["pk"]` only, bound to `model._meta.pk` |
 
-`permission_required`, `P`, `K`, `G`, and `O` stay imported and
-behavior-compatible. They are not the 1.0 guard. `authorization_required`
-does not call `user.has_perm` and does not OR Django authentication
-backends.
+`permission_required`, `P`, `R`, `K`, `G`, and `O` are no longer imported
+from `trusts.decorators`. They live in `django-trusts-zero` as
+`trusts.zero.decorators`. Core keeps only `authorization_required` and
+does not forward, lazy-import, fall back, or optionally depend on Zero.
+
+`authorization_required` does not call `user.has_perm` and does not OR
+Django authentication backends.
 
 Only configured backends whose applicable plan uses
 `django.contrib.auth.models.Permission` participate. Each of those
@@ -149,8 +153,14 @@ Migration-bot checklist:
 
 - `authorization_required(`
 - `from trusts.decorators import authorization_required`
-- `permission_required(`
 - `from trusts.decorators import permission_required`
+- `from trusts.decorators import P`
+- `from trusts.decorators import R`
+- `from trusts.decorators import K`
+- `from trusts.decorators import G`
+- `from trusts.decorators import O`
+- `from trusts.zero.decorators import P, R, K, G, O, permission_required`
+- `permission_required(`
 - `P(` / `K(` / `G(` / `O(`
 - colon permission strings in views (`app_label.codename:name`)
 
