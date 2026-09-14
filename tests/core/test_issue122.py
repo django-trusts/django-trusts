@@ -32,15 +32,19 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('class DocumentPermission(models.Model)', rst)
         self.assertIn('Document.objects.authorized(', rst)
         self.assertIn('user.get_all_permissions(document)', rst)
-        self.assertIn('from trusts.decorators import permission_required', rst)
+        self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertIn('add_named_filter', rst)
         self.assertIn('register_relationship', rst)
         self.assertIn('register_ordered_fold', rst)
         self.assertIn('backend.register_relationship(', rst)
-        self.assertIn('backend.register_ordered_fold(', rst)
-        self.assertIn('source_descriptor="document"', rst)
-        self.assertIn('content=Document', rst)
-        self.assertIn('content=WinNode', rst)
+        self.assertNotIn('backend.register_ordered_fold(', rst)
+        self.assertNotIn('source_descriptor="document"', rst)
+        self.assertNotIn('content=WinNode', rst)
+        self.assertIn('is provisional and excluded from', rst)
+        self.assertIn('advanced evaluator family', rst)
+        self.assertIn('may coexist on the same protected model', rst)
+        self.assertIn('family-local OR', rst)
+        self.assertIn('does not veto an independent relationship grant', rst)
         self.assertNotIn('strategy=OrderedFold', rst)
         self.assertNotIn('from trusts.core import Ref', rst)
         self.assertNotIn('.registry.register(', rst)
@@ -53,6 +57,37 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('django-trusts-gh-permissions', rst)
         self.assertIn('django-trusts-windows-acl', rst)
         self.assertIn('django-trusts-zero-example', rst)
+
+    def test_security_audit_records_the_frozen_boundary(self):
+        guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
+        for needle in (
+            'security boundary that implementation and',
+            'register_relationship(...)',
+            'register_ordered_fold(...)',
+            'complete supported OrderedFold construction surface',
+            'provisional and excluded from',
+            'add_named_filter(...)',
+            'Named filters are outer restrictions',
+            'Runtime callbacks are unsupported',
+            'Django treats an active superuser as globally authorized',
+            'Trusts cannot revoke authorization supplied by another backend',
+            'may coexist on the same protected model',
+            'family-local OR',
+            'cannot veto an independent relationship grant',
+            'Discrepancies must be surfaced in the PR',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, guide)
+        self.assertIn('future policy manifest/lockfile', guide)
+        self.assertIn('not part', guide)
+        self.assertIn('of the 1.0 public contract', guide)
+        self.assertNotIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True', guide)
+        self.assertNotIn('## Change sizing and surface discovery', guide)
+
+        dev = (ROOT / 'DEV.md').read_text()
+        self.assertIn('## Change sizing and surface discovery', dev)
+        self.assertIn('Whole ticket: 34–144', dev)
+        self.assertIn('Completed: 5 (S1 accepted)', dev)
 
     def test_sphinx_and_package_metadata_point_to_current_docs(self):
         conf = (ROOT / 'docs' / 'source' / 'conf.py').read_text()

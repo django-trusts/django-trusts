@@ -60,6 +60,76 @@ AUTHENTICATION_BACKENDS = (
 
 API and compatibility notes are in [migrates.md](migrates.md).
 
+## Change sizing and surface discovery
+
+Design tasks must estimate the complete implementation and review surface before
+implementation is authorized. Use the Fibonacci scale
+`1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144`. This is a comparative
+risk/complexity size, not an hour estimate or a count of changed lines.
+
+Every design review must surface sizing near the top in three layers:
+
+- the entire controlling ticket, with a realistic range covering all known and
+  not-yet-designed stages;
+- completed points from accepted subtasks; and
+- the current proposed subtask, with one size or a bounded range.
+
+Do not hide unplanned stages inside a precise-looking total. Mark them
+`unknown`, give a reasoned comparison where possible, and widen the whole-task
+range accordingly. For example:
+
+```text
+#247 — v3.7 automatic relationship extraction
+Whole ticket: 34–144
+Completed: 5 (S1 accepted)
+Current: S2 — size 8
+S3–S7 — unknown; command, validation, stability, migration,
+and consumer surfaces remain unbounded
+```
+
+Completed points are the sum of the final reviewed sizes of accepted subtasks.
+If a subtask was re-sized during implementation, count its final size and show
+the change. If historical work was never sized, label it `unscored` or
+`retrospective estimate`; do not invent precision.
+
+The whole-task range is a planning envelope, not a mechanical sum of subtask
+points. It should include integration, discoveries between stages, review
+rounds, cross-repository sequencing, and final acceptance proof. Completed
+points show progress but must not be subtracted mechanically from that range to
+claim a precise remaining size while stages remain unknown.
+
+The calibration anchor for a **3** is
+[Core #129 / PR #140](https://github.com/django-trusts/django-trusts/pull/140):
+a bounded one-repository cleanup with no intended API change that nevertheless
+required migration wording, package and companion-wheel proof, preservation of
+historical evidence, a focused review correction, and the full Core matrix.
+[PR #124](https://github.com/django-trusts/django-trusts/pull/124), a
+one-file Read the Docs configuration using an already-proven build, is a useful
+**1** reference.
+
+Estimate the surface that must be understood and proved, including:
+
+- public API and migration consequences;
+- grant-producing semantics and fail-closed behavior;
+- object, queryset, enumeration, and decorator projections;
+- relationship identity, many-to-many, recursion, and database dialects;
+- registry lifecycle, startup, and zero-SQL guarantees;
+- affected consumer repositories and exact-version staging;
+- documentation, packaging, CI, deployment, and rollback proof; and
+- uncertainty about existing behavior or historical compatibility.
+
+A design handoff must state the subtask size, whole-ticket range, comparison
+task used as its anchor, surface drivers, proposed proof, and the known/unknown
+status of later stages. A size is not a promise that discovery will stop. If
+implementation or review exposes a material surface that the estimate omitted,
+stop expanding the patch, report the discovery, and re-size both the current
+subtask and the whole-ticket range before continuing.
+
+A task estimated at **13 or larger** is not implementation-ready. Split it at
+clean dependency or release boundaries and size the resulting tasks
+independently. A task that grows to 13 during implementation follows the same
+rule.
+
 ## Test
 
 ```

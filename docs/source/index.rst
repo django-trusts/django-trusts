@@ -24,7 +24,10 @@ entry, or another relational structure owned by the application.
 ``django-trusts`` compiles these declarations into database queries, keeping
 permission decisions based on persisted truth. The same declarations support
 object checks, authorized querysets, permission enumeration, and decorators
-for protecting views.
+for protecting views. The separate `security audit guide
+<https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
+defines the boundary these APIs enforce and the responsibilities that remain
+with the application.
 
 How permissions are represented
 --------------------------------
@@ -171,39 +174,6 @@ Register the model paths when the application starts:
 ``__`` relationship paths identify the user, permission, and protected
 content associated with each row.
 
-``register_ordered_fold`` donates an OrderedFold plan.
-``content`` is the protected model class. ``descriptor`` is a
-content-relative Django ``__`` path and may be ``""``.
-``source_descriptor`` is a required source-relative path. Direct and
-convergent shared-descriptor graphs use that one spelling:
-
-.. code-block:: python
-
-   backend.register_ordered_fold(
-       Ace,
-       OrderedFold(
-           content=Document,
-           descriptor="",
-           source_descriptor="document",
-           order="ace_order",
-           polarity=PolarityMap("ace_type", allow_value=ALLOW, deny_value=DENY),
-           mask="access_mask",
-           trustee="user",
-           token=FlatToken(
-               principal=User,
-               principal_user="",
-               principal_identity="",
-           ),
-           domain=PermissionMaskDomain(Permission, masks),
-       ),
-   )
-
-A Windows-shaped graph whose ACE and node both point at one security
-descriptor uses the same fields with distinct paths
-(``content=WinNode``, ``descriptor="security_descriptor"``,
-``source_descriptor="descriptor"``). Relationship arguments and an
-OrderedFold plan are separate methods.
-
 The declaration is validated when it is registered. Invalid or unsupported
 paths raise a configuration error instead of becoming an authorization rule.
 
@@ -265,7 +235,7 @@ Filter a queryset to the objects authorized for a particular permission:
        change_document,
    )
 
-Protect a view with the same permission:
+Protect a view with the Trusts-only primary-key guard:
 
 .. code-block:: python
 
@@ -273,28 +243,37 @@ Protect a view with the same permission:
 
    from django.http import HttpResponse
 
-   from trusts.decorators import permission_required
+   from trusts.decorators import authorization_required
+
+   from .models import Document
 
 
-   @permission_required(
+   @authorization_required(
+       Document,
        "documents.change_document",
-       fieldlookups_kwargs={"pk": "pk"},
+       ("non_confidential",),
    )
    def edit_document(request, pk):
        return HttpResponse("Authorized")
 
+The guard binds only the URL keyword argument named ``pk`` to the model's
+primary-key field. It performs configuration preflight before candidate lookup;
+a missing object produces 404 and an existing unauthorized object produces
+403.
+
 Object checks, permission enumeration, queryset filtering, and view protection
-all use the registered permission relationship.
+consume the same normalized registrations.
 
-Named queryable conditions
---------------------------
+Named filters
+-------------
 
-A named ``:condition`` further constrains an existing permission. Register a
-builder with ``backend.add_named_filter``. Core invokes that callable exactly once
-with symbolic ``(u, p, o)`` refs, validates the returned comparison, and
-stores only the normalized predicate. The callable is not kept as policy
-and is never run during ``has_perm``, permission enumeration, or queryset
-filtering.
+A named filter further constrains an existing permission. Register its
+builder with ``backend.add_named_filter``. The backend invokes the builder
+exactly once with symbolic ``(u, p, o)`` references. Operations on those
+references construct a closed expression tree; Core validates and normalizes
+that result, stores only the immutable IR, and discards the callable. Core
+does not inspect the callable's Python source, and the callable never runs
+during ``has_perm``, permission enumeration, or queryset filtering.
 
 Builders are trusted startup code, like ``AppConfig.ready()``. Do not query,
 perform I/O, or read request state inside them. Core itself adds no SQL
@@ -302,7 +281,9 @@ during registration.
 
 The ``DocumentsConfig.ready()`` example above registers
 ``non_confidential`` against ``Document.confidential``. A ``lambda`` and
-an equivalent named function are accepted identically.
+an equivalent named function are accepted identically. Native object checks
+select one named filter with the existing ``:name`` suffix; the
+``authorization_required`` decorator accepts an explicit tuple of names.
 
 .. code-block:: python
 
@@ -328,11 +309,12 @@ the team receives access to content through another model. The registered user
 path can traverse those relationships without copying the resulting
 permissions into a separate user-object table.
 
-Conditions can further constrain a permission path. A condition may require
-the user and content to belong to the same organization, or require a
-requested operation to appear in a team's allowed operations. Conditions
-narrow an existing permission relationship; they cannot create permission by
-themselves.
+The ``condition=`` argument on ``register_relationship`` can further constrain
+that relationship branch. It may require the user and content to belong to the
+same organization, or require a requested operation to appear in a team's
+allowed operations. A relationship condition is always applied to its branch;
+a named filter is selected by an authorization caller. Neither can create
+permission by itself.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either complete
@@ -351,22 +333,30 @@ or descendants without traversing the hierarchy in Python.
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Policies that require ordered allow and deny entries can use the
-``OrderedFold`` strategy. It evaluates persisted entries in order while
+.. warning::
+
+   The OrderedFold construction surface—``register_ordered_fold()``,
+   ``OrderedFold``, ``PermissionMaskDomain``, ``MaskEntry``,
+   ``PolarityMap``, and ``FlatToken``—is provisional and excluded from
+   the normal 1.x compatibility guarantee. Its signatures or location may
+   change, or it may be removed, in a future feature release.
+
+Policies that require ordered allow and deny entries can use the PostgreSQL-only
+``OrderedFold`` evaluator. It evaluates persisted entries in order while
 tracking which requested permission bits remain undecided.
 
-Relationship registrations and one OrderedFold strategy may coexist on the
-same content terminal of one backend when their user and permission
-terminals match. Each family evaluates independently; effective
-authorization is the family-local OR. An OrderedFold deny settles only
-the OrderedFold branch and does not veto an independent relationship
-grant. Named filters remain restricting overlays, never grants.
-Malformed configuration and an unsupported OrderedFold renderer stay
-fail-closed: a configured branch is not dropped silently.
+OrderedFold is an advanced evaluator family, not part of the introductory
+relationship-registration path. A complete working declaration and its
+security assumptions live in `django-trusts-windows-acl
+<https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
-Evaluation strategies use the same object-check, permission-enumeration, and
-queryset interfaces as direct permission paths. Database support varies by
-strategy; see the support matrix for the currently verified combinations.
+Both evaluator families use the same object-check, permission-enumeration, and
+queryset interfaces. Relationship registrations and one OrderedFold strategy
+may coexist on the same protected model in one configured backend when their
+resolved user, permission, and content identities are coherent. Authorization
+is the family-local OR: an OrderedFold deny settles only the OrderedFold branch
+and does not veto an independent relationship grant. Database support varies by
+evaluator; see the support matrix for the currently verified combinations.
 
 Reference implementations
 -------------------------
@@ -401,8 +391,8 @@ Ordered access-control entries
 permissions using persisted access-control entries with ordering, allow and
 deny effects, permission masks, and inheritance.
 
-It demonstrates how an ACL-style permission system can select an ordered
-evaluation strategy while retaining the same Django-facing permission APIs.
+It demonstrates how an ACL-style permission system can select the ordered-fold
+evaluator while retaining the same Django-facing permission APIs.
 
 The project is intended to prove that this class of permission system can be
 implemented with ``django-trusts``. It is not intended to reproduce every
