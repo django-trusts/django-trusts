@@ -62,11 +62,6 @@ overlay:
 | `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
-Ordered allow/deny registration lives in
-[django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold).
-django-trusts does not import, depend on, auto-discover, or fallback-import that
-package.
-
 Registration must issue no SQL. Unsupported paths, types, constants, and
 combinations fail during setup. Registration closes when the configured
 registry freezes; late mutation is rejected.
