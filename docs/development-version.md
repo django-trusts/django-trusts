@@ -44,7 +44,7 @@ subclasses. django-trusts ships no AppConfig and no `kernel_config()`. The
 generic mixin lives only at
 `from trusts.backends import TrustModelBackendMixin`. The transitional backend
 module is gone. Historical concrete models and `TrustModelBackend` live under
-`trusts.zero.*`. See [registry.md](registry.md).
+`trusts.zero.*`. See [core-registry.md](core-registry.md).
 
 ## Preserved legacy source
 
