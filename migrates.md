@@ -70,6 +70,25 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
 `trust=` is required and keyword-only. `register_relationship` is removed;
 there is no compatibility forwarder. This is a pre-1.0 API replacement.
 
+Both accepted path spellings of the same registration (the usage guide pairs
+them the same way under “Register the trust”):
+
+```python
+backend.register(
+    trust=DocumentPermission,
+    user=lambda t: t.user,
+    permission=lambda t: t.permission,
+    content=lambda t: t.document,
+)
+
+backend.register(
+    trust=DocumentPermission,
+    user="user",
+    permission="permission",
+    content="document",
+)
+```
+
 A symbolic path builder is called exactly once during registration with a value
 typed as the `trust=` model. Attribute access records a path; no application
 row is loaded. The result is validated using Django model metadata and

@@ -84,14 +84,23 @@ backend.register(
     permission=lambda t: t.permission,
     content=lambda t: t.document,
 )
+
+backend.register(
+    trust=DocumentPermission,
+    user="user",
+    permission="permission",
+    content="document",
+)
 ```
 
 Each path accepts either a Django `__` string or a one-argument symbolic path
-builder. A builder is called once during registration and must return a path
-rooted at the supplied symbolic trust value. Trusts validates and normalizes
-the complete path with Django model metadata and stores no callable. Builder
-exceptions, foreign symbolic roots, constants, empty paths, and unsupported
-relationship shapes fail closed with zero SQL and no partial mutation.
+builder; both forms of the same registration are shown above (the usage guide
+pairs them the same way under “Register the trust”). A builder is called once
+during registration and must return a path rooted at the supplied symbolic
+trust value. Trusts validates and normalizes the complete path with Django
+model metadata and stores no callable. Builder exceptions, foreign symbolic
+roots, constants, empty paths, and unsupported relationship shapes fail closed
+with zero SQL and no partial mutation.
 
 A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and

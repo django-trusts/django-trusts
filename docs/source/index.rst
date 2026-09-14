@@ -169,12 +169,13 @@ Register the model paths when the application starts:
                predicate=lambda u, p, o: o.confidential != True,
            )
 
-``DocumentPermission`` is the trust model. The three path builders identify
-the user, permission, and protected content associated with each trust record.
+``DocumentPermission`` is the trust model. The three paths identify the user,
+permission, and protected content associated with each trust record.
 
-``user``, ``permission``, and ``content`` each accept either a Django ``__``
-path string or a one-argument path builder. The string form of the same
-registration is:
+``user``, ``permission``, and ``content`` each accept either a one-argument
+path builder (the ``lambda`` form in ``ready()`` above) or a Django ``__``
+path string. Both forms of the same registration are valid; the string
+equivalent is:
 
 .. code-block:: python
 
@@ -322,7 +323,8 @@ More expressive permission policies
 
 The ``DocumentPermission`` example uses the shortest useful trust: one record
 directly connects a user, a permission, and a document. The same registration
-API also supports paths through multiple relationships:
+API also supports paths through multiple relationships. Again, both forms of
+the same registration are valid:
 
 .. code-block:: python
 
@@ -331,6 +333,13 @@ API also supports paths through multiple relationships:
        user=lambda t: t.team.members,
        permission=lambda t: t.permission,
        content=lambda t: t.document,
+   )
+
+   backend.register(
+       trust=TeamDocumentPermission,
+       user="team__members",
+       permission="permission",
+       content="document",
    )
 
 The callable and string forms may be mixed in one registration. They normalize

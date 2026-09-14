@@ -30,7 +30,8 @@ permission schema, grant editor, or application workflow.
 ## Usage
 
 Start with **[Installation in the complete usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
-The RST guide covers models, backend configuration, trust registration,
+The RST guide covers models, backend configuration, trust registration
+(both one-argument path builders and Django `__` strings, shown together),
 named filters, object and queryset authorization, inherited relationships, and
 ordered allow/deny policies.
 
