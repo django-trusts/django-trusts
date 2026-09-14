@@ -179,7 +179,7 @@ Register the model paths when the application starts:
 permission, and protected content associated with each trust record.
 
 ``user``, ``permission``, and ``content`` each accept either a one-argument
-path builder (the ``lambda`` form in ``ready()`` above) or a Django ``__``
+path lambda (the form in ``ready()`` above) or a Django ``__``
 path string. Both forms of the same registration are valid; the string
 equivalent is:
 
@@ -405,7 +405,7 @@ It demonstrates an ACL-style permission system built with
 ``django-trusts-ordered-fold``, a provisional extension of ``django-trusts``,
 while
 retaining the same Django-facing permission APIs. It is not intended to
-reproduce every feature or security guarantee of Windows ACLs.
+reproduce every feature or security behavior of Windows ACLs.
 
 Users of django-trusts 0.x
 --------------------------
