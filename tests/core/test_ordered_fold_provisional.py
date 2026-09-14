@@ -37,6 +37,16 @@ class OrderedFoldProvisionalApiTest(SimpleTestCase):
             doc,
         )
 
+
+    def test_internal_helpers_are_not_reexported_from_core(self):
+        for name in (
+            'OrderedFoldAllowed',
+            'RegisteredStrategy',
+            'ordered_fold_connection_supported',
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(core, name))
+
     def test_implementation_module_does_not_advertise_helpers(self):
         doc = getdoc(__import__('trusts.ordered_fold', fromlist=['']))
         self.assertIn(
