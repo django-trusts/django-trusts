@@ -188,18 +188,20 @@ equivalent is:
 
 A path builder is contextually typed as the model passed to ``trust=``, so
 type-aware editors can infer the lambda parameter and offer model-field
-completion. Trusts does not call the path function. It structurally accepts
-only a rooted attribute chain of the form
-``parameter.attr[.attr...]`` on the supported CPython versions, extracts the
-attribute names, validates the complete path with Django model metadata, and
-stores only its normalized ``__`` path.
+completion. Trusts calls the builder once during registration with a symbolic
+proxy. Attribute access on the proxy records a rooted model path; other
+operations on the proxy are unsupported. Trusts validates the returned complete
+path with Django model metadata, stores only its normalized ``__`` path, and
+discards the callable before authorization.
 
-Calls, operators, indexing, globals, closures, conditionals, tuple selection,
-and every other Python program are rejected before the function body can run.
-Python itself does not prove that a lambda attribute exists; Trusts' setup-time
-validation is authoritative. An unsupported function shape, missing attribute,
-empty path, or unsupported relationship shape raises a configuration error
-with zero SQL and no partial registration.
+The builder is trusted application startup code. Trusts does not inspect or
+sandbox unrelated Python in its body; the application could perform the same
+SQL, I/O, or side effect immediately before calling ``register()``. Trusts
+itself issues no SQL while validating the returned path. Python itself does not
+prove that a lambda attribute exists, so Trusts' setup-time validation remains
+authoritative. A builder exception, missing or foreign returned path, empty
+path, or unsupported relationship shape fails registration without partial
+registry mutation. Trusts cannot roll back side effects the builder performed.
 
 Configure Django
 ----------------
