@@ -339,8 +339,8 @@ support is recorded in the `support matrix
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Policies that require ordered allow and deny entries belong in
-`django-trusts-ordered-fold
+Ordered allow and deny support is provisional. Policies that require it belong
+in `django-trusts-ordered-fold
 <https://github.com/django-trusts/django-trusts-ordered-fold>`_, not
 django-trusts. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
 ``MaskEntry``, ``PolarityMap``, ``FlatToken``,
