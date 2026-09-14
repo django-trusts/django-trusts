@@ -897,23 +897,28 @@ class MembershipGroupExistsTest(TransactionTestCase):
                 handle, self.other, self.member, self.read, kind='group',
             ), False)
 
-    def test_strategy_does_not_suppress_membership_group_slice(self):
+    def test_empty_records_have_no_group_slice(self):
         plan = RelationPlan(
             records=self.membership.records,
             permission_model=self.Token,
-            strategy=object(),
         )
-        fold_only = RelationPlan(
+        empty = RelationPlan(
             records=(),
             permission_model=self.Token,
-            strategy=object(),
         )
+        self.assertNotIn('strategy', getattr(RelationPlan, '__dataclass_fields__', {}))
+        with self.assertRaises(TypeError):
+            RelationPlan(
+                records=self.membership.records,
+                permission_model=self.Token,
+                strategy=object(),
+            )
         with self.assertNumQueries(0):
             self.assertIsNotNone(self.compiler.group_exists(
                 plan, self.folder, self.member, self.read,
             ))
             self.assertIsNone(self.compiler.group_exists(
-                fold_only, self.folder, self.member, self.read,
+                empty, self.folder, self.member, self.read,
             ))
 
 
