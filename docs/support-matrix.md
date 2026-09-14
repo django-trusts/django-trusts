@@ -31,26 +31,20 @@ declared Python version with Django 6.1, plus the django-trusts/Zero pair job
 and a `package` job. The `package` job
 (sdist/wheel build, `twine check`, metadata/LICENSE proof, and an
 out-of-checkout wheel import) runs on **Python 3.12** as a representative
-install of the declared range. django-trusts still retains
-`scripts/verify-legacy-upgrade.py` as historical already-applied-`0001`
-evidence; that runner is currently broken, off CI, and not a live
-operator path. Live Trusts management commands require
-[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
-and `trusts.zero.apps.ZeroConfig`.
+install of the declared range.
 
-## Database (Along reachability, issue #92)
+## Database (provisional inherited relationships)
 
-V1 `Along` / `GrantReach` is claimed only for Django's
-`django.db.backends.sqlite3` engine together with the JSON functions
+The provisional `along=` evaluator is currently exercised in CI only with
+Django's `django.db.backends.sqlite3` engine, the JSON functions
 `json_array`, `json_group_array`, `json_array_length`, and `json_each`,
-plus `WITH RECURSIVE`. That combination is what CI executes.
+and `WITH RECURSIVE`.
 
-This is not a claim for PostgreSQL, MySQL, MariaDB, Oracle, or any other
-vendor. Those engines need a separate renderer and CI proof. Runtime
-compilation on a non-sqlite3 connection raises `TrustsConfigurationError`
-before walk SQL. `trusts.E005` is a database-tagged check over exactly
-the aliases Django passes in `databases`; it is not an all-clear when
-that argument is absent or empty.
+CI does not currently exercise this evaluator on PostgreSQL, MySQL, MariaDB,
+Oracle, or another vendor. In the current implementation, compilation on a
+non-SQLite connection raises `TrustsConfigurationError` before the walk
+query. `trusts.E005` checks the aliases Django supplies in `databases`; an
+absent or empty argument should not be read as a database all-clear.
 
 ## What is intentionally not declared
 
