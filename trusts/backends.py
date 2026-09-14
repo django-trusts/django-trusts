@@ -73,12 +73,18 @@ class TrustModelBackendMixin(object):
         return config.configured_backend(config.path_for_backend(self))
 
     def _is_collection_coordinator(self):
-        """First configured Trusts path (de-duped) is the sole coordinator."""
+        """Legacy first-path identity. QuerySet auth is not gated on it."""
         config = self._trusts_config()
         paths = config._configured_trusts_paths()
         if not paths:
             return False
         return config.path_for_backend(self) == paths[0]
+
+    def _own_plan_applies(self, obj, user_obj):
+        """True when this path has a relation plan for ``obj``."""
+        handle = self._own_handle()
+        plan = handle.registry.plan_for(obj, user=user_obj)
+        return bool(plan.records or getattr(plan, 'strategy', None))
 
     def _ensure_perm_cache(self, user_obj):
         """Documented ``_trust_perm_cache`` attribute; not an auth source."""
@@ -86,14 +92,7 @@ class TrustModelBackendMixin(object):
             setattr(user_obj, '_trust_perm_cache', dict())
         return getattr(user_obj, '_trust_perm_cache')
 
-    def _collection_permissions(self, user_obj, obj, *, kind):
-        handles = self._trusts_config().configured_handles()
-        qs = common_permissions(handles, obj, user_obj, kind=kind)
-        if qs is None:
-            return set()
-        return _perm_codes(qs)
-
-    def _instance_permissions(self, user_obj, obj, *, kind):
+    def _path_permissions(self, user_obj, obj, *, kind):
         handle = self._own_handle()
         qs = common_permissions((handle,), obj, user_obj, kind=kind)
         if qs is None:
@@ -108,14 +107,9 @@ class TrustModelBackendMixin(object):
         if obj is None or not is_active_principal(user_obj):
             return set()
 
-        if isinstance(obj, QuerySet):
-            if not self._is_collection_coordinator():
-                return set()
-            return self._collection_permissions(user_obj, obj, kind='group')
-
-        if not isinstance(obj, Model):
-            return set()
-        return self._instance_permissions(user_obj, obj, kind='group')
+        if isinstance(obj, QuerySet) or isinstance(obj, Model):
+            return self._path_permissions(user_obj, obj, kind='group')
+        return set()
 
     def get_all_permissions(self, user_obj, obj=None):
         if obj is None or not is_active_principal(user_obj):
@@ -123,14 +117,9 @@ class TrustModelBackendMixin(object):
 
         self._ensure_perm_cache(user_obj)
 
-        if isinstance(obj, QuerySet):
-            if not self._is_collection_coordinator():
-                return set()
-            return self._collection_permissions(user_obj, obj, kind='complete')
-
-        if not isinstance(obj, Model):
-            return set()
-        return self._instance_permissions(user_obj, obj, kind='complete')
+        if isinstance(obj, QuerySet) or isinstance(obj, Model):
+            return self._path_permissions(user_obj, obj, kind='complete')
+        return set()
 
     def permission_condition_met(self, record, user_obj, perm, obj):
         if record.expr is None:
@@ -157,28 +146,26 @@ class TrustModelBackendMixin(object):
         ])
 
     def _bound_condition_lookup(self, obj):
-        """Bound ``ConditionLookup`` on the coordinating / own registry.
+        """Bound ``ConditionLookup`` on this backend path's registry.
 
         Unbound (after explicit ``set_condition_lookup(None)``) is
-        ``None``. Unknown ``:condition`` codes then raise
-        ``AttributeError``.
+        ``None``. Instance unknown ``:condition`` codes still raise
+        ``AttributeError``. QuerySet unknown names are a local
+        fail-closed non-match.
         """
-        if isinstance(obj, QuerySet):
-            handles = self._trusts_config().configured_handles()
-            if not handles:
-                return None
-            return handles[0].registry.condition_lookup
         return self._own_handle().registry.condition_lookup
 
     def _condition_overlay(self, permext, obj, user_obj):
         """Return (record, extra_q) for a ``:condition`` suffix.
 
-        Stored IR on a QuerySet compiles to SQL (AND overlay).
-        Unregistered codes raise the same ``AttributeError`` as before.
+        Stored IR on a QuerySet compiles to SQL (AND overlay) from this
+        path only. On a QuerySet, a name absent from this path is
+        ``(None, None)`` so the caller can fail closed without raising.
+        Instance unknown codes still raise ``AttributeError``.
 
-        A bound ``ConditionLookup`` is the only condition path. Unknown
-        codes raise ``AttributeError``. Core does not import Zero modules
-        or discover helpers from a model ``__module__``.
+        A bound ``ConditionLookup`` is the only condition path. Core
+        does not import Zero modules or discover helpers from a model
+        ``__module__``.
         """
         if not permission_has_condition(permext):
             return None, None
@@ -186,12 +173,16 @@ class TrustModelBackendMixin(object):
         model = self._get_class(obj)
         lookup = self._bound_condition_lookup(obj)
         if lookup is None:
+            if isinstance(obj, QuerySet):
+                return None, None
             raise AttributeError(
                 'Permission condition code "%s" is not associate with model "%s_%s"'
                 % (cond, applabel, modelname)
             )
         record = lookup.record_for(model, cond)
         if record is None:
+            if isinstance(obj, QuerySet):
+                return None, None
             raise AttributeError(
                 'Permission condition code "%s" is not associate with model "%s_%s"'
                 % (cond, applabel, modelname)
@@ -202,10 +193,10 @@ class TrustModelBackendMixin(object):
         return record, extra_q
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None):
-        handles = self._trusts_config().configured_handles()
+        handle = self._own_handle()
         binding = _permission_binding(perm, obj.model)
         matched = all_match(
-            handles, obj, user_obj, binding, kind='complete', extra_q=extra_q,
+            (handle,), obj, user_obj, binding, kind='complete', extra_q=extra_q,
         )
         if matched is None:
             return False
@@ -225,10 +216,10 @@ class TrustModelBackendMixin(object):
         if obj is None or not is_active_principal(user_obj):
             return False
 
-        if isinstance(obj, QuerySet) and not self._is_collection_coordinator():
+        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
 
-        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
+        if isinstance(obj, QuerySet) and not self._own_plan_applies(obj, user_obj):
             return False
 
         record, extra_q = self._condition_overlay(permext, obj, user_obj)
@@ -236,6 +227,8 @@ class TrustModelBackendMixin(object):
         perm = '%s.%s_%s' % (applabel, action, modelname)
 
         if isinstance(obj, QuerySet):
+            if permission_has_condition(permext) and record is None:
+                return False
             positive = self._collection_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
             )
