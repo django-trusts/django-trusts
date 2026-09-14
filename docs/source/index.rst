@@ -365,8 +365,8 @@ mixed-family one-SQL OR and must not be read as Django's object-level
 backend OR.
 
 Until the OrderedFold engine leaves Core, one exact relationship backend
-path may still hold both families on one plan. That same-path family-local
-OR is a provisional deferral, not the 1.0 QuerySet or view-guard
+path may still hold both families on one plan. That same-path family-local OR
+is a provisional deferral, not the 1.0 QuerySet or view-guard
 contract. A future combined list projection belongs in the OrderedFold
 package, not Core. Database support varies by evaluator; see the support
 matrix for the currently verified combinations.

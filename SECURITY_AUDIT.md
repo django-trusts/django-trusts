@@ -140,8 +140,8 @@ mixed-family one-SQL OR. Django's object-level backend OR is a different
 layer and must not be read as Core list/guard aggregation.
 
 Until the OrderedFold engine leaves Core, one exact relationship backend
-path may still hold both families on one plan. That same-path family-local
-OR is a provisional deferral, not the 1.0 QuerySet or view-guard contract.
+path may still hold both families on one plan. That same-path family-local OR
+is a provisional deferral, not the 1.0 QuerySet or view-guard contract.
 
 ### Named filters are outer restrictions
 
