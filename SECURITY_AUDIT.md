@@ -60,7 +60,7 @@ overlay:
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
 | `register_relationship(...)` | Register paths from a permission-bearing model to user, permission, and protected content | Yes |
-| `register_ordered_fold(...)` | Register an ordered allow/deny evaluator for one protected model | Yes |
+| `register_ordered_fold(...)` *(provisional)* | Register an ordered allow/deny evaluator for one protected model | Yes |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
 Registration must issue no SQL. Unsupported paths, types, constants, and
@@ -97,6 +97,13 @@ specifically documented OrderedFold/token positions where the model instance
 itself is the identity.
 
 ### Ordered allow and deny
+
+The complete supported OrderedFold construction surface is
+`register_ordered_fold()`, `OrderedFold`, `PermissionMaskDomain`, `MaskEntry`,
+`PolarityMap`, and `FlatToken`. This surface is provisional and excluded from
+the normal 1.x compatibility guarantee. Its signatures or location may change,
+or it may be removed, in a future feature release. Other OrderedFold compiler,
+validation, expression, and renderer names are implementation details.
 
 `register_ordered_fold(source_model, OrderedFold(...))` selects the
 OrderedFold evaluator. It has its own declaration, validation, stored plan,
@@ -275,7 +282,7 @@ listed in the support matrix.
 
 ### OrderedFold PostgreSQL renderer
 
-OrderedFold is currently rendered for PostgreSQL. Its SQL contains a recursive
+This provisional evaluator is currently rendered for PostgreSQL. Its SQL contains a recursive
 ordered remaining-bits evaluation that Django treats as a custom expression.
 PostgreSQL execution tests—not string inspection alone—are required for nested
 `OuterRef`, alias scoping, aggregation, enumeration, and composition changes.
