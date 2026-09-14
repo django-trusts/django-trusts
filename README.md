@@ -12,16 +12,17 @@ with ordinary Django models.
 
 ## How permissions are represented
 
-A permission-bearing relationship connects three paths from one
-application-owned model:
+A **trust model** is the application-owned Django model from which three
+authorization paths begin:
 
 - **user** — who is requesting access;
 - **permission** — the operation being requested; and
 - **content** — the object being protected.
 
-The paths describe persisted application-owned facts. More than one complete
-relationship may reach the same protected model; each is an alternative grant
-and the branches combine with OR.
+Each matching trust record is a candidate grant. A trust model is often an
+explicit many-to-many relation model, but it may represent another relational
+shape. More than one complete trust may reach the same protected model; each is
+an alternative grant and the branches combine with OR.
 
 Core supplies the compiler and authorization APIs. It does not impose a
 permission schema, grant editor, or application workflow.
@@ -29,7 +30,7 @@ permission schema, grant editor, or application workflow.
 ## Usage
 
 Start with **[Installation in the complete usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
-The RST guide covers models, backend configuration, relationship registration,
+The RST guide covers models, backend configuration, trust registration,
 named filters, object and queryset authorization, inherited relationships, and
 ordered allow/deny policies.
 
