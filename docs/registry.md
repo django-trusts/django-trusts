@@ -15,9 +15,10 @@ operations are unsupported. The registry validates the returned path through
 Django `_meta` and each hop's `get_path_info()` without issuing SQL, then
 stores an immutable `RegisteredRelation` and discards the callable.
 
-The builder body is trusted application startup code, not a sandboxed Trusts
-dialect. Trusts constrains and validates its returned proxy path but does not
-police unrelated Python, SQL, I/O, or side effects in the body.
+The builder runs in the same application-startup context as the surrounding
+`AppConfig.ready()` code and receives no additional authority from Trusts.
+Trusts constrains and validates its returned proxy path but does not inspect or
+sandbox unrelated Python, SQL, I/O, or side effects in the body.
 
 ```python
 backend.register(
