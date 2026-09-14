@@ -74,6 +74,14 @@ class QueryCompiler(object):
 
     historical_fallback = False
 
+    def applies(self, plan):
+        """True when this compiler has a grant plan for ``plan``.
+
+        Relationship default is ``bool(plan.records)``. Construction
+        issues no SQL. Inapplicable backends must not compile a grant.
+        """
+        return bool(getattr(plan, 'records', None))
+
     def complete_exists(self, plan, candidates, user, permission):
         raise NotImplementedError
 
@@ -93,6 +101,10 @@ class PlanQueryCompiler(object):
     """
 
     historical_fallback = False
+
+    def applies(self, plan):
+        """Relationship applicability: registered AnyPath records only."""
+        return bool(getattr(plan, 'records', None))
 
     def complete_exists(self, plan, candidates, user, permission):
         if not plan.records and getattr(plan, 'strategy', None) is None:
@@ -175,6 +187,10 @@ def any_plan_records(handles, content):
     another path's compiler. Empty ``handles`` is False. Does not
     consult ``historical_fallback`` or historical model names.
     Construction issues no SQL.
+
+    The provisional ``strategy`` consult stays only while the engine
+    still lives in Core (C2 deletes it). This gate is not a mixed-family
+    one-SQL authorization contract.
     """
     for handle in handles:
         plan = handle.registry.plan_for(content)
@@ -183,18 +199,25 @@ def any_plan_records(handles, content):
     return False
 
 
-def granted(handles, candidates, user, permission, *, kind='complete'):
-    """OR each applicable handle compiler's complete (or group) predicate.
+def _compiler_applies(compiler, plan):
+    """Route applicability through ``compiler.applies`` when present."""
+    applies = getattr(compiler, 'applies', None)
+    if callable(applies):
+        return bool(applies(plan))
+    return bool(
+        getattr(plan, 'records', None)
+        or getattr(plan, 'strategy', None) is not None
+    )
 
-    Noun-blind: this builder does not know Trust, Group, Guardian, or
-    ceiling. A valid compiler returning ``None`` is inapplicable and is
-    omitted. Compiler exceptions propagate. An empty result is ``None``
-    so the caller may use the transitional undeclared fallback.
 
-    ``permission`` may be a permission instance or an unevaluated lookup
-    (``Subquery`` / ``OuterRef``). Expressions are not passed to
-    ``plan_for``; the plan is selected by content and user terminals.
-    """
+def _relationship_handles(handles):
+    from trusts.apps import _relationship_family_handles
+
+    return _relationship_family_handles(handles)
+
+
+def _compile_granted(handles, candidates, user, permission, *, kind='complete'):
+    """OR compiler predicates for the given handles. No family filter."""
     parts = []
     for handle in handles:
         plan = _plan_for_permission(handle, candidates, user, permission)
@@ -211,6 +234,30 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
     if len(parts) == 1:
         return parts[0]
     return reduce(or_, parts)
+
+
+def granted(handles, candidates, user, permission, *, kind='complete'):
+    """OR each applicable relationship-family handle's complete (or group) predicate.
+
+    Core-owned aggregate: fold-family handles are omitted. Noun-blind
+    among relationship handles: this builder does not know Trust, Group,
+    Guardian, or ceiling. A valid compiler returning ``None`` is
+    inapplicable and is omitted. Compiler exceptions propagate. An empty
+    result is ``None`` so the caller may use the transitional undeclared
+    fallback.
+
+    Mixin instance / QuerySet evaluation uses ``_compile_granted`` on
+    ``self._own_handle()`` so an extension family can still project
+    through the mixin.
+
+    ``permission`` may be a permission instance or an unevaluated lookup
+    (``Subquery`` / ``OuterRef``). Expressions are not passed to
+    ``plan_for``; the plan is selected by content and user terminals.
+    """
+    return _compile_granted(
+        _relationship_handles(handles),
+        candidates, user, permission, kind=kind,
+    )
 
 
 class ConditionLookup(object):
@@ -278,7 +325,8 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     or a scope model not on the path also return ``none()``.
     ``permission`` must be a model instance. Construction of a fail-closed
     result issues zero SQL; SQL runs only when a compiled predicate is
-    evaluated.
+    evaluated. Default and explicit handle lists include
+    relationship-family handles only.
 
     Noun-blind: this builder does not import or name Zero schema models
     and does not use a compiler's historical group
@@ -292,8 +340,10 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
     if handles is None:
-        from trusts.apps import configured_implementation_handles
-        handles = configured_implementation_handles()
+        from trusts.apps import _relationship_implementation_handles
+        handles = _relationship_implementation_handles()
+    else:
+        handles = _relationship_handles(handles)
     if not handles:
         return queryset.none()
 
@@ -323,7 +373,7 @@ def all_match(handles, candidates, user, permission, *, kind='complete', extra_q
     undeclared fallback. ``extra_q`` is an optional overlay (AND); it
     never creates a grant.
     """
-    granted_q = granted(handles, candidates, user, permission, kind=kind)
+    granted_q = _compile_granted(handles, candidates, user, permission, kind=kind)
     if granted_q is None:
         return None
     if extra_q is not None:
@@ -342,7 +392,7 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
     overlay (AND); it never creates a grant.
     """
-    granted_q = granted((handle,), obj, user, permission, kind=kind)
+    granted_q = _compile_granted((handle,), obj, user, permission, kind=kind)
     if granted_q is None:
         return None
     if extra_q is not None:
@@ -352,13 +402,8 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
     ).filter(granted_q).exists()
 
 
-def common_permissions(handles, candidates, user, *, kind='complete'):
-    """Permission queryset held on every candidate via the aggregate proof.
-
-    One SQL when evaluated. ``None`` when no handle applies so the caller
-    may use the undeclared fallback. Uses nested ``OuterRef`` so the
-    permission identity is the outer permission row, not the candidate.
-    """
+def _compile_common_permissions(handles, candidates, user, *, kind='complete'):
+    """Permission queryset for the given handles. No family filter."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
     parts = []
@@ -366,20 +411,21 @@ def common_permissions(handles, candidates, user, *, kind='complete'):
     applicable = False
     for handle in handles:
         plan = handle.registry.plan_for(candidates, user=user)
-        if plan.records or getattr(plan, 'strategy', None) is not None:
-            applicable = True
-            if plan.permission_model is not None:
-                if permission_model is None:
-                    permission_model = plan.permission_model
-                elif permission_model is not plan.permission_model:
-                    raise TrustsConfigurationError(
-                        'Applicable registrations must share one permission '
-                        'model; got %s and %s.'
-                        % (
-                            permission_model._meta.label,
-                            plan.permission_model._meta.label,
-                        )
+        if not _compiler_applies(handle.compiler, plan):
+            continue
+        applicable = True
+        if plan.permission_model is not None:
+            if permission_model is None:
+                permission_model = plan.permission_model
+            elif permission_model is not plan.permission_model:
+                raise TrustsConfigurationError(
+                    'Applicable registrations must share one permission '
+                    'model; got %s and %s.'
+                    % (
+                        permission_model._meta.label,
+                        plan.permission_model._meta.label,
                     )
+                )
         if kind == 'complete':
             fn = handle.compiler.complete_exists
         else:
@@ -398,6 +444,22 @@ def common_permissions(handles, candidates, user, *, kind='complete'):
     ).exclude(
         Exists(qs.filter(~granted_q)),
     ).distinct()
+
+
+def common_permissions(handles, candidates, user, *, kind='complete'):
+    """Permission queryset held on every candidate via the aggregate proof.
+
+    Core-owned aggregate: fold-family handles are omitted. One SQL when
+    evaluated. ``None`` when no remaining handle applies so the caller
+    may use the undeclared fallback. Uses nested ``OuterRef`` so the
+    permission identity is the outer permission row, not the candidate.
+    Applicability is ``compiler.applies(plan)``. Mixin enumeration uses
+    ``_compile_common_permissions`` on ``self._own_handle()``.
+    """
+    return _compile_common_permissions(
+        _relationship_handles(handles),
+        candidates, user, kind=kind,
+    )
 
 
 def _is_model_class(value):

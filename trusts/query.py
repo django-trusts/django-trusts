@@ -30,11 +30,13 @@ class AuthorizedQuerySet(QuerySet):
 
     Callers that need Django inactivity checks or string permissions wrap
     this; they do not belong on this class. There is no ``.permitted`` and
-    no ``.get_permission``.
+    no ``.get_permission``. Core ``.authorized`` includes
+    relationship-family handles only; it is not Django's object-level
+    backend OR.
     """
 
     def authorized(self, user, permission, extra_q=None):
-        from trusts.apps import configured_implementation_handles
+        from trusts.apps import _relationship_implementation_handles
         from trusts.core import TrustsConfigurationError, granted
 
         if not isinstance(permission, Model):
@@ -42,7 +44,7 @@ class AuthorizedQuerySet(QuerySet):
                 'permission must be a model instance, not %r.' % (permission,)
             )
         granted_q = granted(
-            configured_implementation_handles(),
+            _relationship_implementation_handles(),
             self, user, permission, kind='complete',
         )
         if granted_q is None:

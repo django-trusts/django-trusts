@@ -262,7 +262,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
 
 def _authorize_candidate(request, view_kwargs, model, permission, conditions):
     from django.apps import apps as django_apps
-    from trusts.apps import configured_implementation_handles
+    from trusts.apps import _relationship_implementation_handles
 
     user = getattr(request, 'user', None)
     raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None
@@ -284,7 +284,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
             'authorization_required cannot authorize before Django apps '
             'are ready.'
         )
-    handles = configured_implementation_handles()
+    handles = _relationship_implementation_handles()
     _assert_authorization_preflight(handles, model, conditions)
 
     candidates = model._default_manager.filter(pk=pk)
@@ -329,9 +329,11 @@ def authorization_required(model, permission, conditions=()):
     ``django.contrib.auth.models.Permission`` participate. Each of
     those backends composes its own grant with its own selected names
     before the backends are OR'd; backend order does not change the
-    result. Does not use Django backend OR, ``user.has_perm``, or the
+    result. Only relationship-family implementation handles participate.
+    Does not use Django backend OR, ``user.has_perm``, or the
     legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
-    surface.
+    surface. Django's object-level ``user.has_perm`` OR across
+    authentication backends is a different layer.
     """
     model = _guard_model(model)
     _guard_permission(model, permission)

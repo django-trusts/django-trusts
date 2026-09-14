@@ -124,14 +124,24 @@ The content and source descriptor paths must converge on one validated
 comparison identity. Malformed, unknown, null, negative, or out-of-domain state
 must fail closed according to the documented evaluator contract.
 
-At the current 1.0 boundary, relationship registrations and one OrderedFold
-strategy may coexist on the same protected model in one configured backend when
-their resolved user, permission, and content identities are coherent. The
-backend grants when either evaluator family grants: this is family-local OR.
+At the current 1.0 boundary, object-level ``user.has_perm`` uses Django's
+ordered authentication-backend OR. A relationship grant or an OrderedFold
+grant on another configured backend can authorize that single object.
+An OrderedFold deny cannot veto an independent relationship grant or
+revoke a grant returned by another configured Django authentication
+backend.
 
-An OrderedFold deny settles only the OrderedFold branch. It cannot veto an
-independent relationship grant or revoke a grant returned by another configured
-Django authentication backend.
+Core list, guard, and common-permission helpers are relationship-family
+local. ``Model.objects.authorized``, ``authorization_required``,
+``filter_authorized_scopes``, and module-level ``granted`` /
+``common_permissions`` include only handles whose implementation
+``_authorization_family`` is ``"relationship"``. They do not compile a
+mixed-family one-SQL OR. Django's object-level backend OR is a different
+layer and must not be read as Core list/guard aggregation.
+
+Until the OrderedFold engine leaves Core, one exact relationship backend
+path may still hold both families on one plan. That same-path family-local
+OR is a provisional deferral, not the 1.0 QuerySet or view-guard contract.
 
 ### Named filters are outer restrictions
 
@@ -226,8 +236,8 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Authorized objects | `Model.objects.authorized(user, permission)` | Authorization in SQL before pagination |
-| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and Trusts-only authorization |
+| Authorized objects | `Model.objects.authorized(user, permission)` | Relationship-family SQL before pagination; not Django backend OR |
+| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 The Core view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
 through the protected model's primary-key field, and keeps it as a parameter.
