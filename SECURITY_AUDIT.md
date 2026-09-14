@@ -93,14 +93,17 @@ backend.register(
 )
 ```
 
-Each path accepts either a Django `__` string or a one-argument symbolic path
-builder; both forms of the same registration are shown above (the usage guide
-pairs them the same way under “Register the trust”). A builder is called once
-during registration and must return a path rooted at the supplied symbolic
-trust value. Trusts validates and normalizes the complete path with Django
-model metadata and stores no callable. Builder exceptions, foreign symbolic
-roots, constants, empty paths, and unsupported relationship shapes fail closed
-with zero SQL and no partial mutation.
+Each path accepts either a Django `__` string or a one-argument non-executing
+path builder; both forms of the same registration are shown above (the usage
+guide pairs them the same way under “Register the trust”). Trusts never invokes
+the path function. On the supported CPython versions it structurally accepts
+only a rooted attribute-chain body, `parameter.attr[.attr...]`. Calls,
+operators, indexing, globals, closures, control flow, tuple selection, and
+every other instruction shape are rejected before application code can run.
+Trusts extracts the attribute names, validates and normalizes the complete path
+with Django model metadata, and stores no callable. Unsupported function
+shapes, foreign or missing paths, empty paths, and unsupported relationship
+shapes fail closed with zero SQL and no partial registry mutation.
 
 A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and

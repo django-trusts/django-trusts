@@ -89,14 +89,16 @@ backend.register(
 )
 ```
 
-A symbolic path builder is called exactly once during registration with a value
-typed as the `trust=` model. Attribute access records a path; no application
-row is loaded. The result is validated using Django model metadata and
-normalized to the same internal `__` path as the string spelling. The callable
-is never stored or invoked during authorization. Invalid builder results,
-exceptions, paths from another symbolic root, empty paths, and unsupported
-relationship shapes raise `TrustsConfigurationError` with zero SQL and no
-partial registry mutation.
+A path builder is contextually typed as the `trust=` model, but Trusts never
+invokes it. On the supported CPython versions, Trusts structurally accepts only
+a one-argument function whose body is a rooted
+`parameter.attr[.attr...]` chain. It extracts those names, validates them using
+Django model metadata, and normalizes them to the same internal `__` path as
+the string spelling. Calls, operators, indexing, globals, closures, control
+flow, tuple selection, and every other instruction shape raise
+`TrustsConfigurationError` before application code can run. Missing or empty
+paths and unsupported relationship shapes also fail with zero SQL and no
+partial registry mutation. The function is never stored.
 
 The lowercase term **trust model** describes the role of the registered
 application model. It does not require or imply the concrete
@@ -106,6 +108,7 @@ Migration-bot checklist across Core and active consumers:
 
 - `.register_relationship(`
 - positional relationship root arguments
+- path callables containing anything beyond rooted attribute access
 - `user=`, `permission=`, and `content=` path strings
 - prose using “permission-bearing relation”, “permission-bearing root”, or
   ambiguous bare “root” for the public trust model

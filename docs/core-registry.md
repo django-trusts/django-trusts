@@ -6,13 +6,14 @@ This slice does **not** re-export a process-global registry from `trusts`.
 
 `TrustsRegistry` is instantiable and isolated. Public
 `BackendHandle.register(trust=..., user=..., permission=..., content=...)`
-accepts path strings or one-argument symbolic path builders and normalizes
-them into this internal representation. Attribute access on a symbolic trust
-root builds a root-relative path, including ordinary field names such as
-`root` and `path`. The registry validates those paths through Django `_meta`
-and each hop's `get_path_info()` (zero SQL), then stores an immutable
-`RegisteredRelation`. Inspect the inferred root, full path, lookup, and target
-field on that record.
+accepts path strings or one-argument non-executing path builders and normalizes
+them into this internal representation. Trusts structurally extracts only a
+rooted `parameter.attr[.attr...]` chain from an accepted function; it never
+invokes that function. The extracted names form a root-relative path, including
+ordinary field names such as `root` and `path`. The registry validates those
+paths through Django `_meta` and each hop's `get_path_info()` (zero SQL),
+then stores an immutable `RegisteredRelation`. Inspect the inferred root, full
+path, lookup, and target field on that record.
 
 ```python
 from trusts.core import Ref, TrustsRegistry
