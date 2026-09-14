@@ -114,6 +114,14 @@ jobs:
         WORK="$(mktemp -d)"
         cd "$WORK"
         python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
+    - name: Installed-wheel Pyright contextual typing
+      env:
+        PYTHONPATH: ""
+      run: |
+        python -m pip install pyright
+        WORK="$(mktemp -d)"
+        cd "$WORK"
+        python "${GITHUB_WORKSPACE}/scripts/verify-wheel-pyright.py" --checkout "${GITHUB_WORKSPACE}"
     - name: Companion Core + Zero #191 decorator wheels
       run: |
         python -m pip install build
