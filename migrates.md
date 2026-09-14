@@ -95,9 +95,10 @@ forms a rooted model path; other proxy operations are unsupported. Trusts
 validates the returned path using Django model metadata, normalizes it to the
 same internal `__` path as the string spelling, and discards the callable.
 
-The builder body remains trusted application startup code. Trusts does not
-inspect or sandbox unrelated Python in it, and therefore does not claim to stop
-the SQL, I/O, or side effects that application code could also perform before
+The builder runs in the same application-startup context as the surrounding
+`AppConfig.ready()` code and receives no additional authority from Trusts.
+Trusts does not inspect or sandbox unrelated Python in it, and does not claim to
+stop SQL, I/O, or side effects that the application could also perform before
 calling `register()`. Trusts’ own returned-path validation issues zero SQL. A
 builder exception, missing or foreign returned path, empty path, or unsupported
 relationship shape fails without partial registry mutation; effects already
