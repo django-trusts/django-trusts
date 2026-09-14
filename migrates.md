@@ -89,16 +89,19 @@ backend.register(
 )
 ```
 
-A path builder is contextually typed as the `trust=` model, but Trusts never
-invokes it. On the supported CPython versions, Trusts structurally accepts only
-a one-argument function whose body is a rooted
-`parameter.attr[.attr...]` chain. It extracts those names, validates them using
-Django model metadata, and normalizes them to the same internal `__` path as
-the string spelling. Calls, operators, indexing, globals, closures, control
-flow, tuple selection, and every other instruction shape raise
-`TrustsConfigurationError` before application code can run. Missing or empty
-paths and unsupported relationship shapes also fail with zero SQL and no
-partial registry mutation. The function is never stored.
+A path builder is contextually typed as the `trust=` model. Trusts invokes it
+once during registration with a symbolic proxy. Attribute access on that proxy
+forms a rooted model path; other proxy operations are unsupported. Trusts
+validates the returned path using Django model metadata, normalizes it to the
+same internal `__` path as the string spelling, and discards the callable.
+
+The builder body remains trusted application startup code. Trusts does not
+inspect or sandbox unrelated Python in it, and therefore does not claim to stop
+the SQL, I/O, or side effects that application code could also perform before
+calling `register()`. Trusts’ own returned-path validation issues zero SQL. A
+builder exception, missing or foreign returned path, empty path, or unsupported
+relationship shape fails without partial registry mutation; effects already
+performed by application code are outside that guarantee.
 
 The lowercase term **trust model** describes the role of the registered
 application model. It does not require or imply the concrete
@@ -108,7 +111,7 @@ Migration-bot checklist across django-trusts and active consumers:
 
 - `.register_relationship(`
 - positional relationship root arguments
-- path callables containing anything beyond rooted attribute access
+- path builders that rely on proxy operations beyond attribute access
 - `user=`, `permission=`, and `content=` path strings
 - prose using “permission-bearing relation”, “permission-bearing root”, or
   ambiguous bare “root” for the public trust model
