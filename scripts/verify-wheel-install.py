@@ -137,9 +137,9 @@ def main() -> int:
         if len(callable_parts) != 1:
             raise SystemExit('%s hint missing Callable: %r' % (role, role_hint))
         callable_args = get_args(callable_parts[0])
-        if callable_args != (trust_args[0], object):
+        if callable_args != ([trust_args[0]], object):
             raise SystemExit(
-                '%s Callable args are %r, expected TypeVar + object'
+                '%s Callable args are %r, expected [TypeVar] + object'
                 % (role, callable_args)
             )
     if hints.get('return') is not RegisteredRelation:

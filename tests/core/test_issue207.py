@@ -103,7 +103,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
             ]
             self.assertEqual(len(callable_parts), 1)
             callable_args = get_args(callable_parts[0])
-            self.assertEqual(callable_args[0], type_args[0])
+            self.assertEqual(callable_args[0], [type_args[0]])
             self.assertIs(callable_args[1], object)
         self.assertIs(hints['return'], RegisteredRelation)
         # Python does not prove lambda attributes exist on trust=.
@@ -250,7 +250,7 @@ class RegisterOnceAtRegistrationTest(TestCase):
         handle = _handle(registry)
         user = _Count('user')
         permission = _Count('permission')
-        content = _Count('content')
+        content = _Count('document')
         handle.register(
             trust=DocumentGrant,
             user=user,
