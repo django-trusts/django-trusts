@@ -332,8 +332,8 @@ Inherited relationships
 Inherited relationships are provisional. A bounded hierarchical walk may be
 declared with ``along=("parent", 8)`` on ``backend.register``.
 django-trusts evaluates the walk with a recursive common table expression
-rather than traversing the hierarchy in Python. Its currently verified database
-support is recorded in the `support matrix
+rather than traversing the hierarchy in Python. The database combinations
+currently exercised by CI are recorded in the `support matrix
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 
 Ordered allow and deny
@@ -418,8 +418,9 @@ Run Django's system checks during development and deployment:
 
    python manage.py check
 
-Invalid declarations are rejected during application setup. Missing
-registrations and unsupported permission paths fail closed.
+django-trusts is designed to reject invalid declarations during application
+setup. Missing registrations and unsupported permission paths are intended to
+fail closed.
 
 Current Python, Django, database, and evaluation-strategy support is recorded
 in the `support matrix
