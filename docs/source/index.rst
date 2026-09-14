@@ -174,39 +174,6 @@ Register the model paths when the application starts:
 ``__`` relationship paths identify the user, permission, and protected
 content associated with each row.
 
-``register_ordered_fold`` donates an OrderedFold plan.
-``content`` is the protected model class. ``descriptor`` is a
-content-relative Django ``__`` path and may be ``""``.
-``source_descriptor`` is a required source-relative path. Direct and
-convergent shared-descriptor graphs use that one spelling:
-
-.. code-block:: python
-
-   backend.register_ordered_fold(
-       Ace,
-       OrderedFold(
-           content=Document,
-           descriptor="",
-           source_descriptor="document",
-           order="ace_order",
-           polarity=PolarityMap("ace_type", allow_value=ALLOW, deny_value=DENY),
-           mask="access_mask",
-           trustee="user",
-           token=FlatToken(
-               principal=User,
-               principal_user="",
-               principal_identity="",
-           ),
-           domain=PermissionMaskDomain(Permission, masks),
-       ),
-   )
-
-A Windows-shaped graph whose ACE and node both point at one security
-descriptor uses the same fields with distinct paths
-(``content=WinNode``, ``descriptor="security_descriptor"``,
-``source_descriptor="descriptor"``). Relationship arguments and an
-OrderedFold plan are separate methods.
-
 The declaration is validated when it is registered. Invalid or unsupported
 paths raise a configuration error instead of becoming an authorization rule.
 
@@ -366,11 +333,24 @@ or descendants without traversing the hierarchy in Python.
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Policies that require ordered allow and deny entries can use the
+.. warning::
+
+   The OrderedFold construction surface—``register_ordered_fold()``,
+   ``OrderedFold``, ``PermissionMaskDomain``, ``MaskEntry``,
+   ``PolarityMap``, and ``FlatToken``—is provisional and excluded from
+   the normal 1.x compatibility guarantee. Its signatures or location may
+   change, or it may be removed, in a future feature release.
+
+Policies that require ordered allow and deny entries can use the PostgreSQL-only
 ``OrderedFold`` evaluator. It evaluates persisted entries in order while
 tracking which requested permission bits remain undecided.
 
-Both policy families use the same object-check, permission-enumeration, and
+OrderedFold is an advanced evaluator family, not part of the introductory
+relationship-registration path. A complete working declaration and its
+security assumptions live in `django-trusts-windows-acl
+<https://github.com/django-trusts/django-trusts-windows-acl>`_.
+
+Both evaluator families use the same object-check, permission-enumeration, and
 queryset interfaces. At the current 1.0 boundary, one protected model in one
 configured backend uses relationship authorization or OrderedFold, not both.
 Database support varies by evaluator; see the support matrix for the currently
