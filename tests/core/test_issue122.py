@@ -128,19 +128,19 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         readme = (ROOT / 'README.md').read_text()
         pyproject = (ROOT / 'pyproject.toml').read_text()
 
-        self.assertIn('# Core migration record', text[:80])
+        self.assertIn('# django-trusts migration guide', text[:80])
         self.assertIn('## Audiences', text)
-        self.assertIn('## Public Core 1.x actions', text)
+        self.assertIn('## Public django-trusts 1.x actions', text)
         self.assertIn('## Relation registration (#131)', text)
-        self.assertIn('## Family-local Core aggregates (#194 / #181)', text)
-        self.assertIn('## Remove OrderedFold from Core (#195 / C2)', text)
+        self.assertIn('## Family-local django-trusts aggregates (#194 / #181)', text)
+        self.assertIn('## Remove OrderedFold from django-trusts (#195 / C2)', text)
         self.assertIn('_create_registry(path)', text)
         self.assertIn('_create_handle(path, registry, compiler)', text)
         self.assertIn('QueryCompiler.applies(plan)', text)
         self.assertIn('_authorization_family', text)
         self.assertIn('bool(plan.records)', text)
         self.assertIn('relationship-family local', text)
-        self.assertIn('Do not read this as Core list/guard aggregation', text)
+        self.assertIn('Do not read this as django-trusts list/guard aggregation', text)
         self.assertIn('from trusts.core import Ref', text)
         self.assertIn('.registry.register(', text)
         self.assertIn('.registry.register_strategy(', text)
@@ -187,7 +187,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             '7414886263faafb6edfb44c0c5fcf9fc8fa14e79/migrates.md',
             text,
         )
-        self.assertIn('1.x migration router', readme)
+        self.assertIn('[Migration guide](migrates.md)', readme)
         self.assertIn(
             'https://github.com/django-trusts/django-trusts/blob/dev/migrates.md',
             rst,
