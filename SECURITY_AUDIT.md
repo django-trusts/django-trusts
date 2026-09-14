@@ -254,9 +254,10 @@ bounded reachability. Audit:
 The current Along renderer is verified only for the database combinations
 listed in the support matrix.
 
-## Fail-closed expectations
+## Fail-closed principle
 
-The following must not silently become grants:
+django-trusts is designed around a fail-closed principle. We intend cases that
+cannot be safely authorized not to become grants silently. This includes:
 
 - missing or unknown registrations;
 - malformed paths or unsupported relationship shapes;
@@ -269,8 +270,11 @@ The following must not silently become grants:
 - unsupported database renderers; and
 - invalid request primary-key coercion.
 
-Configuration failures should be reported during startup or system checks where
-possible. Runtime denial must not fall back to a broader Trusts path.
+This list is not exhaustive. A newly discovered path that can fail open is
+treated as a defect and should be closed.
+
+Where practical, configuration failures should surface during startup or system
+checks. Runtime denial should not fall back to a broader Trusts path.
 
 ## Reference implementations
 
