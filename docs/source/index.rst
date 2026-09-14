@@ -22,7 +22,8 @@ trust model may be an explicit many-to-many relation model, a direct grant
 model, or another relational structure owned by the application.
 
 ``django-trusts`` compiles these declarations into database queries via
-QuerySet, keeping permission decisions based on persisted truth. The same declarations support
+QuerySet, keeping permission decisions based on persisted truth. The same
+declarations support
 object checks, authorized querysets, permission enumeration, and decorators
 for protecting views. The separate `security audit guide
 <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
