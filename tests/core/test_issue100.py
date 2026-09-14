@@ -25,7 +25,6 @@ from trusts.core import (
     FlatToken,
     MaskEntry,
     OrderedFold,
-    OrderedFoldAllowed,
     PermissionMaskDomain,
     PlanQueryCompiler,
     PolarityMap,
@@ -35,6 +34,7 @@ from trusts.core import (
     all_match,
     filter_authorized_scopes,
 )
+from trusts.ordered_fold import OrderedFoldAllowed
 from trusts.query import AuthorizedManager, is_active_principal
 
 
