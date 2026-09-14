@@ -7,14 +7,17 @@ re-export a process-global registry from `trusts`.
 
 `TrustsRegistry` is instantiable and isolated. Public
 `BackendHandle.register(trust=..., user=..., permission=..., content=...)`
-accepts path strings or one-argument non-executing path builders and normalizes
-them into this internal representation. Trusts structurally extracts only a
-rooted `parameter.attr[.attr...]` chain from an accepted function; it never
-invokes that function. The extracted names form a root-relative path, including
-ordinary field names such as `root` and `path`. The registry validates those
-paths through Django `_meta` and each hop's `get_path_info()` (zero SQL),
-then stores an immutable `RegisteredRelation`. Inspect the inferred root, full
-path, lookup, and target field on that record.
+accepts path strings or one-argument registration-time path builders and
+normalizes them into this internal representation. Trusts invokes a builder
+once with a symbolic proxy; attribute access on that proxy forms a root-relative
+path, including ordinary field names such as `root` and `path`. Other proxy
+operations are unsupported. The registry validates the returned path through
+Django `_meta` and each hop's `get_path_info()` without issuing SQL, then
+stores an immutable `RegisteredRelation` and discards the callable.
+
+The builder body is trusted application startup code, not a sandboxed Trusts
+dialect. Trusts constrains and validates its returned proxy path but does not
+police unrelated Python, SQL, I/O, or side effects in the body.
 
 ```python
 backend.register(
