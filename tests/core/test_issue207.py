@@ -124,6 +124,9 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         pyright = (ROOT / 'scripts' / 'verify-wheel-pyright.py').read_text()
         self.assertIn('not_a_field', pyright)
         self.assertIn('AnnotatedGrant', pyright)
+        self.assertIn('TrustsImplementationConfig', pyright)
+        self.assertIn('configured_backend()', pyright)
+        self.assertNotIn('from trusts.core import BackendHandle', pyright)
 
     def test_keyword_only_signature(self):
         signature = inspect.signature(BackendHandle.register)

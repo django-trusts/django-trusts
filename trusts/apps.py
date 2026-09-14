@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from django.apps import AppConfig as DjangoAppConfig
 from django.core.exceptions import ImproperlyConfigured
 
 from trusts._meta_options import _ensure_permission_conditions_option
+
+if TYPE_CHECKING:
+    from trusts.core import BackendHandle
 
 # Hosts load this module before Django constructs their models. Register
 # Meta.permission_conditions here so applications do not import _ir.
@@ -86,7 +93,7 @@ class _TrustsRegistryOwner(object):
 
         return TrustsRegistry()
 
-    def _create_handle(self, path, registry, compiler):
+    def _create_handle(self, path, registry, compiler) -> BackendHandle:
         """Construct the path-owned handle. Protected / provisional.
 
         The default is Core ``BackendHandle``. An extension config may
@@ -108,7 +115,7 @@ class _TrustsRegistryOwner(object):
             registry.freeze()
         return registry
 
-    def configured_backend(self, path=None):
+    def configured_backend(self, path=None) -> BackendHandle:
         """Return the configured backend for one exact Trusts path.
 
         With one Trusts path, ``path`` may be omitted. With zero or
@@ -146,7 +153,7 @@ class _TrustsRegistryOwner(object):
             compiler_for_class(cls),
         )
 
-    def configured_handles(self):
+    def configured_handles(self) -> tuple[BackendHandle, ...]:
         """Handles for every configured Trusts path, in settings order."""
         return tuple(
             self.configured_backend(path)
