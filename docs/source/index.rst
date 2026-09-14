@@ -333,30 +333,34 @@ or descendants without traversing the hierarchy in Python.
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-.. warning::
+Policies that require ordered allow and deny entries belong in
+`django-trusts-ordered-fold
+<https://github.com/django-trusts/django-trusts-ordered-fold>`_, not
+Core. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
+``MaskEntry``, ``PolarityMap``, ``FlatToken``,
+``register_ordered_fold()``, ``TrustsOrderedFoldModelBackend``, and
+the PostgreSQL remaining-bits renderer. Core does not import, depend
+on, auto-discover, or fallback-import it.
 
-   The OrderedFold construction surface—``register_ordered_fold()``,
-   ``OrderedFold``, ``PermissionMaskDomain``, ``MaskEntry``,
-   ``PolarityMap``, and ``FlatToken``—is provisional and excluded from
-   the normal 1.x compatibility guarantee. Its signatures or location may
-   change, or it may be removed, in a future feature release.
-
-Policies that require ordered allow and deny entries can use the PostgreSQL-only
-``OrderedFold`` evaluator. It evaluates persisted entries in order while
-tracking which requested permission bits remain undecided.
-
-OrderedFold is an advanced evaluator family, not part of the introductory
-relationship-registration path. A complete working declaration and its
-security assumptions live in `django-trusts-windows-acl
+A complete working Windows declaration and its security assumptions
+live in `django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
-Both evaluator families use the same object-check, permission-enumeration, and
-queryset interfaces. Relationship registrations and one OrderedFold strategy
-may coexist on the same protected model in one configured backend when their
-resolved user, permission, and content identities are coherent. Authorization
-is the family-local OR: an OrderedFold deny settles only the OrderedFold branch
-and does not veto an independent relationship grant. Database support varies by
-evaluator; see the support matrix for the currently verified combinations.
+Object-level ``user.has_perm`` uses Django's ordered
+``AUTHENTICATION_BACKENDS`` OR. A relationship grant or an OrderedFold
+grant on another configured backend can authorize that single object.
+An OrderedFold deny on another backend does not veto an independent
+relationship grant returned by a relationship backend.
+
+Core list, guard, and common-permission helpers are relationship-family
+local. ``Model.objects.authorized``, ``authorization_required``,
+``filter_authorized_scopes``, and module-level ``granted`` /
+``common_permissions`` include only handles whose implementation
+``_authorization_family`` is ``"relationship"``. They do not compile a
+mixed-family one-SQL OR and must not be read as Django's object-level
+backend OR. A future combined list projection belongs in the
+OrderedFold package, not Core. Database support varies by evaluator;
+see the support matrix for the currently verified combinations.
 
 Reference implementations
 -------------------------
@@ -391,8 +395,9 @@ Ordered access-control entries
 permissions using persisted access-control entries with ordering, allow and
 deny effects, permission masks, and inheritance.
 
-It demonstrates how an ACL-style permission system can select the ordered-fold
-evaluator while retaining the same Django-facing permission APIs.
+It demonstrates how an ACL-style permission system can use
+``django-trusts-ordered-fold`` while retaining the same Django-facing
+permission APIs.
 
 The project is intended to prove that this class of permission system can be
 implemented with ``django-trusts``. It is not intended to reproduce every

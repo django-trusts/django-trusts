@@ -18,8 +18,9 @@ from trusts.query import (
 )
 from trusts.core import (
     PlanQueryCompiler,
+    _compile_common_permissions,
+    _compiler_applies,
     all_match,
-    common_permissions,
     instance_match,
 )
 from trusts import utils
@@ -73,10 +74,14 @@ class TrustModelBackendMixin(object):
         return config.configured_backend(config.path_for_backend(self))
 
     def _own_plan_applies(self, obj, user_obj):
-        """True when this path has a relation plan for ``obj``."""
+        """True when this path's compiler applies to ``obj``.
+
+        Routes through ``QueryCompiler.applies``. Inapplicable is
+        ``False`` at zero SQL, before ``:name`` overlay.
+        """
         handle = self._own_handle()
         plan = handle.registry.plan_for(obj, user=user_obj)
-        return bool(plan.records or getattr(plan, 'strategy', None))
+        return _compiler_applies(handle.compiler, plan)
 
     def _ensure_perm_cache(self, user_obj):
         """Documented ``_trust_perm_cache`` attribute; not an auth source."""
@@ -86,7 +91,7 @@ class TrustModelBackendMixin(object):
 
     def _path_permissions(self, user_obj, obj, *, kind):
         handle = self._own_handle()
-        qs = common_permissions((handle,), obj, user_obj, kind=kind)
+        qs = _compile_common_permissions((handle,), obj, user_obj, kind=kind)
         if qs is None:
             return set()
         return _perm_codes(qs)

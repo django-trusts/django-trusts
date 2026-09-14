@@ -321,7 +321,8 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `:condition`, does not call `is_active_principal`, and does not call
 `get_permission`. `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
-this class.
+this class. Core `.authorized` includes relationship-family handles
+only; it is not Django's object-level authentication-backend OR.
 
 `filter_authorized_scopes(queryset, user, permission, *, content, handles=None)`
 in `trusts.core` filters rows of an intermediate scope model that is a
@@ -334,15 +335,14 @@ permission, and ORs applicable records. `queryset.model` equal to the
 content terminal is allowed when a proper prefix hop of that same model
 exists (self-referential trees). A terminal-only path, an unknown
 terminal, empty handles, or a scope model not on the path return
-`none()`. Core does not import Zero schema models
+`none()`. Default and explicit handle lists include relationship-family
+handles only. Core does not import Zero schema models
 (`Trust`, `TrustUserPermission`, `TrustGroup`, …).
 
 `PlanQueryCompiler.group_exists` compiles the membership-hop subset of
 the same plan (user path ending in M2M) via `RelationPlan.content_exists`.
 Direct FK / O2O / reverse user hops stay out of the group slice.
-A mixed plan keeps that relationship membership slice available; an
-OrderedFold `strategy` does not become a group grant and does not
-suppress `group_exists`. Fold-only plans (no membership records) still
+Core plans are relationship records only. Empty membership records
 make `group_exists` inapplicable (`None`).
 
 `ConditionLookup` (`record_for`, `compile_q`) is self-bound at

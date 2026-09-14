@@ -54,14 +54,18 @@ boundary. Application code uses the object returned by
 `configured_backend()`; it must not construct private registry or compiler
 objects.
 
-The pre-1.0 public surface has two grant-producing families and one restricting
+The Core 1.x public surface has one grant-producing family and one restricting
 overlay:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
 | `register_relationship(...)` | Register paths from a permission-bearing model to user, permission, and protected content | Yes |
-| `register_ordered_fold(...)` *(provisional)* | Register an ordered allow/deny evaluator for one protected model | Yes |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
+
+Ordered allow/deny registration lives in
+[django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold).
+Core does not import, depend on, auto-discover, or fallback-import that
+package.
 
 Registration must issue no SQL. Unsupported paths, types, constants, and
 combinations fail during setup. Registration closes when the configured
@@ -92,46 +96,34 @@ the resolved comparison identity, duplicate-row behavior, and whether
 compiled from every segment; no implementation may validate the complete path
 and then query only its first hop.
 
-The `user`, `permission`, and `content` relationship path arguments may not be empty. Empty paths appear only in
-specifically documented OrderedFold/token positions where the model instance
-itself is the identity.
+The `user`, `permission`, and `content` relationship path arguments may
+not be empty.
 
 ### Ordered allow and deny
 
-The complete supported OrderedFold construction surface is
-`register_ordered_fold()`, `OrderedFold`, `PermissionMaskDomain`, `MaskEntry`,
-`PolarityMap`, and `FlatToken`. This surface is provisional and excluded from
-the normal 1.x compatibility guarantee. Its signatures or location may change,
-or it may be removed, in a future feature release. Other OrderedFold compiler,
-validation, expression, and renderer names are implementation details.
+OrderedFold is not a Core engine. Import the five construction types and
+`register_ordered_fold(...)` from `trusts_ordered_fold`, list
+`TrustsOrderedFoldModelBackend` (or a subclass such as Windows
+`WinfsBackend`), and own that path with
+`OrderedFoldImplementationConfig`. Vendor diagnostics are
+`trusts_ordered_fold.E001`, not Core `trusts.E006`.
 
-`register_ordered_fold(source_model, OrderedFold(...))` selects the
-OrderedFold evaluator. It has its own declaration, validation, stored plan,
-and PostgreSQL remaining-bits renderer.
+At the current 1.0 boundary, object-level ``user.has_perm`` uses Django's
+ordered authentication-backend OR. A relationship grant or an OrderedFold
+grant on another configured backend can authorize that single object.
+An OrderedFold deny cannot veto an independent relationship grant or
+revoke a grant returned by another configured Django authentication
+backend.
 
-The declaration identifies:
-
-- the protected content model;
-- the content-relative descriptor path;
-- the source-relative descriptor path;
-- deterministic ACE ordering;
-- allow and deny values;
-- the requested-permission mask domain;
-- trustee identity; and
-- direct or flat-group requester tokens.
-
-The content and source descriptor paths must converge on one validated
-comparison identity. Malformed, unknown, null, negative, or out-of-domain state
-must fail closed according to the documented evaluator contract.
-
-At the current 1.0 boundary, relationship registrations and one OrderedFold
-strategy may coexist on the same protected model in one configured backend when
-their resolved user, permission, and content identities are coherent. The
-backend grants when either evaluator family grants: this is family-local OR.
-
-An OrderedFold deny settles only the OrderedFold branch. It cannot veto an
-independent relationship grant or revoke a grant returned by another configured
-Django authentication backend.
+Core list, guard, and common-permission helpers are relationship-family
+local. ``Model.objects.authorized``, ``authorization_required``,
+``filter_authorized_scopes``, and module-level ``granted`` /
+``common_permissions`` include only handles whose implementation
+``_authorization_family`` is ``"relationship"``. They do not compile a
+mixed-family one-SQL OR. Django's object-level backend OR is a different
+layer and must not be read as Core list/guard aggregation. Same-path
+family-local OR of relationship and OrderedFold on one Core plan is
+removed.
 
 ### Named filters are outer restrictions
 
@@ -161,16 +153,19 @@ AND
 NamedFilter(object, user, permission)
 ```
 
-For OrderedFold, the filter compiles against the outer protected-object query.
-It is not injected into the recursive CTE and does not:
+When an OrderedFold backend is configured, the filter compiles against
+the outer protected-object query in that package. It is not injected
+into the recursive CTE and does not:
 
 - select or reject individual ACE rows;
 - alter traversal bounds, direction, or cycle handling;
 - change ordering, polarity, mask consumption, or trustee tokens; or
 - act as a recursive stopping rule.
 
-A rule that changes ACE eligibility or recursive evaluation belongs in the
-closed OrderedFold grammar. It must not be hidden in an object filter.
+A rule that changes ACE eligibility or recursive evaluation belongs in
+the closed OrderedFold grammar owned by
+``django-trusts-ordered-fold``. It must not be hidden in an object
+filter.
 
 Unknown, unbound, or untranslatable named filters fail closed. A filter cannot
 create a grant. Permission enumeration returns bare permissions rather than every possible
@@ -226,8 +221,8 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Authorized objects | `Model.objects.authorized(user, permission)` | Authorization in SQL before pagination |
-| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and Trusts-only authorization |
+| Authorized objects | `Model.objects.authorized(user, permission)` | Relationship-family SQL before pagination; not Django backend OR |
+| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 The Core view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
 through the protected model's primary-key field, and keeps it as a parameter.
@@ -282,10 +277,12 @@ listed in the support matrix.
 
 ### OrderedFold PostgreSQL renderer
 
-This provisional evaluator is currently rendered for PostgreSQL. Its SQL contains a recursive
-ordered remaining-bits evaluation that Django treats as a custom expression.
-PostgreSQL execution tests—not string inspection alone—are required for nested
-`OuterRef`, alias scoping, aggregation, enumeration, and composition changes.
+The remaining-bits evaluator is owned by
+[django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold)
+and is rendered for PostgreSQL there. Core no longer ships that
+renderer. PostgreSQL execution tests in the extension—not string
+inspection alone—are required for nested `OuterRef`, alias scoping,
+aggregation, enumeration, and composition changes.
 
 ## Fail-closed expectations
 

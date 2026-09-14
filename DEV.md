@@ -150,13 +150,14 @@ they are not an already-applied-`0001` → `0002` → grandfather replay.
 Only that Zero replay should authorize deleting this Core evidence.
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
-authorization tests, a fresh migrate, `manage.py check`, an OrderedFold
-PostgreSQL job, pair proofs against the supported Zero companion, and a
-`package` job that builds an sdist/wheel, checks that the long description
-comes from the user `README.md` (not this file), verifies BeeDesk
-2015-2026 / BSD-2-Clause `LICENSE` metadata, and imports the wheel from a
-temporary directory so the source tree cannot satisfy the import. Do not
-treat a removed Travis check as a stand-in green status.
+authorization tests, a fresh migrate, `manage.py check`, pair proofs
+against the supported Zero companion, and a `package` job that builds
+an sdist/wheel, checks that the long description comes from the user
+`README.md` (not this file), verifies BeeDesk 2015-2026 / BSD-2-Clause
+`LICENSE` metadata, and imports the wheel from a temporary directory so
+the source tree cannot satisfy the import. OrderedFold PostgreSQL proof
+lives in `django-trusts-ordered-fold`. Do not treat a removed Travis
+check as a stand-in green status.
 
 ## Legacy baseline
 
