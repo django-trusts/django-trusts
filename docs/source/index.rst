@@ -294,13 +294,13 @@ Named filters
 A named filter further constrains an existing permission. Register its
 builder with ``backend.add_named_filter``. The backend invokes the builder
 exactly once with symbolic ``(u, p, o)`` references. Operations on those
-references construct a closed expression tree; Core validates and normalizes
-that result, stores only the immutable IR, and discards the callable. Core
+references construct a closed expression tree; django-trusts validates and normalizes
+that result, stores only the immutable IR, and discards the callable. django-trusts
 does not inspect the callable's Python source, and the callable never runs
 during ``has_perm``, permission enumeration, or queryset filtering.
 
 Builders are trusted startup code, like ``AppConfig.ready()``. Do not query,
-perform I/O, or read request state inside them. Core itself adds no SQL
+perform I/O, or read request state inside them. django-trusts itself adds no SQL
 during registration.
 
 The ``DocumentsConfig.ready()`` example above registers
@@ -375,10 +375,10 @@ Ordered allow and deny
 Policies that require ordered allow and deny entries belong in
 `django-trusts-ordered-fold
 <https://github.com/django-trusts/django-trusts-ordered-fold>`_, not
-Core. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
+django-trusts. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
 ``MaskEntry``, ``PolarityMap``, ``FlatToken``,
 ``register_ordered_fold()``, ``TrustsOrderedFoldModelBackend``, and
-the PostgreSQL remaining-bits renderer. Core does not import, depend
+the PostgreSQL remaining-bits renderer. django-trusts does not import, depend
 on, auto-discover, or fallback-import it.
 
 A complete working Windows declaration and its security assumptions
@@ -391,14 +391,14 @@ grant on another configured backend can authorize that single object.
 An OrderedFold deny on another backend does not veto an independent
 relationship grant returned by a relationship backend.
 
-Core list, guard, and common-permission helpers are relationship-family
+django-trusts list, guard, and common-permission helpers are relationship-family
 local. ``Model.objects.authorized``, ``authorization_required``,
 ``filter_authorized_scopes``, and module-level ``granted`` /
 ``common_permissions`` include only handles whose implementation
 ``_authorization_family`` is ``"relationship"``. They do not compile a
 mixed-family one-SQL OR and must not be read as Django's object-level
 backend OR. A future combined list projection belongs in the
-OrderedFold package, not Core. Database support varies by evaluator;
+OrderedFold package, not django-trusts. Database support varies by evaluator;
 see the support matrix for the currently verified combinations.
 
 Reference implementations
@@ -459,7 +459,7 @@ migration identities are preserved. Python imports and Django settings move to
 the explicit ``trusts.zero`` paths described in the `Zero migration guide
 <https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
-The Core 1.x migration router is `migrates.md
+The migration guide is `migrates.md
 <https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_.
 
 A runnable application using that implementation is available in
