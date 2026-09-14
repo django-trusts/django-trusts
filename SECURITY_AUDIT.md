@@ -101,11 +101,12 @@ a rooted model path; other operations on the proxy are unsupported. Trusts
 validates and normalizes the returned complete path with Django model metadata
 and stores no callable.
 
-The application owns and trusts its `AppConfig.ready()` code, including the
-builder body. Trusts does not inspect or sandbox unrelated Python in that body;
-it may perform SQL, I/O, or other side effects just as application code before
-the `register()` call may. The zero-SQL guarantee covers Trusts’ own path
-validation, not application-supplied builder code. A builder exception,
+The builder runs in the same `AppConfig.ready()` context as the surrounding
+application code and has no additional authority supplied by Trusts. Trusts
+does not inspect or sandbox unrelated Python in that body; the application can
+already perform the same SQL, I/O, or other side effects before calling
+`register()`. The zero-SQL guarantee covers Trusts’ own path validation, not
+the surrounding application code. A builder exception,
 foreign or missing returned path, empty path, or unsupported relationship shape
 fails registration without partial registry mutation, but Trusts cannot undo
 side effects already performed by the builder.
@@ -162,13 +163,14 @@ backend.add_named_filter(
 )
 ```
 
-The callable is a trusted registration-time builder. The backend invokes it
-once with symbolic principal, permission, and object references. Operations on
-those references construct a closed expression tree; django-trusts validates and
-normalizes that result, stores only the immutable IR, and discards the
-callable. django-trusts does not inspect or parse the callable's Python source. Do not query,
-perform I/O, capture request state, or rely on mutable captured values inside
-the predicate.
+The backend invokes the callable once with symbolic principal, permission, and
+object references. Operations on those references construct a closed expression
+tree; django-trusts validates and normalizes that result, stores only the
+immutable IR, and discards the callable. The builder runs in the same
+application-startup context as its surrounding code and receives no additional
+authority from django-trusts. django-trusts does not inspect or sandbox the
+callable body; SQL, I/O, request state, and mutable captures remain application
+behavior outside the returned-expression validation.
 
 At an authorization site, the named filter restricts an existing grant:
 
