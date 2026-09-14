@@ -19,17 +19,17 @@ and every authorization backend installed beside django-trusts.
 
 ## Installation and dependencies
 
-Core's direct runtime dependency is Django. The supported Python, Django, and
+django-trusts's direct runtime dependency is Django. The supported Python, Django, and
 database combinations are recorded in
 [the support matrix](docs/support-matrix.md). Build and test dependencies are
 not part of the runtime authorization boundary.
 
 Django selects and loads the database backend and driver configured by the
-application; Core does not import, select, or manage database drivers. The
+application; django-trusts does not import, select, or manage database drivers. The
 application and deployment therefore own driver provenance and versioning,
 secure connection settings, and operational availability.
 
-Core supplies no Django application or concrete permission schema. Do not add
+django-trusts supplies no Django application or concrete permission schema. Do not add
 `"trusts"` to `INSTALLED_APPS`. Install the application or package that owns
 the concrete Trusts implementation instead.
 
@@ -54,7 +54,7 @@ boundary. Application code uses the object returned by
 `configured_backend()`; it must not construct private registry or compiler
 objects.
 
-The Core 1.x public surface has one grant-producing family and one restricting
+The django-trusts 1.x public surface has one grant-producing family and one restricting
 overlay:
 
 | API | Meaning | Can grant independently? |
@@ -64,7 +64,7 @@ overlay:
 
 Ordered allow/deny registration lives in
 [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold).
-Core does not import, depend on, auto-discover, or fallback-import that
+django-trusts does not import, depend on, auto-discover, or fallback-import that
 package.
 
 Registration must issue no SQL. Unsupported paths, types, constants, and
@@ -121,12 +121,12 @@ not be empty.
 
 ### Ordered allow and deny
 
-OrderedFold is not a Core engine. Import the five construction types and
+OrderedFold is not a django-trusts engine. Import the five construction types and
 `register_ordered_fold(...)` from `trusts_ordered_fold`, list
 `TrustsOrderedFoldModelBackend` (or a subclass such as Windows
 `WinfsBackend`), and own that path with
 `OrderedFoldImplementationConfig`. Vendor diagnostics are
-`trusts_ordered_fold.E001`, not Core `trusts.E006`.
+`trusts_ordered_fold.E001`, not django-trusts `trusts.E006`.
 
 At the current 1.0 boundary, object-level ``user.has_perm`` uses Django's
 ordered authentication-backend OR. A relationship grant or an OrderedFold
@@ -135,14 +135,14 @@ An OrderedFold deny cannot veto an independent relationship grant or
 revoke a grant returned by another configured Django authentication
 backend.
 
-Core list, guard, and common-permission helpers are relationship-family
+django-trusts list, guard, and common-permission helpers are relationship-family
 local. ``Model.objects.authorized``, ``authorization_required``,
 ``filter_authorized_scopes``, and module-level ``granted`` /
 ``common_permissions`` include only handles whose implementation
 ``_authorization_family`` is ``"relationship"``. They do not compile a
 mixed-family one-SQL OR. Django's object-level backend OR is a different
-layer and must not be read as Core list/guard aggregation. Same-path
-family-local OR of relationship and OrderedFold on one Core plan is
+layer and must not be read as django-trusts list/guard aggregation. Same-path
+family-local OR of relationship and OrderedFold on one django-trusts plan is
 removed.
 
 ### Named filters are outer restrictions
@@ -159,9 +159,9 @@ backend.add_named_filter(
 
 The callable is a trusted registration-time builder. The backend invokes it
 once with symbolic principal, permission, and object references. Operations on
-those references construct a closed expression tree; Core validates and
+those references construct a closed expression tree; django-trusts validates and
 normalizes that result, stores only the immutable IR, and discards the
-callable. Core does not inspect or parse the callable's Python source. Do not query,
+callable. django-trusts does not inspect or parse the callable's Python source. Do not query,
 perform I/O, capture request state, or rely on mutable captured values inside
 the predicate.
 
@@ -217,7 +217,7 @@ Audit all of the following:
 - the point at which registration freezes; and
 - the output of `python manage.py check`.
 
-Core is schema-neutral and has no final `AppConfig`. Concrete implementations
+django-trusts is schema-neutral and has no final `AppConfig`. Concrete implementations
 own their application labels, migrations, tables, and registration calls.
 
 ### Django's outer authorization boundary
@@ -244,7 +244,7 @@ The supported projections consume the same normalized registration:
 | Authorized objects | `Model.objects.authorized(user, permission)` | Relationship-family SQL before pagination; not Django backend OR |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
-The Core view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
+The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
 through the protected model's primary-key field, and keeps it as a parameter.
 Request data cannot select query structure.
 
@@ -299,7 +299,7 @@ listed in the support matrix.
 
 The remaining-bits evaluator is owned by
 [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold)
-and is rendered for PostgreSQL there. Core no longer ships that
+and is rendered for PostgreSQL there. django-trusts no longer ships that
 renderer. PostgreSQL execution tests in the extension—not string
 inspection alone—are required for nested `OuterRef`, alias scoping,
 aggregation, enumeration, and composition changes.
@@ -325,7 +325,7 @@ possible. Runtime denial must not fall back to a broader Trusts path.
 
 ## Reference implementations
 
-Reference repositories validate bounded portions of the Core contract:
+Reference repositories validate bounded portions of the django-trusts contract:
 
 - [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
   preserves the concrete 0.x Trust model and migration identity.
