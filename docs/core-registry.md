@@ -4,13 +4,15 @@ Additive registration and projection surface for issues #57, #60, #65,
 #83, #92, #98, and the first historical reader in #67. Import from `trusts.core`.
 This slice does **not** re-export a process-global registry from `trusts`.
 
-`TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
-permission-bearing relation root; attribute access builds a root-relative
-path, including ordinary field names such as `root` and `path`. `register`
-accepts those refs, validates them through Django `_meta` and each hop's
-`get_path_info()` (zero SQL), and stores an immutable `RegisteredRelation`.
-Inspect the inferred root, full path, lookup, and target field on that
-record, not on `Ref`.
+`TrustsRegistry` is instantiable and isolated. Public
+`BackendHandle.register(trust=..., user=..., permission=..., content=...)`
+accepts path strings or one-argument symbolic path builders and normalizes
+them into this internal representation. `Ref(Model)` names the trust root;
+attribute access builds a root-relative path, including ordinary field names
+such as `root` and `path`. The registry validates refs through Django `_meta`
+and each hop's `get_path_info()` (zero SQL), then stores an immutable
+`RegisteredRelation`. Inspect the inferred root, full path, lookup, and target
+field on that record, not on `Ref`.
 
 ```python
 from trusts.core import Ref, TrustsRegistry
@@ -108,7 +110,7 @@ registry.register(
   accepted path.
 
 Those predicates compile as an AND overlay on the same
-permission-bearing root row. They do not create a grant. Callables,
+trust record. They do not create a grant. Callables,
 `Q` objects, lookup strings, and tuples are not a condition dialect
 and raise `TrustsConfigurationError` with zero SQL. Untyped values
 still report that `condition` is not supported.
@@ -214,7 +216,7 @@ consume that same object. A later reader may OR it with another predicate
 on the original candidate queryset; do not filter trustee rows first and
 then try to restore another branch.
 
-Multiple applicable relation roots combine by SQL `OR`. Duplicate grant
+Multiple applicable trust roots combine by SQL `OR`. Duplicate grant
 rows do not duplicate permission or content results. An unregistered
 content model fails closed: empty enumeration, `False`, and
 `queryset.none()`.
