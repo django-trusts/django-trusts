@@ -24,7 +24,7 @@ explicit many-to-many relation model, but it may represent another relational
 shape. More than one complete trust may reach the same protected model; each is
 an alternative grant and the branches combine with OR.
 
-Core supplies the compiler and authorization APIs. It does not impose a
+django-trusts supplies the compiler and authorization APIs. It does not impose a
 permission schema, grant editor, or application workflow.
 
 ## Usage
@@ -39,7 +39,7 @@ ordered allow/deny policies.
 ## Other documents
 
 - [Security audit guide](SECURITY_AUDIT.md)
-- [Core 1.x migration router](migrates.md)
+- [Migration guide](migrates.md)
 - [Supported Python, Django, and database combinations](docs/support-matrix.md)
 - [Development and contribution guide](DEV.md)
 - [BSD 2-Clause License](LICENSE)
