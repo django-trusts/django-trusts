@@ -29,7 +29,7 @@ permission schema, grant editor, or application workflow.
 
 ## Usage
 
-Start with **[Installation in the complete usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
+Start with **[Installation in the usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
 The RST guide covers models, backend configuration, trust registration
 (both one-argument path lambdas and Django `__` strings,
 shown together),
@@ -48,7 +48,7 @@ named filters, object and queryset authorization, and inherited relationships.
 - [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero) — continuation of the concrete django-trusts 0.x model
 - [django-trusts-zero-example](https://github.com/django-trusts/django-trusts-zero-example) — runnable application using Zero
 - [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions) — organization, team, and repository relationship reference
-- [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold) — PostgreSQL ordered allow/deny backend
-- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) — Windows ACL consumer of OrderedFold
+- [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold) — provisional PostgreSQL ordered allow/deny extension
+- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) — Windows ACL example built on the OrderedFold extension
 
 Copyright BeeDesk, Inc., 2015–2026. Released under the BSD 2-Clause License.
