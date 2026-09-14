@@ -162,16 +162,14 @@ jobs:
     - name: Install this C2 Core, then pinned OrderedFold P2
       run: |
         python -m pip install --upgrade pip
-        python -m pip install "Django>=6.1,<6.2" "psycopg[binary]" coverage
+        python -m pip install "Django>=6.1,<6.2" "psycopg[binary]"
         python -m pip install -e . --config-settings editable_mode=compat
         python -m pip install -e .deps/django-trusts-ordered-fold --config-settings editable_mode=compat
     - name: Rewrite P2 dual-write leftovers for C2 deletion
       run: python scripts/adapt-orderedfold-p2-for-c2.py .deps/django-trusts-ordered-fold
     - name: OrderedFold P2 package suite
       working-directory: .deps/django-trusts-ordered-fold
-      run: |
-        coverage run -m tests.runtests
-        coverage report
+      run: python -m tests.runtests
     - name: OrderedFold P2 PostgreSQL regressions
       working-directory: .deps/django-trusts-ordered-fold
       env:
