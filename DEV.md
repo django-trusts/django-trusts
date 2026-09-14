@@ -155,9 +155,8 @@ against the supported Zero companion, and a `package` job that builds
 an sdist/wheel, checks that the long description comes from the user
 `README.md` (not this file), verifies BeeDesk 2015-2026 / BSD-2-Clause
 `LICENSE` metadata, and imports the wheel from a temporary directory so
-the source tree cannot satisfy the import. OrderedFold PostgreSQL proof
-lives in `django-trusts-ordered-fold`. Do not treat a removed Travis
-check as a stand-in green status.
+the source tree cannot satisfy the import. Do not treat a removed Travis check
+as a stand-in green status.
 
 ## Legacy baseline
 
