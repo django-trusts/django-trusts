@@ -41,7 +41,13 @@ The 1.x runtime requires Python 3.12–3.14 and Django 6.1.
    in `AppConfig.ready()` before finalization. The application-facing
    object is the configured backend from `configured_backend()`.
    `BackendHandle.register(...)` and
-   `register_permission_condition(...)` are removed.
+   `register_permission_condition(...)` are removed. The OrderedFold
+   construction surface—`backend.register_ordered_fold`, `OrderedFold`,
+   `PermissionMaskDomain`, `MaskEntry`, `PolarityMap`, and `FlatToken`—is
+   provisional and excluded from the normal 1.x compatibility guarantee.
+   Its signatures or location may change, or it may be removed, in a future
+   feature release. Other OrderedFold compiler and renderer names are
+   implementation details.
 4. Import only the six public `trusts.conditions` names:
    `PermissionConditionBooleanError`, `PermissionConditionError`,
    `PermissionConditionNotQueryable`, `PermissionConditionUnsupported`,
