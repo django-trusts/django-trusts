@@ -16,10 +16,10 @@ allowing applications to use familiar checks such as
 with ordinary Django models.
 
 At its simplest, a permission is a persisted relationship among a user, an
-operation, and protected content. An application declares the model paths
-connecting them. A permission may come from a direct grant row, team
-membership, an organizational relationship, an inherited access-control
-entry, or another relational structure owned by the application.
+operation, and protected content. The application model from which those paths
+begin is the **trust model**. A matching trust record is a candidate grant. A
+trust model may be an explicit many-to-many relation model, a direct grant
+model, or another relational structure owned by the application.
 
 ``django-trusts`` compiles these declarations into database queries, keeping
 permission decisions based on persisted truth. The same declarations support
@@ -32,18 +32,17 @@ with the application.
 How permissions are represented
 --------------------------------
 
-A registered permission relationship connects three paths:
+A registered trust connects three paths:
 
 * **user** -- who is requesting access;
 * **permission** -- the operation being requested; and
 * **content** -- the object being protected.
 
-The paths begin from the same permission-bearing relation. In the simplest
-case, that relation is a table with foreign keys to a user, a Django
-permission, and a protected object.
+All three paths begin from the same trust model. In the simplest case, that
+model has foreign keys to a user, a Django permission, and a protected object.
 
-Multiple registered relationships may authorize the same kind of content.
-Each complete relationship is an independent way to receive permission.
+Multiple registered trusts may authorize the same kind of content. Each
+complete trust is an independent way to receive permission.
 
 Installation
 ------------
@@ -58,7 +57,7 @@ The current development version requires Python 3.12--3.14 and Django 6.1.
 Define the models
 -----------------
 
-The application owns its protected content and permission relationships.
+The application owns its protected content and trust models.
 
 .. code-block:: python
 
@@ -92,8 +91,8 @@ The application owns its protected content and permission relationships.
            on_delete=models.CASCADE,
        )
 
-``DocumentPermission`` is the permission-bearing relation. Each row connects
-one user and one permission to one document.
+``DocumentPermission`` is the trust model. Each trust record connects one
+user and one permission to one document.
 
 Granting and revoking permission are ordinary changes to persisted application
 data:
@@ -134,8 +133,8 @@ The application provides a Django authentication backend using
    class DocumentBackend(TrustModelBackendMixin, ModelBackend):
        pass
 
-Register the permission relationship
-------------------------------------
+Register the trust
+------------------
 
 Register the model paths when the application starts:
 
@@ -158,11 +157,11 @@ Register the model paths when the application starts:
            from .models import Document, DocumentPermission
 
            backend = self.configured_backend()
-           backend.register_relationship(
-               DocumentPermission,
-               user="user",
-               permission="permission",
-               content="document",
+           backend.register(
+               trust=DocumentPermission,
+               user=lambda t: t.user,
+               permission=lambda t: t.permission,
+               content=lambda t: t.document,
            )
            backend.add_named_filter(
                Document,
@@ -170,12 +169,33 @@ Register the model paths when the application starts:
                predicate=lambda u, p, o: o.confidential != True,
            )
 
-``DocumentPermission`` is the permission-bearing root. The three Django
-``__`` relationship paths identify the user, permission, and protected
-content associated with each row.
+``DocumentPermission`` is the trust model. The three path builders identify
+the user, permission, and protected content associated with each trust record.
 
-The declaration is validated when it is registered. Invalid or unsupported
-paths raise a configuration error instead of becoming an authorization rule.
+``user``, ``permission``, and ``content`` each accept either a Django ``__``
+path string or a one-argument path builder. The string form of the same
+registration is:
+
+.. code-block:: python
+
+   backend.register(
+       trust=DocumentPermission,
+       user="user",
+       permission="permission",
+       content="document",
+   )
+
+A path builder receives a symbolic value typed as the model passed to
+``trust=``. Attribute access records a model path, so type-aware editors can
+infer the lambda parameter and offer model-field completion. Trusts calls the
+builder once during registration, validates the complete path with Django
+model metadata, and stores only its normalized ``__`` path. It never stores or
+calls the builder during authorization.
+
+Python itself does not prove that a lambda attribute exists. An exception,
+missing attribute, empty path, return value other than the supplied symbolic
+path, or unsupported relationship shape raises a configuration error with
+zero SQL and no partial registration.
 
 Configure Django
 ----------------
@@ -300,16 +320,23 @@ callbacks. If that setting is still ``True``, ``manage.py check`` reports
 More expressive permission policies
 -----------------------------------
 
-The ``DocumentPermission`` example uses the shortest useful path: one row
+The ``DocumentPermission`` example uses the shortest useful trust: one record
 directly connects a user, a permission, and a document. The same registration
-API also supports paths through multiple relationships.
+API also supports paths through multiple relationships:
 
-For example, a user may receive permission through membership in a team, while
-the team receives access to content through another model. The registered user
-path can traverse those relationships without copying the resulting
-permissions into a separate user-object table.
+.. code-block:: python
 
-The ``condition=`` argument on ``register_relationship`` can further constrain
+   backend.register(
+       trust=TeamDocumentPermission,
+       user=lambda t: t.team.members,
+       permission=lambda t: t.permission,
+       content=lambda t: t.document,
+   )
+
+The callable and string forms may be mixed in one registration. They normalize
+to the same stored path and therefore have identical authorization semantics.
+
+The ``condition=`` argument on ``register`` can further constrain
 that relationship branch. It may require the user and content to belong to the
 same organization, or require a requested operation to appear in a team's
 allowed operations. A relationship condition is always applied to its branch;
@@ -325,7 +352,7 @@ Inherited relationships
 
 Permissions may also be inherited through hierarchical relationships. The
 Along walk is registered as ``along=("parent", 8)`` on
-``backend.register_relationship``.
+``backend.register``.
 It uses a bounded hierarchy with a recursive common table expression,
 allowing a permission attached to one node to apply to related ancestors
 or descendants without traversing the hierarchy in Python.
