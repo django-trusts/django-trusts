@@ -74,6 +74,7 @@ The application owns its protected content and trust models.
        title = models.CharField(max_length=200)
        confidential = models.BooleanField(default=False)
 
+       # Adds Document.objects.authorized(user, permission).
        objects = AuthorizedManager()
 
 
@@ -93,6 +94,12 @@ The application owns its protected content and trust models.
 
 ``DocumentPermission`` is the trust model. Each trust record connects one
 user and one permission to one document.
+
+``AuthorizedManager`` is needed only when the protected model should expose
+``Document.objects.authorized(user, permission)`` for queryset filtering.
+Plain ``user.has_perm(permission, document)`` object checks do not require it.
+``ContentManager`` belongs to django-trusts-zero's concrete ``Content`` model
+and is not the manager for an application-owned django-trusts model.
 
 Granting and revoking permission are ordinary changes to persisted application
 data:
