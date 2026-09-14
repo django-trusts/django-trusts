@@ -310,20 +310,10 @@ API also supports paths through multiple relationships:
 
    backend.register(
        trust=TeamDocumentPermission,
-       user=lambda t: t.team.members,
-       permission=lambda t: t.permission,
-       content=lambda t: t.document,
+       user=lambda t: t.team.members,  # or "team__members"
+       permission=lambda t: t.permission,  # or "permission"
+       content=lambda t: t.document,  # or "document"
    )
-
-   backend.register(
-       trust=TeamDocumentPermission,
-       user="team__members",
-       permission="permission",
-       content="document",
-   )
-
-The callable and string forms may be mixed in one registration. They normalize
-to the same stored path and therefore have identical authorization semantics.
 
 The ``condition=`` argument on ``register`` can further constrain
 that relationship branch. It may require the user and content to belong to the
