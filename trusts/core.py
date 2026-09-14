@@ -2886,22 +2886,16 @@ from trusts.ordered_fold import (  # noqa: E402
     FlatToken,
     MaskEntry,
     OrderedFold,
-    OrderedFoldAllowed,
     PermissionMaskDomain,
     PolarityMap,
-    RegisteredStrategy,
-    ordered_fold_connection_supported,
 )
 
 for _exported in (
     FlatToken,
     MaskEntry,
     OrderedFold,
-    OrderedFoldAllowed,
     PermissionMaskDomain,
     PolarityMap,
-    RegisteredStrategy,
-    ordered_fold_connection_supported,
 ):
     _exported.__module__ = 'trusts.core'
 del _exported
