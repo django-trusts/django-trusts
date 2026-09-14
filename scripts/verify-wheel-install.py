@@ -247,6 +247,29 @@ def main() -> int:
         else:
             raise SystemExit('trusts.conditions still imports %s' % _hidden)
     print('public construction imports fail')
+    import trusts.decorators as decorators_mod
+    from trusts.decorators import authorization_required
+    if authorization_required is None:
+        raise SystemExit('library wheel lost authorization_required')
+    for _legacy in (
+        'P', 'R', 'K', 'G', 'O', 'permission_required', 'request_passes_test',
+    ):
+        if hasattr(decorators_mod, _legacy):
+            raise SystemExit(
+                'library wheel still exposes trusts.decorators.%s' % _legacy
+            )
+        try:
+            exec('from trusts.decorators import %s' % _legacy)
+        except ImportError:
+            pass
+        else:
+            raise SystemExit(
+                'library wheel still imports trusts.decorators.%s' % _legacy
+            )
+    decorators_src = Path(decorators_mod.__file__).read_text()
+    if 'trusts.zero' in decorators_src:
+        raise SystemExit('library wheel decorators import Zero')
+    print('legacy decorator family absent')
     import importlib.util
 
     def _find_spec(name):

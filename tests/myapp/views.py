@@ -1,6 +1,7 @@
-from trusts.decorators import permission_required
+from tests.myapp.models import Document
+from trusts.decorators import authorization_required
 
 
-@permission_required('myapp.change_document', fieldlookups_kwargs={'pk': 'pk'})
+@authorization_required(Document, 'myapp.change_document')
 def edit_document(request, pk):
     return 'ok'
