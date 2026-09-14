@@ -329,12 +329,12 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Permissions may also be inherited through hierarchical relationships. The
-Along walk is registered as ``along=("parent", 8)`` on
-``backend.register``.
-It uses a bounded hierarchy with a recursive common table expression,
-allowing a permission attached to one node to apply to related ancestors
-or descendants without traversing the hierarchy in Python.
+Inherited relationships are provisional. A bounded hierarchical walk may be
+declared with ``along=("parent", 8)`` on ``backend.register``.
+django-trusts evaluates the walk with a recursive common table expression
+rather than traversing the hierarchy in Python. Its currently verified database
+support is recorded in the `support matrix
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -348,8 +348,8 @@ django-trusts. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
 the PostgreSQL remaining-bits renderer. django-trusts does not import, depend
 on, auto-discover, or fallback-import it.
 
-A complete working Windows declaration and its security assumptions
-live in `django-trusts-windows-acl
+An example Windows declaration lives in
+`django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
 Object-level ``user.has_perm`` uses Django's ordered
