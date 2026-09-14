@@ -283,37 +283,21 @@ consume the same normalized registrations.
 Named filters
 -------------
 
-A named filter further constrains an existing permission. Register its
-builder with ``backend.add_named_filter``. The backend invokes the builder
-exactly once with symbolic ``(u, p, o)`` references. Operations on those
-references construct a closed expression tree; django-trusts validates and normalizes
-that result, stores only the immutable IR, and discards the callable. django-trusts
-does not inspect the callable's Python source, and the callable never runs
-during ``has_perm``, permission enumeration, or queryset filtering.
+A named filter further constrains an existing permission; it cannot grant
+permission by itself. Register it against the protected model during
+``AppConfig.ready()`` with ``backend.add_named_filter(...)``.
 
-The builder runs in the same application-startup context as the surrounding
-``AppConfig.ready()`` code and receives no additional authority from
-django-trusts. django-trusts does not inspect or sandbox SQL, I/O, or request
-state used by that application code. Its own expression normalization adds no
-SQL during registration.
-
-The ``DocumentsConfig.ready()`` example above registers
-``non_confidential`` against ``Document.confidential``. A ``lambda`` and
-an equivalent named function are accepted identically. Native object checks
-select one named filter with the existing ``:name`` suffix; the
-``authorization_required`` decorator accepts an explicit tuple of names.
+Its predicate is a three-argument lambda or function: ``u`` is the requesting
+user, ``p`` is the requested permission, and ``o`` is the protected object. It
+must return a supported boolean expression that django-trusts can translate
+into the Django QuerySet used for authorization. The example above registers
+``non_confidential`` against ``Document.confidential``. Object checks select
+one named filter with the ``:name`` suffix; ``authorization_required`` accepts
+a tuple of names. Unsupported expressions fail registration.
 
 .. code-block:: python
 
    user.has_perm("documents.change_document:non_confidential", document)
-
-Unsupported operations, exceptions, non-predicates, unresolved fields, and
-forbidden constant captures fail at registration. Later mutation of a
-Python object captured by the builder cannot change authorization.
-
-``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` does not restore runtime
-callbacks. If that setting is still ``True``, ``manage.py check`` reports
-``trusts.E007``.
 
 More expressive permission policies
 -----------------------------------
