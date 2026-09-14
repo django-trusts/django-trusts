@@ -1,11 +1,14 @@
 """#207: docs-first ``register(*, trust=...)`` Core contract.
 
-Keyword-only public registration, string/callable/mixed normalization,
-once-at-registration builders, fail-closed invalid families, honest
-contextual typing, and ``py.typed`` packaging. OrderedFold stays gone.
+Keyword-only public registration, non-executing path builders,
+string/callable/mixed normalization, fail-closed invalid families,
+honest contextual typing, and ``py.typed`` / Pyright packaging.
+OrderedFold stays gone.
 """
 
+import dis
 import inspect
+import sys
 import types
 from collections.abc import Callable
 from pathlib import Path
@@ -31,6 +34,7 @@ from trusts.core import (
     RegisteredRelation,
     TrustsConfigurationError,
     TrustsRegistry,
+    _extract_builder_path,
     _public_path_segments,
     _resolve_path,
     _validate_condition,
@@ -39,6 +43,23 @@ from trusts.core import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def module_user(t):
+    return t.user
+
+
+def module_permission(t):
+    return t.permission
+
+
+def module_content(t):
+    return t.document
+
+
+MODULE_USER = lambda t: t.user
+MODULE_PERMISSION = lambda t: t.permission
+MODULE_CONTENT = lambda t: t.document
 
 
 def _handle(registry=None, path='tests.core.issue207'):
@@ -51,14 +72,22 @@ def _handle(registry=None, path='tests.core.issue207'):
     )
 
 
-class _Count:
-    def __init__(self, attr):
-        self.attr = attr
-        self.calls = 0
+def _builder_opnames(fn):
+    return [
+        inst.opname
+        for inst in dis.get_instructions(fn, adaptive=False)
+        if inst.opname != 'CACHE'
+    ]
 
-    def __call__(self, trust):
-        self.calls += 1
-        return getattr(trust, self.attr)
+
+def _profile_calls(fn):
+    seen = []
+
+    def profile(frame, event, arg):
+        if event == 'call' and frame.f_code is fn.__code__:
+            seen.append(1)
+
+    return profile, seen
 
 
 class RegisterPublicSurfaceTest(SimpleTestCase):
@@ -106,7 +135,6 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
             self.assertEqual(callable_args[0], [type_args[0]])
             self.assertIs(callable_args[1], object)
         self.assertIs(hints['return'], RegisteredRelation)
-        # Python does not prove lambda attributes exist on trust=.
         self.assertNotIn('document', BackendHandle.register.__annotations__)
 
     def test_py_typed_marker_is_present(self):
@@ -120,6 +148,9 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertIn('register_relationship', wheel)
         metadata = (ROOT / 'scripts' / 'verify-package-metadata.py').read_text()
         self.assertIn('trusts/py.typed', metadata)
+        pyright = (ROOT / 'scripts' / 'verify-wheel-pyright.py').read_text()
+        self.assertIn('not_a_field', pyright)
+        self.assertIn('AnnotatedGrant', pyright)
 
     def test_keyword_only_signature(self):
         signature = inspect.signature(BackendHandle.register)
@@ -137,7 +168,21 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
 
 
 class RegisterNormalizeTest(SimpleTestCase):
-    def test_strings_callables_and_mixed_normalize_equivalently(self):
+    def test_canonical_instruction_allowlist(self):
+        for fn in (
+            MODULE_USER,
+            module_user,
+            lambda t: t.team.members,
+        ):
+            names = _builder_opnames(fn)
+            with self.subTest(fn=fn, names=names):
+                self.assertEqual(names[0], 'RESUME')
+                self.assertIn(names[1], ('LOAD_FAST', 'LOAD_FAST_BORROW'))
+                self.assertTrue(names[2:-1])
+                self.assertTrue(all(name == 'LOAD_ATTR' for name in names[2:-1]))
+                self.assertEqual(names[-1], 'RETURN_VALUE')
+
+    def test_module_level_and_function_local_normalize_equivalently(self):
         via_ref = TrustsRegistry()
         expected = via_ref.register(
             content=Ref(DocumentGrant).document,
@@ -150,7 +195,35 @@ class RegisterNormalizeTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        callables = _handle(path='tests.core.issue207-callables').register(
+        module_fns = _handle(path='tests.core.issue207-module-fns').register(
+            trust=DocumentGrant,
+            user=module_user,
+            permission=module_permission,
+            content=module_content,
+        )
+        module_lambdas = _handle(path='tests.core.issue207-module-lambdas').register(
+            trust=DocumentGrant,
+            user=MODULE_USER,
+            permission=MODULE_PERMISSION,
+            content=MODULE_CONTENT,
+        )
+
+        def local_user(t):
+            return t.user
+
+        def local_permission(t):
+            return t.permission
+
+        def local_content(t):
+            return t.document
+
+        local_fns = _handle(path='tests.core.issue207-local-fns').register(
+            trust=DocumentGrant,
+            user=local_user,
+            permission=local_permission,
+            content=local_content,
+        )
+        local_lambdas = _handle(path='tests.core.issue207-local-lambdas').register(
             trust=DocumentGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
@@ -162,8 +235,24 @@ class RegisterNormalizeTest(SimpleTestCase):
             permission='permission',
             content=lambda t: t.document,
         )
+        self.assertTrue(local_user.__code__.co_flags & 0x10)
+        self.assertNotEqual(local_user.__code__.co_flags, 3)
+
+        class ReadyLike:
+            def ready(self):
+                return lambda t: t.user
+
+        ready_lambda = ReadyLike().ready()
+        self.assertTrue(ready_lambda.__code__.co_flags & 0x10)
+        self.assertEqual(
+            _extract_builder_path(ready_lambda, 'user'),
+            'user',
+        )
         self.assertEqual(strings, expected)
-        self.assertEqual(callables, expected)
+        self.assertEqual(module_fns, expected)
+        self.assertEqual(module_lambdas, expected)
+        self.assertEqual(local_fns, expected)
+        self.assertEqual(local_lambdas, expected)
         self.assertEqual(mixed, expected)
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -173,9 +262,13 @@ class RegisterNormalizeTest(SimpleTestCase):
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
         expected = _register_team(TrustsRegistry(), TeamRepoGrant)
+
+        def local_user(t):
+            return t.team.members
+
         record = _handle().register(
             trust=TeamRepoGrant,
-            user=lambda t: t.team.members,
+            user=local_user,
             permission=lambda t: t.operation,
             content=lambda t: t.repository,
             condition=All(
@@ -244,24 +337,26 @@ class RegisterNormalizeTest(SimpleTestCase):
         self.assertEqual(handle.registry.records, ())
 
 
-class RegisterOnceAtRegistrationTest(TestCase):
-    def test_builders_run_once_and_never_during_projections(self):
+class RegisterNeverInvokeTest(TestCase):
+    def test_valid_builders_are_never_invoked(self):
         registry = TrustsRegistry()
         handle = _handle(registry)
-        user = _Count('user')
-        permission = _Count('permission')
-        content = _Count('document')
-        handle.register(
-            trust=DocumentGrant,
-            user=user,
-            permission=permission,
-            content=content,
-        )
-        self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
+        profile, seen = _profile_calls(MODULE_USER)
+        sys.setprofile(profile)
+        try:
+            handle.register(
+                trust=DocumentGrant,
+                user=MODULE_USER,
+                permission=MODULE_PERMISSION,
+                content=MODULE_CONTENT,
+            )
+        finally:
+            sys.setprofile(None)
+        self.assertEqual(seen, [])
 
         User = get_user_model()
         alice = User.objects.create_user('alice-207', password='x')
-        document = Document.objects.create(title='once')
+        document = Document.objects.create(title='never')
         ct = ContentType.objects.get_for_model(Document)
         perm, _created = Permission.objects.get_or_create(
             content_type=ct,
@@ -271,59 +366,126 @@ class RegisterOnceAtRegistrationTest(TestCase):
         DocumentGrant.objects.create(
             document=document, user=alice, permission=perm,
         )
-        self.assertTrue(registry.has_permission(alice, document, perm))
-        list(registry.permissions_for(alice, document))
-        list(registry.filter_authorized(Document.objects.all(), alice, perm))
-        self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
+        sys.setprofile(profile)
+        try:
+            self.assertTrue(registry.has_permission(alice, document, perm))
+            list(registry.permissions_for(alice, document))
+            list(registry.filter_authorized(Document.objects.all(), alice, perm))
+        finally:
+            sys.setprofile(None)
+        self.assertEqual(seen, [])
         self.assertEqual(registry.records[0].user_path, ('user',))
         self.assertIsInstance(registry.records[0].user_field, str)
 
+    def test_extract_does_not_call_get_instructions_when_frozen(self):
+        registry = TrustsRegistry()
+        handle = _handle(registry)
+        registry.freeze()
+        with patch(
+            'trusts.core.dis.get_instructions',
+            side_effect=AssertionError('inspected while frozen'),
+        ):
+            with patch(
+                'trusts.core._public_path_segments',
+                wraps=_public_path_segments,
+            ) as segments:
+                with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+                    with patch(
+                        'trusts.core._validate_condition',
+                        wraps=_validate_condition,
+                    ) as validate:
+                        with self.assertRaises(TrustsConfigurationError) as ctx:
+                            handle.register(
+                                trust=DocumentGrant,
+                                user=MODULE_USER,
+                                permission=MODULE_PERMISSION,
+                                content=MODULE_CONTENT,
+                            )
+        self.assertIn('frozen', str(ctx.exception).lower())
+        segments.assert_not_called()
+        resolve.assert_not_called()
+        validate.assert_not_called()
+        self.assertEqual(registry.records, ())
+
 
 class RegisterFailClosedTest(TestCase):
-    def test_invalid_builder_families_are_zero_sql_and_do_not_mutate(self):
-        captured = []
+    def test_invalid_builder_families_are_zero_sql_and_never_run(self):
+        side_calls = []
 
-        def capture(trust):
-            captured.append(trust)
-            return trust.user
+        def side_effect():
+            side_calls.append(1)
+            return 1
 
-        first = _handle(path='tests.core.issue207-capture')
-        first.register(
-            trust=DocumentGrant,
-            user=capture,
-            permission=lambda t: t.permission,
-            content=lambda t: t.document,
-        )
+        def closed_user(t):
+            attr = 'user'
+            return getattr(t, attr)
 
-        def boom(_trust):
-            raise RuntimeError('builder exploded')
+        def make_closure():
+            attr = 'user'
+            return lambda t: getattr(t, attr)
 
         cases = (
-            ('exception', boom),
-            ('missing', lambda t: t.not_a_field),
             ('empty', lambda t: t),
             ('constant-str', lambda t: 'user'),
             ('constant-int', lambda t: 1),
             ('constant-none', lambda t: None),
-            ('foreign-root', lambda t: captured[0].user),
-            ('magic-eq', lambda t: t.user == t.permission),
-            ('magic-add', lambda t: t.user + t.permission),
-            ('magic-item', lambda t: t.user['x']),
-            ('magic-call', lambda t: t.user()),
+            ('call', lambda t: t.user()),
+            ('operator', lambda t: t.user + t.permission),
+            ('indexing', lambda t: t['user']),
+            ('tuple-select', lambda t: (side_effect(), t.user)[1]),
+            ('control-flow', lambda t: t.user if t else t.permission),
+            ('global', lambda t: side_effect),
+            ('extra-locals', closed_user),
+            ('closure', make_closure()),
+            ('defaults', lambda t, extra=1: t.user),
+            ('kwonly', lambda t, *, extra=1: t.user),
+            ('varargs', lambda t, *args: t.user),
+            ('varkw', lambda t, **kwargs: t.user),
+            ('missing', lambda t: t.not_a_field),
             ('unsupported-shape', lambda t: t.document.title),
         )
         handle = _handle()
         for name, builder in cases:
             with self.subTest(name=name):
+                profile, seen = _profile_calls(builder)
+                sys.setprofile(profile)
+                try:
+                    with self.assertNumQueries(0):
+                        with self.assertRaises(TrustsConfigurationError):
+                            handle.register(
+                                trust=DocumentGrant,
+                                user=builder,
+                                permission=lambda t: t.permission,
+                                content=lambda t: t.document,
+                            )
+                finally:
+                    sys.setprofile(None)
+                self.assertEqual(seen, [])
+                self.assertEqual(handle.registry.records, ())
+        self.assertEqual(side_calls, [])
+
+    def test_non_function_callables_are_rejected_without_calling(self):
+        handle = _handle()
+        calls = []
+
+        class CallablePath:
+            def __call__(self, trust):
+                calls.append(1)
+                return trust.user
+
+        import operator
+        for value in (CallablePath(), operator.attrgetter('user'), 1, None):
+            with self.subTest(value=value):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register(
                             trust=DocumentGrant,
-                            user=builder,
+                            user=value,
                             permission=lambda t: t.permission,
                             content=lambda t: t.document,
                         )
-                self.assertEqual(handle.registry.records, ())
+        self.assertEqual(calls, [])
+        self.assertEqual(handle.registry.records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
@@ -337,35 +499,40 @@ class RegisterFailClosedTest(TestCase):
                 )
         self.assertEqual(handle.registry.records, ())
 
-    def test_freeze_wins_before_builder_invocation(self):
-        registry = TrustsRegistry()
-        handle = _handle(registry)
-        registry.freeze()
-        calls = []
+    def test_extract_rejects_empty_and_method_load_without_calling(self):
+        with self.assertRaises(TrustsConfigurationError):
+            _extract_builder_path(lambda t: t, 'user')
+        with self.assertRaises(TrustsConfigurationError):
+            _extract_builder_path(lambda t: t.user(), 'user')
+        self.assertEqual(
+            _extract_builder_path(lambda t: t.team.members, 'user'),
+            'team__members',
+        )
 
-        def user(trust):
-            calls.append(trust)
-            return trust.user
+    def test_function_type_gate_rejects_without_calling(self):
+        async def coro(t):
+            return t.user
 
-        with patch(
-            'trusts.core._public_path_segments',
-            wraps=_public_path_segments,
-        ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
-                with patch(
-                    'trusts.core._validate_condition',
-                    wraps=_validate_condition,
-                ) as validate:
-                    with self.assertRaises(TrustsConfigurationError) as ctx:
-                        handle.register(
-                            trust=DocumentGrant,
-                            user=user,
-                            permission=lambda t: t.permission,
-                            content=lambda t: t.document,
-                        )
-        self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(calls, [])
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        self.assertEqual(registry.records, ())
+        def gen(t):
+            yield t.user
+
+        async def async_gen(t):
+            yield t.user
+
+        for name, builder in (
+            ('coroutine', coro),
+            ('generator', gen),
+            ('async-gen', async_gen),
+        ):
+            with self.subTest(name=name):
+                profile, seen = _profile_calls(builder)
+                sys.setprofile(profile)
+                try:
+                    with self.assertRaises(TrustsConfigurationError):
+                        _extract_builder_path(builder, 'user')
+                finally:
+                    sys.setprofile(None)
+                self.assertEqual(seen, [])
+
+        with patch('inspect.getsource', side_effect=AssertionError('source')):
+            self.assertEqual(_extract_builder_path(lambda t: t.user, 'user'), 'user')
