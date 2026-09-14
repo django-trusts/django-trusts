@@ -194,10 +194,11 @@ operations on the proxy are unsupported. Trusts validates the returned complete
 path with Django model metadata, stores only its normalized ``__`` path, and
 discards the callable before authorization.
 
-The builder is trusted application startup code. Trusts does not inspect or
-sandbox unrelated Python in its body; the application could perform the same
-SQL, I/O, or side effect immediately before calling ``register()``. Trusts
-itself issues no SQL while validating the returned path. Python itself does not
+The builder runs in the same application-startup context as the surrounding
+``AppConfig.ready()`` code and receives no additional authority from Trusts.
+Trusts does not inspect or sandbox unrelated Python in its body; the application
+could perform the same SQL, I/O, or side effect immediately before calling
+``register()``. Trusts itself issues no SQL while validating the returned path. Python itself does not
 prove that a lambda attribute exists, so Trusts' setup-time validation remains
 authoritative. A builder exception, missing or foreign returned path, empty
 path, or unsupported relationship shape fails registration without partial
@@ -301,9 +302,11 @@ that result, stores only the immutable IR, and discards the callable. django-tru
 does not inspect the callable's Python source, and the callable never runs
 during ``has_perm``, permission enumeration, or queryset filtering.
 
-Builders are trusted startup code, like ``AppConfig.ready()``. Do not query,
-perform I/O, or read request state inside them. django-trusts itself adds no SQL
-during registration.
+The builder runs in the same application-startup context as the surrounding
+``AppConfig.ready()`` code and receives no additional authority from
+django-trusts. django-trusts does not inspect or sandbox SQL, I/O, or request
+state used by that application code. Its own expression normalization adds no
+SQL during registration.
 
 The ``DocumentsConfig.ready()`` example above registers
 ``non_confidential`` against ``Document.confidential``. A ``lambda`` and
