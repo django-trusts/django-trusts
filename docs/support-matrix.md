@@ -27,13 +27,13 @@ declares one matrix and tests it in CI.
 
 CI (`.github/workflows/ci.yml`) runs kernel-only authorization tests, a
 fresh migrate (no Trusts schema), and `manage.py check` on **each**
-declared Python version with Django 6.1, plus the Core/Zero pair job
+declared Python version with Django 6.1, plus the django-trusts/Zero pair job
 and a `package` job. OrderedFold PostgreSQL proof lives in
 [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold).
 The `package` job
 (sdist/wheel build, `twine check`, metadata/LICENSE proof, and an
 out-of-checkout wheel import) runs on **Python 3.12** as a representative
-install of the declared range. Core still retains
+install of the declared range. django-trusts still retains
 `scripts/verify-legacy-upgrade.py` as historical already-applied-`0001`
 evidence; that runner is currently broken, off CI, and not a live
 operator path. Live Trusts management commands require
