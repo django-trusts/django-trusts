@@ -68,7 +68,11 @@ The application owns its protected content and trust models.
    from django.contrib.auth.models import Permission
    from django.db import models
 
-   from trusts.query import AuthorizedManager
+   from trusts.query import AuthorizedManagerMixin
+
+
+   class DocumentManager(AuthorizedManagerMixin, models.Manager):
+       pass
 
 
    class Document(models.Model):
@@ -76,7 +80,7 @@ The application owns its protected content and trust models.
        confidential = models.BooleanField(default=False)
 
        # Adds Document.objects.authorized(user, permission).
-       objects = AuthorizedManager()
+       objects = DocumentManager()
 
 
    class DocumentPermission(models.Model):
@@ -96,9 +100,12 @@ The application owns its protected content and trust models.
 ``DocumentPermission`` is the trust model. Each trust record connects one
 user and one permission to one document.
 
-``AuthorizedManager`` is needed only when the protected model should expose
-``Document.objects.authorized(user, permission)`` for queryset filtering.
-Plain ``user.has_perm(permission, document)`` object checks do not require it.
+``AuthorizedManagerMixin`` adds
+``Document.objects.authorized(user, permission)`` to the application's own
+manager without replacing its other behavior. The concrete
+``AuthorizedManager`` remains available as a convenience for models that do
+not need a custom manager. Plain ``user.has_perm(permission, document)``
+object checks do not require either one.
 
 Granting and revoking permission are ordinary changes to persisted application
 data:

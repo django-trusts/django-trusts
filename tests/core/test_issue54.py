@@ -28,7 +28,12 @@ from trusts.core import (
     TrustsRegistry,
     filter_authorized_scopes,
 )
-from trusts.query import AuthorizedManager, AuthorizedQuerySet, is_active_principal
+from trusts.query import (
+    AuthorizedManager,
+    AuthorizedManagerMixin,
+    AuthorizedQuerySet,
+    is_active_principal,
+)
 
 
 def _pks(qs):
@@ -225,6 +230,28 @@ class ConditionLookupBindTest(TestCase):
 
 
 class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
+    def test_manager_mixin_preserves_application_manager_behavior(self):
+        class DocumentManager(AuthorizedManagerMixin, models.Manager):
+            def application_method(self):
+                return 'application-owned'
+
+        manager = DocumentManager()
+        queryset = Mock()
+        with (
+            patch.object(manager, 'get_queryset', return_value=queryset),
+            patch.object(
+                AuthorizedQuerySet, 'authorized', return_value='authorized',
+            ) as authorized,
+        ):
+            self.assertEqual(
+                manager.authorized('user', 'permission', extra_q='extra'),
+                'authorized',
+            )
+        authorized.assert_called_once_with(
+            queryset, 'user', 'permission', extra_q='extra',
+        )
+        self.assertEqual(manager.application_method(), 'application-owned')
+
     def test_no_permitted_or_get_permission_on_generic_surface(self):
         self.assertFalse(hasattr(AuthorizedQuerySet, 'permitted'))
         self.assertFalse(hasattr(AuthorizedQuerySet, 'get_permission'))
