@@ -1,13 +1,13 @@
-"""#181 / #137 C: share-nothing QuerySet authorization by exact path.
+"""#181 / #137 C: share-nothing authorization by exact path.
 
 Public ``user.has_perm`` / mixin methods only. Each exact
 ``AUTHENTICATION_BACKENDS`` path evaluates ``self._own_handle()``.
-Host does not preempt Document's ``non_confidential`` overlay.
-A named filter cannot manufacture a path or grant. Split-path
-grants do not OR per row before the all-candidates projection.
-#132 already proves a registered true filter cannot turn
-unsupported content into a plan. Private overlay/lookup/compiler
-helpers are not the assertion.
+Host does not preempt Document's ``non_confidential`` overlay on a
+QuerySet or a model instance. A named filter cannot manufacture a
+path or grant. Split-path grants do not OR per row before the
+all-candidates projection. #132 already proves a registered true
+filter cannot turn unsupported content into a plan. Private
+overlay/lookup/compiler helpers are not the assertion.
 """
 
 from django.contrib.auth import get_user_model
@@ -137,7 +137,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.assertFalse(self.alice.has_perm(WRONG, many))
         self.assertFalse(self.bob.has_perm(PERM, many))
 
-    def test_unknown_local_filter_is_queryset_non_match_at_zero_sql(self):
+    def test_unknown_local_filter_is_non_match_at_zero_sql(self):
         many = self._granted_qs(self.open_one, self.open_two)
 
         with self.assertNumQueries(0):
@@ -146,13 +146,18 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             )
             self.assertFalse(self.host.has_perm(self.alice, MISSING, many))
             self.assertFalse(self.alice.has_perm(MISSING, many))
+            self.assertFalse(
+                self.document_backend.has_perm(self.alice, MISSING, self.open_one),
+            )
+            self.assertFalse(self.host.has_perm(self.alice, MISSING, self.open_one))
+            self.assertFalse(self.alice.has_perm(MISSING, self.open_one))
 
         with self.assertNumQueries(1):
             self.assertTrue(self.document_backend.has_perm(self.alice, PERM, many))
         self.assertTrue(self.alice.has_perm(PERM, many))
-        with self.assertRaises(AttributeError) as missing:
-            self.document_backend.has_perm(self.alice, MISSING, self.open_one)
-        self.assertIn('missing', str(missing.exception))
+        self.assertTrue(
+            self.document_backend.has_perm(self.alice, PERM, self.open_one),
+        )
 
     def test_split_path_grants_do_not_or_before_all_candidates(self):
         DocumentGrant.objects.filter(
@@ -244,19 +249,42 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             with self.assertNumQueries(2):
                 self.assertEqual(self.alice.get_all_permissions(qs), {PERM})
 
-    def test_instance_named_filter_stays_backend_local(self):
-        self.assertTrue(
-            self.document_backend.has_perm(self.alice, FILTERED, self.open_one),
-        )
-        self.assertFalse(
-            self.document_backend.has_perm(self.alice, FILTERED, self.secret),
-        )
-        self.assertTrue(
-            self.document_backend.has_perm(self.alice, PERM, self.secret),
-        )
-        with self.assertRaises(AttributeError):
-            self.host.has_perm(self.alice, FILTERED, self.open_one)
-        self.assertFalse(self.host.has_perm(self.alice, PERM, self.open_one))
-        self.assertTrue(
-            self.document_backend.has_perm(self.alice, PERM, self.open_one),
-        )
+    def test_instance_named_filter_does_not_preempt_siblings(self):
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                self.document_backend.has_perm(self.alice, FILTERED, self.open_one),
+            )
+        with self.assertNumQueries(1):
+            self.assertFalse(
+                self.document_backend.has_perm(self.alice, FILTERED, self.secret),
+            )
+        with self.assertNumQueries(1):
+            self.assertTrue(
+                self.document_backend.has_perm(self.alice, PERM, self.secret),
+            )
+        with self.assertNumQueries(0):
+            self.assertFalse(self.host.has_perm(self.alice, FILTERED, self.open_one))
+            self.assertFalse(self.host.has_perm(self.alice, PERM, self.open_one))
+            self.assertFalse(self.host.has_perm(self.alice, MISSING, self.open_one))
+            self.assertFalse(
+                self.document_backend.has_perm(self.alice, MISSING, self.open_one),
+            )
+
+        with self.assertNumQueries(1):
+            self.assertTrue(self.alice.has_perm(FILTERED, self.open_one))
+        with self.assertNumQueries(1):
+            self.assertFalse(self.alice.has_perm(FILTERED, self.secret))
+        with self.assertNumQueries(1):
+            self.assertTrue(self.alice.has_perm(PERM, self.secret))
+        with self.assertNumQueries(0):
+            self.assertFalse(self.alice.has_perm(MISSING, self.open_one))
+
+        with override_settings(AUTHENTICATION_BACKENDS=(
+            DOCUMENT_BACKEND, HOST_BACKEND,
+        )):
+            with self.assertNumQueries(1):
+                self.assertTrue(self.alice.has_perm(FILTERED, self.open_one))
+            with self.assertNumQueries(1):
+                self.assertFalse(self.alice.has_perm(FILTERED, self.secret))
+            with self.assertNumQueries(0):
+                self.assertFalse(self.alice.has_perm(MISSING, self.open_one))

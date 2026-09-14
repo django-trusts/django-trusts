@@ -102,12 +102,14 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
                 self.alice, self.change, extra_q=Q(pk=self.report.pk),
             ).exists()
         )
-        with self.assertRaises(AttributeError):
-            self.alice.has_perm('%s:non_confidential' % PERM, self.report)
-        with self.assertRaises(AttributeError):
+        self.assertFalse(
+            self.alice.has_perm('%s:non_confidential' % PERM, self.report),
+        )
+        self.assertFalse(
             self.document_backend.has_perm(
                 self.alice, '%s:non_confidential' % PERM, self.report,
-            )
+            ),
+        )
 
     def test_unregistered_content_is_rejected_before_sql(self):
         self.assertTrue(self.alice.has_perm(PERM, self.document))

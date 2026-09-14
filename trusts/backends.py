@@ -72,14 +72,6 @@ class TrustModelBackendMixin(object):
         config = self._trusts_config()
         return config.configured_backend(config.path_for_backend(self))
 
-    def _is_collection_coordinator(self):
-        """Legacy first-path identity. QuerySet auth is not gated on it."""
-        config = self._trusts_config()
-        paths = config._configured_trusts_paths()
-        if not paths:
-            return False
-        return config.path_for_backend(self) == paths[0]
-
     def _own_plan_applies(self, obj, user_obj):
         """True when this path has a relation plan for ``obj``."""
         handle = self._own_handle()
@@ -149,9 +141,9 @@ class TrustModelBackendMixin(object):
         """Bound ``ConditionLookup`` on this backend path's registry.
 
         Unbound (after explicit ``set_condition_lookup(None)``) is
-        ``None``. Instance unknown ``:condition`` codes still raise
-        ``AttributeError``. QuerySet unknown names are a local
-        fail-closed non-match.
+        ``None``. A name absent from this path is a local fail-closed
+        non-match. Malformed or unbound policy this path owns still
+        raises.
         """
         return self._own_handle().registry.condition_lookup
 
@@ -159,9 +151,9 @@ class TrustModelBackendMixin(object):
         """Return (record, extra_q) for a ``:condition`` suffix.
 
         Stored IR on a QuerySet compiles to SQL (AND overlay) from this
-        path only. On a QuerySet, a name absent from this path is
-        ``(None, None)`` so the caller can fail closed without raising.
-        Instance unknown codes still raise ``AttributeError``.
+        path only. A name absent from this path is ``(None, None)`` so
+        the caller can fail closed without raising. An explicit unbound
+        lookup on an instance is still a loud configuration failure.
 
         A bound ``ConditionLookup`` is the only condition path. Core
         does not import Zero modules or discover helpers from a model
@@ -181,12 +173,7 @@ class TrustModelBackendMixin(object):
             )
         record = lookup.record_for(model, cond)
         if record is None:
-            if isinstance(obj, QuerySet):
-                return None, None
-            raise AttributeError(
-                'Permission condition code "%s" is not associate with model "%s_%s"'
-                % (cond, applabel, modelname)
-            )
+            return None, None
         extra_q = None
         if isinstance(obj, QuerySet):
             extra_q = lookup.compile_q(obj.model, permext, user_obj)
@@ -219,16 +206,17 @@ class TrustModelBackendMixin(object):
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
 
-        if isinstance(obj, QuerySet) and not self._own_plan_applies(obj, user_obj):
+        if not self._own_plan_applies(obj, user_obj):
             return False
 
         record, extra_q = self._condition_overlay(permext, obj, user_obj)
         applabel, modelname, action, _cond = utils.parse_perm_code(permext)
         perm = '%s.%s_%s' % (applabel, action, modelname)
 
+        if permission_has_condition(permext) and record is None:
+            return False
+
         if isinstance(obj, QuerySet):
-            if permission_has_condition(permext) and record is None:
-                return False
             positive = self._collection_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
             )

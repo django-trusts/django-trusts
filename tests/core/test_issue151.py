@@ -250,11 +250,11 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         backend = DocumentBackend()
         document = Document(title='probe')
         user = get_user_model()(username='probe-151')
-        with self.assertRaises(AttributeError) as ctx:
-            backend._condition_overlay(
-                'myapp.change_document:missing', document, user,
-            )
-        self.assertIn('missing', str(ctx.exception))
+        record, extra_q = backend._condition_overlay(
+            'myapp.change_document:missing', document, user,
+        )
+        self.assertIsNone(record)
+        self.assertIsNone(extra_q)
 
     def test_explicit_unbind_fail_closes_named_condition_overlay(self):
         backend = DocumentBackend()
