@@ -37,10 +37,11 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('register_relationship', rst)
         self.assertIn('register_ordered_fold', rst)
         self.assertIn('backend.register_relationship(', rst)
-        self.assertIn('backend.register_ordered_fold(', rst)
-        self.assertIn('source_descriptor="document"', rst)
-        self.assertIn('content=Document', rst)
-        self.assertIn('content=WinNode', rst)
+        self.assertNotIn('backend.register_ordered_fold(', rst)
+        self.assertNotIn('source_descriptor="document"', rst)
+        self.assertNotIn('content=WinNode', rst)
+        self.assertIn('is provisional and excluded from', rst)
+        self.assertIn('advanced evaluator family', rst)
         self.assertNotIn('strategy=OrderedFold', rst)
         self.assertNotIn('from trusts.core import Ref', rst)
         self.assertNotIn('.registry.register(', rst)
@@ -60,6 +61,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'security boundary that implementation and',
             'register_relationship(...)',
             'register_ordered_fold(...)',
+            'complete supported OrderedFold construction surface',
+            'provisional and excluded from',
             'add_named_filter(...)',
             'Named filters are outer restrictions',
             'Runtime callbacks are unsupported',
