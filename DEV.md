@@ -22,7 +22,7 @@ Trust / Content / settlor / trustee models and the concrete backend
 live only in `django-trusts-zero`.
 
 Pair CI runs historical tests from the pinned Zero companion
-`tests/legacy/`, not from core package paths. Exact companion pins
+`tests/legacy/`, not from current django-trusts package paths. Exact companion pins
 are in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## What this package is not
