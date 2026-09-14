@@ -402,7 +402,8 @@ permissions using persisted access-control entries with ordering, allow and
 deny effects, permission masks, and inheritance.
 
 It demonstrates an ACL-style permission system built with
-``django-trusts-ordered-fold``, an extension of ``django-trusts``, while
+``django-trusts-ordered-fold``, a provisional extension of ``django-trusts``,
+while
 retaining the same Django-facing permission APIs. It is not intended to
 reproduce every feature or security guarantee of Windows ACLs.
 
