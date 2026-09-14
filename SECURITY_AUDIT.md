@@ -106,6 +106,19 @@ foreign or missing returned path, empty path, or unsupported relationship shape
 fails registration without partial registry mutation, but Trusts cannot undo
 side effects already performed by the builder.
 
+`condition=` is the same one-argument symbolic language, rooted at `trust=`.
+It is invoked once after the freeze check. 1.0 operations are path equality
+(`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
+Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
+or a `__contains__` side channel. The stored overlay is private `Equal` /
+`PermissionIn` / `All` and contains no callable. Public
+`register(condition=...)` rejects prebuilt `All` / `Equal` / `permission_in`
+values. `.contains` is a reserved condition-proxy method; a model field of
+that name cannot be walked there. `predicate=` is reserved and unsupported
+in 1.0. Invalid arity, foreign roots, empty or non-expression returns,
+unsupported operations, and builder exceptions fail closed with zero SQL
+from django-trusts and no partial registry mutation.
+
 A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and
 combine with OR in one generated query. A condition attached to a relationship

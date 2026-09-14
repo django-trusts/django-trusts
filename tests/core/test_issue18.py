@@ -368,8 +368,8 @@ class LongPathRegistrationTest(TestCase):
                 user='actor',
                 permission='token',
                 content='artifact',
-                condition=permission_in(
-                    'wing__floor__building__hall__badges',
+                condition=lambda t: (
+                    t.wing.floor.building.hall.badges.contains(t.token)
                 ),
             )
             handle_cluster = handle.register(
@@ -377,8 +377,10 @@ class LongPathRegistrationTest(TestCase):
                 user='actor',
                 permission='token',
                 content='artifact',
-                condition=permission_in(
-                    'wing__floor__building__hall__clusters__tokens',
+                condition=lambda t: (
+                    t.wing.floor.building.hall.clusters.tokens.contains(
+                        t.token,
+                    )
                 ),
             )
         self.assertEqual(handle_direct, ref_direct)

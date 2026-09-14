@@ -12,11 +12,14 @@ Optional ``Along`` replaces equality at one walk-site with bounded
 grant-anchored reachability. V1 compiles that walk only for Django's
 SQLite backend.
 
-Closed predicate nodes ``All``, ``Equal``, and ``permission_in`` are an
-AND overlay on one permission-bearing root. A requester path may end in
-exactly one terminal M2M membership hop after zero or more forward
-single-valued hops. Validation is registration-time ``_meta`` only
-(zero SQL).
+Closed predicate nodes ``All``, ``Equal``, and ``permission_in`` are the
+private stored overlay on one permission-bearing root. Public
+``register(*, trust=..., condition=...)`` accepts only a one-argument
+trust-rooted symbolic callable (path ``==``, collection-rooted
+``.contains(member)``, conjunction with ``&``) and lowers to those
+nodes. A requester path may end in exactly one terminal M2M membership
+hop after zero or more forward single-valued hops. Validation is
+registration-time ``_meta`` only (zero SQL).
 
 The configured backend exposes two public registration methods.
 ``register(*, trust=...)`` is the AnyPath ``EXISTS`` fast path.
@@ -36,6 +39,8 @@ Permission-condition *records* live on each ``TrustsRegistry`` via
 the private store adapter; ``set_condition_lookup`` remains for
 tests and explicit unbind.
 """
+
+import inspect
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1283,8 +1288,8 @@ class Equal(object):
     """Closed equality of two root-relative single-valued refs.
 
     Isolated registry tests may pass ``Ref`` operands. Public
-    ``register(*, trust=...)`` accepts Django ``__`` path strings and
-    binds them to the registration root before validation.
+    ``register(*, trust=..., condition=...)`` does not accept a prebuilt
+    ``Equal``; it lowers a trust-rooted ``==`` expression to this node.
     """
 
     __slots__ = ('left', 'right')
@@ -2577,6 +2582,372 @@ for _name in (
     setattr(_PathBuilder, _name, _unsupported_path_builder_op(_name))
 
 
+_CONDITION_ARITY_PROBE = object()
+
+_CONDITION_BOOLEAN_MESSAGE = (
+    "Python 'and'/'or'/'not' and chained comparisons are unsupported "
+    "on condition=; use '&' for conjunction."
+)
+
+_CONDITION_IN_MESSAGE = (
+    "Python 'in' is unsupported on condition=; use "
+    "collection.contains(member)."
+)
+
+
+def _unsupported_condition_op(name):
+    def _op(self, *args, **kwargs):
+        raise TrustsConfigurationError(
+            'condition builder does not support %s.' % name
+        )
+    _op.__name__ = name
+    return _op
+
+
+def _condition_boolean_error(self):
+    raise TrustsConfigurationError(_CONDITION_BOOLEAN_MESSAGE)
+
+
+class _ConditionProxy(object):
+    """Trust-rooted symbolic value for public ``condition=`` builders.
+
+    Attribute access records a path. ``contains`` is a reserved proxy
+    method, not a field hop: a model field actually named ``contains``
+    cannot be walked here. Path-role builders stay on ``_PathBuilder``
+    and do not grow ``contains``.
+    """
+
+    __slots__ = ('_trust', '_path', '_token')
+
+    def __init__(self, trust, path=(), token=None):
+        object.__setattr__(self, '_trust', trust)
+        object.__setattr__(self, '_path', tuple(path))
+        object.__setattr__(self, '_token', token)
+
+    def __getattr__(self, name):
+        return _ConditionProxy(self._trust, self._path + (name,), self._token)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('Condition builder is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('Condition builder is immutable.')
+
+    def contains(self, member):
+        if not isinstance(member, _ConditionProxy):
+            raise TrustsConfigurationError(
+                'condition .contains member must be a path rooted at the '
+                'supplied trust value, not %r.' % (member,)
+            )
+        if member._token is not self._token:
+            raise TrustsConfigurationError(
+                'condition .contains used a path from another symbolic root.'
+            )
+        if not self._path:
+            raise TrustsConfigurationError(
+                'condition .contains collection returned an empty path.'
+            )
+        if not member._path:
+            raise TrustsConfigurationError(
+                'condition .contains member returned an empty path.'
+            )
+        return _ConditionIn(self, member)
+
+    def __eq__(self, other):
+        if not isinstance(other, _ConditionProxy):
+            raise TrustsConfigurationError(
+                'condition equality requires two trust-rooted paths, '
+                'not %r.' % (other,)
+            )
+        if other._token is not self._token:
+            raise TrustsConfigurationError(
+                'condition equality used a path from another symbolic root.'
+            )
+        if not self._path or not other._path:
+            raise TrustsConfigurationError(
+                'condition equality returned an empty path.'
+            )
+        return _ConditionEq(self, other)
+
+    def __contains__(self, item):
+        raise TrustsConfigurationError(_CONDITION_IN_MESSAGE)
+
+    def __and__(self, other):
+        raise TrustsConfigurationError(
+            'condition conjunction requires equality or .contains '
+            'operands, not a bare path.'
+        )
+
+    def __rand__(self, other):
+        raise TrustsConfigurationError(
+            'condition conjunction requires equality or .contains '
+            'operands, not a bare path.'
+        )
+
+    def __repr__(self):
+        root = getattr(self._trust, '__name__', self._trust)
+        if not self._path:
+            return 'ConditionProxy(%s)' % root
+        return 'ConditionProxy(%s).%s' % (root, '.'.join(self._path))
+
+
+class _ConditionEq(object):
+    """Private executing-proxy equality node. Not a stored policy record."""
+
+    __slots__ = ('left', 'right')
+
+    def __init__(self, left, right):
+        object.__setattr__(self, 'left', left)
+        object.__setattr__(self, 'right', right)
+
+    def __and__(self, other):
+        return _condition_and(self, other)
+
+    def __rand__(self, other):
+        return _condition_and(other, self)
+
+
+class _ConditionIn(object):
+    """Private executing-proxy membership node. Not a stored policy record."""
+
+    __slots__ = ('collection', 'member')
+
+    def __init__(self, collection, member):
+        object.__setattr__(self, 'collection', collection)
+        object.__setattr__(self, 'member', member)
+
+    def __and__(self, other):
+        return _condition_and(self, other)
+
+    def __rand__(self, other):
+        return _condition_and(other, self)
+
+
+class _ConditionAnd(object):
+    """Private executing-proxy conjunction. Flattened to ``All`` on store."""
+
+    __slots__ = ('left', 'right')
+
+    def __init__(self, left, right):
+        object.__setattr__(self, 'left', left)
+        object.__setattr__(self, 'right', right)
+
+    def __and__(self, other):
+        return _condition_and(self, other)
+
+    def __rand__(self, other):
+        return _condition_and(other, self)
+
+
+_CONDITION_EXPR_TYPES = (_ConditionEq, _ConditionIn, _ConditionAnd)
+
+
+def _condition_and(left, right):
+    if not isinstance(left, _CONDITION_EXPR_TYPES):
+        raise TrustsConfigurationError(
+            'condition conjunction requires equality or .contains '
+            'operands, not %r.' % (left,)
+        )
+    if not isinstance(right, _CONDITION_EXPR_TYPES):
+        raise TrustsConfigurationError(
+            'condition conjunction requires equality or .contains '
+            'operands, not %r.' % (right,)
+        )
+    return _ConditionAnd(left, right)
+
+
+for _name in (
+    '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
+    '__hash__', '__len__',
+    '__getitem__', '__setitem__', '__delitem__',
+    '__call__', '__iter__', '__next__',
+    '__add__', '__radd__', '__sub__', '__rsub__',
+    '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
+    '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
+    '__or__', '__ror__',
+    '__xor__', '__rxor__', '__invert__',
+    '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
+    '__neg__', '__pos__', '__abs__',
+    '__int__', '__float__', '__index__',
+    '__enter__', '__exit__',
+    '__await__', '__aenter__', '__aexit__',
+):
+    setattr(_ConditionProxy, _name, _unsupported_condition_op(_name))
+
+_ConditionProxy.__bool__ = _condition_boolean_error
+
+for _cls in _CONDITION_EXPR_TYPES:
+    for _name in (
+        '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
+        '__hash__', '__len__', '__contains__',
+        '__getitem__', '__setitem__', '__delitem__',
+        '__call__', '__iter__', '__next__',
+        '__add__', '__radd__', '__sub__', '__rsub__',
+        '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
+        '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
+        '__or__', '__ror__',
+        '__xor__', '__rxor__', '__invert__',
+        '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
+        '__neg__', '__pos__', '__abs__',
+        '__int__', '__float__', '__index__',
+        '__enter__', '__exit__',
+        '__await__', '__aenter__', '__aexit__',
+    ):
+        setattr(_cls, _name, _unsupported_condition_op(_name))
+    _cls.__bool__ = _condition_boolean_error
+    _cls.__setattr__ = _ConditionProxy.__setattr__
+    _cls.__delattr__ = _ConditionProxy.__delattr__
+
+
+def _require_condition_arity(builder):
+    """Reject 0-arg, 2+-required, and keyword-only-only before invoke."""
+    try:
+        signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        return
+    try:
+        signature.bind(_CONDITION_ARITY_PROBE)
+    except TypeError as exc:
+        raise TrustsConfigurationError(
+            'condition builder must accept exactly one positional '
+            'argument (the trust value): %s' % exc
+        ) from exc
+
+
+def _public_condition_path(proxy, token, role):
+    if not isinstance(proxy, _ConditionProxy):
+        raise TrustsConfigurationError(
+            '%s must be a path rooted at the supplied trust value, '
+            'not %r.' % (role, proxy)
+        )
+    if proxy._token is not token:
+        raise TrustsConfigurationError(
+            '%s used a path from another symbolic root.' % (role,)
+        )
+    if not proxy._path:
+        raise TrustsConfigurationError(
+            '%s returned an empty path.' % (role,)
+        )
+    return '__'.join(proxy._path)
+
+
+def _flatten_public_all(*predicates):
+    parts = []
+    for predicate in predicates:
+        if isinstance(predicate, All):
+            parts.extend(predicate.predicates)
+        else:
+            parts.append(predicate)
+    return All(*parts)
+
+
+def _lower_public_condition(node, trust, token, permission_path):
+    if isinstance(node, _ConditionAnd):
+        return _flatten_public_all(
+            _lower_public_condition(node.left, trust, token, permission_path),
+            _lower_public_condition(node.right, trust, token, permission_path),
+        )
+    if isinstance(node, _ConditionEq):
+        return Equal(
+            _public_ref(
+                trust,
+                _public_condition_path(node.left, token, 'Equal left'),
+                'Equal left',
+            ),
+            _public_ref(
+                trust,
+                _public_condition_path(node.right, token, 'Equal right'),
+                'Equal right',
+            ),
+        )
+    if isinstance(node, _ConditionIn):
+        member_path = _public_condition_path(
+            node.member, token, 'condition .contains member',
+        )
+        permission_segments = _public_path_segments(
+            permission_path, 'permission',
+        )
+        if tuple(member_path.split('__')) != permission_segments:
+            raise TrustsConfigurationError(
+                'condition .contains member must be the registered '
+                'permission path %r, not %r.'
+                % (permission_path, member_path)
+            )
+        return PermissionIn(
+            _public_ref(
+                trust,
+                _public_condition_path(
+                    node.collection, token, 'condition .contains collection',
+                ),
+                'permission_in',
+            ),
+        )
+    raise TrustsConfigurationError(
+        'condition builder must return a boolean expression of path '
+        'equality, collection.contains(member), or their conjunction, '
+        'not %r.' % (node,)
+    )
+
+
+def _reject_public_condition_value(condition):
+    """Public ``condition=`` is a callable, not a prebuilt IR node."""
+    from trusts.conditions._ir import Expr
+
+    if (
+        condition is All
+        or condition is Equal
+        or condition is PermissionIn
+        or condition is permission_in
+    ):
+        raise TypeError(
+            'condition must be a one-argument symbolic callable, '
+            'not a prebuilt All / Equal / permission_in value or other '
+            'non-callable %r.' % (condition,)
+        )
+    if isinstance(condition, (All, Equal, PermissionIn, Expr, Ref, Q, str, bool)):
+        raise TypeError(
+            'condition must be a one-argument symbolic callable, '
+            'not a prebuilt All / Equal / permission_in value or other '
+            'non-callable %r.' % (condition,)
+        )
+    if not callable(condition):
+        raise TypeError(
+            'condition must be a one-argument symbolic callable, '
+            'not %r.' % (condition,)
+        )
+
+
+def _normalize_public_condition(trust, condition, permission_path, *, token):
+    """Invoke a public condition builder once and lower to private IR."""
+    if condition is None:
+        return None
+    _reject_public_condition_value(condition)
+    if inspect.iscoroutinefunction(condition) or inspect.isasyncgenfunction(
+        condition,
+    ):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression, not a '
+            'coroutine or async generator.'
+        )
+    _require_condition_arity(condition)
+    proxy = _ConditionProxy(trust, token=token)
+    try:
+        result = condition(proxy)
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
+        raise TrustsConfigurationError(
+            'condition builder failed: %s' % exc
+        ) from exc
+    if not isinstance(result, _CONDITION_EXPR_TYPES):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression of path '
+            'equality, collection.contains(member), or their conjunction, '
+            'not %r.' % (result,)
+        )
+    return _lower_public_condition(result, trust, token, permission_path)
+
+
 def _normalize_public_role(trust, value, role, *, token):
     """Normalize a public string or path builder to a Django ``__`` path."""
     if isinstance(value, Ref):
@@ -2659,7 +3030,12 @@ def _public_ref(root, value, role, *, allow_empty=False):
 
 
 def _bind_public_condition(condition, root):
-    """Rewrite string condition leaves to root-relative ``Ref`` nodes."""
+    """Rewrite string condition leaves to root-relative ``Ref`` nodes.
+
+    Not the public ``BackendHandle.register`` surface. Internal
+    registry tests may still construct private ``All`` / ``Equal`` /
+    ``permission_in`` records directly.
+    """
     if condition is None:
         return None
     if isinstance(condition, All):
@@ -2721,7 +3097,7 @@ class BackendHandle:
         user: str | Callable[[T], object],
         permission: str | Callable[[T], object],
         content: str | Callable[[T], object],
-        condition=None,
+        condition: Callable[[T], object] | None = None,
         along=None,
     ) -> RegisteredRelation:
         """Donate one AnyPath permission relationship on this backend.
@@ -2731,8 +3107,13 @@ class BackendHandle:
         is called once during registration with a value typed as
         ``trust``. Attribute access records a path; the callable is
         discarded and never stored or run during authorization.
-        ``condition`` leaves are path strings on ``Equal`` /
-        ``permission_in`` / ``All``. ``along`` is ``(path, bound)``.
+        ``condition`` is a one-argument trust-rooted symbolic callable
+        using path ``==``, collection-rooted ``.contains(member)``, and
+        ``&``. It is invoked once after the freeze check; the stored
+        overlay is private ``Equal`` / ``PermissionIn`` / ``All`` and
+        contains no callable. Prebuilt ``All`` / ``Equal`` /
+        ``permission_in`` values are ``TypeError``. ``predicate`` is
+        reserved and unsupported. ``along`` is ``(path, bound)``.
         Passing a ``Ref`` is ``TypeError``. A frozen backend raises
         ``TrustsConfigurationError`` before path parsing or builder
         invocation.
@@ -2763,7 +3144,9 @@ class BackendHandle:
             content=_public_ref(trust, content_path, 'content'),
             user=_public_ref(trust, user_path, 'user'),
             permission=_public_ref(trust, permission_path, 'permission'),
-            condition=_bind_public_condition(condition, trust),
+            condition=_normalize_public_condition(
+                trust, condition, permission_path, token=token,
+            ),
             along=_bind_public_along(trust, along),
         )
 

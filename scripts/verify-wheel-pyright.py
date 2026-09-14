@@ -28,6 +28,7 @@ class AnnotatedGrant(models.Model):
     user: object
     permission: object
     document: object
+    team: object
 
     class Meta:
         app_label = "pyright_proof"
@@ -47,6 +48,7 @@ class DocumentsConfig(TrustsImplementationConfig):
             user=lambda t: t.user,
             permission=lambda t: t.permission,
             content=lambda t: t.document,
+            condition=lambda t: t.team == t.document,
         )
 '''
 
@@ -60,6 +62,7 @@ class AnnotatedGrant(models.Model):
     user: object
     permission: object
     document: object
+    team: object
 
     class Meta:
         app_label = "pyright_proof"
@@ -76,9 +79,10 @@ class DocumentsConfig(TrustsImplementationConfig):
         backend = self.configured_backend()
         backend.register(
             trust=AnnotatedGrant,
-            user=lambda t: t.not_a_field,
+            user=lambda t: t.user,
             permission=lambda t: t.permission,
             content=lambda t: t.document,
+            condition=lambda t: t.not_a_field == t.document,
         )
 '''
 
