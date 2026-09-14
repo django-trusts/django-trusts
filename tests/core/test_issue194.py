@@ -206,8 +206,8 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             registry=self.fold_registry,
             compiler=PlanQueryCompiler(),
         )
-        self.fold_handle.register_relationship(
-            DocumentAltGrant,
+        self.fold_handle.register(
+            trust=DocumentAltGrant,
             user='user',
             permission='permission',
             content='document',
