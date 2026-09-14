@@ -234,7 +234,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
             readme,
         )
         self.assertIn('[Security audit guide](SECURITY_AUDIT.md)', readme)
-        self.assertIn('[Core 1.x migration router](migrates.md)', readme)
+        self.assertIn('[Migration guide](migrates.md)', readme)
         self.assertIn('DEV.md', readme)
         self.assertIn('django-trusts-zero', readme)
         self.assertIn('django-trusts-gh-permissions', readme)
