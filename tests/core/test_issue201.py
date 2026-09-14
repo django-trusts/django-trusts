@@ -133,6 +133,51 @@ print('partial-declaration-ok')
 """
 
 
+_MISSING_NAME_SOURCE = """\
+import os
+os.environ['DJANGO_SETTINGS_MODULE'] = 'tests.settings'
+import django
+django.setup()
+from django.db import connection
+from django.http import HttpRequest
+from django.test.utils import CaptureQueriesContext
+from tests.myapp.models import Document
+from trusts.core import TrustsConfigurationError
+from trusts.decorators import authorization_required
+
+class _Principal(object):
+    def __init__(self, *, superuser=False):
+        self.is_active = True
+        self.is_superuser = superuser
+        self.is_anonymous = False
+        self.is_authenticated = True
+
+@authorization_required(Document, 'myapp.change_document', ('missing_201',))
+def _missing(request, pk):
+    return 'no'
+
+def _request(user):
+    request = HttpRequest()
+    request.user = user
+    request.META['SERVER_NAME'] = 'testserver'
+    request.META['SERVER_PORT'] = '80'
+    return request
+
+for user in (_Principal(), _Principal(superuser=True)):
+    with CaptureQueriesContext(connection) as captured:
+        try:
+            _missing(_request(user), pk=1)
+        except TrustsConfigurationError as exc:
+            if 'missing_201' not in str(exc):
+                raise
+        else:
+            raise SystemExit('expected TrustsConfigurationError')
+    if captured.captured_queries:
+        raise SystemExit('missing-name probe issued SQL')
+print('missing-name-preflight-ok')
+"""
+
+
 class AuthorizationRequiredDeclarationTest(TestCase):
     def test_declaration_rejects_invalid_permission_and_names_at_zero_sql(self):
         with self.assertNumQueries(0):
@@ -166,6 +211,10 @@ class AuthorizationRequiredDeclarationTest(TestCase):
         stdout = _run_isolated(_PARTIAL_DECLARATION_SOURCE)
         self.assertIn('partial-declaration-ok', stdout)
 
+    def test_missing_selected_name_fails_before_candidate_or_superuser(self):
+        stdout = _run_isolated(_MISSING_NAME_SOURCE)
+        self.assertIn('missing-name-preflight-ok', stdout)
+
 
 class AuthorizationRequiredPopulateReadinessTest(SimpleTestCase):
     def test_populate_window_fails_closed_at_zero_sql(self):
@@ -196,19 +245,7 @@ class AuthorizationRequiredReadinessPreflightTest(
             document=self.secret, user=self.alice, permission=self.change,
         )
 
-    def test_missing_and_unbound_selected_name_fail_before_candidate_or_superuser(
-        self,
-    ):
-        @authorization_required(Document, PERM, ('missing_201',))
-        def _missing(request, pk):
-            return 'no'
-
-        for user in (self.alice, self.superuser):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    _missing(_request(user), pk=self.open_doc.pk)
-                self.assertIn('missing_201', str(ctx.exception))
-
+    def test_unbound_selected_name_fails_before_candidate_or_superuser(self):
         @authorization_required(Document, PERM, ('non_confidential',))
         def _filtered(request, pk):
             return 'ok'
