@@ -621,7 +621,7 @@ def check_ordered_fold_renderer(app_configs, **kwargs):
     from django.db import connections
 
     from trusts.apps import implementation_configs
-    from trusts.core import ordered_fold_connection_supported
+    from trusts.ordered_fold import ordered_fold_connection_supported
 
     owners = implementation_configs()
     if not owners:
