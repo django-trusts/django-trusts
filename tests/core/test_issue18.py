@@ -897,15 +897,23 @@ class MembershipGroupExistsTest(TransactionTestCase):
                 handle, self.other, self.member, self.read, kind='group',
             ), False)
 
-    def test_strategy_makes_group_exists_none(self):
+    def test_strategy_does_not_suppress_membership_group_slice(self):
         plan = RelationPlan(
             records=self.membership.records,
             permission_model=self.Token,
             strategy=object(),
         )
+        fold_only = RelationPlan(
+            records=(),
+            permission_model=self.Token,
+            strategy=object(),
+        )
         with self.assertNumQueries(0):
-            self.assertIsNone(self.compiler.group_exists(
+            self.assertIsNotNone(self.compiler.group_exists(
                 plan, self.folder, self.member, self.read,
+            ))
+            self.assertIsNone(self.compiler.group_exists(
+                fold_only, self.folder, self.member, self.read,
             ))
 
 
