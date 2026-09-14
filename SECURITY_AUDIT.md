@@ -146,20 +146,6 @@ AND
 NamedFilter(object, user, permission)
 ```
 
-When an OrderedFold backend is configured, the filter compiles against
-the outer protected-object query in that package. It is not injected
-into the recursive CTE and does not:
-
-- select or reject individual ACE rows;
-- alter traversal bounds, direction, or cycle handling;
-- change ordering, polarity, mask consumption, or trustee tokens; or
-- act as a recursive stopping rule.
-
-A rule that changes ACE eligibility or recursive evaluation belongs in
-the closed OrderedFold grammar owned by
-``django-trusts-ordered-fold``. It must not be hidden in an object
-filter.
-
 Unknown, unbound, or untranslatable named filters fail closed. A filter cannot
 create a grant. Permission enumeration returns bare permissions rather than every possible
 combination of permission and filter names.
@@ -268,15 +254,6 @@ bounded reachability. Audit:
 The current Along renderer is verified only for the database combinations
 listed in the support matrix.
 
-### OrderedFold PostgreSQL renderer
-
-The remaining-bits evaluator is owned by
-[django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold)
-and is rendered for PostgreSQL there. django-trusts no longer ships that
-renderer. PostgreSQL execution tests in the extension—not string
-inspection alone—are required for nested `OuterRef`, alias scoping,
-aggregation, enumeration, and composition changes.
-
 ## Fail-closed expectations
 
 The following must not silently become grants:
@@ -289,7 +266,6 @@ The following must not silently become grants:
 - unknown named filters;
 - unsupported predicate expressions;
 - frozen-registry mutation;
-- malformed OrderedFold rows or permission domains;
 - unsupported database renderers; and
 - invalid request primary-key coercion.
 
@@ -307,8 +283,6 @@ Reference repositories validate bounded portions of the django-trusts contract:
 - [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions)
   demonstrates direct and team-derived relationship grants, ceilings, and
   organization alignment.
-- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl)
-  demonstrates ordered allow/deny masks and bounded inheritance.
 
 A passing reference implementation proves only its declared schema and tested
 operations. It is not a universal security proof for applications that adapt
