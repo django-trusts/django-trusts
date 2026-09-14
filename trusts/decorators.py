@@ -113,7 +113,7 @@ def _plan_is_auth_permission(plan):
         return False
     if permission_model._meta.concrete_model is not Permission:
         return False
-    if not plan.records and getattr(plan, 'strategy', None) is None:
+    if not plan.records:
         return False
     return True
 

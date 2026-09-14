@@ -285,6 +285,7 @@ def main() -> int:
         'trusts.test_issue57',
         'trusts.test_issue100',
         'trusts.test_issue115',
+        'trusts.ordered_fold',
     ):
         if _find_spec(name) is not None:
             raise SystemExit('installed wheel still exposes %s' % name)

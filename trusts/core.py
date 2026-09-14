@@ -18,25 +18,13 @@ exactly one terminal M2M membership hop after zero or more forward
 single-valued hops. Validation is registration-time ``_meta`` only
 (zero SQL).
 
-The configured backend exposes three public registration methods.
+The configured backend exposes two public registration methods.
 ``register_relationship`` is the AnyPath ``EXISTS`` fast path.
-``register_ordered_fold`` is the parallel closed remaining-bits
-family. ``add_named_filter`` binds a named restricting predicate and
-is not an authorization source. One content terminal may carry
-AnyPath records and one OrderedFold strategy together. Each family
-evaluates independently; effective authorization is the family-local
-OR. An OrderedFold deny settles only the OrderedFold branch and does
-not veto a relationship grant. Public ``OrderedFold.content`` is the content
-model class; ``descriptor`` is content-relative and may be ``""``;
-``source_descriptor`` is a required source-relative Django ``__``
-path. The first OrderedFold renderer is PostgreSQL; other vendors
-fail closed before fold SQL. Import ``OrderedFold``,
-``PermissionMaskDomain``, ``MaskEntry``, ``PolarityMap``, and
-``FlatToken`` from ``trusts.core``. Those five declarations and
-``BackendHandle.register_ordered_fold`` are the complete supported OrderedFold
-surface. They are provisional and excluded from the normal 1.x compatibility
-guarantee; other OrderedFold compiler, validation, expression, and renderer
-names are implementation details.
+``add_named_filter`` binds a named restricting predicate and is not
+an authorization source. Core is relationship-only. OrderedFold
+construction, registration, and PostgreSQL remaining-bits rendering
+live in ``django-trusts-ordered-fold``. Core does not import, depend
+on, auto-discover, or fallback-import that package.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
@@ -92,12 +80,10 @@ class QueryCompiler(object):
 class PlanQueryCompiler(object):
     """Immutable mixin default: registered plan; group slice is membership hops.
 
-    ``complete_exists`` compiles every relationship record OR the
-    OrderedFold strategy on the same plan. ``group_exists`` compiles
-    only records whose user path ends in a many-to-many membership hop.
-    Direct FK / O2O / reverse user hops stay out of the group slice.
-    OrderedFold never becomes a group grant merely because it shares
-    the plan.
+    ``complete_exists`` compiles relationship records only.
+    ``group_exists`` compiles only records whose user path ends in a
+    many-to-many membership hop. Direct FK / O2O / reverse user hops
+    stay out of the group slice.
     """
 
     historical_fallback = False
@@ -107,7 +93,7 @@ class PlanQueryCompiler(object):
         return bool(getattr(plan, 'records', None))
 
     def complete_exists(self, plan, candidates, user, permission):
-        if not plan.records and getattr(plan, 'strategy', None) is None:
+        if not plan.records:
             return None
         return plan.content_exists(user, permission)
 
@@ -186,15 +172,13 @@ def any_plan_records(handles, content):
     known; it does not compile a grant and does not authorize through
     another path's compiler. Empty ``handles`` is False. Does not
     consult ``historical_fallback`` or historical model names.
-    Construction issues no SQL.
-
-    The provisional ``strategy`` consult stays only while the engine
-    still lives in Core (C2 deletes it). This gate is not a mixed-family
-    one-SQL authorization contract.
+    Construction issues no SQL. Relationship records only; a
+    non-relationship plan on another family is not a Core support
+    declaration.
     """
     for handle in handles:
         plan = handle.registry.plan_for(content)
-        if plan.records or getattr(plan, 'strategy', None) is not None:
+        if plan.records:
             return True
     return False
 
@@ -204,10 +188,7 @@ def _compiler_applies(compiler, plan):
     applies = getattr(compiler, 'applies', None)
     if callable(applies):
         return bool(applies(plan))
-    return bool(
-        getattr(plan, 'records', None)
-        or getattr(plan, 'strategy', None) is not None
-    )
+    return bool(getattr(plan, 'records', None))
 
 
 def _relationship_handles(handles):
@@ -2064,32 +2045,6 @@ def _same_terminal_bindings(existing, record):
     )
 
 
-def _require_compatible_family_terminals(
-    strategy, content_model, *, user_model, permission_model,
-):
-    """Reject mixed families whose user or permission terminals differ."""
-    if user_model is not strategy.user_model:
-        raise TrustsConfigurationError(
-            'Content terminal %s cannot mix AnyPath user terminal %s '
-            'with OrderedFold user terminal %s.'
-            % (
-                content_model._meta.label,
-                user_model._meta.label,
-                strategy.user_model._meta.label,
-            )
-        )
-    if permission_model is not strategy.permission_model:
-        raise TrustsConfigurationError(
-            'Content terminal %s cannot mix AnyPath permission terminal '
-            '%s with OrderedFold permission terminal %s.'
-            % (
-                content_model._meta.label,
-                permission_model._meta.label,
-                strategy.permission_model._meta.label,
-            )
-        )
-
-
 _TARGET_ATTRS = {
     'user_field': 'user_target',
     'content_field': 'content_target',
@@ -2140,7 +2095,6 @@ class RelationPlan:
 
     records: tuple
     permission_model: type | None = None
-    strategy: object | None = None
 
     def _bound_root_qs(self, record, **bindings):
         return _bind_record_qs(record, **bindings)
@@ -2186,21 +2140,11 @@ class RelationPlan:
         """
         user = _require_instance(user, 'user')
         permission = _bind_terminal(permission, 'permission')
-        parts = []
-        if self.records:
-            related = self._correlated_exists(
-                'content_field', user=user, permission=permission,
-            )
-            if related is not None:
-                parts.append(related)
-        if self.strategy is not None:
-            from trusts.ordered_fold import OrderedFoldAllowed
-            parts.append(OrderedFoldAllowed(self.strategy, user, permission))
-        if not parts:
+        if not self.records:
             return None
-        if len(parts) == 1:
-            return parts[0]
-        return reduce(or_, parts)
+        return self._correlated_exists(
+            'content_field', user=user, permission=permission,
+        )
 
     def common_permissions(self, user, content):
         """Trustee permissions held on every candidate through this plan.
@@ -2210,10 +2154,7 @@ class RelationPlan:
         compiler, not this plan-only projection.
         """
         user = _require_instance(user, 'user')
-        if (
-            (not self.records and self.strategy is None)
-            or self.permission_model is None
-        ):
+        if not self.records or self.permission_model is None:
             if self.permission_model is None:
                 return ()
             return self.permission_model._default_manager.none()
@@ -2231,17 +2172,6 @@ class RelationPlan:
         """Distinct permission rows for ``(user, content)``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
-        if self.strategy is not None and self.permission_model is not None:
-            exists = self.content_exists(user, OuterRef('pk'))
-            if exists is None:
-                return self.permission_model._default_manager.none()
-            return self.permission_model._default_manager.filter(
-                Exists(
-                    content._meta.concrete_model._default_manager.filter(
-                        pk=content.pk,
-                    ).filter(exists)
-                )
-            ).distinct()
         if not self.records or self.permission_model is None:
             return ()
         exists = self._correlated_exists(
@@ -2256,13 +2186,6 @@ class RelationPlan:
         permission = _require_instance(permission, 'permission')
         if permission._meta.concrete_model is not self.permission_model:
             return False
-        if self.strategy is not None:
-            exists = self.content_exists(user, permission)
-            if exists is None:
-                return False
-            return content._meta.concrete_model._default_manager.filter(
-                pk=content.pk,
-            ).filter(exists).exists()
         if not self.records or self.permission_model is None:
             return False
         exists = self._correlated_exists(
@@ -2290,11 +2213,10 @@ class TrustsRegistry(object):
     models, or when the same bindings use a different closed condition.
 
         Frozen state is instance-owned. ``freeze()`` is idempotent.
-        ``register``, ``register_strategy``, and
-        ``register_permission_condition`` on that exact frozen instance
-        raise ``TrustsConfigurationError`` before validation, builder
-        invoke, or mutation. Existing records, plans, compilers, and
-        authorization reads stay usable.
+        ``register`` and ``register_permission_condition`` on that exact
+        frozen instance raise ``TrustsConfigurationError`` before
+        validation, builder invoke, or mutation. Existing records,
+        plans, compilers, and authorization reads stay usable.
     A standalone ``TrustsRegistry()`` never inspects Django readiness
     and never auto-freezes.
     """
@@ -2309,8 +2231,6 @@ class TrustsRegistry(object):
 
         self._by_root = {}
         self._order = []
-        self._strategies = {}
-        self._strategy_order = []
         self._frozen = False
         self._condition_lookup = None
         self.conditions = ConditionRegistry()
@@ -2386,16 +2306,12 @@ class TrustsRegistry(object):
         )
 
     def freeze(self):
-        """Seal relation, strategy, and condition registration on this instance."""
+        """Seal relation and condition registration on this instance."""
         self._frozen = True
 
     @property
     def records(self):
         return tuple(self._order)
-
-    @property
-    def strategies(self):
-        return tuple(self._strategy_order)
 
     def records_for_root(self, root):
         """Insertion-ordered records registered for ``root``.
@@ -2462,11 +2378,6 @@ class TrustsRegistry(object):
         permission_path, permission_model, permission_field, permission_target = (
             _resolve_path(root, permission_ref._path, 'permission')
         )
-        if content_model in self._strategies:
-            _require_compatible_family_terminals(
-                self._strategies[content_model], content_model,
-                user_model=user_model, permission_model=permission_model,
-            )
         along_walk = None
         if along is not None:
             along_walk = _build_along_walk(
@@ -2524,39 +2435,6 @@ class TrustsRegistry(object):
         self._order.append(record)
         return record
 
-    def register_strategy(self, strategy):
-        """Register one closed OrderedFold plan. Zero SQL.
-
-        Frozen instances raise before validation or mutation. One content
-        terminal may carry AnyPath records plus one OrderedFold when the
-        user and permission terminals match. Duplicate OrderedFold on
-        the same terminal remains a conflict. Conflicting registration
-        leaves stored records and strategies unchanged.
-        """
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
-        from trusts.ordered_fold import validate_ordered_fold
-
-        compiled = validate_ordered_fold(strategy)
-        content_model = compiled.content_model
-        if content_model in self._strategies:
-            raise TrustsConfigurationError(
-                'Conflicting OrderedFold registration for content terminal '
-                '%s.' % content_model._meta.label
-            )
-        for record in self._order:
-            if record.content_model is content_model:
-                _require_compatible_family_terminals(
-                    compiled, content_model,
-                    user_model=record.user_model,
-                    permission_model=record.permission_model,
-                )
-        self._strategies[content_model] = compiled
-        self._strategy_order.append(compiled)
-        return compiled
-
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
         for record in self._order:
@@ -2589,16 +2467,6 @@ class TrustsRegistry(object):
                 _require_instance(permission, 'permission')
             )
 
-        strategy = self._strategies.get(content_model)
-        if strategy is not None:
-            if user_model is not None and user_model is not strategy.user_model:
-                strategy = None
-            if (
-                permission_model is not None
-                and permission_model is not strategy.permission_model
-            ):
-                strategy = None
-
         records = self._records_for(content_model, user_model, permission_model)
         plan_permission = permission_model
         if records:
@@ -2610,22 +2478,9 @@ class TrustsRegistry(object):
                     % ', '.join(sorted(model._meta.label for model in models))
                 )
             plan_permission = models.pop()
-        if strategy is not None:
-            if plan_permission is None:
-                plan_permission = strategy.permission_model
-            elif plan_permission is not strategy.permission_model:
-                raise TrustsConfigurationError(
-                    'Applicable registrations must share one permission '
-                    'model; got %s and %s.'
-                    % (
-                        plan_permission._meta.label,
-                        strategy.permission_model._meta.label,
-                    )
-                )
         return RelationPlan(
             records=records,
             permission_model=plan_permission,
-            strategy=strategy,
         )
 
     def permissions_for(self, user, content):
@@ -2700,143 +2555,6 @@ def _public_ref(root, value, role, *, allow_empty=False):
     ))
 
 
-def _public_model_class(value, role):
-    if isinstance(value, Ref):
-        raise TypeError(
-            '%s must be a Django model class, not a Ref.' % (role,)
-        )
-    if isinstance(value, str):
-        raise TypeError(
-            '%s must be a Django model class, not a path string.' % (role,)
-        )
-    if not _is_model_class(value):
-        raise TrustsConfigurationError(
-            '%s must be a Django model class, not %r.' % (role, value)
-        )
-    return value
-
-
-def _reject_public_ref(value, role):
-    if isinstance(value, Ref):
-        raise TypeError(
-            '%s must be a Django path string, not a Ref.' % (role,)
-        )
-    return value
-
-
-def _bind_public_flat_token(token):
-    """Bind public FlatToken model/path fields to independent Ref roots."""
-    from trusts.ordered_fold import FlatToken
-
-    if not isinstance(token, FlatToken):
-        return token
-    principal = _public_model_class(token.principal, 'principal')
-    principal_user = _public_ref(
-        principal, token.principal_user, 'principal_user', allow_empty=True,
-    )
-    principal_identity = _public_ref(
-        principal, token.principal_identity, 'principal_identity',
-        allow_empty=True,
-    )
-    member = token.member
-    member_identity = token.member_identity
-    member_group = token.member_group
-    if member is None and member_identity is None and member_group is None:
-        return FlatToken(
-            principal=Ref(principal),
-            principal_user=principal_user,
-            principal_identity=principal_identity,
-        )
-    if member is None:
-        _reject_public_ref(member_identity, 'member_identity')
-        _reject_public_ref(member_group, 'member_group')
-        return FlatToken(
-            principal=Ref(principal),
-            principal_user=principal_user,
-            principal_identity=principal_identity,
-            member=None,
-            member_identity=member_identity,
-            member_group=member_group,
-        )
-    member = _public_model_class(member, 'member')
-    if member_identity is not None:
-        member_identity = _public_ref(
-            member, member_identity, 'member_identity',
-        )
-    else:
-        _reject_public_ref(member_identity, 'member_identity')
-    if member_group is not None:
-        member_group = _public_ref(member, member_group, 'member_group')
-    else:
-        _reject_public_ref(member_group, 'member_group')
-    return FlatToken(
-        principal=Ref(principal),
-        principal_user=principal_user,
-        principal_identity=principal_identity,
-        member=Ref(member),
-        member_identity=member_identity,
-        member_group=member_group,
-    )
-
-
-def _bind_public_polarity(source_model, polarity):
-    from trusts.ordered_fold import PolarityMap
-
-    if not isinstance(polarity, PolarityMap):
-        return polarity
-    if isinstance(polarity.field, Ref):
-        raise TypeError(
-            'PolarityMap.field must be a Django path string, not a Ref.'
-        )
-    return PolarityMap(
-        _public_ref(source_model, polarity.field, 'polarity'),
-        allow_value=polarity.allow_value,
-        deny_value=polarity.deny_value,
-    )
-
-
-def _bind_public_ordered_fold(source_model, strategy):
-    """Normalize public OrderedFold models/paths to today's internal Refs."""
-    from trusts.ordered_fold import OrderedFold
-
-    if not isinstance(strategy, OrderedFold):
-        raise TrustsConfigurationError(
-            'register_ordered_fold requires OrderedFold, not %r.'
-            % (strategy,)
-        )
-    if isinstance(strategy.source, Ref) or isinstance(
-        strategy.source_descriptor, Ref,
-    ):
-        raise TypeError(
-            'register_ordered_fold does not accept Ref fields; pass '
-            'Django path strings.'
-        )
-    if strategy.source is not None:
-        raise TrustsConfigurationError(
-            'source is derived from the source model passed to '
-            'register_ordered_fold.'
-        )
-    content_model = _public_model_class(strategy.content, 'content')
-    descriptor_path = _public_path_segments(
-        strategy.descriptor, 'descriptor', allow_empty=True,
-    )
-    source_descriptor_path = _public_path_segments(
-        strategy.source_descriptor, 'source_descriptor',
-    )
-    return OrderedFold(
-        content=Ref(content_model),
-        descriptor=Ref(content_model, descriptor_path),
-        source=Ref(source_model),
-        source_descriptor=Ref(source_model, source_descriptor_path),
-        order=_public_ref(source_model, strategy.order, 'order'),
-        polarity=_bind_public_polarity(source_model, strategy.polarity),
-        mask=_public_ref(source_model, strategy.mask, 'mask'),
-        trustee=_public_ref(source_model, strategy.trustee, 'trustee'),
-        token=_bind_public_flat_token(strategy.token),
-        domain=strategy.domain,
-    )
-
-
 def _bind_public_condition(condition, root):
     """Rewrite string condition leaves to root-relative ``Ref`` nodes."""
     if condition is None:
@@ -2901,9 +2619,7 @@ class BackendHandle:
         ``condition`` leaves are path strings on ``Equal`` /
         ``permission_in`` / ``All``. ``along`` is ``(path, bound)``.
         Passing a ``Ref`` is ``TypeError``. A frozen backend raises
-        ``TrustsConfigurationError`` before path parsing. May coexist
-        with one OrderedFold on the same content terminal when user and
-        permission terminals match; authorization is the family-local OR.
+        ``TrustsConfigurationError`` before path parsing.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
@@ -2925,43 +2641,6 @@ class BackendHandle:
             permission=_public_ref(root, permission, 'permission'),
             condition=_bind_public_condition(condition, root),
             along=_bind_public_along(root, along),
-        )
-
-    def register_ordered_fold(self, source_model, fold):
-        """Donate one OrderedFold plan on this backend.
-
-        Provisional API: this method is excluded from the normal 1.x
-        compatibility guarantee. Its signature or location may change, or it
-        may be removed, in a future feature release.
-
-        The positional ``source_model`` is the source root. Public
-        ``fold.content`` is the content model class. ``descriptor`` is
-        a Django ``__`` path on that content model and may be ``""``.
-        ``source_descriptor``, ``order``, ``mask``, ``trustee``, and
-        ``PolarityMap.field`` are Django ``__`` paths on the source.
-        ``FlatToken.principal`` and optional ``member`` are independent
-        model classes. Passing a ``Ref`` is ``TypeError``. A frozen
-        backend raises ``TrustsConfigurationError`` before path parsing.
-        May coexist with AnyPath records on the same content terminal
-        when user and permission terminals match. An OrderedFold deny
-        does not veto an independent relationship grant.
-        """
-        if getattr(self.registry, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
-        if isinstance(source_model, Ref):
-            raise TypeError(
-                'register_ordered_fold source must be a Django model '
-                'class, not a Ref.'
-            )
-        if not _is_model_class(source_model):
-            raise TrustsConfigurationError(
-                'register_ordered_fold source must be a Django model '
-                'class, not %r.' % (source_model,)
-            )
-        return self.registry.register_strategy(
-            _bind_public_ordered_fold(source_model, fold),
         )
 
     def add_named_filter(self, model, code, predicate):
@@ -2991,22 +2670,3 @@ class BackendHandle:
         static content map; undeclared terminals fail closed.
         """
         return bool(getattr(self.compiler, 'historical_fallback', False))
-
-
-from trusts.ordered_fold import (  # noqa: E402
-    FlatToken,
-    MaskEntry,
-    OrderedFold,
-    PermissionMaskDomain,
-    PolarityMap,
-)
-
-for _exported in (
-    FlatToken,
-    MaskEntry,
-    OrderedFold,
-    PermissionMaskDomain,
-    PolarityMap,
-):
-    _exported.__module__ = 'trusts.core'
-del _exported

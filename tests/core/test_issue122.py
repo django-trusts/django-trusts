@@ -37,20 +37,20 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertNotIn('from trusts.decorators import P', rst)
         self.assertIn('add_named_filter', rst)
         self.assertIn('register_relationship', rst)
-        self.assertIn('register_ordered_fold', rst)
+        self.assertIn('register_ordered_fold()', rst)
         self.assertIn('backend.register_relationship(', rst)
         self.assertNotIn('backend.register_ordered_fold(', rst)
         self.assertNotIn('source_descriptor="document"', rst)
         self.assertNotIn('content=WinNode', rst)
-        self.assertIn('is provisional and excluded from', rst)
-        self.assertIn('advanced evaluator family', rst)
+        self.assertIn('django-trusts-ordered-fold', rst)
+        self.assertIn('TrustsOrderedFoldModelBackend', rst)
         self.assertIn('AUTHENTICATION_BACKENDS', rst)
         self.assertIn('relationship-family', rst)
         self.assertIn('_authorization_family', rst)
         self.assertIn('mixed-family one-SQL', rst)
-        self.assertIn('family-local OR', rst)
-        self.assertIn('does not veto an independent relationship grant', rst)
-        self.assertIn('not the 1.0 QuerySet or view-guard', rst)
+        self.assertNotIn('family-local OR', rst)
+        self.assertNotIn('Until the OrderedFold engine leaves Core', rst)
+        self.assertIn('does not veto an independent', rst)
         self.assertNotIn('strategy=OrderedFold', rst)
         self.assertNotIn('from trusts.core import Ref', rst)
         self.assertNotIn('.registry.register(', rst)
@@ -61,6 +61,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('OrderedFold', rst)
         self.assertIn('django-trusts-zero', rst)
         self.assertIn('django-trusts-gh-permissions', rst)
+        self.assertIn('django-trusts-ordered-fold', rst)
         self.assertIn('django-trusts-windows-acl', rst)
         self.assertIn('django-trusts-zero-example', rst)
 
@@ -69,9 +70,6 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         for needle in (
             'security boundary that implementation and',
             'register_relationship(...)',
-            'register_ordered_fold(...)',
-            'complete supported OrderedFold construction surface',
-            'provisional and excluded from',
             'add_named_filter(...)',
             'Named filters are outer restrictions',
             'Runtime callbacks are unsupported',
@@ -80,7 +78,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'relationship-family',
             '_authorization_family',
             'mixed-family one-SQL',
-            'family-local OR',
+            'django-trusts-ordered-fold',
+            'trusts_ordered_fold.E001',
             'cannot veto an',
             'independent relationship grant',
             'Django\'s object-level backend OR is a different',
@@ -133,6 +132,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('## Public Core 1.x actions', text)
         self.assertIn('## Relation registration (#131)', text)
         self.assertIn('## Family-local Core aggregates (#194 / #181)', text)
+        self.assertIn('## Remove OrderedFold from Core (#195 / C2)', text)
         self.assertIn('_create_registry(path)', text)
         self.assertIn('_create_handle(path, registry, compiler)', text)
         self.assertIn('QueryCompiler.applies(plan)', text)
