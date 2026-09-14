@@ -1,7 +1,14 @@
 """Closed OrderedFold strategy types, validation, and PostgreSQL renderer.
 
-Public names are re-exported from ``trusts.core``. Consumers import them
-from ``trusts.core`` only. This module is not a second registration API.
+The supported construction surface is ``OrderedFold``,
+``PermissionMaskDomain``, ``MaskEntry``, ``PolarityMap``, and ``FlatToken``.
+Consumers import those names from ``trusts.core`` only. Together with
+``BackendHandle.register_ordered_fold``, they are a provisional API excluded
+from the normal 1.x compatibility guarantee.
+
+Every other name in this module, including compiled records, expressions,
+validation functions, and renderer helpers, is an implementation detail.
+This module is not a second registration API.
 """
 
 from __future__ import annotations
@@ -51,7 +58,12 @@ def _is_model_class(value):
 
 @dataclass(frozen=True)
 class MaskEntry:
-    """One public permission identity mapped to one remaining-bits seed."""
+    """One public permission identity mapped to one remaining-bits seed.
+
+    Provisional API: this declaration is excluded from the normal 1.x
+    compatibility guarantee. Its signature or location may change, or it may
+    be removed, in a future feature release.
+    """
 
     action: str
     mask: int
@@ -59,7 +71,12 @@ class MaskEntry:
 
 @dataclass(frozen=True)
 class PermissionMaskDomain:
-    """Closed OrderedFold domain. One per OrderedFold plan. AnyPath has none."""
+    """Closed OrderedFold domain. One per OrderedFold plan. AnyPath has none.
+
+    Provisional API: this declaration is excluded from the normal 1.x
+    compatibility guarantee. Its signature or location may change, or it may
+    be removed, in a future feature release.
+    """
 
     permission_model: type
     entries: tuple
@@ -71,7 +88,12 @@ class PermissionMaskDomain:
 
 @dataclass(frozen=True)
 class PolarityMap:
-    """Closed allow/deny constants for one source polarity field."""
+    """Closed allow/deny constants for one source polarity field.
+
+    Provisional API: this declaration is excluded from the normal 1.x
+    compatibility guarantee. Its signature or location may change, or it may
+    be removed, in a future feature release.
+    """
 
     field: object
     allow_value: object
@@ -85,7 +107,12 @@ class PolarityMap:
 
 @dataclass(frozen=True)
 class FlatToken:
-    """Requester → identity set. Flat. Not Along. Not nested groups."""
+    """Requester → identity set. Flat. Not Along. Not nested groups.
+
+    Provisional API: this declaration is excluded from the normal 1.x
+    compatibility guarantee. Its signature or location may change, or it may
+    be removed, in a future feature release.
+    """
 
     principal: object
     principal_user: object
@@ -98,6 +125,10 @@ class FlatToken:
 @dataclass(frozen=True)
 class OrderedFold:
     """Closed typed remaining-bits strategy for one content terminal.
+
+    Provisional API: this declaration is excluded from the normal 1.x
+    compatibility guarantee. Its signature or location may change, or it may
+    be removed, in a future feature release.
 
     ``backend.register_ordered_fold(source_model, OrderedFold(...))``
     derives ``source`` from the positional source model. Public
