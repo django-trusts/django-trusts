@@ -36,9 +36,10 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertNotIn('from trusts.decorators import permission_required', rst)
         self.assertNotIn('from trusts.decorators import P', rst)
         self.assertIn('add_named_filter', rst)
-        self.assertIn('register_relationship', rst)
+        self.assertIn('backend.register(', rst)
+        self.assertIn('trust=DocumentPermission', rst)
+        self.assertNotIn('register_relationship', rst)
         self.assertIn('register_ordered_fold()', rst)
-        self.assertIn('backend.register_relationship(', rst)
         self.assertNotIn('backend.register_ordered_fold(', rst)
         self.assertNotIn('source_descriptor="document"', rst)
         self.assertNotIn('content=WinNode', rst)
@@ -69,7 +70,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
         for needle in (
             'security boundary that implementation and',
-            'register_relationship(...)',
+            'register(*, trust, user, permission, content, condition=None, along=None)',
             'add_named_filter(...)',
             'Named filters are outer restrictions',
             'Runtime callbacks are unsupported',

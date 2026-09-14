@@ -106,6 +106,8 @@ def _check_wheel(wheel: Path) -> None:
             raise SystemExit(
                 'wheel still ships trusts/management/**: %s' % management_hits
             )
+        if not any(name.endswith('trusts/py.typed') for name in names):
+            raise SystemExit('wheel missing trusts/py.typed: %s' % names[-20:])
     print('wheel metadata ok', wheel.name)
 
 
@@ -143,6 +145,8 @@ def _check_sdist(sdist: Path) -> None:
             raise SystemExit(
                 'sdist still ships trusts/management/**: %s' % management_hits
             )
+        if not any(name.endswith('trusts/py.typed') for name in names):
+            raise SystemExit('sdist missing trusts/py.typed')
     print('sdist metadata ok', sdist.name)
 
 
