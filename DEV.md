@@ -8,14 +8,14 @@ points at `README.md`, not this file.
 ## Current architecture
 
 Historical django-trusts 0.x was the concrete Trust / Content / group
-implementation. Current django-trusts is the schema-neutral Core
+implementation. Current django-trusts is the schema-neutral django-trusts
 library. [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
 is the continuation and bridge for that historical concrete behavior.
 Package-version identity for this tree is recorded in
 [docs/development-version.md](docs/development-version.md), not here.
 
-Core is a Python dependency only: do **not** list `'trusts'` in
-`INSTALLED_APPS`. Current Core ships no Django `AppConfig`, no
+django-trusts is a Python dependency only: do **not** list `'trusts'` in
+`INSTALLED_APPS`. Current django-trusts ships no Django `AppConfig`, no
 `kernel_config()`, and no `trusts.backends.TrustModelBackend`. The
 mixin stays at `trusts.backends.TrustModelBackendMixin`. Historical
 Trust / Content / settlor / trustee models and the concrete backend
@@ -30,7 +30,7 @@ are in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 Earlier top-level README copy described django-trusts itself as a
 multiple-organization Trust/settlor/trustee add-on with concrete
 `Content` / `Group` models. That product description is false for
-current Core. Readers who want that 0.x behavior should use
+current django-trusts. Readers who want that 0.x behavior should use
 [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
 
 ## Supported versions
@@ -99,10 +99,10 @@ points show progress but must not be subtracted mechanically from that range to
 claim a precise remaining size while stages remain unknown.
 
 The calibration anchor for a **3** is
-[Core #129 / PR #140](https://github.com/django-trusts/django-trusts/pull/140):
+[django-trusts #129 / PR #140](https://github.com/django-trusts/django-trusts/pull/140):
 a bounded one-repository cleanup with no intended API change that nevertheless
 required migration wording, package and companion-wheel proof, preservation of
-historical evidence, a focused review correction, and the full Core matrix.
+historical evidence, a focused review correction, and the full django-trusts matrix.
 [PR #124](https://github.com/django-trusts/django-trusts/pull/124), a
 one-file Read the Docs configuration using an already-proven build, is a useful
 **1** reference.
@@ -147,7 +147,7 @@ operator path. Live `create_trust_root`,
 commands require `trusts.zero.apps.ZeroConfig`. Zero's
 fresh-install / migration-identity / grandfather tests are complementary;
 they are not an already-applied-`0001` → `0002` → grandfather replay.
-Only that Zero replay should authorize deleting this Core evidence.
+Only that Zero replay should authorize deleting this django-trusts evidence.
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
 authorization tests, a fresh migrate, `manage.py check`, pair proofs
