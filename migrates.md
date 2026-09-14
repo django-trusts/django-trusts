@@ -457,6 +457,20 @@ Then:
 This migration guide covers django-trusts 1.x only. It does not document concrete
 Zero schema, UI, admin, or management-command steps.
 
+## Application-owned AuthorizedManagerMixin (#209)
+
+| | Old | New |
+| --- | --- | --- |
+| Authorized manager | Use the concrete `AuthorizedManager`, or duplicate `.authorized()` in an application manager | Optionally mix `AuthorizedManagerMixin` into the application-owned manager while retaining its behavior |
+
+No mandatory consumer change. `AuthorizedManager` remains supported.
+
+Migration-bot checklist:
+
+- `AuthorizedManager(`
+- custom manager definitions
+- application-owned `authorized(` methods
+
 ## Archaeology
 
 Chronology of unpublished development stairs lives in the annotated
