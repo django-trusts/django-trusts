@@ -1,8 +1,9 @@
 """Bounded ordered remaining-bits strategy (issue #100).
 
-Closed ``register_strategy(OrderedFold)`` beside unchanged AnyPath.
-Registration and system-check proofs are zero SQL. Runtime fold proofs
-require PostgreSQL and skip on other vendors.
+Closed ``register_strategy(OrderedFold)`` beside AnyPath. The families
+may coexist on one terminal (#187). Registration and system-check
+proofs are zero SQL. Runtime fold proofs require PostgreSQL and skip
+on other vendors.
 """
 
 from contextlib import contextmanager
@@ -378,7 +379,7 @@ class OrderedFoldRegistrationTest(SimpleTestCase):
             _register_direct(registry, Ace, Permission, Document)
         self.assertEqual(registry.strategies, ())
 
-    def test_anypath_xor_orderedfold_rejects_with_zero_sql(self):
+    def test_anypath_and_orderedfold_coexist_with_zero_sql(self):
         Permission, Document, Ace = _direct_models()
         User = get_user_model()
 
@@ -390,21 +391,28 @@ class OrderedFoldRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = TrustsRegistry()
         g = Ref(Grant)
-        registry.register(content=g.document, user=g.user, permission=g.permission)
-        stored = registry.records
-        with self.assertRaisesRegex(TrustsConfigurationError, r'AnyPath'):
-            _register_direct(registry, Ace, Permission, Document)
-        self.assertEqual(registry.records, stored)
-        self.assertEqual(registry.strategies, ())
+        registry = TrustsRegistry()
+        record = registry.register(
+            content=g.document, user=g.user, permission=g.permission,
+        )
+        compiled = _register_direct(registry, Ace, Permission, Document)
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(registry.strategies, (compiled,))
+        plan = registry.plan_for(Document)
+        self.assertEqual(plan.records, (record,))
+        self.assertIs(plan.strategy, compiled)
 
         other = TrustsRegistry()
-        _register_direct(other, Ace, Permission, Document)
-        with self.assertRaisesRegex(TrustsConfigurationError, r'OrderedFold'):
-            other.register(content=g.document, user=g.user, permission=g.permission)
-        self.assertEqual(len(other.strategies), 1)
-        self.assertEqual(other.records, ())
+        compiled = _register_direct(other, Ace, Permission, Document)
+        record = other.register(
+            content=g.document, user=g.user, permission=g.permission,
+        )
+        self.assertEqual(other.records, (record,))
+        self.assertEqual(other.strategies, (compiled,))
+        plan = other.plan_for(Document)
+        self.assertEqual(plan.records, (record,))
+        self.assertIs(plan.strategy, compiled)
 
     def test_two_orderedfold_on_one_terminal_rejected(self):
         Permission, Document, Ace = _direct_models()

@@ -355,6 +355,15 @@ Policies that require ordered allow and deny entries can use the
 ``OrderedFold`` strategy. It evaluates persisted entries in order while
 tracking which requested permission bits remain undecided.
 
+Relationship registrations and one OrderedFold strategy may coexist on the
+same content terminal of one backend when their user and permission
+terminals match. Each family evaluates independently; effective
+authorization is the family-local OR. An OrderedFold deny settles only
+the OrderedFold branch and does not veto an independent relationship
+grant. Named filters remain restricting overlays, never grants.
+Malformed configuration and an unsupported OrderedFold renderer stay
+fail-closed: a configured branch is not dropped silently.
+
 Evaluation strategies use the same object-check, permission-enumeration, and
 queryset interfaces as direct permission paths. Database support varies by
 strategy; see the support matrix for the currently verified combinations.

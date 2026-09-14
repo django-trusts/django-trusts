@@ -22,8 +22,11 @@ The configured backend exposes three public registration methods.
 ``register_relationship`` is the AnyPath ``EXISTS`` fast path.
 ``register_ordered_fold`` is the parallel closed remaining-bits
 family. ``add_named_filter`` binds a named restricting predicate and
-is not an authorization source. One content terminal may use AnyPath
-xor one OrderedFold. Public ``OrderedFold.content`` is the content
+is not an authorization source. One content terminal may carry
+AnyPath records and one OrderedFold strategy together. Each family
+evaluates independently; effective authorization is the family-local
+OR. An OrderedFold deny settles only the OrderedFold branch and does
+not veto a relationship grant. Public ``OrderedFold.content`` is the content
 model class; ``descriptor`` is content-relative and may be ``""``;
 ``source_descriptor`` is a required source-relative Django ``__``
 path. The first OrderedFold renderer is PostgreSQL; other vendors
@@ -81,25 +84,22 @@ class QueryCompiler(object):
 class PlanQueryCompiler(object):
     """Immutable mixin default: registered plan; group slice is membership hops.
 
-    ``complete_exists`` compiles every record (or the OrderedFold
-    strategy). ``group_exists`` compiles only records whose user path
-    ends in a many-to-many membership hop. Direct FK / O2O / reverse
-    user hops stay out of the group slice. An OrderedFold ``strategy``
-    makes ``group_exists`` inapplicable (``None``).
+    ``complete_exists`` compiles every relationship record OR the
+    OrderedFold strategy on the same plan. ``group_exists`` compiles
+    only records whose user path ends in a many-to-many membership hop.
+    Direct FK / O2O / reverse user hops stay out of the group slice.
+    OrderedFold never becomes a group grant merely because it shares
+    the plan.
     """
 
     historical_fallback = False
 
     def complete_exists(self, plan, candidates, user, permission):
-        if getattr(plan, 'strategy', None) is not None:
-            return plan.content_exists(user, permission)
-        if not plan.records:
+        if not plan.records and getattr(plan, 'strategy', None) is None:
             return None
         return plan.content_exists(user, permission)
 
     def group_exists(self, plan, candidates, user, permission):
-        if getattr(plan, 'strategy', None) is not None:
-            return None
         membership = tuple(
             record for record in plan.records
             if _user_path_is_membership(record)
@@ -2001,6 +2001,33 @@ def _same_terminal_bindings(existing, record):
         and existing.along == record.along
     )
 
+
+def _require_compatible_family_terminals(
+    strategy, content_model, *, user_model, permission_model,
+):
+    """Reject mixed families whose user or permission terminals differ."""
+    if user_model is not strategy.user_model:
+        raise TrustsConfigurationError(
+            'Content terminal %s cannot mix AnyPath user terminal %s '
+            'with OrderedFold user terminal %s.'
+            % (
+                content_model._meta.label,
+                user_model._meta.label,
+                strategy.user_model._meta.label,
+            )
+        )
+    if permission_model is not strategy.permission_model:
+        raise TrustsConfigurationError(
+            'Content terminal %s cannot mix AnyPath permission terminal '
+            '%s with OrderedFold permission terminal %s.'
+            % (
+                content_model._meta.label,
+                permission_model._meta.label,
+                strategy.permission_model._meta.label,
+            )
+        )
+
+
 _TARGET_ATTRS = {
     'user_field': 'user_target',
     'content_field': 'content_target',
@@ -2097,14 +2124,21 @@ class RelationPlan:
         """
         user = _require_instance(user, 'user')
         permission = _bind_terminal(permission, 'permission')
+        parts = []
+        if self.records:
+            related = self._correlated_exists(
+                'content_field', user=user, permission=permission,
+            )
+            if related is not None:
+                parts.append(related)
         if self.strategy is not None:
             from trusts.ordered_fold import OrderedFoldAllowed
-            return OrderedFoldAllowed(self.strategy, user, permission)
-        if not self.records:
+            parts.append(OrderedFoldAllowed(self.strategy, user, permission))
+        if not parts:
             return None
-        return self._correlated_exists(
-            'content_field', user=user, permission=permission,
-        )
+        if len(parts) == 1:
+            return parts[0]
+        return reduce(or_, parts)
 
     def common_permissions(self, user, content):
         """Trustee permissions held on every candidate through this plan.
@@ -2360,18 +2394,17 @@ class TrustsRegistry(object):
         content_path, content_model, content_field, content_target = _resolve_path(
             root, content_ref._path, 'content', trailing_reverse=True,
         )
-        if content_model in self._strategies:
-            raise TrustsConfigurationError(
-                'Content terminal %s already has an OrderedFold strategy; '
-                'AnyPath and OrderedFold cannot share one terminal.'
-                % content_model._meta.label
-            )
         user_path, user_model, user_field, user_target = _resolve_path(
             root, user_ref._path, 'user', terminal_membership=True,
         )
         permission_path, permission_model, permission_field, permission_target = (
             _resolve_path(root, permission_ref._path, 'permission')
         )
+        if content_model in self._strategies:
+            _require_compatible_family_terminals(
+                self._strategies[content_model], content_model,
+                user_model=user_model, permission_model=permission_model,
+            )
         along_walk = None
         if along is not None:
             along_walk = _build_along_walk(
@@ -2433,8 +2466,10 @@ class TrustsRegistry(object):
         """Register one closed OrderedFold plan. Zero SQL.
 
         Frozen instances raise before validation or mutation. One content
-        terminal may use AnyPath xor one OrderedFold. Conflicting
-        registration leaves stored records and strategies unchanged.
+        terminal may carry AnyPath records plus one OrderedFold when the
+        user and permission terminals match. Duplicate OrderedFold on
+        the same terminal remains a conflict. Conflicting registration
+        leaves stored records and strategies unchanged.
         """
         if self._frozen:
             raise TrustsConfigurationError(
@@ -2451,10 +2486,10 @@ class TrustsRegistry(object):
             )
         for record in self._order:
             if record.content_model is content_model:
-                raise TrustsConfigurationError(
-                    'Content terminal %s already has an AnyPath registration; '
-                    'AnyPath and OrderedFold cannot share one terminal.'
-                    % content_model._meta.label
+                _require_compatible_family_terminals(
+                    compiled, content_model,
+                    user_model=record.user_model,
+                    permission_model=record.permission_model,
                 )
         self._strategies[content_model] = compiled
         self._strategy_order.append(compiled)
@@ -2501,14 +2536,9 @@ class TrustsRegistry(object):
                 and permission_model is not strategy.permission_model
             ):
                 strategy = None
-            if strategy is not None:
-                return RelationPlan(
-                    records=(),
-                    permission_model=strategy.permission_model,
-                    strategy=strategy,
-                )
 
         records = self._records_for(content_model, user_model, permission_model)
+        plan_permission = permission_model
         if records:
             models = {record.permission_model for record in records}
             if len(models) != 1:
@@ -2517,9 +2547,23 @@ class TrustsRegistry(object):
                     'model; got %s.'
                     % ', '.join(sorted(model._meta.label for model in models))
                 )
-            permission_model = models.pop()
+            plan_permission = models.pop()
+        if strategy is not None:
+            if plan_permission is None:
+                plan_permission = strategy.permission_model
+            elif plan_permission is not strategy.permission_model:
+                raise TrustsConfigurationError(
+                    'Applicable registrations must share one permission '
+                    'model; got %s and %s.'
+                    % (
+                        plan_permission._meta.label,
+                        strategy.permission_model._meta.label,
+                    )
+                )
         return RelationPlan(
-            records=records, permission_model=permission_model,
+            records=records,
+            permission_model=plan_permission,
+            strategy=strategy,
         )
 
     def permissions_for(self, user, content):
@@ -2795,7 +2839,9 @@ class BackendHandle:
         ``condition`` leaves are path strings on ``Equal`` /
         ``permission_in`` / ``All``. ``along`` is ``(path, bound)``.
         Passing a ``Ref`` is ``TypeError``. A frozen backend raises
-        ``TrustsConfigurationError`` before path parsing.
+        ``TrustsConfigurationError`` before path parsing. May coexist
+        with one OrderedFold on the same content terminal when user and
+        permission terminals match; authorization is the family-local OR.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
@@ -2834,6 +2880,9 @@ class BackendHandle:
         ``FlatToken.principal`` and optional ``member`` are independent
         model classes. Passing a ``Ref`` is ``TypeError``. A frozen
         backend raises ``TrustsConfigurationError`` before path parsing.
+        May coexist with AnyPath records on the same content terminal
+        when user and permission terminals match. An OrderedFold deny
+        does not veto an independent relationship grant.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
