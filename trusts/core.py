@@ -37,8 +37,6 @@ the private store adapter; ``set_condition_lookup`` remains for
 tests and explicit unbind.
 """
 
-import dis
-import types
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import reduce
@@ -2520,37 +2518,67 @@ class TrustsRegistry(object):
         ).filter_content(queryset, user, permission)
 
 
-_CO_VARARGS = 0x04
-_CO_VARKEYWORDS = 0x08
-_CO_GENERATOR = 0x20
-_CO_COROUTINE = 0x80
-_CO_ASYNC_GENERATOR = 0x200
-_CO_REJECT_FLAGS = (
-    _CO_VARARGS
-    | _CO_VARKEYWORDS
-    | _CO_GENERATOR
-    | _CO_COROUTINE
-    | _CO_ASYNC_GENERATOR
-)
-_BUILDER_PARAM_LOADS = frozenset(('LOAD_FAST', 'LOAD_FAST_BORROW'))
-_BUILDER_OPCODES = frozenset((
-    'RESUME',
-    'LOAD_FAST',
-    'LOAD_FAST_BORROW',
-    'LOAD_ATTR',
-    'RETURN_VALUE',
-))
+class _PathBuilder(object):
+    """Symbolic attribute-recording value rooted at one ``register()`` call.
+
+    Public typing presents this object as the ``trust=`` model. Runtime
+    records attribute names only; it does not load a row or prove that
+    an attribute exists.
+    """
+
+    __slots__ = ('_trust', '_path', '_token')
+
+    def __init__(self, trust, path=(), token=None):
+        object.__setattr__(self, '_trust', trust)
+        object.__setattr__(self, '_path', tuple(path))
+        object.__setattr__(self, '_token', token)
+
+    def __getattr__(self, name):
+        return _PathBuilder(self._trust, self._path + (name,), self._token)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('Path builder is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('Path builder is immutable.')
+
+    def __repr__(self):
+        root = getattr(self._trust, '__name__', self._trust)
+        if not self._path:
+            return 'PathBuilder(%s)' % root
+        return 'PathBuilder(%s).%s' % (root, '.'.join(self._path))
 
 
-def _builder_config_error(role, detail):
-    return TrustsConfigurationError(
-        '%s must be a Django path string or a one-argument path '
-        'builder (%s).' % (role, detail)
-    )
+def _unsupported_path_builder_op(name):
+    def _op(self, *args, **kwargs):
+        raise TrustsConfigurationError(
+            'Path builder does not support %s.' % name
+        )
+    _op.__name__ = name
+    return _op
 
 
-def _extract_builder_path(value, role):
-    """Extract ``parameter.attr[.attr...]`` without invoking ``value``."""
+for _name in (
+    '__eq__', '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
+    '__hash__', '__bool__', '__len__', '__contains__',
+    '__getitem__', '__setitem__', '__delitem__',
+    '__call__', '__iter__', '__next__',
+    '__add__', '__radd__', '__sub__', '__rsub__',
+    '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
+    '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
+    '__or__', '__ror__', '__and__', '__rand__',
+    '__xor__', '__rxor__', '__invert__',
+    '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
+    '__neg__', '__pos__', '__abs__',
+    '__int__', '__float__', '__index__',
+    '__enter__', '__exit__',
+    '__await__', '__aenter__', '__aexit__',
+):
+    setattr(_PathBuilder, _name, _unsupported_path_builder_op(_name))
+
+
+def _normalize_public_role(trust, value, role, *, token):
+    """Normalize a public string or path builder to a Django ``__`` path."""
     if isinstance(value, Ref):
         raise TypeError(
             '%s must be a Django path string or a one-argument path '
@@ -2558,58 +2586,35 @@ def _extract_builder_path(value, role):
         )
     if isinstance(value, str):
         return value
-    if type(value) is not types.FunctionType:
-        raise _builder_config_error(role, 'not a function, got %r' % (value,))
-    code = value.__code__
-    # CO_NESTED is allowed: AppConfig.ready()/helpers/tests may define
-    # the builder locally. Do not require co_flags == 3.
-    if (
-        code.co_argcount != 1
-        or code.co_kwonlyargcount != 0
-        or code.co_nlocals != 1
-        or value.__defaults__ is not None
-        or value.__kwdefaults__ is not None
-        or code.co_freevars
-        or code.co_cellvars
-        or code.co_flags & _CO_REJECT_FLAGS
-    ):
-        raise _builder_config_error(
-            role, 'unsupported function signature or closure'
+    if not callable(value):
+        raise TrustsConfigurationError(
+            '%s must be a Django path string or a one-argument path '
+            'builder, not %r.' % (role, value)
         )
-    instructions = [
-        inst for inst in dis.get_instructions(value, adaptive=False)
-        if inst.opname != 'CACHE'
-    ]
-    if (
-        len(instructions) < 4
-        or instructions[0].opname != 'RESUME'
-        or instructions[0].arg != 0
-        or instructions[-1].opname != 'RETURN_VALUE'
-    ):
-        raise _builder_config_error(role, 'unsupported instruction shape')
-    body = instructions[1:-1]
-    if (
-        not body
-        or body[0].opname not in _BUILDER_PARAM_LOADS
-        or body[0].arg != 0
-    ):
-        raise _builder_config_error(role, 'unsupported instruction shape')
-    names = []
-    for inst in body[1:]:
-        if inst.opname != 'LOAD_ATTR' or inst.arg is None or inst.arg & 1:
-            raise _builder_config_error(role, 'unsupported instruction shape')
-        name = inst.argval
-        if not isinstance(name, str) or not name:
-            raise _builder_config_error(role, 'unsupported instruction shape')
-        names.append(name)
-    if not names:
-        raise _builder_config_error(role, 'empty path')
-    extra = [
-        inst.opname for inst in instructions if inst.opname not in _BUILDER_OPCODES
-    ]
-    if extra:
-        raise _builder_config_error(role, 'unsupported instruction shape')
-    return '__'.join(names)
+    builder = _PathBuilder(trust, token=token)
+    try:
+        result = value(builder)
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
+        raise TrustsConfigurationError(
+            '%s path builder failed: %s' % (role, exc)
+        ) from exc
+    if not isinstance(result, _PathBuilder):
+        raise TrustsConfigurationError(
+            '%s path builder must return a path rooted at the supplied '
+            'trust value, not %r.' % (role, result)
+        )
+    if result._token is not token:
+        raise TrustsConfigurationError(
+            '%s path builder used a path from another symbolic root.'
+            % (role,)
+        )
+    if not result._path:
+        raise TrustsConfigurationError(
+            '%s path builder returned an empty path.' % (role,)
+        )
+    return '__'.join(result._path)
 
 
 def _public_path_segments(value, role, *, allow_empty=False):
@@ -2722,14 +2727,15 @@ class BackendHandle:
         """Donate one AnyPath permission relationship on this backend.
 
         ``user`` / ``permission`` / ``content`` accept a Django ``__``
-        path string or a one-argument path builder. Trusts never calls
-        the builder; it extracts a rooted ``parameter.attr[.attr...]``
-        chain from the function code object. The callable is not stored
-        or run during authorization. ``condition`` leaves are path
-        strings on ``Equal`` / ``permission_in`` / ``All``. ``along``
-        is ``(path, bound)``. Passing a ``Ref`` is ``TypeError``. A
-        frozen backend raises ``TrustsConfigurationError`` before path
-        parsing or builder inspection.
+        path string or a one-argument symbolic path builder. A builder
+        is called once during registration with a value typed as
+        ``trust``. Attribute access records a path; the callable is
+        discarded and never stored or run during authorization.
+        ``condition`` leaves are path strings on ``Equal`` /
+        ``permission_in`` / ``All``. ``along`` is ``(path, bound)``.
+        Passing a ``Ref`` is ``TypeError``. A frozen backend raises
+        ``TrustsConfigurationError`` before path parsing or builder
+        invocation.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
@@ -2745,9 +2751,14 @@ class BackendHandle:
                 'register trust must be a Django model class, '
                 'not %r.' % (trust,)
             )
-        user_path = _extract_builder_path(user, 'user')
-        permission_path = _extract_builder_path(permission, 'permission')
-        content_path = _extract_builder_path(content, 'content')
+        token = object()
+        user_path = _normalize_public_role(trust, user, 'user', token=token)
+        permission_path = _normalize_public_role(
+            trust, permission, 'permission', token=token,
+        )
+        content_path = _normalize_public_role(
+            trust, content, 'content', token=token,
+        )
         return self.registry.register(
             content=_public_ref(trust, content_path, 'content'),
             user=_public_ref(trust, user_path, 'user'),
