@@ -304,8 +304,7 @@ More expressive permission policies
 
 The ``DocumentPermission`` example uses the shortest useful trust: one record
 directly connects a user, a permission, and a document. The same registration
-API also supports paths through multiple relationships. Again, both forms of
-the same registration are valid:
+API also supports paths through multiple relationships:
 
 .. code-block:: python
 
