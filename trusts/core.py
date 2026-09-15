@@ -3029,39 +3029,6 @@ def _public_ref(root, value, role, *, allow_empty=False):
     ))
 
 
-def _bind_public_condition(condition, root):
-    """Rewrite string condition leaves to root-relative ``Ref`` nodes.
-
-    Not the public ``BackendHandle.register`` surface. Internal
-    registry tests may still construct private ``All`` / ``Equal`` /
-    ``permission_in`` records directly.
-    """
-    if condition is None:
-        return None
-    if isinstance(condition, All):
-        return All(*(
-            _bind_public_condition(predicate, root)
-            for predicate in condition.predicates
-        ))
-    if isinstance(condition, Equal):
-        return Equal(
-            _public_ref(root, condition.left, 'Equal left'),
-            _public_ref(root, condition.right, 'Equal right'),
-        )
-    if isinstance(condition, PermissionIn):
-        return PermissionIn(*(
-            _public_ref(root, ref, 'permission_in')
-            for ref in condition.refs
-        ))
-    if isinstance(condition, Ref):
-        raise TypeError(
-            'condition must be All, Equal, or permission_in, not a Ref.'
-        )
-    raise TrustsConfigurationError(
-        'condition is not supported; omit it or pass None.'
-    )
-
-
 def _bind_public_along(root, along):
     """Normalize ``(path, bound)`` to an internal ``Along``."""
     if along is None:
