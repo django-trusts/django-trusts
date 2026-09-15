@@ -430,9 +430,9 @@ the explicit ``trusts.zero`` paths described in the `Zero migration guide
 <https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
 django-trusts keeps a terse migration-boundary record in `migrates.md
-<https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_,
+<https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`__,
 while the supported 0.x migration guide is Zero's `migrates.md
-<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
+<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`__.
 
 A runnable application using that implementation is available in
 `django-trusts-zero-example
