@@ -38,20 +38,21 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('add_named_filter', rst)
         self.assertIn('backend.register(', rst)
         self.assertIn('trust=DocumentPermission', rst)
+        self.assertIn('path lambda', rst)
+        self.assertIn('condition=', rst)
+        self.assertIn('.contains(member)', rst)
         self.assertNotIn('register_relationship', rst)
-        self.assertIn('register_ordered_fold()', rst)
+        self.assertNotIn('register_ordered_fold()', rst)
         self.assertNotIn('backend.register_ordered_fold(', rst)
+        self.assertNotIn('TrustsOrderedFoldModelBackend', rst)
         self.assertNotIn('source_descriptor="document"', rst)
         self.assertNotIn('content=WinNode', rst)
         self.assertIn('django-trusts-ordered-fold', rst)
-        self.assertIn('TrustsOrderedFoldModelBackend', rst)
         self.assertIn('AUTHENTICATION_BACKENDS', rst)
-        self.assertIn('relationship-family', rst)
-        self.assertIn('_authorization_family', rst)
-        self.assertIn('mixed-family one-SQL', rst)
+        self.assertNotIn('_authorization_family', rst)
+        self.assertNotIn('mixed-family one-SQL', rst)
         self.assertNotIn('family-local OR', rst)
         self.assertNotIn('Until the OrderedFold engine leaves Core', rst)
-        self.assertIn('does not veto an independent', rst)
         self.assertNotIn('strategy=OrderedFold', rst)
         self.assertNotIn('from trusts.core import Ref', rst)
         self.assertNotIn('.registry.register(', rst)
@@ -59,8 +60,10 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('confidential = models.BooleanField(default=False)', rst)
         self.assertIn('Inherited relationships are provisional', rst)
         self.assertIn('along=("parent", 8)', rst)
-        self.assertIn('Ordered allow and deny support is provisional', rst)
-        self.assertIn('OrderedFold', rst)
+        self.assertIn(
+            'provisional extension of django-trusts for ordered allow and deny',
+            rst,
+        )
         self.assertIn('django-trusts-zero', rst)
         self.assertIn('django-trusts-gh-permissions', rst)
         self.assertIn('django-trusts-ordered-fold', rst)
@@ -78,20 +81,18 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'Django treats an active superuser as globally authorized',
             'Trusts cannot revoke authorization supplied by another backend',
             'relationship-family',
-            '_authorization_family',
-            'mixed-family one-SQL',
-            'django-trusts-ordered-fold',
-            'trusts_ordered_fold.E001',
-            'cannot veto an',
-            'independent relationship grant',
-            'Django\'s object-level backend OR is a different',
+            'Fail-closed principle',
+            'one-argument symbolic predicate',
+            'collection-rooted `.contains(member)`',
             'Discrepancies must be surfaced in the PR',
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, guide)
-        self.assertIn('future policy manifest/lockfile', guide)
         self.assertIn('not part', guide)
-        self.assertIn('of the 1.0 public contract', guide)
+        self.assertNotIn('future policy manifest/lockfile', guide)
+        self.assertNotIn('_authorization_family', guide)
+        self.assertNotIn('mixed-family one-SQL', guide)
+        self.assertNotIn('trusts_ordered_fold.E001', guide)
         self.assertNotIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True', guide)
         self.assertNotIn('## Change sizing and surface discovery', guide)
 

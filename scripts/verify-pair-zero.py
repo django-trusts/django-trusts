@@ -2,7 +2,7 @@
 """Matrix B: core 1.0.0.dev3 + exact Zero IIa.
 
 Requires ZERO_CHECKOUT (django-trusts-zero at
-``73b74b4213f6040f0e71c4c46d7a509804975672``, #37 STAGE 1 merge) and an
+``c7dc4f11f728ad3c4c22249e471daa4bf9849404``, #38 public register()) and an
 installed pair.
 Django is configured here so the kernel tests.settings host is not used.
 """
