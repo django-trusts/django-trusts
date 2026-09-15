@@ -18,8 +18,8 @@ class DocumentConfig(TrustsImplementationConfig):
         registry = handle.registry
         if getattr(self, '_document_grant_registry_id', None) is registry:
             return
-        handle.register_relationship(
-            DocumentGrant,
+        handle.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',

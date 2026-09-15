@@ -1,10 +1,12 @@
 """#131 C-methods: public relationship and named-filter APIs.
 
-Configured-backend Django ``__`` paths, string condition leaves,
-``along=(path, bound)``, ``register_relationship``, and
-``add_named_filter``. ``BackendHandle.register`` /
-``register_permission_condition`` are removed. ``Ref`` input is
-TypeError. Freeze raises before path resolution. Dual backends stay
+Configured-backend Django ``__`` paths, symbolic ``condition=``
+builders, ``along=(path, bound)``, ``register(*, trust=...)``, and
+``add_named_filter``. The earlier positional/strategy
+``BackendHandle.register`` forms and
+``register_permission_condition`` remain removed. ``Ref`` input and
+prebuilt ``All`` / ``Equal`` / ``permission_in`` on the public handle
+are TypeError. Freeze raises before path resolution. Dual backends stay
 isolated. Internal ``TrustsRegistry.register(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
 """
@@ -44,13 +46,14 @@ def _handle(registry=None, path='tests.core.handle-a'):
 class HandleRegisterSurfaceTest(SimpleTestCase):
     def test_register_is_the_public_donation_verb(self):
         handle = _handle()
-        self.assertTrue(hasattr(BackendHandle, 'register_relationship'))
+        self.assertTrue(hasattr(BackendHandle, 'register'))
         self.assertTrue(hasattr(BackendHandle, 'add_named_filter'))
-        self.assertFalse(hasattr(BackendHandle, 'register'))
+        self.assertFalse(hasattr(BackendHandle, 'register_relationship'))
         self.assertFalse(hasattr(BackendHandle, 'register_permission_condition'))
         self.assertFalse(hasattr(BackendHandle, 'register_ordered_fold'))
         self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
-        self.assertFalse(hasattr(handle, 'register'))
+        self.assertTrue(hasattr(handle, 'register'))
+        self.assertFalse(hasattr(handle, 'register_relationship'))
         self.assertFalse(hasattr(handle, 'register_permission_condition'))
         self.assertFalse(hasattr(handle, 'register_ordered_fold'))
         self.assertFalse(hasattr(handle, 'register_strategy'))
@@ -67,8 +70,8 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
             permission=j.permission,
         )
         handle = _handle()
-        record = handle.register_relationship(
-            DocumentGrant,
+        record = handle.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
@@ -82,44 +85,44 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         handle = _handle()
         j = Ref(DocumentGrant)
         with self.assertRaises(TypeError):
-            handle.register_relationship(
-                j,
+            handle.register(
+                trust=j,
                 user='user',
                 permission='permission',
                 content='document',
             )
         with self.assertRaises(TypeError):
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user=j.user,
                 permission='permission',
                 content='document',
             )
         with self.assertRaises(TypeError):
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user='user',
                 permission=j.permission,
                 content='document',
             )
         with self.assertRaises(TypeError):
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content=j.document,
             )
         with self.assertRaises(TypeError):
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
                 condition=Equal(j.user, j.permission),
             )
         with self.assertRaises(TypeError):
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
@@ -141,8 +144,8 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         ):
             with self.subTest(path=path):
                 with self.assertRaises(TrustsConfigurationError):
-                    handle.register_relationship(
-                        DocumentGrant,
+                    handle.register(
+                        trust=DocumentGrant,
                         user=path,
                         permission='permission',
                         content='document',
@@ -163,23 +166,23 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
 
     def test_duplicate_and_conflict_leave_store_unchanged(self):
         handle = _handle()
-        first = handle.register_relationship(
-            DocumentGrant,
+        first = handle.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
             )
         self.assertEqual(handle.registry.records, (first,))
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user='permission',
                 permission='user',
                 content='document',
@@ -202,8 +205,8 @@ class HandleFreezeOrderTest(SimpleTestCase):
                     wraps=_validate_condition,
                 ) as validate:
                     with self.assertRaises(TrustsConfigurationError) as ctx:
-                        handle.register_relationship(
-                            DocumentGrant,
+                        handle.register(
+                            trust=DocumentGrant,
                             user='user',
                             permission='permission',
                             content='document',
@@ -219,8 +222,8 @@ class HandleFreezeOrderTest(SimpleTestCase):
         handle = _handle(registry)
         registry.freeze()
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            handle.register_relationship(
-                DocumentGrant,
+            handle.register(
+                trust=DocumentGrant,
                 user='',
                 permission='permission',
                 content='document',
@@ -233,16 +236,16 @@ class HandleIsolationTest(SimpleTestCase):
     def test_dual_handle_string_register_does_not_leak(self):
         left = _handle(path='tests.core.handle-left')
         right = _handle(path='tests.core.handle-right')
-        left.register_relationship(
-            DocumentGrant,
+        left.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
         self.assertEqual(len(left.registry.records), 1)
         self.assertEqual(right.registry.records, ())
-        right.register_relationship(
-            DocumentGrant,
+        right.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
@@ -263,17 +266,14 @@ class HandleConditionAndAlongTest(SimpleTestCase):
         via_ref = TrustsRegistry()
         expected = _register_team(via_ref, TeamRepoGrant)
         handle = _handle()
-        record = handle.register_relationship(
-            TeamRepoGrant,
+        record = handle.register(
+            trust=TeamRepoGrant,
             user='team__members',
             permission='operation',
             content='repository',
-            condition=All(
-                permission_in('team__permission_bundles__operations'),
-                Equal(
-                    'team__organization',
-                    'repository__organization',
-                ),
+            condition=lambda t: (
+                t.team.permission_bundles.operations.contains(t.operation)
+                & (t.team.organization == t.repository.organization)
             ),
         )
         self.assertEqual(record, expected)
@@ -295,8 +295,8 @@ class HandleConditionAndAlongTest(SimpleTestCase):
             along=Along(j.node.parent, bound=8),
         )
         handle = _handle()
-        record = handle.register_relationship(
-            Grant,
+        record = handle.register(
+            trust=Grant,
             user='user',
             permission='permission',
             content='node',
@@ -320,18 +320,19 @@ class _PredicateLog:
 class CMethodsPublicSurfaceTest(SimpleTestCase):
     def test_two_public_methods_and_no_ordered_fold(self):
         backend = _handle()
-        self.assertTrue(callable(backend.register_relationship))
+        self.assertTrue(callable(backend.register))
         self.assertTrue(callable(backend.add_named_filter))
-        self.assertFalse(hasattr(backend, 'register'))
+        self.assertFalse(hasattr(backend, 'register_relationship'))
         self.assertFalse(hasattr(backend, 'register_permission_condition'))
         self.assertFalse(hasattr(backend, 'register_ordered_fold'))
         self.assertFalse(hasattr(backend, 'register_strategy'))
-        self.assertFalse(hasattr(BackendHandle, 'register'))
+        self.assertTrue(hasattr(BackendHandle, 'register'))
+        self.assertFalse(hasattr(BackendHandle, 'register_relationship'))
         self.assertFalse(hasattr(BackendHandle, 'register_permission_condition'))
         self.assertFalse(hasattr(BackendHandle, 'register_ordered_fold'))
         self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
 
-    def test_register_relationship_matches_internal_ref_record(self):
+    def test_register_matches_internal_ref_record(self):
         via_ref = TrustsRegistry()
         j = Ref(DocumentGrant)
         expected = via_ref.register(
@@ -340,8 +341,8 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             permission=j.permission,
         )
         backend = _handle()
-        record = backend.register_relationship(
-            DocumentGrant,
+        record = backend.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
@@ -354,8 +355,8 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
     def test_wrong_family_keywords_are_type_error(self):
         backend = _handle()
         with self.assertRaises(TypeError):
-            backend.register_relationship(
-                DocumentGrant,
+            backend.register(
+                trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
@@ -366,31 +367,31 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
     def test_incomplete_signatures_are_type_error(self):
         backend = _handle()
         with self.assertRaises(TypeError):
-            backend.register_relationship(DocumentGrant, user='user')
+            backend.register(trust=DocumentGrant, user='user')
         with self.assertRaises(TypeError):
             backend.add_named_filter(Document, 'non_confidential')
         self.assertEqual(backend.registry.records, ())
 
-    def test_register_relationship_ref_is_type_error(self):
+    def test_register_ref_is_type_error(self):
         backend = _handle()
         j = Ref(DocumentGrant)
         with self.assertRaises(TypeError):
-            backend.register_relationship(
-                j, user='user', permission='permission', content='document',
+            backend.register(
+                trust=j, user='user', permission='permission', content='document',
             )
         self.assertEqual(backend.registry.records, ())
 
     def test_duplicate_relationship_leaves_store_unchanged(self):
         backend = _handle()
-        first = backend.register_relationship(
-            DocumentGrant,
+        first = backend.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            backend.register_relationship(
-                DocumentGrant,
+            backend.register(
+                trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
@@ -408,24 +409,21 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
         via_ref = TrustsRegistry()
         expected = _register_team(via_ref, TeamRepoGrant)
         backend = _handle()
-        record = backend.register_relationship(
-            TeamRepoGrant,
+        record = backend.register(
+            trust=TeamRepoGrant,
             user='team__members',
             permission='operation',
             content='repository',
-            condition=All(
-                permission_in('team__permission_bundles__operations'),
-                Equal(
-                    'team__organization',
-                    'repository__organization',
-                ),
+            condition=lambda t: (
+                t.team.permission_bundles.operations.contains(t.operation)
+                & (t.team.organization == t.repository.organization)
             ),
         )
         self.assertEqual(record, expected)
         self.assertEqual(record.user_path, ('team', 'members'))
         self.assertEqual(record.user_field, 'team__members')
 
-    def test_along_tuple_on_register_relationship(self):
+    def test_along_tuple_on_register(self):
         from tests.core.test_issue92 import _node_graph_models
 
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
@@ -440,8 +438,8 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
             along=Along(j.node.parent, bound=8),
         )
         backend = _handle()
-        record = backend.register_relationship(
-            Grant,
+        record = backend.register(
+            trust=Grant,
             user='user',
             permission='permission',
             content='node',
@@ -494,8 +492,8 @@ class CMethodsFreezeAndIsolationTest(SimpleTestCase):
                     wraps=_validate_condition,
                 ) as validate:
                     with self.assertRaises(TrustsConfigurationError) as rel:
-                        backend.register_relationship(
-                            DocumentGrant,
+                        backend.register(
+                            trust=DocumentGrant,
                             user='user',
                             permission='permission',
                             content='document',
@@ -520,16 +518,16 @@ class CMethodsFreezeAndIsolationTest(SimpleTestCase):
     def test_dual_backend_relationship_does_not_leak(self):
         left = _handle(path='tests.core.cmethods-left')
         right = _handle(path='tests.core.cmethods-right')
-        left.register_relationship(
-            DocumentGrant,
+        left.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
         self.assertEqual(len(left.registry.records), 1)
         self.assertEqual(right.registry.records, ())
-        right.register_relationship(
-            DocumentGrant,
+        right.register(
+            trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',

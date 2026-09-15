@@ -186,7 +186,7 @@ Register the model paths when the application starts:
 permission, and protected content associated with each trust record.
 
 ``user``, ``permission``, and ``content`` each accept either a one-argument
-path builder (the ``lambda`` form in ``ready()`` above) or a Django ``__``
+path lambda (the form in ``ready()`` above) or a Django ``__``
 path string. Both forms of the same registration are valid; the string
 equivalent is:
 
@@ -322,12 +322,32 @@ API also supports paths through multiple relationships:
        content=lambda t: t.document,  # or "document"
    )
 
-The ``condition=`` argument on ``register`` can further constrain
-that relationship branch. It may require the user and content to belong to the
-same organization, or require a requested operation to appear in a team's
-allowed operations. A relationship condition is always applied to its branch;
-a named filter is selected by an authorization caller. Neither can create
-permission by itself.
+The ``condition=`` argument on ``register`` is a one-argument symbolic
+predicate rooted at the trust model. django-trusts invokes it once during
+registration and stores no callable. The 1.0 grammar is path equality
+(``==``), collection-rooted membership (``.contains(member)``), and
+conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
+Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
+``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
+reserved method on the condition proxy; a model field actually named
+``contains`` cannot be walked there. ``predicate=`` is reserved and
+unsupported in 1.0.
+
+.. code-block:: python
+
+   backend.register(
+       trust=TeamDocumentPermission,
+       user=lambda t: t.team.members,
+       permission=lambda t: t.permission,
+       content=lambda t: t.document,
+       condition=lambda t: (
+           t.team.allowed_operations.contains(t.permission)
+           & (t.team.organization == t.document.organization)
+       ),
+   )
+
+A relationship condition is always applied to its branch; a named filter is
+selected by an authorization caller. Neither can create permission by itself.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either complete
@@ -336,44 +356,22 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Permissions may also be inherited through hierarchical relationships. The
-Along walk is registered as ``along=("parent", 8)`` on
-``backend.register``.
-It uses a bounded hierarchy with a recursive common table expression,
-allowing a permission attached to one node to apply to related ancestors
-or descendants without traversing the hierarchy in Python.
+Inherited relationships are provisional. A bounded hierarchical walk may be
+declared with ``along=("parent", 8)`` on ``backend.register``.
+django-trusts evaluates the walk with a recursive common table expression
+rather than traversing the hierarchy in Python. The database combinations
+currently exercised by CI are recorded in the `support matrix
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Policies that require ordered allow and deny entries belong in
 `django-trusts-ordered-fold
-<https://github.com/django-trusts/django-trusts-ordered-fold>`_, not
-django-trusts. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
-``MaskEntry``, ``PolarityMap``, ``FlatToken``,
-``register_ordered_fold()``, ``TrustsOrderedFoldModelBackend``, and
-the PostgreSQL remaining-bits renderer. django-trusts does not import, depend
-on, auto-discover, or fallback-import it.
-
-A complete working Windows declaration and its security assumptions
-live in `django-trusts-windows-acl
+<https://github.com/django-trusts/django-trusts-ordered-fold>`_ is a
+provisional extension of django-trusts for ordered allow and deny policies.
+An example Windows declaration lives in
+`django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
-
-Object-level ``user.has_perm`` uses Django's ordered
-``AUTHENTICATION_BACKENDS`` OR. A relationship grant or an OrderedFold
-grant on another configured backend can authorize that single object.
-An OrderedFold deny on another backend does not veto an independent
-relationship grant returned by a relationship backend.
-
-django-trusts list, guard, and common-permission helpers are relationship-family
-local. ``Model.objects.authorized``, ``authorization_required``,
-``filter_authorized_scopes``, and module-level ``granted`` /
-``common_permissions`` include only handles whose implementation
-``_authorization_family`` is ``"relationship"``. They do not compile a
-mixed-family one-SQL OR and must not be read as Django's object-level
-backend OR. A future combined list projection belongs in the
-OrderedFold package, not django-trusts. Database support varies by evaluator;
-see the support matrix for the currently verified combinations.
 
 Reference implementations
 -------------------------
@@ -408,13 +406,11 @@ Ordered access-control entries
 permissions using persisted access-control entries with ordering, allow and
 deny effects, permission masks, and inheritance.
 
-It demonstrates how an ACL-style permission system can use
-``django-trusts-ordered-fold`` while retaining the same Django-facing
-permission APIs.
-
-The project is intended to prove that this class of permission system can be
-implemented with ``django-trusts``. It is not intended to reproduce every
-feature or security guarantee of Windows ACLs.
+It demonstrates an ACL-style permission system built with
+``django-trusts-ordered-fold``, a provisional extension of ``django-trusts``,
+while
+retaining the same Django-facing permission APIs. It is not intended to
+reproduce every feature or security behavior of Windows ACLs.
 
 Users of django-trusts 0.x
 --------------------------
@@ -449,8 +445,9 @@ Run Django's system checks during development and deployment:
 
    python manage.py check
 
-Invalid declarations are rejected during application setup. Missing
-registrations and unsupported permission paths fail closed.
+django-trusts is designed to reject invalid declarations during application
+setup. Missing registrations and unsupported permission paths are intended to
+fail closed.
 
 Current Python, Django, database, and evaluation-strategy support is recorded
 in the `support matrix

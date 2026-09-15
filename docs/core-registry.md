@@ -1,37 +1,31 @@
 # TrustsRegistry (internal development primitive)
 
-Additive registration and projection internals for issues #57, #60, #65,
-#83, #92, #98, and the first historical reader in #67. These are
-implementation details, not application imports. The package does **not**
-re-export a process-global registry from `trusts`.
+Additive registration and projection surface for issues #57, #60, #65,
+#83, #92, #98, and the first historical reader in #67. Import from `trusts.core`.
+This slice does **not** re-export a process-global registry from `trusts`.
 
-`TrustsRegistry` is instantiable and isolated. Public
-`BackendHandle.register(trust=..., user=..., permission=..., content=...)`
-accepts path strings or one-argument registration-time path builders and
-normalizes them into this internal representation. Trusts invokes a builder
-once with a symbolic proxy; attribute access on that proxy forms a root-relative
-path, including ordinary field names such as `root` and `path`. Other proxy
-operations are unsupported. The registry validates the returned path through
-Django `_meta` and each hop's `get_path_info()` without issuing SQL, then
-stores an immutable `RegisteredRelation` and discards the callable.
-
-The builder runs in the same application-startup context as the surrounding
-`AppConfig.ready()` code and receives no additional authority from Trusts.
-Trusts constrains and validates its returned proxy path but does not inspect or
-sandbox unrelated Python, SQL, I/O, or side effects in the body.
+`TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
+permission-bearing relation root; attribute access builds a root-relative
+path, including ordinary field names such as `root` and `path`. `register`
+accepts those refs, validates them through Django `_meta` and each hop's
+`get_path_info()` (zero SQL), and stores an immutable `RegisteredRelation`.
+Inspect the inferred root, full path, lookup, and target field on that
+record, not on `Ref`.
 
 ```python
-backend.register(
-    trust=FolderGrant,
-    content="folder",
-    user="user",
-    permission="permission",
+from trusts.core import Ref, TrustsRegistry
+
+j = Ref(FolderGrant)
+registry = TrustsRegistry()
+registry.register(
+    content=j.folder,
+    user=j.user,
+    permission=j.permission,
 )
-backend.register(
-    trust=FolderGrant,
-    content="folder__documents",
-    user="user",
-    permission="permission",
+registry.register(
+    content=j.folder.documents,
+    user=j.user,
+    permission=j.permission,
 )
 ```
 
@@ -79,9 +73,29 @@ These shapes raise `TrustsConfigurationError` during `register`:
 - composite / multi-column correlation (`get_path_info()` must yield
   exactly one `PathInfo` with exactly one target field)
 
-`condition` may be omitted, `None`, or an internally normalized closed
-predicate tree. Public applications normally declare restrictions through
-named filters; the nodes below describe the stored planning representation.
+Public `BackendHandle.register(..., condition=...)` accepts a one-argument
+trust-rooted symbolic callable (`==`, `.contains(member)`, `&`) and rejects
+prebuilt `All` / `Equal` / `permission_in` values. The callable is invoked
+once after freeze and is not stored.
+
+Internal `TrustsRegistry.register` may still accept a closed predicate tree
+exported from `trusts.core`. `condition` may also be omitted or `None`. The
+nodes below are that stored planning representation:
+
+```python
+from trusts.core import All, Equal, Ref, permission_in
+
+t = Ref(TeamRepoGrant)
+registry.register(
+    content=t.repository,
+    user=t.team.members,
+    permission=t.operation,
+    condition=All(
+        permission_in(t.team.permission_bundles.operations),
+        Equal(t.team.organization, t.repository.organization),
+    ),
+)
+```
 
 - `All(*predicates)` — AND of one or more `All` / `Equal` /
   `permission_in` nodes
@@ -100,7 +114,7 @@ named filters; the nodes below describe the stored planning representation.
   accepted path.
 
 Those predicates compile as an AND overlay on the same
-trust record. They do not create a grant. Callables,
+permission-bearing root row. They do not create a grant. Callables,
 `Q` objects, lookup strings, and tuples are not a condition dialect
 and raise `TrustsConfigurationError` with zero SQL. Untyped values
 still report that `condition` is not supported.
@@ -206,7 +220,7 @@ consume that same object. A later reader may OR it with another predicate
 on the original candidate queryset; do not filter trustee rows first and
 then try to restore another branch.
 
-Multiple applicable trust roots combine by SQL `OR`. Duplicate grant
+Multiple applicable relation roots combine by SQL `OR`. Duplicate grant
 rows do not duplicate permission or content results. An unregistered
 content model fails closed: empty enumeration, `False`, and
 `queryset.none()`.
@@ -257,7 +271,7 @@ runtime. The check issues zero SQL and does not register.
 `trusts.E005` is the Along renderer database check described above.
 
 `ContentQuerySet.permitted` is a thin aggregate caller. It ORs each
-applicable handle compiler's complete predicate (the internal relationship grant compiler)
+applicable handle compiler's complete predicate (`trusts.core.granted`)
 and then applies the unchanged condition overlay. Concrete
 `TrustModelBackend` routes keep the transitional historical TrustGroup
 compiler; mixin-only routes receive only their registered-plan proof.
@@ -313,11 +327,11 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `:condition`, does not call `is_active_principal`, and does not call
 `get_permission`. `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
-this class. django-trusts `.authorized` includes relationship-family handles
+this class. Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
 `filter_authorized_scopes(queryset, user, permission, *, content, handles=None)`
-in the internal authorization planner filters rows of an intermediate scope model that is a
+in `trusts.core` filters rows of an intermediate scope model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. It compiles `EXISTS` of root rows
 correlated to `OuterRef` of that hop's resolved target field (the
@@ -328,13 +342,13 @@ content terminal is allowed when a proper prefix hop of that same model
 exists (self-referential trees). A terminal-only path, an unknown
 terminal, empty handles, or a scope model not on the path return
 `none()`. Default and explicit handle lists include relationship-family
-handles only. django-trusts does not import Zero schema models
+handles only. Core does not import Zero schema models
 (`Trust`, `TrustUserPermission`, `TrustGroup`, …).
 
 `PlanQueryCompiler.group_exists` compiles the membership-hop subset of
 the same plan (user path ending in M2M) via `RelationPlan.content_exists`.
 Direct FK / O2O / reverse user hops stay out of the group slice.
-django-trusts plans are relationship records only. Empty membership records
+Core plans are relationship records only. Empty membership records
 make `group_exists` inapplicable (`None`).
 
 `ConditionLookup` (`record_for`, `compile_q`) is self-bound at
@@ -344,7 +358,7 @@ and explicit unbind. Missing methods raise
 Live registries are owned by installed `TrustsImplementationConfig`
 subclasses. Resolve them with `implementation_for_path()`,
 `implementation_for_class()`, or `configured_implementation_handles()`.
-django-trusts ships no AppConfig and no `kernel_config()`. After Zero is
+Core ships no AppConfig and no `kernel_config()`. After Zero is
 installed, `apps.get_app_config('trusts')` is ZeroConfig (models and
 that implementation's registry store). Do not list `'trusts'` in
 `INSTALLED_APPS`.

@@ -431,8 +431,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_dual_backend_condition_order_does_not_broaden(self):
         primary = _document_backend()
         extra = _extra_handle()
-        extra.register_relationship(
-            self.ExtraDocumentGrant,
+        extra.register(
+            trust=self.ExtraDocumentGrant,
             user='user',
             permission='permission',
             content='document',
@@ -453,8 +453,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_incomplete_second_backend_grant_is_omitted(self):
         primary = _document_backend()
         extra = _extra_handle()
-        extra.register_relationship(
-            self.ExtraDocumentGrant,
+        extra.register(
+            trust=self.ExtraDocumentGrant,
             user='user',
             permission='permission',
             content='document',
@@ -470,8 +470,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_incompatible_permission_terminal_cannot_collide(self):
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-perm')
-        extra.register_relationship(
-            self.OtherPermissionGrant,
+        extra.register(
+            trust=self.OtherPermissionGrant,
             user='user',
             permission='permission',
             content='document',
@@ -499,8 +499,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         handle_a = _extra_handle(path='tests.core.issue138-split-a')
         handle_b = _extra_handle(path='tests.core.issue138-split-b')
         for handle in (handle_a, handle_b):
-            handle.register_relationship(
-                self.ExtraDocumentGrant,
+            handle.register(
+                trust=self.ExtraDocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
@@ -539,8 +539,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_e008_name_only_on_incompatible_permission_terminal(self):
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-e008')
-        extra.register_relationship(
-            self.OtherPermissionGrant,
+        extra.register(
+            trust=self.OtherPermissionGrant,
             user='user',
             permission='permission',
             content='document',
