@@ -26,13 +26,15 @@ consumer checks already in each repository.
 - A `compatible-with-django-trusts-v<VERSION>` tag is a source snapshot
   of a tested pairing. It is not a companion package release.
 - Examples are examples. OrderedFold is provisional. Both get their
-  ordinary existing CI only — no new wheel, lock, or publication gates.
+  ordinary existing CI only when they changed or the Core delta can
+  affect them — no new wheel, lock, or publication gates.
 - Default branches are contribution baselines. Do not rename
   `main`/`master` solely for consistency.
-- Between RCs, reuse already-accepted evidence for unchanged
-  companions. Rerun django-trusts CI and the django-trusts + Zero pair
-  on the new candidate. Rerun a consumer only when the delta can affect
-  it, or when its ordinary CI is part of a default-branch merge.
+- Between RCs, reuse already-accepted evidence for unchanged and
+  unaffected companions. Rerun django-trusts CI and the django-trusts +
+  Zero pair on the new candidate. Rerun a consumer only when it changed
+  or the Core delta can affect it. Do not open a no-content PR merely
+  because Core increments.
 - A Zero development tag (for example RC1’s separately authorized
   `v0.12.0.dev0`) is **not** a mandatory recurring step of this train.
 
@@ -40,14 +42,14 @@ consumer checks already in each repository.
 
 | Role | Responsibility |
 | --- | --- |
-| Preparer | Freeze exact candidate heads, apply coupled django-trusts version metadata, run existing CI, and return exact SHAs for review. |
-| Release operator | Review and merge promotions into each existing default branch, create annotated tags, and prepare the GitHub Release notes. |
-| Thomas | Authorizes the final PyPI publish of django-trusts. No other package is published on this train unless separately authorized. |
+| Preparer | Freeze exact candidate heads, apply django-trusts version metadata and coupled Core version assertions, run existing django-trusts CI (including the Zero pair), and return exact SHAs for review. |
+| Release operator | Review and merge promotions into each *affected* existing default branch, create the annotated tags, and create the GitHub Release. |
+| Thomas | Authorizes and handles the PyPI publication of django-trusts. No other package is published on this train unless separately authorized. |
 
-The preparer does not merge promotions, push release tags, or upload to
-PyPI unless that exact step is reassigned. Draft baton PR
-[#220](https://github.com/django-trusts/django-trusts/pull/220) is a
-coordination lane only and stays do-not-merge.
+The preparer does not merge promotions, create tags, create the GitHub
+Release, or upload to PyPI unless that exact step is reassigned. Draft
+baton PR [#220](https://github.com/django-trusts/django-trusts/pull/220)
+is a coordination lane only and stays do-not-merge.
 
 ## Active repositories and default branches
 
@@ -55,22 +57,25 @@ coordination lane only and stays do-not-merge.
 | --- | --- | --- |
 | [django-trusts](https://github.com/django-trusts/django-trusts) | `master` | Published package. Tag `v<VERSION>`. |
 | [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero) | `main` | Required compatibility pair. Compatibility tag only. |
-| [django-trusts-zero-example](https://github.com/django-trusts/django-trusts-zero-example) | `master` | Example. Ordinary CI. Compatibility tag only. |
-| [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) | `main` | Consumer. Ordinary CI when the delta can affect it. Compatibility tag only. |
-| [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions) | `main` | Consumer. Ordinary CI when the delta can affect it. Compatibility tag only. |
-| [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold) | `main` | Provisional extension. Ordinary CI only. Compatibility tag only. |
+| [django-trusts-zero-example](https://github.com/django-trusts/django-trusts-zero-example) | `master` | Example. Ordinary CI and promote only if changed or the Core delta can affect it. Compatibility tag only. |
+| [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) | `main` | Consumer. Ordinary CI and promote only if changed or the Core delta can affect it. Compatibility tag only. |
+| [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions) | `main` | Consumer. Ordinary CI and promote only if changed or the Core delta can affect it. Compatibility tag only. |
+| [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold) | `main` | Provisional extension. Ordinary CI and promote only if changed or the Core delta can affect it. Compatibility tag only. |
 
-Promote accepted revisions into those existing defaults. Do not create
-new release branches in every repository merely for consistency.
+Promote an accepted companion revision into its existing default only
+when that companion changed or the Core delta can affect it. Do not
+open a no-content PR merely because django-trusts increments. Do not
+create new release branches in every repository merely for consistency.
 
 ## Version metadata (django-trusts + coupled assertions)
 
 `pyproject.toml` is the authoritative django-trusts package version.
-A release revision updates that version and the **coupled assertions**
-that already exist in this tree. Do not add a new version source or
-`__version__`.
+A release revision updates that version and the **coupled Core version
+assertions** that already exist in this tree. Do not add a new version
+source or `__version__`.
 
-Coupled locations proven on RC1 (`1.0.0.dev3` → `1.0.0rc1`):
+Core version assertions proven on RC1 (`1.0.0.dev3` → `1.0.0rc1`). These
+may change with the django-trusts version:
 
 | Location | Role |
 | --- | --- |
@@ -78,13 +83,16 @@ Coupled locations proven on RC1 (`1.0.0.dev3` → `1.0.0rc1`):
 | `docs/source/conf.py` | Sphinx `version` / `release` |
 | `docs/development-version.md` | Development-line record |
 | `docs/support-matrix.md` | Support-claim version wording |
-| `.github/workflows/ci.yml` `COMPANION_ZERO_SHA` | Exact Zero candidate for the pair job |
 | `scripts/verify-package-metadata.py` | `EXPECTED_VERSION` and sdist/wheel name prefix |
 | `scripts/verify-wheel-install.py` | Installed-wheel version assertion |
 | `scripts/verify-pair-zero.py` | Pair-proof version wording |
 | `scripts/verify-companion-wheels.py` | Companion-wheel version wording |
 | `scripts/management_archive.py` | Sdist member-prefix comment |
 | Kernel tests that pin the package version string | Existing assertions only |
+
+`.github/workflows/ci.yml` `COMPANION_ZERO_SHA` is **not** automatically
+coupled to the django-trusts version. Verify the exact Zero pin on every
+release. Update it only when the intended Zero candidate changes.
 
 Independently intended companion version changes (for example Zero
 `0.12.0.dev0`) are companion-owned work. They are not part of the
@@ -101,19 +109,23 @@ tracker). #224 remains the standing procedure.
 
 ### 1. Freeze the candidate
 
-Record the exact django-trusts and Zero candidate commits, plus the
-exact companion heads that will be promoted. Start later RCs from the
-previous release tag and review the delta. Do not reopen historical
-architecture reviews or one-off proofs unless that surface changed.
+Record the exact django-trusts and Zero candidate commits. For each
+companion, record whether it changed or the Core delta can affect it;
+only those companions are in the promotion set. Confirm the recorded
+default head of every unchanged and unaffected companion. Start later
+RCs from the previous release tag and review the delta. Do not reopen
+historical architecture reviews or one-off proofs unless that surface
+changed.
 
 A failed **relevant** existing check blocks the release. Absence of a
 newly imagined check does not.
 
 ### 2. Set and verify version metadata
 
-Apply the new django-trusts version and the coupled assertions listed
-above. Review release notes, migration-boundary wording
-(`migrates.md`), dependency metadata, and
+Apply the new django-trusts version and the coupled Core version
+assertions listed above. Verify `COMPANION_ZERO_SHA` and update it only
+if the intended Zero candidate changed. Review release notes,
+migration-boundary wording (`migrates.md`), dependency metadata, and
 [docs/support-matrix.md](docs/support-matrix.md).
 
 Companion repositories receive version changes only when those changes
@@ -131,34 +143,40 @@ Run django-trusts’s committed CI once on the exact release revision
 - the existing django-trusts + Zero compatibility pair against the
   exact Zero candidate pin.
 
-Run ordinary current compatibility checks for GH Permissions and
-Windows ACL when the django-trusts delta can affect them.
-
-Run each example or provisional repository’s ordinary existing checks.
-Do not invent new wheel matrices, locks, scripts, or byte-identical
-environment proofs merely for the django-trusts release.
+For each companion (Zero Example, Windows ACL, GH Permissions,
+OrderedFold, and Zero itself beyond the pair job): if that repository
+changed or the Core delta can affect it, run its ordinary existing CI.
+If it is unchanged and unaffected, confirm the recorded default head
+and reuse already-accepted evidence. Do not invent new wheel matrices,
+locks, scripts, or byte-identical environment proofs merely for the
+django-trusts release. Do not open a no-content companion PR merely
+because Core increments.
 
 ### 4. Promote accepted revisions to default branches
 
-After proof is accepted, merge the accepted state of every active
-repository into its existing default branch so users can reproduce it
-and open bug-fix PRs from the correct base:
+After proof is accepted, promote **django-trusts** into `master`.
 
-- django-trusts → `master`
+Promote a companion into its existing default only when that companion
+changed or the Core delta can affect it:
+
 - Zero → `main`
 - Zero Example → `master`
 - Windows ACL → `main`
 - GH Permissions → `main`
 - OrderedFold → `main`
 
-Confirm each resulting default-branch commit and its ordinary required
-checks. The preparer returns those exact heads; the release operator
-reviews and merges.
+If a companion is unchanged and unaffected, confirm the recorded
+default-branch head and reuse its accepted evidence. Do not open a
+no-content PR merely because Core increments.
+
+The preparer returns those exact heads (promoted or confirmed). The
+release operator reviews and merges only the promotions that are
+actually required.
 
 ### 5. Create exact annotated tags
 
-Create annotated tags only. Do not force-update. Do not treat a tag as
-a package release.
+The release operator creates the annotated tags. Do not force-update.
+Do not treat a tag as a package release.
 
 - django-trusts: `v<VERSION>` on the verified default-branch commit.
   RC1 used message `django-trusts 1.0.0rc1`.
@@ -173,10 +191,10 @@ compatible.
 
 ### 6. Create the GitHub pre-release
 
-Create the GitHub Release from the django-trusts tag. RC1 marked
-`v1.0.0rc1` as a **pre-release**. A later final `1.0.0` uses the same
-tag/Release path and is marked a full release when Thomas authorizes
-that step.
+The release operator creates the GitHub Release from the django-trusts
+tag. RC1 marked `v1.0.0rc1` as a **pre-release**. A later final `1.0.0`
+uses the same tag/Release path and is marked a full release when that
+step is authorized.
 
 Do not create GitHub Releases for companion compatibility tags.
 
@@ -195,8 +213,9 @@ python -m twine upload dist/django_trusts-<VERSION>.tar.gz \
     dist/django_trusts-<VERSION>-py3-none-any.whl
 ```
 
-Thomas authorizes that upload. Store the token outside the repository.
-Do not commit credentials or add a publish workflow in this runbook.
+Thomas authorizes and handles that upload. Store the token outside the
+repository. Do not commit credentials or add a publish workflow in this
+runbook.
 
 **Optional future improvement:** GitHub Actions Trusted Publishing to
 PyPI. That is not the current path. Do not add workflow or CI files
@@ -241,8 +260,9 @@ For `rc1 → rc2` and later increments:
 2. Keep accepted evidence for unchanged code and unaffected consumers.
 3. Rerun django-trusts’s committed release CI and the django-trusts +
    Zero pair on the new exact candidate.
-4. Rerun a consumer only when the delta can affect it, or when its
-   ordinary CI is part of the default-branch merge.
+4. Rerun a consumer only when it changed or the delta can affect it.
+   If unchanged and unaffected, confirm the recorded default head.
+   Do not open a no-content PR merely because Core increments.
 5. Add the new compatibility tag after the new pairing is confirmed.
    It may point to the same companion commit as the prior tag.
 6. Publish only django-trusts unless a companion release was
@@ -282,6 +302,8 @@ Zero and do not authorize a Zero GitHub Release or PyPI upload.
 ## Non-goals
 
 - Coordinated package versions or publication across repositories.
+- Recreating six-repository churn, or a no-content companion PR, merely
+  because django-trusts increments.
 - New release branches in every repository.
 - Exhaustive artifact proofs for examples.
 - Promoting provisional extensions to stable packages.
