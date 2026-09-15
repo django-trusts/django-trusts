@@ -19,22 +19,13 @@ should follow the
 
 | | Old | New |
 | --- | --- | --- |
-| `trusts.utils.get_short_model_name` | Importable helper. Strings were returned unchanged. Django model subclasses produced `app_label.ObjectName`. Other class objects produced `''`. Non-string, non-class values may raise `TypeError` at `issubclass(klass, Model)`. | django-trusts no longer provides this helper |
+| `trusts.utils.get_short_model_name` | Existed on the historical/pre-1.0 surface | schema-neutral django-trusts does not provide it |
 
-Search consumer imports and calls. Replace them with consumer-owned formatting appropriate to the caller. Use the retained `get_short_model_name_lower` only where its intentionally different lowercase semantics are required.
-
-Do not treat `get_short_model_name_lower` as a drop-in: strings are lowercased, and Django model subclasses produce `app_label.model_name` rather than `app_label.ObjectName`.
+0.x applications must follow [django-trusts-zero's migration guide](https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md); django-trusts offers no replacement recipe. Detailed Old-behavior, replacement, and casing guidance live in that Zero guide.
 
 Migration-bot checklist:
 
-- `from trusts.utils import get_short_model_name`
-- `from trusts import utils` plus `utils.get_short_model_name`
-- `get_short_model_name(`
-- classify string / Django model subclass / other class / non-string non-class
-- replace intentionally with consumer-owned formatting
-- verify casing-sensitive expectations (`ObjectName` vs `model_name`)
-- run consumer tests
-- confirm no remaining reference
+- detect `get_short_model_name` imports/calls and send them to the Zero checklist
 
 ## Relationship condition language (#210)
 
