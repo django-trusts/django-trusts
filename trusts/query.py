@@ -54,4 +54,13 @@ class AuthorizedQuerySet(QuerySet):
         return self.filter(granted_q).distinct()
 
 
+class AuthorizedManagerMixin:
+    """Add ``authorized()`` without replacing an application's manager."""
+
+    def authorized(self, user, permission, extra_q=None):
+        return AuthorizedQuerySet.authorized(
+            self.get_queryset(), user, permission, extra_q=extra_q,
+        )
+
+
 AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)
