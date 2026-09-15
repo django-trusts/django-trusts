@@ -160,7 +160,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('not an alternative 0.x migration path', text)
         self.assertNotIn('Current 1.x contract', text)
         self.assertNotIn('backend.register_relationship', text)
-        self.assertIn('[Migration guide](migrates.md)', readme)
+        self.assertIn('[Migration boundary](migrates.md)', readme)
         self.assertIn(
             'https://github.com/django-trusts/django-trusts/blob/dev/migrates.md',
             rst,
