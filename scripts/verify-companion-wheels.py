@@ -24,8 +24,8 @@ if str(_SCRIPTS) not in sys.path:
 from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
-# Zero #38 public register() companion.
-ZERO_HEAD = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
+# Exact Zero candidate companion.
+ZERO_HEAD = '462c83b59edfb51011b4373e8214b2daaab7f500'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',
@@ -158,6 +158,46 @@ def _ensure_zero_wheel(zero_root: Path) -> Path:
     return _wheel(zero_root / 'dist', 'django_trusts_zero-*.whl')
 
 
+def resolved_zero_head(zero_root: Path) -> str:
+    """Return ``git rev-parse HEAD`` for the Zero checkout.
+
+    Raises ``SystemExit`` if the path is not a git checkout whose HEAD
+    can be resolved. Does not treat ``ZERO_HEAD`` as proven.
+    """
+    try:
+        completed = subprocess.run(
+            ['git', '-C', str(zero_root), 'rev-parse', 'HEAD'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, 'stderr', None) or exc
+        if isinstance(detail, str):
+            detail = detail.strip() or exc
+        raise SystemExit(
+            'ZERO_CHECKOUT HEAD could not be resolved at %s: %s'
+            % (zero_root, detail)
+        ) from exc
+    head = completed.stdout.strip()
+    if not head:
+        raise SystemExit('ZERO_CHECKOUT HEAD is empty at %s' % zero_root)
+    return head
+
+
+def assert_zero_checkout_matches_head(zero_root: Path, expected=None) -> str:
+    """Fail unless the checkout at *zero_root* is the exact Zero candidate."""
+    if expected is None:
+        expected = ZERO_HEAD
+    head = resolved_zero_head(zero_root)
+    if head != expected:
+        raise SystemExit(
+            'ZERO_CHECKOUT HEAD %s does not match exact Zero candidate %s'
+            % (head, expected)
+        )
+    return head
+
+
 def _assert_zero_record(wheel: Path) -> None:
     with zipfile.ZipFile(wheel) as zf:
         names = zf.namelist()
@@ -171,9 +211,10 @@ def _assert_zero_record(wheel: Path) -> None:
 def main() -> int:
     zero_root = Path(os.environ.get('ZERO_CHECKOUT', ROOT / '.deps' / 'django-trusts-zero'))
     if not zero_root.is_dir():
-        raise SystemExit('ZERO_CHECKOUT missing: %s (expected IIa %s)' % (
+        raise SystemExit('ZERO_CHECKOUT missing: %s (expected exact Zero candidate %s)' % (
             zero_root, ZERO_HEAD,
         ))
+    zero_head = assert_zero_checkout_matches_head(zero_root)
 
     kernel_wheel = _ensure_kernel_wheel()
     zero_wheel = _ensure_zero_wheel(zero_root)
@@ -233,7 +274,7 @@ def main() -> int:
     print('companion wheels ok')
     print('kernel_wheel', kernel_wheel)
     print('zero_wheel', zero_wheel)
-    print('zero_head', ZERO_HEAD)
+    print('zero_head', zero_head)
     return 0
 
 
