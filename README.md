@@ -41,6 +41,7 @@ named filters, object and queryset authorization, and inherited relationships.
 - [Migration boundary](migrates.md)
 - [Supported Python, Django, and database combinations](docs/support-matrix.md)
 - [Development and contribution guide](DEV.md)
+- [Release runbook](RELEASING.md)
 - [BSD 2-Clause License](LICENSE)
 
 ## Other repositories
