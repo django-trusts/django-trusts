@@ -412,8 +412,8 @@ while
 retaining the same Django-facing permission APIs. It is not intended to
 reproduce every feature or security behavior of Windows ACLs.
 
-Users of django-trusts 0.x
---------------------------
+Migrating from django-trusts 0.x
+--------------------------------
 
 Earlier versions of ``django-trusts`` included a concrete permission system
 based on ``Trust``, ``Content``, groups, roles, and their associated
