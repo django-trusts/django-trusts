@@ -15,6 +15,27 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## Unused `get_short_model_name` helper (#217)
+
+| | Old | New |
+| --- | --- | --- |
+| `trusts.utils.get_short_model_name` | Importable helper. Strings were returned unchanged. Django model subclasses produced `app_label.ObjectName`. Other class objects produced `''`. Non-string, non-class values may raise `TypeError` at `issubclass(klass, Model)`. | django-trusts no longer provides this helper |
+
+Search consumer imports and calls. Replace them with consumer-owned formatting appropriate to the caller. Use the retained `get_short_model_name_lower` only where its intentionally different lowercase semantics are required.
+
+Do not treat `get_short_model_name_lower` as a drop-in: strings are lowercased, and Django model subclasses produce `app_label.model_name` rather than `app_label.ObjectName`.
+
+Migration-bot checklist:
+
+- `from trusts.utils import get_short_model_name`
+- `from trusts import utils` plus `utils.get_short_model_name`
+- `get_short_model_name(`
+- classify string / Django model subclass / other class / non-string non-class
+- replace intentionally with consumer-owned formatting
+- verify casing-sensitive expectations (`ObjectName` vs `model_name`)
+- run consumer tests
+- confirm no remaining reference
+
 ## Relationship condition language (#210)
 
 | | Old | New |
