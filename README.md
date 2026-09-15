@@ -38,7 +38,7 @@ named filters, object and queryset authorization, and inherited relationships.
 ## Other documents
 
 - [Security audit guide](SECURITY_AUDIT.md)
-- [Migration guide](migrates.md)
+- [Migration boundary](migrates.md)
 - [Supported Python, Django, and database combinations](docs/support-matrix.md)
 - [Development and contribution guide](DEV.md)
 - [BSD 2-Clause License](LICENSE)
