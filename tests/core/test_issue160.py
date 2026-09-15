@@ -40,7 +40,7 @@ class DevMdTransitionalFramingTest(SimpleTestCase):
         self.assertEqual(offenders, [])
         self.assertNotRegex(dev, r'(?i)\b1\.0\.0\b')
         self.assertIn('0.x', dev)
-        self.assertIn('schema-neutral Core', dev)
+        self.assertIn('schema-neutral django-trusts', dev)
         self.assertIn('django-trusts-zero', dev)
         self.assertIn("do **not** list `'trusts'` in", dev)
         self.assertIn('INSTALLED_APPS', dev)

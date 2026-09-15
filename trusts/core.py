@@ -19,7 +19,7 @@ single-valued hops. Validation is registration-time ``_meta`` only
 (zero SQL).
 
 The configured backend exposes two public registration methods.
-``register_relationship`` is the AnyPath ``EXISTS`` fast path.
+``register(*, trust=...)`` is the AnyPath ``EXISTS`` fast path.
 ``add_named_filter`` binds a named restricting predicate and is not
 an authorization source. Core is relationship-only. OrderedFold
 construction, registration, and PostgreSQL remaining-bits rendering
@@ -37,9 +37,11 @@ the private store adapter; ``set_condition_lookup`` remains for
 tests and explicit unbind.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import reduce
 from operator import or_
+from typing import TypeVar
 
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
@@ -47,6 +49,8 @@ from django.db.models import BooleanField, Count, Exists, F, Model, OuterRef, Q
 from django.db.models.base import ModelBase
 from django.db.models.expressions import Expression
 from django.db.models.query import QuerySet
+
+T = TypeVar('T', bound=Model)
 
 
 class TrustsConfigurationError(Exception):
@@ -1279,7 +1283,7 @@ class Equal(object):
     """Closed equality of two root-relative single-valued refs.
 
     Isolated registry tests may pass ``Ref`` operands. Public
-    ``register_relationship`` accepts Django ``__`` path strings and
+    ``register(*, trust=...)`` accepts Django ``__`` path strings and
     binds them to the registration root before validation.
     """
 
@@ -2514,6 +2518,105 @@ class TrustsRegistry(object):
         ).filter_content(queryset, user, permission)
 
 
+class _PathBuilder(object):
+    """Symbolic attribute-recording value rooted at one ``register()`` call.
+
+    Public typing presents this object as the ``trust=`` model. Runtime
+    records attribute names only; it does not load a row or prove that
+    an attribute exists.
+    """
+
+    __slots__ = ('_trust', '_path', '_token')
+
+    def __init__(self, trust, path=(), token=None):
+        object.__setattr__(self, '_trust', trust)
+        object.__setattr__(self, '_path', tuple(path))
+        object.__setattr__(self, '_token', token)
+
+    def __getattr__(self, name):
+        return _PathBuilder(self._trust, self._path + (name,), self._token)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('Path builder is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('Path builder is immutable.')
+
+    def __repr__(self):
+        root = getattr(self._trust, '__name__', self._trust)
+        if not self._path:
+            return 'PathBuilder(%s)' % root
+        return 'PathBuilder(%s).%s' % (root, '.'.join(self._path))
+
+
+def _unsupported_path_builder_op(name):
+    def _op(self, *args, **kwargs):
+        raise TrustsConfigurationError(
+            'Path builder does not support %s.' % name
+        )
+    _op.__name__ = name
+    return _op
+
+
+for _name in (
+    '__eq__', '__ne__', '__lt__', '__le__', '__gt__', '__ge__',
+    '__hash__', '__bool__', '__len__', '__contains__',
+    '__getitem__', '__setitem__', '__delitem__',
+    '__call__', '__iter__', '__next__',
+    '__add__', '__radd__', '__sub__', '__rsub__',
+    '__mul__', '__rmul__', '__truediv__', '__rtruediv__',
+    '__floordiv__', '__rfloordiv__', '__mod__', '__rmod__', '__pow__',
+    '__or__', '__ror__', '__and__', '__rand__',
+    '__xor__', '__rxor__', '__invert__',
+    '__lshift__', '__rlshift__', '__rshift__', '__rrshift__',
+    '__neg__', '__pos__', '__abs__',
+    '__int__', '__float__', '__index__',
+    '__enter__', '__exit__',
+    '__await__', '__aenter__', '__aexit__',
+):
+    setattr(_PathBuilder, _name, _unsupported_path_builder_op(_name))
+
+
+def _normalize_public_role(trust, value, role, *, token):
+    """Normalize a public string or path builder to a Django ``__`` path."""
+    if isinstance(value, Ref):
+        raise TypeError(
+            '%s must be a Django path string or a one-argument path '
+            'builder, not a Ref.' % (role,)
+        )
+    if isinstance(value, str):
+        return value
+    if not callable(value):
+        raise TrustsConfigurationError(
+            '%s must be a Django path string or a one-argument path '
+            'builder, not %r.' % (role, value)
+        )
+    builder = _PathBuilder(trust, token=token)
+    try:
+        result = value(builder)
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
+        raise TrustsConfigurationError(
+            '%s path builder failed: %s' % (role, exc)
+        ) from exc
+    if not isinstance(result, _PathBuilder):
+        raise TrustsConfigurationError(
+            '%s path builder must return a path rooted at the supplied '
+            'trust value, not %r.' % (role, result)
+        )
+    if result._token is not token:
+        raise TrustsConfigurationError(
+            '%s path builder used a path from another symbolic root.'
+            % (role,)
+        )
+    if not result._path:
+        raise TrustsConfigurationError(
+            '%s path builder returned an empty path.' % (role,)
+        )
+    return '__'.join(result._path)
+
+
 def _public_path_segments(value, role, *, allow_empty=False):
     """Split a public Django ``__`` path. Reject before ``Ref`` / resolve."""
     if isinstance(value, Ref):
@@ -2611,36 +2714,57 @@ class BackendHandle:
     registry: object
     compiler: object
 
-    def register_relationship(self, root, *, user, permission, content,
-                              condition=None, along=None):
+    def register(
+        self,
+        *,
+        trust: type[T],
+        user: str | Callable[[T], object],
+        permission: str | Callable[[T], object],
+        content: str | Callable[[T], object],
+        condition=None,
+        along=None,
+    ) -> RegisteredRelation:
         """Donate one AnyPath permission relationship on this backend.
 
-        Django ``__`` strings for ``user`` / ``permission`` / ``content``.
+        ``user`` / ``permission`` / ``content`` accept a Django ``__``
+        path string or a one-argument symbolic path builder. A builder
+        is called once during registration with a value typed as
+        ``trust``. Attribute access records a path; the callable is
+        discarded and never stored or run during authorization.
         ``condition`` leaves are path strings on ``Equal`` /
         ``permission_in`` / ``All``. ``along`` is ``(path, bound)``.
         Passing a ``Ref`` is ``TypeError``. A frozen backend raises
-        ``TrustsConfigurationError`` before path parsing.
+        ``TrustsConfigurationError`` before path parsing or builder
+        invocation.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
                 'Cannot register on a frozen TrustsRegistry.'
             )
-        if isinstance(root, Ref):
+        if isinstance(trust, Ref):
             raise TypeError(
-                'register_relationship root must be a Django model class, '
+                'register trust must be a Django model class, '
                 'not a Ref.'
             )
-        if not _is_model_class(root):
+        if not _is_model_class(trust):
             raise TrustsConfigurationError(
-                'register_relationship root must be a Django model class, '
-                'not %r.' % (root,)
+                'register trust must be a Django model class, '
+                'not %r.' % (trust,)
             )
+        token = object()
+        user_path = _normalize_public_role(trust, user, 'user', token=token)
+        permission_path = _normalize_public_role(
+            trust, permission, 'permission', token=token,
+        )
+        content_path = _normalize_public_role(
+            trust, content, 'content', token=token,
+        )
         return self.registry.register(
-            content=_public_ref(root, content, 'content'),
-            user=_public_ref(root, user, 'user'),
-            permission=_public_ref(root, permission, 'permission'),
-            condition=_bind_public_condition(condition, root),
-            along=_bind_public_along(root, along),
+            content=_public_ref(trust, content_path, 'content'),
+            user=_public_ref(trust, user_path, 'user'),
+            permission=_public_ref(trust, permission_path, 'permission'),
+            condition=_bind_public_condition(condition, trust),
+            along=_bind_public_along(trust, along),
         )
 
     def add_named_filter(self, model, code, predicate):

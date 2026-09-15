@@ -47,8 +47,8 @@ def _extra_handle():
         registry=TrustsRegistry(),
         compiler=PlanQueryCompiler(),
     )
-    handle.register_relationship(
-        DocumentGrant,
+    handle.register(
+        trust=DocumentGrant,
         user='user',
         permission='permission',
         content='document',

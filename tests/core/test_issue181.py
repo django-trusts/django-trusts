@@ -178,8 +178,8 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             path=MIXIN,
             registry=alt_registry,
             compiler=PlanQueryCompiler(),
-        ).register_relationship(
-            DocumentAltGrant,
+        ).register(
+            trust=DocumentAltGrant,
             user='user',
             permission='permission',
             content='document',

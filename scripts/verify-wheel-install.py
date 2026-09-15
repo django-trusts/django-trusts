@@ -75,6 +75,7 @@ def main() -> int:
     )
     from trusts.backends import TrustModelBackendMixin
     from trusts.core import (
+        BackendHandle,
         ConditionLookup,
         Ref,
         RegisteredRelation,
@@ -97,6 +98,57 @@ def main() -> int:
     core_file = Path(trusts.core.__file__).resolve()
     if 'site-packages' not in str(core_file) and 'dist-packages' not in str(core_file):
         raise SystemExit('trusts.core is not a site-packages install: %s' % core_file)
+    typed_marker = Path(trusts.__file__).resolve().parent / 'py.typed'
+    if not typed_marker.is_file():
+        raise SystemExit('installed wheel missing trusts/py.typed')
+    if hasattr(BackendHandle, 'register_relationship'):
+        raise SystemExit('library wheel still exposes register_relationship')
+    import inspect
+    from collections.abc import Callable as AbcCallable
+    from typing import TypeVar, get_args, get_origin, get_type_hints
+
+    signature = inspect.signature(BackendHandle.register)
+    param_names = [name for name in signature.parameters if name != 'self']
+    expected_params = [
+        'trust', 'user', 'permission', 'content', 'condition', 'along',
+    ]
+    if param_names != expected_params:
+        raise SystemExit(
+            'register parameters are %r, expected %r' % (param_names, expected_params)
+        )
+    for name in expected_params:
+        if signature.parameters[name].kind != inspect.Parameter.KEYWORD_ONLY:
+            raise SystemExit('register parameter %s is not keyword-only' % name)
+    hints = get_type_hints(BackendHandle.register)
+    trust_hint = hints.get('trust')
+    if get_origin(trust_hint) is not type:
+        raise SystemExit('register trust annotation is not type[T]: %r' % trust_hint)
+    trust_args = get_args(trust_hint)
+    if len(trust_args) != 1 or not isinstance(trust_args[0], TypeVar):
+        raise SystemExit('register trust is not type[TypeVar]: %r' % trust_hint)
+    for role in ('user', 'permission', 'content'):
+        role_hint = hints.get(role)
+        parts = get_args(role_hint)
+        if str not in parts:
+            raise SystemExit('%s hint missing str: %r' % (role, role_hint))
+        callable_parts = [
+            part for part in parts if get_origin(part) is AbcCallable
+        ]
+        if len(callable_parts) != 1:
+            raise SystemExit('%s hint missing Callable: %r' % (role, role_hint))
+        callable_args = get_args(callable_parts[0])
+        if callable_args != ([trust_args[0]], object):
+            raise SystemExit(
+                '%s Callable args are %r, expected [TypeVar] + object'
+                % (role, callable_args)
+            )
+    if hints.get('return') is not RegisteredRelation:
+        raise SystemExit(
+            'register return annotation is %r, expected RegisteredRelation'
+            % hints.get('return')
+        )
+    print('py.typed present')
+    print('register contextual typing', BackendHandle.register)
 
     from django.apps import apps as django_apps
 

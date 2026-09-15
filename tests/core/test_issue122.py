@@ -36,9 +36,10 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertNotIn('from trusts.decorators import permission_required', rst)
         self.assertNotIn('from trusts.decorators import P', rst)
         self.assertIn('add_named_filter', rst)
-        self.assertIn('register_relationship', rst)
+        self.assertIn('backend.register(', rst)
+        self.assertIn('trust=DocumentPermission', rst)
+        self.assertNotIn('register_relationship', rst)
         self.assertIn('register_ordered_fold()', rst)
-        self.assertIn('backend.register_relationship(', rst)
         self.assertNotIn('backend.register_ordered_fold(', rst)
         self.assertNotIn('source_descriptor="document"', rst)
         self.assertNotIn('content=WinNode', rst)
@@ -56,8 +57,9 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertNotIn('.registry.register(', rst)
         self.assertIn('o.confidential != True', rst)
         self.assertIn('confidential = models.BooleanField(default=False)', rst)
-        self.assertIn('Along', rst)
+        self.assertIn('Inherited relationships are provisional', rst)
         self.assertIn('along=("parent", 8)', rst)
+        self.assertIn('Ordered allow and deny support is provisional', rst)
         self.assertIn('OrderedFold', rst)
         self.assertIn('django-trusts-zero', rst)
         self.assertIn('django-trusts-gh-permissions', rst)
@@ -69,7 +71,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
         for needle in (
             'security boundary that implementation and',
-            'register_relationship(...)',
+            'register(*, trust, user, permission, content, condition=None, along=None)',
             'add_named_filter(...)',
             'Named filters are outer restrictions',
             'Runtime callbacks are unsupported',
@@ -115,10 +117,10 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
     def test_migration_record_leads_with_current_contract(self):
         migration = (ROOT / 'migrates.md').read_text()
         current = migration[:1800]
-        self.assertIn('Current 1.x contract', current)
-        self.assertIn('schema-neutral dependency', current)
-        self.assertIn('TrustModelBackendMixin', current)
-        self.assertIn('trusts.zero.apps.ZeroConfig', current)
+        self.assertIn('# Migrating to django-trusts 1.0', current)
+        self.assertIn('schema-neutral authorization library', current)
+        self.assertIn('django-trusts-zero', current)
+        self.assertIn('supported 0.x migration path', current)
 
     def test_live_router_points_at_merged_zero_and_rejects_zero_schema(self):
         path = ROOT / 'migrates.md'
@@ -127,55 +129,14 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         readme = (ROOT / 'README.md').read_text()
         pyproject = (ROOT / 'pyproject.toml').read_text()
 
-        self.assertIn('# Core migration record', text[:80])
-        self.assertIn('## Audiences', text)
-        self.assertIn('## Public Core 1.x actions', text)
-        self.assertIn('## Relation registration (#131)', text)
-        self.assertIn('## Family-local Core aggregates (#194 / #181)', text)
-        self.assertIn('## Remove OrderedFold from Core (#195 / C2)', text)
-        self.assertIn('_create_registry(path)', text)
-        self.assertIn('_create_handle(path, registry, compiler)', text)
-        self.assertIn('QueryCompiler.applies(plan)', text)
-        self.assertIn('_authorization_family', text)
-        self.assertIn('bool(plan.records)', text)
-        self.assertIn('relationship-family local', text)
-        self.assertIn('Do not read this as Core list/guard aggregation', text)
-        self.assertIn('from trusts.core import Ref', text)
-        self.assertIn('.registry.register(', text)
-        self.assertIn('.registry.register_strategy(', text)
-        self.assertIn('Along(', text)
-        self.assertIn('OrderedFold(', text)
-        self.assertIn('register_strategy(', text)
-        self.assertIn('register_strategy(OrderedFold', text)
-        self.assertIn('backend.register_relationship(DocumentGrant', text)
-        self.assertIn('backend.register_ordered_fold(Ace, OrderedFold(', text)
-        self.assertIn('backend.add_named_filter(', text)
-        self.assertIn(
-            'from trusts.decorators import P, R, K, G, O, permission_required',
-            text,
-        )
-        self.assertIn(
-            'from trusts.zero.decorators import P, R, K, G, O, permission_required',
-            text,
-        )
-        self.assertIn('does not forward, lazy-import, fall back', text)
-        self.assertNotIn('stay imported and', text)
-        self.assertIn('register_permission_condition(', text)
-        self.assertIn('OrderedFold(content="', text)
-        self.assertIn('source_descriptor="document"', text)
-        self.assertIn('content=Document', text)
-        self.assertIn('content=WinNode', text)
-        self.assertIn('register(..., strategy=', text)
-        self.assertIn('## Archaeology', text)
+        self.assertIn('# Migrating to django-trusts 1.0', text[:80])
+        self.assertIn('does not provide a direct migration', text)
         self.assertIn(
             'https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md',
             text,
         )
-        self.assertIn(
-            'https://github.com/django-trusts/django-trusts-zero/blob/'
-            '88a515e0956a820b2244bcc8982cf2d5ab9efd70/migrates.md',
-            text,
-        )
+        self.assertIn('https://django-trusts.readthedocs.io/en/dev/', text)
+        self.assertIn('## Archaeology', text)
         self.assertIn(
             'https://github.com/django-trusts/django-trusts/blob/'
             'migration-archive-pre-1.0/migrates.md',
@@ -186,7 +147,11 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             '7414886263faafb6edfb44c0c5fcf9fc8fa14e79/migrates.md',
             text,
         )
-        self.assertIn('1.x migration router', readme)
+        self.assertIn('historical reference', text)
+        self.assertIn('not an alternative 0.x migration path', text)
+        self.assertNotIn('Current 1.x contract', text)
+        self.assertNotIn('backend.register_relationship', text)
+        self.assertIn('[Migration guide](migrates.md)', readme)
         self.assertIn(
             'https://github.com/django-trusts/django-trusts/blob/dev/migrates.md',
             rst,
