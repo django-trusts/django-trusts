@@ -429,10 +429,10 @@ migration identities are preserved. Python imports and Django settings move to
 the explicit ``trusts.zero`` paths described in the `Zero migration guide
 <https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
-django-trusts keeps a terse migration-boundary record in `migrates.md
-<https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`__,
-while the supported 0.x migration guide is Zero's `migrates.md
-<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`__.
+django-trusts keeps a terse migration-boundary record in `django-trusts migrates.md
+<https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_,
+while the supported 0.x migration guide is Zero's `Zero migrates.md
+<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
 A runnable application using that implementation is available in
 `django-trusts-zero-example
