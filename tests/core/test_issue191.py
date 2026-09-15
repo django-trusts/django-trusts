@@ -17,7 +17,8 @@ LEGACY_NAMES = (
     'permission_required',
     'request_passes_test',
 )
-ZERO_PIN = '462c83b59edfb51011b4373e8214b2daaab7f500'
+ZERO_PIN = 'd413bde81738966930c5733e3971bbfe8b350bf7'
+STALE_ZERO_R5A = '462c83b59edfb51011b4373e8214b2daaab7f500'
 STALE_ZERO_191 = '517307170f954f187da78c56e236ec1779c46e29'
 STALE_ZERO_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
 
@@ -56,6 +57,8 @@ class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
         wheels = (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text()
         self.assertIn('COMPANION_ZERO_SHA: %s' % ZERO_PIN, ci)
         self.assertIn("ZERO_HEAD = '%s'" % ZERO_PIN, wheels)
+        self.assertNotIn(STALE_ZERO_R5A, ci)
+        self.assertNotIn(STALE_ZERO_R5A, wheels)
         self.assertNotIn(STALE_ZERO_191, ci)
         self.assertNotIn(STALE_ZERO_191, wheels)
         self.assertNotIn(STALE_ZERO_38, ci)

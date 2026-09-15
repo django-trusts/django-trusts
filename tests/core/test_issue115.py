@@ -186,7 +186,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn('license = "BSD-2-Clause"', pyproject)
         self.assertIn('readme = "README.md"', pyproject)
         self.assertNotIn('readme = "DEV.md"', pyproject)
-        self.assertIn('version = "1.0.0.dev3"', pyproject)
+        self.assertIn('version = "1.0.0rc1"', pyproject)
         self.assertNotIn(
             'multiple organizations and object-level permission settings',
             pyproject,

@@ -58,15 +58,15 @@ class ManagementArchiveMatcherTest(SimpleTestCase):
     def test_prefixed_sdist_member_is_rejected(self):
         self.assertEqual(
             ships_trusts_management([
-                'django_trusts-1.0.0.dev3/trusts/management/__init__.py',
+                'django_trusts-1.0.0rc1/trusts/management/__init__.py',
             ]),
-            ['django_trusts-1.0.0.dev3/trusts/management/__init__.py'],
+            ['django_trusts-1.0.0rc1/trusts/management/__init__.py'],
         )
         self.assertEqual(
             ships_trusts_management([
-                'django_trusts-1.0.0.dev3/trusts/management',
+                'django_trusts-1.0.0rc1/trusts/management',
             ]),
-            ['django_trusts-1.0.0.dev3/trusts/management'],
+            ['django_trusts-1.0.0rc1/trusts/management'],
         )
 
     def test_unrelated_paths_are_kept(self):
@@ -74,7 +74,7 @@ class ManagementArchiveMatcherTest(SimpleTestCase):
             ships_trusts_management([
                 'trusts/models.py',
                 'trusts/management_notes.py',
-                'django_trusts-1.0.0.dev3/trusts/apps.py',
+                'django_trusts-1.0.0rc1/trusts/apps.py',
                 'scripts/verify-legacy-upgrade.py',
             ]),
             [],

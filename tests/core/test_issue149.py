@@ -13,7 +13,8 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ZERO_CANDIDATE = '462c83b59edfb51011b4373e8214b2daaab7f500'
+ZERO_CANDIDATE = 'd413bde81738966930c5733e3971bbfe8b350bf7'
+STALE_ZERO_R5A = '462c83b59edfb51011b4373e8214b2daaab7f500'
 STALE_ZERO_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
 
 
@@ -69,6 +70,8 @@ class ExactZeroCandidatePinTest(SimpleTestCase):
         wheels = (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text()
         self.assertIn('COMPANION_ZERO_SHA: %s' % ZERO_CANDIDATE, ci)
         self.assertIn("ZERO_HEAD = '%s'" % ZERO_CANDIDATE, wheels)
+        self.assertNotIn(STALE_ZERO_R5A, ci)
+        self.assertNotIn(STALE_ZERO_R5A, wheels)
         self.assertNotIn(STALE_ZERO_38, ci)
         self.assertNotIn(STALE_ZERO_38, wheels)
         self.assertNotIn('Zero #38 register()', ci)

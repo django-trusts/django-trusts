@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Companion wheel isolation: core 1.0.0.dev3 + Zero IIa.
+"""Companion wheel isolation: django-trusts 1.0.0rc1 + exact Zero candidate.
 
 Proves Zero RECORD does not own trusts/__init__.py or trusts/apps.py,
 and that both companion layouts work:
@@ -25,7 +25,7 @@ from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
 # Exact Zero candidate companion.
-ZERO_HEAD = '462c83b59edfb51011b4373e8214b2daaab7f500'
+ZERO_HEAD = 'd413bde81738966930c5733e3971bbfe8b350bf7'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',

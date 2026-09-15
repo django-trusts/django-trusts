@@ -13,7 +13,7 @@ import importlib.metadata
 import sys
 from pathlib import Path
 
-EXPECTED_VERSION = '1.0.0.dev3'
+EXPECTED_VERSION = '1.0.0rc1'
 
 
 def main() -> int:

@@ -1,7 +1,7 @@
 """Detect ``trusts/management`` members in sdist/wheel archives.
 
 Wheel members are normally root-relative (``trusts/management/__init__.py``).
-Sdist members are prefixed (``django_trusts-1.0.0.dev3/trusts/management/...``).
+Sdist members are prefixed (``django_trusts-1.0.0rc1/trusts/management/...``).
 A matcher that only looks for ``/trusts/management/`` misses the wheel root.
 """
 
