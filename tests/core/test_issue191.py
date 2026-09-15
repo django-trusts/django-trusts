@@ -17,8 +17,9 @@ LEGACY_NAMES = (
     'permission_required',
     'request_passes_test',
 )
-ZERO_PIN = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
+ZERO_PIN = '462c83b59edfb51011b4373e8214b2daaab7f500'
 STALE_ZERO_191 = '517307170f954f187da78c56e236ec1779c46e29'
+STALE_ZERO_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
 
 
 class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
@@ -50,13 +51,15 @@ class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
         self.assertNotIn('fieldlookups', views)
         self.assertNotIn('trusts.zero', views)
 
-    def test_companion_pin_is_zero_38_register(self):
+    def test_companion_pin_is_exact_zero_candidate(self):
         ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
         wheels = (ROOT / 'scripts' / 'verify-companion-wheels.py').read_text()
         self.assertIn('COMPANION_ZERO_SHA: %s' % ZERO_PIN, ci)
         self.assertIn("ZERO_HEAD = '%s'" % ZERO_PIN, wheels)
         self.assertNotIn(STALE_ZERO_191, ci)
         self.assertNotIn(STALE_ZERO_191, wheels)
+        self.assertNotIn(STALE_ZERO_38, ci)
+        self.assertNotIn(STALE_ZERO_38, wheels)
         self.assertNotIn('f50946f7112702a41bd63a3e044b44a0d4ec3297', ci)
         self.assertNotIn('f50946f7112702a41bd63a3e044b44a0d4ec3297', wheels)
 

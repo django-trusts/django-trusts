@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Matrix B: core 1.0.0.dev3 + exact Zero IIa.
 
-Requires ZERO_CHECKOUT (django-trusts-zero at
-``c7dc4f11f728ad3c4c22249e471daa4bf9849404``, #38 public register()) and an
+Requires ZERO_CHECKOUT (django-trusts-zero at the exact Zero candidate
+``462c83b59edfb51011b4373e8214b2daaab7f500``) and an
 installed pair.
 Django is configured here so the kernel tests.settings host is not used.
 """
