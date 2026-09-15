@@ -24,8 +24,8 @@ if str(_SCRIPTS) not in sys.path:
 from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
-# Merged Zero #36 / #191 decorator family squash.
-ZERO_HEAD = '517307170f954f187da78c56e236ec1779c46e29'
+# Zero #38 public register() companion.
+ZERO_HEAD = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
 FORBIDDEN_ZERO_PATHS = (
     'trusts/__init__.py',
     'trusts/apps.py',

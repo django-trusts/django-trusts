@@ -54,7 +54,7 @@ def _check_metadata(meta_text: str, origin: str) -> None:
     readme_markers = (
         '# django-trusts',
         '## How permissions are represented',
-        'Installation in the complete usage guide',
+        'Installation in the usage guide',
         '[Security audit guide](SECURITY_AUDIT.md)',
     )
     for marker in readme_markers:
@@ -106,6 +106,8 @@ def _check_wheel(wheel: Path) -> None:
             raise SystemExit(
                 'wheel still ships trusts/management/**: %s' % management_hits
             )
+        if not any(name.endswith('trusts/py.typed') for name in names):
+            raise SystemExit('wheel missing trusts/py.typed: %s' % names[-20:])
     print('wheel metadata ok', wheel.name)
 
 
@@ -131,7 +133,7 @@ def _check_sdist(sdist: Path) -> None:
         readme = tf.extractfile(readme_name).read().decode()
         if (
             '# django-trusts' not in readme
-            or 'Installation in the complete usage guide' not in readme
+            or 'Installation in the usage guide' not in readme
         ):
             raise SystemExit('sdist README.md is not the concise user README')
         if any(name.endswith('/DEV.md') for name in names):
@@ -143,6 +145,8 @@ def _check_sdist(sdist: Path) -> None:
             raise SystemExit(
                 'sdist still ships trusts/management/**: %s' % management_hits
             )
+        if not any(name.endswith('trusts/py.typed') for name in names):
+            raise SystemExit('sdist missing trusts/py.typed')
     print('sdist metadata ok', sdist.name)
 
 

@@ -116,8 +116,8 @@ def _handle(note_grant):
         registry=TrustsRegistry(),
         compiler=PlanQueryCompiler(),
     )
-    handle.register_relationship(
-        note_grant,
+    handle.register(
+        trust=note_grant,
         user='user',
         permission='permission',
         content='note',

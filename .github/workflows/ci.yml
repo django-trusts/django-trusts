@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  # Merged Zero #36 / #191 decorator family (squash).
-  COMPANION_ZERO_SHA: 517307170f954f187da78c56e236ec1779c46e29
+  # Zero #38 public register() companion.
+  COMPANION_ZERO_SHA: c7dc4f11f728ad3c4c22249e471daa4bf9849404
 
 jobs:
   tests:
@@ -51,7 +51,7 @@ jobs:
       run: python -m django check --settings=tests.settings
 
   pair-iia:
-    name: pair with Zero #191 decorators
+    name: pair with Zero #38 register()
     runs-on: ubuntu-latest
     env:
       ZERO_CHECKOUT: ${{ github.workspace }}/.deps/django-trusts-zero
@@ -66,7 +66,7 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-    - name: Install core 1.0.0.dev3 then Zero #191 decorators
+    - name: Install core 1.0.0.dev3 then Zero #38 register()
       run: |
         python -m pip install --upgrade pip
         python -m pip install "Django>=6.1,<6.2" coverage
@@ -114,7 +114,15 @@ jobs:
         WORK="$(mktemp -d)"
         cd "$WORK"
         python "${GITHUB_WORKSPACE}/scripts/verify-wheel-install.py" --checkout "${GITHUB_WORKSPACE}"
-    - name: Companion Core + Zero #191 decorator wheels
+    - name: Installed-wheel Pyright contextual typing
+      env:
+        PYTHONPATH: ""
+      run: |
+        python -m pip install pyright
+        WORK="$(mktemp -d)"
+        cd "$WORK"
+        python "${GITHUB_WORKSPACE}/scripts/verify-wheel-pyright.py" --checkout "${GITHUB_WORKSPACE}"
+    - name: Companion Core + Zero #38 wheels
       run: |
         python -m pip install build
         python -m build --wheel --outdir .deps/django-trusts-zero/dist .deps/django-trusts-zero

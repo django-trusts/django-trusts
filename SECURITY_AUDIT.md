@@ -4,7 +4,7 @@ This guide describes the security boundary that implementation and
 documentation changes are expected to preserve. It is an audit map, not a
 substitute for reviewing the application, its data, or its deployment.
 
-## Security claim
+## Security model
 
 django-trusts answers object-permission questions from explicitly registered
 paths over persisted relational facts. Registration uses a small set of closed,
@@ -19,17 +19,17 @@ and every authorization backend installed beside django-trusts.
 
 ## Installation and dependencies
 
-Core's direct runtime dependency is Django. The supported Python, Django, and
+django-trusts's direct runtime dependency is Django. The supported Python, Django, and
 database combinations are recorded in
 [the support matrix](docs/support-matrix.md). Build and test dependencies are
 not part of the runtime authorization boundary.
 
 Django selects and loads the database backend and driver configured by the
-application; Core does not import, select, or manage database drivers. The
+application; django-trusts does not import, select, or manage database drivers. The
 application and deployment therefore own driver provenance and versioning,
 secure connection settings, and operational availability.
 
-Core supplies no Django application or concrete permission schema. Do not add
+django-trusts supplies no Django application or concrete permission schema. Do not add
 `"trusts"` to `INSTALLED_APPS`. Install the application or package that owns
 the concrete Trusts implementation instead.
 
@@ -39,7 +39,7 @@ part of each release.
 
 ## Models and persisted facts
 
-The application owns all protected models and permission-bearing rows. It must
+The application owns all protected models and trust records. It must
 enforce their database constraints, tenancy rules, valid state transitions, and
 authorized write paths.
 
@@ -54,36 +54,69 @@ boundary. Application code uses the object returned by
 `configured_backend()`; it must not construct private registry or compiler
 objects.
 
-The Core 1.x public surface has one grant-producing family and one restricting
+The django-trusts 1.x public surface has one grant-producing family and one restricting
 overlay:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register_relationship(...)` | Register paths from a permission-bearing model to user, permission, and protected content | Yes |
+| `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
-Ordered allow/deny registration lives in
-[django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold).
-Core does not import, depend on, auto-discover, or fallback-import that
-package.
-
-Registration must issue no SQL. Unsupported paths, types, constants, and
-combinations fail during setup. Registration closes when the configured
-registry freezes; late mutation is rejected.
+django-trusts registration is intended not to issue SQL. Unsupported paths,
+types, constants, and combinations are intended to be rejected during setup.
+Registration closes when the configured registry freezes; late mutation is
+rejected.
 
 ### Relationship authorization
 
-A relationship registration names three non-empty Django `__` paths from one
-permission-bearing root:
+A trust registration has the public signature
+`register(*, trust, user, permission, content, condition=None, along=None)`.
+The required `trust=` model is the root of the three non-empty paths:
 
 ```python
-backend.register_relationship(
-    DocumentPermission,
+backend.register(
+    trust=DocumentPermission,
+    user=lambda t: t.user,
+    permission=lambda t: t.permission,
+    content=lambda t: t.document,
+)
+
+backend.register(
+    trust=DocumentPermission,
     user="user",
     permission="permission",
     content="document",
 )
 ```
+
+Each path accepts either a Django `__` string or a one-argument path lambda;
+both forms of the same registration are shown above. django-trusts calls the
+lambda once with a symbolic path value. Attribute access records a path rooted
+at the `trust=` model; other operations are unsupported. django-trusts
+validates the resulting path with Django model metadata, stores its normalized
+`__` form, and does not retain the lambda.
+
+The lambda runs during `AppConfig.ready()`, in the same application context
+as the surrounding registration code. django-trusts does not inspect or sandbox
+unrelated Python in its body. Its path validation is designed not to issue SQL;
+that statement does not cover other application code executed by the lambda.
+An exception, an empty or invalid path, or an unsupported relationship shape is
+rejected before django-trusts updates the registry. Side effects already
+performed by application code are outside that behavior.
+
+`condition=` is the same one-argument symbolic predicate, rooted at `trust=`.
+It is invoked once after the freeze check. 1.0 operations are path equality
+(`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
+Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
+or a `__contains__` side channel. The stored overlay is private `Equal` /
+`PermissionIn` / `All` and contains no callable. Public
+`register(condition=...)` rejects prebuilt `All` / `Equal` / `permission_in`
+values. `.contains` is a reserved condition-proxy method; a model field of
+that name cannot be walked there. The `predicate=` keyword is reserved and
+unsupported in 1.0. Invalid arity, foreign roots, empty or non-expression
+returns, unsupported operations, and predicate exceptions fail closed.
+django-trusts' own validation is designed not to issue SQL and does not
+partially mutate the registry.
 
 A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and
@@ -99,32 +132,6 @@ and then query only its first hop.
 The `user`, `permission`, and `content` relationship path arguments may
 not be empty.
 
-### Ordered allow and deny
-
-OrderedFold is not a Core engine. Import the five construction types and
-`register_ordered_fold(...)` from `trusts_ordered_fold`, list
-`TrustsOrderedFoldModelBackend` (or a subclass such as Windows
-`WinfsBackend`), and own that path with
-`OrderedFoldImplementationConfig`. Vendor diagnostics are
-`trusts_ordered_fold.E001`, not Core `trusts.E006`.
-
-At the current 1.0 boundary, object-level ``user.has_perm`` uses Django's
-ordered authentication-backend OR. A relationship grant or an OrderedFold
-grant on another configured backend can authorize that single object.
-An OrderedFold deny cannot veto an independent relationship grant or
-revoke a grant returned by another configured Django authentication
-backend.
-
-Core list, guard, and common-permission helpers are relationship-family
-local. ``Model.objects.authorized``, ``authorization_required``,
-``filter_authorized_scopes``, and module-level ``granted`` /
-``common_permissions`` include only handles whose implementation
-``_authorization_family`` is ``"relationship"``. They do not compile a
-mixed-family one-SQL OR. Django's object-level backend OR is a different
-layer and must not be read as Core list/guard aggregation. Same-path
-family-local OR of relationship and OrderedFold on one Core plan is
-removed.
-
 ### Named filters are outer restrictions
 
 A named filter is registered against the protected model:
@@ -137,13 +144,14 @@ backend.add_named_filter(
 )
 ```
 
-The callable is a trusted registration-time builder. The backend invokes it
-once with symbolic principal, permission, and object references. Operations on
-those references construct a closed expression tree; Core validates and
-normalizes that result, stores only the immutable IR, and discards the
-callable. Core does not inspect or parse the callable's Python source. Do not query,
-perform I/O, capture request state, or rely on mutable captured values inside
-the predicate.
+The backend invokes the callable once with symbolic principal, permission, and
+object references. Operations on those references construct a closed expression
+tree; django-trusts validates and normalizes that result, stores only the
+immutable IR, and discards the callable. The predicate runs in the same
+application-startup context as its surrounding code and receives no additional
+authority from django-trusts. django-trusts does not inspect or sandbox the
+callable body; SQL, I/O, request state, and mutable captures remain application
+behavior outside the returned-expression validation.
 
 At an authorization site, the named filter restricts an existing grant:
 
@@ -153,29 +161,16 @@ AND
 NamedFilter(object, user, permission)
 ```
 
-When an OrderedFold backend is configured, the filter compiles against
-the outer protected-object query in that package. It is not injected
-into the recursive CTE and does not:
-
-- select or reject individual ACE rows;
-- alter traversal bounds, direction, or cycle handling;
-- change ordering, polarity, mask consumption, or trustee tokens; or
-- act as a recursive stopping rule.
-
-A rule that changes ACE eligibility or recursive evaluation belongs in
-the closed OrderedFold grammar owned by
-``django-trusts-ordered-fold``. It must not be hidden in an object
-filter.
-
-Unknown, unbound, or untranslatable named filters fail closed. A filter cannot
-create a grant. Permission enumeration returns bare permissions rather than every possible
+Unknown, unbound, or untranslatable named filters are intended to produce no
+grant. A filter restricts an existing grant; it is not intended to create one.
+Permission enumeration returns bare permissions rather than every possible
 combination of permission and filter names.
 
 ### Runtime callbacks are unsupported
 
 Arbitrary runtime permission callbacks are not part of the public surface. They
-cannot provide object/queryset parity, startup validation, deterministic
-inspection, or fixed-query proof.
+are outside the supported object/queryset parity, startup-validation,
+deterministic-inspection, and fixed-query model.
 
 The obsolete `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` setting does not
 restore callbacks. If it remains true, Django's system checks report
@@ -197,7 +192,7 @@ Audit all of the following:
 - the point at which registration freezes; and
 - the output of `python manage.py check`.
 
-Core is schema-neutral and has no final `AppConfig`. Concrete implementations
+django-trusts is schema-neutral and has no final `AppConfig`. Concrete implementations
 own their application labels, migrations, tables, and registration calls.
 
 ### Django's outer authorization boundary
@@ -224,7 +219,7 @@ The supported projections consume the same normalized registration:
 | Authorized objects | `Model.objects.authorized(user, permission)` | Relationship-family SQL before pagination; not Django backend OR |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
-The Core view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
+The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
 through the protected model's primary-key field, and keeps it as a parameter.
 Request data cannot select query structure.
 
@@ -272,21 +267,13 @@ bounded reachability. Audit:
 - the supported database renderer; and
 - agreement among object, queryset, and enumeration projections.
 
-The current Along renderer is verified only for the database combinations
-listed in the support matrix.
+Current CI exercises Along only for the database combinations listed in the
+support matrix.
 
-### OrderedFold PostgreSQL renderer
+## Fail-closed principle
 
-The remaining-bits evaluator is owned by
-[django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold)
-and is rendered for PostgreSQL there. Core no longer ships that
-renderer. PostgreSQL execution tests in the extension—not string
-inspection alone—are required for nested `OuterRef`, alias scoping,
-aggregation, enumeration, and composition changes.
-
-## Fail-closed expectations
-
-The following must not silently become grants:
+django-trusts is designed around a fail-closed principle. We intend cases that
+cannot be safely authorized not to become grants silently. This includes:
 
 - missing or unknown registrations;
 - malformed paths or unsupported relationship shapes;
@@ -296,16 +283,18 @@ The following must not silently become grants:
 - unknown named filters;
 - unsupported predicate expressions;
 - frozen-registry mutation;
-- malformed OrderedFold rows or permission domains;
 - unsupported database renderers; and
 - invalid request primary-key coercion.
 
-Configuration failures should be reported during startup or system checks where
-possible. Runtime denial must not fall back to a broader Trusts path.
+This list is not exhaustive. A newly discovered path that can fail open is
+treated as a defect and should be closed.
+
+Where practical, configuration failures should surface during startup or system
+checks. Runtime denial should not fall back to a broader Trusts path.
 
 ## Reference implementations
 
-Reference repositories validate bounded portions of the Core contract:
+Reference repositories validate bounded portions of the django-trusts contract:
 
 - [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
   preserves the concrete 0.x Trust model and migration identity.
@@ -314,19 +303,18 @@ Reference repositories validate bounded portions of the Core contract:
 - [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions)
   demonstrates direct and team-derived relationship grants, ceilings, and
   organization alignment.
-- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl)
-  demonstrates ordered allow/deny masks and bounded inheritance.
 
-A passing reference implementation proves only its declared schema and tested
-operations. It is not a universal security proof for applications that adapt
-the example.
+Each reference repository provides an example for its listed schema and
+operations. It should not be read as a security assessment of applications
+adapted from it.
 
 ## Validation and review discipline
 
 Run the complete supported test matrix, warning-fatal documentation build,
 package/fresh-install checks, Django system checks, and exact companion tests
-required by the changed surface. API changes require a same-PR
-`migrates.md` entry and migration-bot checklist.
+required by the changed surface. API changes require review of their migration
+impact. Compatibility instructions for 0.x belong in
+`django-trusts-zero`.
 
 For every material implementation or documentation change, reviewers should
 answer:
@@ -334,7 +322,7 @@ answer:
 1. Which statement in this guide does the change implement or preserve?
 2. Does the change expand the grant-producing surface?
 3. Do object, queryset, enumeration, and guard projections still agree?
-4. Does registration remain zero-SQL and fail before partial mutation?
+4. Does the change introduce registration-time database access or partial mutation?
 5. Is the final authorization query still within its tested statement bound?
 6. Did any unsupported database, callback, private registry, or private IR
    surface become reachable?
@@ -343,6 +331,3 @@ answer:
 
 Discrepancies must be surfaced in the PR rather than resolved implicitly.
 
-A future policy manifest/lockfile may make normalized declarations and generated
-SQL independently reviewable. That work is tracked separately and is not part
-of the 1.0 public contract.

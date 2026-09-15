@@ -16,13 +16,14 @@ allowing applications to use familiar checks such as
 with ordinary Django models.
 
 At its simplest, a permission is a persisted relationship among a user, an
-operation, and protected content. An application declares the model paths
-connecting them. A permission may come from a direct grant row, team
-membership, an organizational relationship, an inherited access-control
-entry, or another relational structure owned by the application.
+operation, and protected content. The application model from which those paths
+begin is the **trust model**. A matching trust record is a candidate grant. A
+trust model may be an explicit many-to-many relation model, a direct grant
+model, or another relational structure owned by the application.
 
-``django-trusts`` compiles these declarations into database queries, keeping
-permission decisions based on persisted truth. The same declarations support
+``django-trusts`` compiles these declarations into database queries via
+QuerySet, keeping permission decisions based on persisted truth. The same
+declarations support
 object checks, authorized querysets, permission enumeration, and decorators
 for protecting views. The separate `security audit guide
 <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
@@ -32,18 +33,17 @@ with the application.
 How permissions are represented
 --------------------------------
 
-A registered permission relationship connects three paths:
+A registered trust connects three paths:
 
 * **user** -- who is requesting access;
 * **permission** -- the operation being requested; and
 * **content** -- the object being protected.
 
-The paths begin from the same permission-bearing relation. In the simplest
-case, that relation is a table with foreign keys to a user, a Django
-permission, and a protected object.
+All three paths begin from the same trust model. In the simplest case, that
+model has foreign keys to a user, a Django permission, and a protected object.
 
-Multiple registered relationships may authorize the same kind of content.
-Each complete relationship is an independent way to receive permission.
+Multiple registered trusts may authorize the same kind of content. Each
+complete trust is an independent way to receive permission.
 
 Installation
 ------------
@@ -58,7 +58,7 @@ The current development version requires Python 3.12--3.14 and Django 6.1.
 Define the models
 -----------------
 
-The application owns its protected content and permission relationships.
+The application owns its protected content and trust models.
 
 .. code-block:: python
 
@@ -75,6 +75,7 @@ The application owns its protected content and permission relationships.
        title = models.CharField(max_length=200)
        confidential = models.BooleanField(default=False)
 
+       # Adds Document.objects.authorized(user, permission).
        objects = AuthorizedManager()
 
 
@@ -92,8 +93,12 @@ The application owns its protected content and permission relationships.
            on_delete=models.CASCADE,
        )
 
-``DocumentPermission`` is the permission-bearing relation. Each row connects
-one user and one permission to one document.
+``DocumentPermission`` is the trust model. Each trust record connects one
+user and one permission to one document.
+
+``AuthorizedManager`` is needed only when the protected model should expose
+``Document.objects.authorized(user, permission)`` for queryset filtering.
+Plain ``user.has_perm(permission, document)`` object checks do not require it.
 
 Granting and revoking permission are ordinary changes to persisted application
 data:
@@ -134,8 +139,8 @@ The application provides a Django authentication backend using
    class DocumentBackend(TrustModelBackendMixin, ModelBackend):
        pass
 
-Register the permission relationship
-------------------------------------
+Register the trust
+------------------
 
 Register the model paths when the application starts:
 
@@ -158,11 +163,11 @@ Register the model paths when the application starts:
            from .models import Document, DocumentPermission
 
            backend = self.configured_backend()
-           backend.register_relationship(
-               DocumentPermission,
-               user="user",
-               permission="permission",
-               content="document",
+           backend.register(
+               trust=DocumentPermission,
+               user=lambda t: t.user,
+               permission=lambda t: t.permission,
+               content=lambda t: t.document,
            )
            backend.add_named_filter(
                Document,
@@ -170,12 +175,23 @@ Register the model paths when the application starts:
                predicate=lambda u, p, o: o.confidential != True,
            )
 
-``DocumentPermission`` is the permission-bearing root. The three Django
-``__`` relationship paths identify the user, permission, and protected
-content associated with each row.
+``DocumentPermission`` is the trust model. The three paths identify the user,
+permission, and protected content associated with each trust record.
 
-The declaration is validated when it is registered. Invalid or unsupported
-paths raise a configuration error instead of becoming an authorization rule.
+``user``, ``permission``, and ``content`` each accept either a one-argument
+path lambda (the form in ``ready()`` above) or a Django ``__``
+path string. Both forms of the same registration are valid; the string
+equivalent is:
+
+.. code-block:: python
+
+   backend.register(
+       trust=DocumentPermission,
+       user="user",
+       permission="permission",
+       content="document",
+   )
+
 
 Configure Django
 ----------------
@@ -267,54 +283,64 @@ consume the same normalized registrations.
 Named filters
 -------------
 
-A named filter further constrains an existing permission. Register its
-builder with ``backend.add_named_filter``. The backend invokes the builder
-exactly once with symbolic ``(u, p, o)`` references. Operations on those
-references construct a closed expression tree; Core validates and normalizes
-that result, stores only the immutable IR, and discards the callable. Core
-does not inspect the callable's Python source, and the callable never runs
-during ``has_perm``, permission enumeration, or queryset filtering.
+A named filter further constrains an existing permission; it cannot grant
+permission by itself. Register it against the protected model during
+``AppConfig.ready()`` with ``backend.add_named_filter(...)``.
 
-Builders are trusted startup code, like ``AppConfig.ready()``. Do not query,
-perform I/O, or read request state inside them. Core itself adds no SQL
-during registration.
-
-The ``DocumentsConfig.ready()`` example above registers
-``non_confidential`` against ``Document.confidential``. A ``lambda`` and
-an equivalent named function are accepted identically. Native object checks
-select one named filter with the existing ``:name`` suffix; the
-``authorization_required`` decorator accepts an explicit tuple of names.
+Its predicate is a three-argument lambda or function: ``u`` is the requesting
+user, ``p`` is the requested permission, and ``o`` is the protected object. It
+must return a supported boolean expression that django-trusts can translate
+into the Django QuerySet used for authorization. The example above registers
+``non_confidential`` against ``Document.confidential``. Object checks select
+one named filter with the ``:name`` suffix; ``authorization_required`` accepts
+a tuple of names. Unsupported expressions fail registration.
 
 .. code-block:: python
 
    user.has_perm("documents.change_document:non_confidential", document)
 
-Unsupported operations, exceptions, non-predicates, unresolved fields, and
-forbidden constant captures fail at registration. Later mutation of a
-Python object captured by the builder cannot change authorization.
-
-``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` does not restore runtime
-callbacks. If that setting is still ``True``, ``manage.py check`` reports
-``trusts.E007``.
-
 More expressive permission policies
 -----------------------------------
 
-The ``DocumentPermission`` example uses the shortest useful path: one row
+The ``DocumentPermission`` example uses the shortest useful trust: one record
 directly connects a user, a permission, and a document. The same registration
-API also supports paths through multiple relationships.
+API also supports paths through multiple relationships:
 
-For example, a user may receive permission through membership in a team, while
-the team receives access to content through another model. The registered user
-path can traverse those relationships without copying the resulting
-permissions into a separate user-object table.
+.. code-block:: python
 
-The ``condition=`` argument on ``register_relationship`` can further constrain
-that relationship branch. It may require the user and content to belong to the
-same organization, or require a requested operation to appear in a team's
-allowed operations. A relationship condition is always applied to its branch;
-a named filter is selected by an authorization caller. Neither can create
-permission by itself.
+   backend.register(
+       trust=TeamDocumentPermission,
+       user=lambda t: t.team.members,  # or "team__members"
+       permission=lambda t: t.permission,  # or "permission"
+       content=lambda t: t.document,  # or "document"
+   )
+
+The ``condition=`` argument on ``register`` is a one-argument symbolic
+predicate rooted at the trust model. django-trusts invokes it once during
+registration and stores no callable. The 1.0 grammar is path equality
+(``==``), collection-rooted membership (``.contains(member)``), and
+conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
+Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
+``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
+reserved method on the condition proxy; a model field actually named
+``contains`` cannot be walked there. ``predicate=`` is reserved and
+unsupported in 1.0.
+
+.. code-block:: python
+
+   backend.register(
+       trust=TeamDocumentPermission,
+       user=lambda t: t.team.members,
+       permission=lambda t: t.permission,
+       content=lambda t: t.document,
+       condition=lambda t: (
+           t.team.allowed_operations.contains(t.permission)
+           & (t.team.organization == t.document.organization)
+       ),
+   )
+
+A relationship condition is always applied to its branch; a named filter is
+selected by an authorization caller. Neither can create permission by itself.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either complete
@@ -323,44 +349,22 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Permissions may also be inherited through hierarchical relationships. The
-Along walk is registered as ``along=("parent", 8)`` on
-``backend.register_relationship``.
-It uses a bounded hierarchy with a recursive common table expression,
-allowing a permission attached to one node to apply to related ancestors
-or descendants without traversing the hierarchy in Python.
+Inherited relationships are provisional. A bounded hierarchical walk may be
+declared with ``along=("parent", 8)`` on ``backend.register``.
+django-trusts evaluates the walk with a recursive common table expression
+rather than traversing the hierarchy in Python. The database combinations
+currently exercised by CI are recorded in the `support matrix
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Policies that require ordered allow and deny entries belong in
 `django-trusts-ordered-fold
-<https://github.com/django-trusts/django-trusts-ordered-fold>`_, not
-Core. That package owns ``OrderedFold``, ``PermissionMaskDomain``,
-``MaskEntry``, ``PolarityMap``, ``FlatToken``,
-``register_ordered_fold()``, ``TrustsOrderedFoldModelBackend``, and
-the PostgreSQL remaining-bits renderer. Core does not import, depend
-on, auto-discover, or fallback-import it.
-
-A complete working Windows declaration and its security assumptions
-live in `django-trusts-windows-acl
+<https://github.com/django-trusts/django-trusts-ordered-fold>`_ is a
+provisional extension of django-trusts for ordered allow and deny policies.
+An example Windows declaration lives in
+`django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
-
-Object-level ``user.has_perm`` uses Django's ordered
-``AUTHENTICATION_BACKENDS`` OR. A relationship grant or an OrderedFold
-grant on another configured backend can authorize that single object.
-An OrderedFold deny on another backend does not veto an independent
-relationship grant returned by a relationship backend.
-
-Core list, guard, and common-permission helpers are relationship-family
-local. ``Model.objects.authorized``, ``authorization_required``,
-``filter_authorized_scopes``, and module-level ``granted`` /
-``common_permissions`` include only handles whose implementation
-``_authorization_family`` is ``"relationship"``. They do not compile a
-mixed-family one-SQL OR and must not be read as Django's object-level
-backend OR. A future combined list projection belongs in the
-OrderedFold package, not Core. Database support varies by evaluator;
-see the support matrix for the currently verified combinations.
 
 Reference implementations
 -------------------------
@@ -395,13 +399,11 @@ Ordered access-control entries
 permissions using persisted access-control entries with ordering, allow and
 deny effects, permission masks, and inheritance.
 
-It demonstrates how an ACL-style permission system can use
-``django-trusts-ordered-fold`` while retaining the same Django-facing
-permission APIs.
-
-The project is intended to prove that this class of permission system can be
-implemented with ``django-trusts``. It is not intended to reproduce every
-feature or security guarantee of Windows ACLs.
+It demonstrates an ACL-style permission system built with
+``django-trusts-ordered-fold``, a provisional extension of ``django-trusts``,
+while
+retaining the same Django-facing permission APIs. It is not intended to
+reproduce every feature or security behavior of Windows ACLs.
 
 Users of django-trusts 0.x
 --------------------------
@@ -420,7 +422,7 @@ migration identities are preserved. Python imports and Django settings move to
 the explicit ``trusts.zero`` paths described in the `Zero migration guide
 <https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
-The Core 1.x migration router is `migrates.md
+The migration guide is `migrates.md
 <https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_.
 
 A runnable application using that implementation is available in
@@ -436,8 +438,9 @@ Run Django's system checks during development and deployment:
 
    python manage.py check
 
-Invalid declarations are rejected during application setup. Missing
-registrations and unsupported permission paths fail closed.
+django-trusts is designed to reject invalid declarations during application
+setup. Missing registrations and unsupported permission paths are intended to
+fail closed.
 
 Current Python, Django, database, and evaluation-strategy support is recorded
 in the `support matrix
