@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove wheel/sdist identity: core 1.0.0.dev3, BSD-2-Clause, user README."""
+"""Prove wheel/sdist identity: django-trusts 1.0.0rc1, BSD-2-Clause, user README."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ if str(_SCRIPTS) not in sys.path:
 from management_archive import ships_trusts_management
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = '1.0.0.dev3'
+EXPECTED_VERSION = '1.0.0rc1'
 EXPECTED_NAME = 'django-trusts'
 FORBIDDEN_LONG_DESC = (
     'Step I',
@@ -99,8 +99,8 @@ def _check_wheel(wheel: Path) -> None:
             raise SystemExit('wheel LICENSE notice is not BeeDesk 2015-2026')
         if 'and contributors' in notice.split('THIS SOFTWARE')[0]:
             raise SystemExit('wheel LICENSE copyright adds "and contributors"')
-        if 'django_trusts-1.0.0.dev3' not in wheel.name:
-            raise SystemExit('wheel filename is not 1.0.0.dev3: %s' % wheel.name)
+        if 'django_trusts-1.0.0rc1' not in wheel.name:
+            raise SystemExit('wheel filename is not 1.0.0rc1: %s' % wheel.name)
         management_hits = ships_trusts_management(names)
         if management_hits:
             raise SystemExit(
@@ -114,9 +114,9 @@ def _check_wheel(wheel: Path) -> None:
 def _check_sdist(sdist: Path) -> None:
     with tarfile.open(sdist, 'r:gz') as tf:
         names = tf.getnames()
-        prefix = 'django_trusts-1.0.0.dev3'
+        prefix = 'django_trusts-1.0.0rc1'
         if not any(name == prefix or name.startswith(prefix + '/') for name in names):
-            raise SystemExit('sdist is not 1.0.0.dev3: %s' % sdist.name)
+            raise SystemExit('sdist is not 1.0.0rc1: %s' % sdist.name)
         license_name = next((name for name in names if name.endswith('/LICENSE')), None)
         if license_name is None:
             raise SystemExit('sdist missing LICENSE')

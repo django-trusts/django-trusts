@@ -1,7 +1,7 @@
-# Development version 1.0.0.dev3
+# Development version 1.0.0rc1
 
-The revived Trusts development line is **1.0.0.dev3**. This is a
-development-version mark only. It is not a production 1.0 release, not a PyPI
+The revived Trusts development line is **1.0.0rc1**. This is a
+release-candidate mark. It is not a production 1.0 release, not a PyPI
 publication, and not a claim that the declarative permission model has been
 validated. `1.0.0.dev3` identifies the library cutover (#111). `1.0.0.dev2`
 remains the merged implementation-owned registry bridge (#108). `1.0.0.dev1`
@@ -65,8 +65,8 @@ version.
 
 | Location | Role | Value |
 | --- | --- | --- |
-| `pyproject.toml` | Authoritative package metadata | `1.0.0.dev3` |
+| `pyproject.toml` | Authoritative package metadata | `1.0.0rc1` |
 | `setup.py` | Thin wrapper; no duplicate version field | defers to `pyproject.toml` |
-| `docs/source/conf.py` | Sphinx `version` / `release` | `1.0.0.dev3` |
+| `docs/source/conf.py` | Sphinx `version` / `release` | `1.0.0rc1` |
 | `trusts/__init__.py` | No `__version__` | unchanged |
 | `docs/legacy-baseline.md`, `docs/legacy/baseline.json` | Historical 0.10.3 record | preserved |

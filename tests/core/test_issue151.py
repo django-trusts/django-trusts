@@ -124,7 +124,8 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
     def test_companion_pin_is_exact_zero_candidate(self):
-        z_methods = '462c83b59edfb51011b4373e8214b2daaab7f500'
+        z_methods = 'd413bde81738966930c5733e3971bbfe8b350bf7'
+        stale_r5a = '462c83b59edfb51011b4373e8214b2daaab7f500'
         stale_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
         stale_191 = '517307170f954f187da78c56e236ec1779c46e29'
         stale_181 = 'f50946f7112702a41bd63a3e044b44a0d4ec3297'
@@ -141,6 +142,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertIn("ZERO_HEAD = '%s'" % z_methods, pairing['wheels'])
         for name, text in pairing.items():
             self.assertNotIn(stale, text, name)
+            self.assertNotIn(stale_r5a, text, name)
             self.assertNotIn(stale_38, text, name)
             self.assertNotIn(stale_181, text, name)
             self.assertNotIn(stale_191, text, name)
