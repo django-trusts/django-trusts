@@ -81,6 +81,20 @@ Migration-bot checklist:
 - `Python 'in' is unsupported`
 - reserved field name `contains` on a condition proxy walk
 
+## Application-owned AuthorizedManagerMixin (#209)
+
+| | Old | New |
+| --- | --- | --- |
+| Authorized manager | Use the concrete `AuthorizedManager`, or duplicate `.authorized()` in an application manager | Optionally mix `AuthorizedManagerMixin` into the application-owned manager while retaining its behavior |
+
+No mandatory consumer change. `AuthorizedManager` remains supported.
+
+Migration-bot checklist:
+
+- `AuthorizedManager(`
+- custom manager definitions
+- application-owned `authorized(` methods
+
 ## Archaeology
 
 The pre-1.0 development migration record is preserved for historical reference

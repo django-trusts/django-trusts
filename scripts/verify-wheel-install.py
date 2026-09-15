@@ -83,7 +83,7 @@ def main() -> int:
         TrustsRegistry,
         filter_authorized_scopes,
     )
-    from trusts.query import AuthorizedManager, AuthorizedQuerySet
+    from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
         PermissionConditionError,
         permission_condition_code,
@@ -251,7 +251,7 @@ def main() -> int:
     print('kernel_config absent')
     print('TrustsImplementationConfig', TrustsImplementationConfig)
     print('implementation_configs', implementation_configs())
-    print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManager)
+    print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
     standalone = TrustsRegistry()
