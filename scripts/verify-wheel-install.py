@@ -142,6 +142,20 @@ def main() -> int:
                 '%s Callable args are %r, expected [TypeVar] + object'
                 % (role, callable_args)
             )
+    condition_hint = hints.get('condition')
+    condition_parts = get_args(condition_hint)
+    if type(None) not in condition_parts:
+        raise SystemExit('condition hint missing None: %r' % condition_hint)
+    condition_callables = [
+        part for part in condition_parts if get_origin(part) is AbcCallable
+    ]
+    if len(condition_callables) != 1:
+        raise SystemExit('condition hint missing Callable: %r' % condition_hint)
+    if get_args(condition_callables[0]) != ([trust_args[0]], object):
+        raise SystemExit(
+            'condition Callable args are %r, expected [TypeVar] + object'
+            % (get_args(condition_callables[0]),)
+        )
     if hints.get('return') is not RegisteredRelation:
         raise SystemExit(
             'register return annotation is %r, expected RegisteredRelation'

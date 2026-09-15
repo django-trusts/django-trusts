@@ -315,12 +315,32 @@ API also supports paths through multiple relationships:
        content=lambda t: t.document,  # or "document"
    )
 
-The ``condition=`` argument on ``register`` can further constrain
-that relationship branch. It may require the user and content to belong to the
-same organization, or require a requested operation to appear in a team's
-allowed operations. A relationship condition is always applied to its branch;
-a named filter is selected by an authorization caller. Neither can create
-permission by itself.
+The ``condition=`` argument on ``register`` is a one-argument symbolic
+predicate rooted at the trust model. django-trusts invokes it once during
+registration and stores no callable. The 1.0 grammar is path equality
+(``==``), collection-rooted membership (``.contains(member)``), and
+conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
+Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
+``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
+reserved method on the condition proxy; a model field actually named
+``contains`` cannot be walked there. ``predicate=`` is reserved and
+unsupported in 1.0.
+
+.. code-block:: python
+
+   backend.register(
+       trust=TeamDocumentPermission,
+       user=lambda t: t.team.members,
+       permission=lambda t: t.permission,
+       content=lambda t: t.document,
+       condition=lambda t: (
+           t.team.allowed_operations.contains(t.permission)
+           & (t.team.organization == t.document.organization)
+       ),
+   )
+
+A relationship condition is always applied to its branch; a named filter is
+selected by an authorization caller. Neither can create permission by itself.
 
 Applications may register more than one valid path to the same content. A
 direct user grant and a team-derived grant can coexist, with either complete

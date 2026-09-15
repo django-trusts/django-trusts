@@ -131,6 +131,14 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
 
         self.assertIn('# Migrating to django-trusts 1.0', text[:80])
         self.assertIn('does not provide a direct migration', text)
+        self.assertIn('## Relationship condition language (#210)', text)
+        self.assertIn(
+            '| Membership | `permission_in("team__allowed_operations")` |',
+            text,
+        )
+        self.assertNotIn('Python `in` or `permission_in', text)
+        self.assertTrue((ROOT / 'docs' / 'core-registry.md').is_file())
+        self.assertFalse((ROOT / 'docs' / 'registry.md').exists())
         self.assertIn(
             'https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md',
             text,

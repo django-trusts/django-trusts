@@ -1,11 +1,12 @@
 """#131 C-methods: public relationship and named-filter APIs.
 
-Configured-backend Django ``__`` paths, string condition leaves,
-``along=(path, bound)``, ``register(*, trust=...)``, and
+Configured-backend Django ``__`` paths, symbolic ``condition=``
+builders, ``along=(path, bound)``, ``register(*, trust=...)``, and
 ``add_named_filter``. The earlier positional/strategy
 ``BackendHandle.register`` forms and
-``register_permission_condition`` remain removed. ``Ref`` input is
-TypeError. Freeze raises before path resolution. Dual backends stay
+``register_permission_condition`` remain removed. ``Ref`` input and
+prebuilt ``All`` / ``Equal`` / ``permission_in`` on the public handle
+are TypeError. Freeze raises before path resolution. Dual backends stay
 isolated. Internal ``TrustsRegistry.register(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
 """
@@ -270,12 +271,9 @@ class HandleConditionAndAlongTest(SimpleTestCase):
             user='team__members',
             permission='operation',
             content='repository',
-            condition=All(
-                permission_in('team__permission_bundles__operations'),
-                Equal(
-                    'team__organization',
-                    'repository__organization',
-                ),
+            condition=lambda t: (
+                t.team.permission_bundles.operations.contains(t.operation)
+                & (t.team.organization == t.repository.organization)
             ),
         )
         self.assertEqual(record, expected)
@@ -416,12 +414,9 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
             user='team__members',
             permission='operation',
             content='repository',
-            condition=All(
-                permission_in('team__permission_bundles__operations'),
-                Equal(
-                    'team__organization',
-                    'repository__organization',
-                ),
+            condition=lambda t: (
+                t.team.permission_bundles.operations.contains(t.operation)
+                & (t.team.organization == t.repository.organization)
             ),
         )
         self.assertEqual(record, expected)

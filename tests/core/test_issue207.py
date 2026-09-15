@@ -23,10 +23,8 @@ from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.core import (
-    All,
     Along,
     BackendHandle,
-    Equal,
     PlanQueryCompiler,
     Ref,
     RegisteredRelation,
@@ -35,7 +33,6 @@ from trusts.core import (
     _public_path_segments,
     _resolve_path,
     _validate_condition,
-    permission_in,
 )
 
 
@@ -106,6 +103,21 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
             callable_args = get_args(callable_parts[0])
             self.assertEqual(callable_args[0], [type_args[0]])
             self.assertIs(callable_args[1], object)
+        condition_hint = hints['condition']
+        self.assertIn(
+            get_origin(condition_hint),
+            (types.UnionType, type(str | int)),
+        )
+        condition_parts = get_args(condition_hint)
+        self.assertIn(type(None), condition_parts)
+        condition_callables = [
+            part for part in condition_parts if get_origin(part) is Callable
+        ]
+        self.assertEqual(len(condition_callables), 1)
+        self.assertEqual(
+            get_args(condition_callables[0]),
+            ([type_args[0]], object),
+        )
         self.assertIs(hints['return'], RegisteredRelation)
         # Python does not prove lambda attributes exist on trust=.
         self.assertNotIn('document', BackendHandle.register.__annotations__)
@@ -126,6 +138,8 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertIn('AnnotatedGrant', pyright)
         self.assertIn('TrustsImplementationConfig', pyright)
         self.assertIn('configured_backend()', pyright)
+        self.assertIn('condition=', pyright)
+        self.assertIn('t.team == t.document', pyright)
         self.assertNotIn('from trusts.core import BackendHandle', pyright)
 
     def test_keyword_only_signature(self):
@@ -185,12 +199,9 @@ class RegisterNormalizeTest(SimpleTestCase):
             user=lambda t: t.team.members,
             permission=lambda t: t.operation,
             content=lambda t: t.repository,
-            condition=All(
-                permission_in('team__permission_bundles__operations'),
-                Equal(
-                    'team__organization',
-                    'repository__organization',
-                ),
+            condition=lambda t: (
+                t.team.permission_bundles.operations.contains(t.operation)
+                & (t.team.organization == t.repository.organization)
             ),
         )
         mixed = _handle(path='tests.core.issue207-m2m-mixed').register(
@@ -198,12 +209,9 @@ class RegisterNormalizeTest(SimpleTestCase):
             user='team__members',
             permission=lambda t: t.operation,
             content='repository',
-            condition=All(
-                permission_in('team__permission_bundles__operations'),
-                Equal(
-                    'team__organization',
-                    'repository__organization',
-                ),
+            condition=lambda t: (
+                t.team.permission_bundles.operations.contains(t.operation)
+                & (t.team.organization == t.repository.organization)
             ),
         )
         self.assertEqual(record, expected)

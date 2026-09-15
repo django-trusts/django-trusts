@@ -73,8 +73,14 @@ These shapes raise `TrustsConfigurationError` during `register`:
 - composite / multi-column correlation (`get_path_info()` must yield
   exactly one `PathInfo` with exactly one target field)
 
-`condition` may be omitted, `None`, or a closed predicate tree exported
-from `trusts.core`:
+Public `BackendHandle.register(..., condition=...)` accepts a one-argument
+trust-rooted symbolic callable (`==`, `.contains(member)`, `&`) and rejects
+prebuilt `All` / `Equal` / `permission_in` values. The callable is invoked
+once after freeze and is not stored.
+
+Internal `TrustsRegistry.register` may still accept a closed predicate tree
+exported from `trusts.core`. `condition` may also be omitted or `None`. The
+nodes below are that stored planning representation:
 
 ```python
 from trusts.core import All, Equal, Ref, permission_in
