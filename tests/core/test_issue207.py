@@ -16,6 +16,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.db.models import Model
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
@@ -261,6 +262,8 @@ class RegisterNormalizeTest(SimpleTestCase):
 
 class RegisterOnceAtRegistrationTest(TestCase):
     def test_builders_run_once_and_never_during_projections(self):
+        if 'myapp_document' not in connection.introspection.table_names():
+            self.skipTest('myapp tables exist only on the kernel host')
         registry = TrustsRegistry()
         handle = _handle(registry)
         user = _Count('user')
