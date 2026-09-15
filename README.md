@@ -1,77 +1,54 @@
-Django Trusts
--------------
+# django-trusts
 
-[![Docs](https://readthedocs.org/projects/django-trusts/badge/)](http://django-trusts.readthedocs.org) [![CI](https://github.com/django-trusts/django-trusts/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/django-trusts/django-trusts/actions/workflows/ci.yml)
+![django-trusts badger mascot holding a green key](docs/source/_static/django-trusts-mascot.png)
 
-Django authorization add-on for multiple organizations and object-level permission settings
+[![Coverage](https://coveralls.io/repos/github/django-trusts/django-trusts/badge.svg?branch=dev)](https://coveralls.io/github/django-trusts/django-trusts?branch=dev)
 
-Introduction
-------------
+`django-trusts` is a Django permission system for object-level authorization.
+It integrates with Django's authentication backend interface, allowing
+applications to use familiar checks such as
+`user.has_perm(permission, object)` while defining authorization policies
+with ordinary Django models.
 
-``django-trusts`` is a add-on to Django's builtin authorization. It strives to be a **minimal** implementation, adding only a single concept, ``trust``, to enable maintainable per-object permission settings for a django project that hosts users of multiple organizations  with a single user namespace.
+## How permissions are represented
 
-A ``trust`` is a relationship whereby content access is permitted by the creator [``settlor``] to specific user(s) [``trustee`` (s)] or ``group`` (s). Content can be an instance of a `Content` subclass, or of an existing model via a junction table. Access to multiple content can be permitted by a single ``trust`` for maintainable permssion settings. Django's builtin model, `group`, is supported and can be used to define reusuable permissions for a ``group`` of ``user``'s.
+A **trust model** is the application-owned Django model from which three
+authorization paths begin:
 
-``django-trusts`` also strives to be a **scalable** solution. Permissions checking is offloaded to the database by design, and the implementation minimizes database hits. Permissions are cached per ``trust`` for the lifecycle of ``request user``. If a project's request lifecycle resolves most checked content to one or few ``trusts``, which should be very typically the case, this design should be a winner in term of performance. Permissions checking is done against an individual content or a ``QuerySet``.
+- **user** — who is requesting access;
+- **permission** — the operation being requested; and
+- **content** — the object being protected.
 
-``django-trusts`` supports Django's builtins User models ``has_perm()`` / ``has_perms()`` and does not provides any in-addition.
+Each matching trust record is a candidate grant. A trust model is often an
+explicit many-to-many relation model, but it may represent another relational
+shape. More than one complete trust may reach the same protected model; each is
+an alternative grant and the branches combine with OR.
 
-Read more: http://django-trusts.readthedocs.org/en/latest/
+django-trusts supplies the compiler and authorization APIs. It does not impose a
+permission schema, grant editor, or application workflow.
 
-Supported versions
-------------------
+## Usage
 
-The `1.0.0.dev0` development line requires **Python 3.12–3.14** and **Django 6.1**.
-Sources checked on 2026-09-07 and the rationale are in
-[docs/support-matrix.md](docs/support-matrix.md).
+Start with **[Installation in the usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
+The RST guide covers models, backend configuration, trust registration
+(both one-argument path lambdas and Django `__` strings,
+shown together),
+named filters, object and queryset authorization, and inherited relationships.
 
-This is not a published PyPI release. Install from a local checkout or sdist/wheel
-built from this tree.
+## Other documents
 
-```
-python -m pip install "Django>=6.1,<6.2"
-python -m pip install .
-```
+- [Security audit guide](SECURITY_AUDIT.md)
+- [Migration boundary](migrates.md)
+- [Supported Python, Django, and database combinations](docs/support-matrix.md)
+- [Development and contribution guide](DEV.md)
+- [BSD 2-Clause License](LICENSE)
 
-Add `trusts` to `INSTALLED_APPS` and set:
+## Other repositories
 
-```
-AUTHENTICATION_BACKENDS = (
-    'trusts.backends.TrustModelBackend',
-)
-```
+- [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero) — continuation of the concrete django-trusts 0.x model
+- [django-trusts-zero-example](https://github.com/django-trusts/django-trusts-zero-example) — runnable application using Zero
+- [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions) — organization, team, and repository relationship reference
+- [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold) — provisional PostgreSQL ordered allow/deny extension
+- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) — Windows ACL example built on the OrderedFold extension
 
-API and compatibility notes for this modernization are in [migrates.md](migrates.md).
-
-Test
-----
-
-```
-python -m pip install "Django>=6.1,<6.2" coverage
-python -m pip install -e .
-python -m tests.runtests
-python -m django check --settings=tests.settings
-python scripts/verify-legacy-upgrade.py
-```
-
-CI is GitHub Actions (`.github/workflows/ci.yml`): authorization tests, a
-fresh migrate, ``manage.py check``, and the legacy-upgrade script on Python
-3.12, 3.13, and 3.14 with Django 6.1. The `package` job (Python 3.12 only) builds an sdist/wheel
-and imports it from a temporary directory so the source tree cannot satisfy
-the import. Job names: `tests (Python 3.12)`, `tests (Python 3.13)`,
-`tests (Python 3.14)`, `package`. Do not treat a removed Travis check as a
-stand-in green status.
-
-Development version
--------------------
-
-The active package version is **1.0.0.dev0**. That is a development-line mark,
-not a production 1.0 release. See [docs/development-version.md](docs/development-version.md).
-
-Legacy baseline
----------------
-
-The exact pre-modernization default-branch commit, existing release tags, source
-archive checksum, and historical Python/Django requirements are recorded in
-[docs/legacy-baseline.md](docs/legacy-baseline.md). That snapshot is historical
-documentation only.
+Copyright BeeDesk, Inc., 2015–2026. Released under the BSD 2-Clause License.

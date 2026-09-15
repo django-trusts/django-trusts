@@ -1,396 +1,458 @@
-.. django-trusts documentation master file, created by
-   sphinx-quickstart on Fri Jan 29 22:11:11 2016.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+django-trusts
+=============
 
-Welcome to django-trusts's documentation!
-=========================================
+.. image:: _static/django-trusts-mascot.png
+   :alt: django-trusts badger mascot holding a green key
+   :align: center
+   :width: 220px
 
-Django authorization add-on for multiple organizations and object-level permission settings
+Declarative object permissions for Django
+-----------------------------------------
 
-Introduction
-------------
+``django-trusts`` is a Django permission system for object-level
+authorization. It integrates with Django's authentication backend interface,
+allowing applications to use familiar checks such as
+``user.has_perm(permission, object)`` while defining authorization policies
+with ordinary Django models.
 
-``django-trusts`` is an add-on to Django's built-in [1]_ authorization. It strives to be a **minimal** implementation, adding only a single concept, ``trust``, to enable maintainable per-object permission settings for a Django project that hosts users from multiple organizations [2]_ in a single user namespace.
+At its simplest, a permission is a persisted relationship among a user, an
+operation, and protected content. The application model from which those paths
+begin is the **trust model**. A matching trust record is a candidate grant. A
+trust model may be an explicit many-to-many relation model, a direct grant
+model, or another relational structure owned by the application.
 
-A ``trust`` associates content with a ``settlor`` and grants permissions to specific users (``trustees``) or groups. The settlor identifies the entity under whose trust the content is held; django-trusts does not require the settlor to be the content's creator and does not automatically grant the settlor permissions. Content can be an instance of a ``Content`` subclass or an existing model connected through a junction table. A single trust can cover multiple content objects so their permission settings can be maintained together. Django's built-in ``Group`` model is supported and can define reusable permissions for groups of users.
+``django-trusts`` compiles these declarations into database queries via
+QuerySet, keeping permission decisions based on persisted truth. The same
+declarations support
+object checks, authorized querysets, permission enumeration, and decorators
+for protecting views. The separate `security audit guide
+<https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
+defines the boundary these APIs enforce and the responsibilities that remain
+with the application.
 
-``django-trusts`` also strives to be a **scalable** solution. Trust and grant resolution uses database queries, and the implementation minimizes database hits. Permissions are cached per ``trust`` on the user object. Permission checks can be made against an individual content object or a ``QuerySet``.
+How permissions are represented
+--------------------------------
 
-.. warning::
+A registered trust connects three paths:
 
-   The per-trust permission cache is not automatically invalidated when grants, group membership, local TrustGroup permissions, or roles change. Reload the user object, or explicitly remove its ``_trust_perm_cache`` attribute, before making further permission checks with the same user instance.
+* **user** -- who is requesting access;
+* **permission** -- the operation being requested; and
+* **content** -- the object being protected.
 
-``django-trusts`` supports Django's built-in user permission methods, ``has_perm()`` and ``has_perms()``.
+All three paths begin from the same trust model. In the simplest case, that
+model has foreign keys to a user, a Django permission, and a protected object.
 
-
-.. [1]  See: `Django Object Permissions <https://github.com/djangoadvent/djangoadvent-articles/blob/master/1.2/06_object-permissions.rst>`_.
-.. [2]  Although ``django-trusts`` was created to support multiple organizations in one project, it does not define or restrict the organization model. One approach is to model an organization as a special user that can be the settlor of trusts. Another is to create a separate organization model. In that arrangement, a trust's settlor may be the creating user, who may or may not have every permission on the organization's content.
-
-Usages
-------
+Multiple registered trusts may authorize the same kind of content. Each
+complete trust is an independent way to receive permission.
 
 Installation
-~~~~~~~~~~~~
+------------
 
-Steps:
+The current development version requires Python 3.12--3.14 and Django 6.1.
 
-1. Install django-trusts::
+.. code-block:: console
 
-     python -m pip install django-trusts
+   python -m pip install "Django>=6.1,<6.2"
+   python -m pip install "django-trusts @ git+https://github.com/django-trusts/django-trusts@dev"
 
-2. Set ``AUTHENTICATION_BACKENDS`` in ``settings.py``::
+Define the models
+-----------------
 
-   AUTHENTICATION_BACKENDS = (
-     'trusts.backends.TrustModelBackend',
+The application owns its protected content and trust models.
+
+.. code-block:: python
+
+   # documents/models.py
+
+   from django.conf import settings
+   from django.contrib.auth.models import Permission
+   from django.db import models
+
+   from trusts.query import AuthorizedManagerMixin
+
+
+   class DocumentManager(AuthorizedManagerMixin, models.Manager):
+       pass
+
+
+   class Document(models.Model):
+       title = models.CharField(max_length=200)
+       confidential = models.BooleanField(default=False)
+
+       # Adds Document.objects.authorized(user, permission).
+       objects = DocumentManager()
+
+
+   class DocumentPermission(models.Model):
+       user = models.ForeignKey(
+           settings.AUTH_USER_MODEL,
+           on_delete=models.CASCADE,
+       )
+       permission = models.ForeignKey(
+           Permission,
+           on_delete=models.CASCADE,
+       )
+       document = models.ForeignKey(
+           Document,
+           on_delete=models.CASCADE,
+       )
+
+``DocumentPermission`` is the trust model. Each trust record connects one
+user and one permission to one document.
+
+``AuthorizedManagerMixin`` adds
+``Document.objects.authorized(user, permission)`` to the application's own
+manager without replacing its other behavior. The concrete
+``AuthorizedManager`` remains available as a convenience for models that do
+not need a custom manager. Plain ``user.has_perm(permission, document)``
+object checks do not require either one.
+
+Granting and revoking permission are ordinary changes to persisted application
+data:
+
+.. code-block:: python
+
+   DocumentPermission.objects.create(
+       user=user,
+       permission=change_document,
+       document=document,
    )
 
-3. Add ``trusts`` to ``INSTALLED_APPS`` in ``settings.py``.
+   DocumentPermission.objects.filter(
+       user=user,
+       permission=change_document,
+       document=document,
+   ).delete()
 
-4. Apply migrations::
+An application may instead change a team membership, organizational
+relationship, ACL entry, or another persisted fact. ``django-trusts`` does
+not impose one grant-management workflow.
 
-     python manage.py migrate
+Define the backend
+------------------
 
-5. Run Django system checks in CI and before deploy::
+The application provides a Django authentication backend using
+``TrustModelBackendMixin``.
 
-     python manage.py check
+.. code-block:: python
 
-Implementation
-~~~~~~~~~~~~~~
+   # documents/backends.py
 
-Alternative 1
-++++++++++++++
+   from django.contrib.auth.backends import ModelBackend
 
-Use ``Content`` ::
+   from trusts.backends import TrustModelBackendMixin
 
-   # app/models.py
 
-   from django.db import models
-   from trusts.models import Content
+   class DocumentBackend(TrustModelBackendMixin, ModelBackend):
+       pass
 
-   class Receipt(Content, models.Model):
-       account = models.ForeignKey(Account, null=True, on_delete=models.CASCADE)
-       merchant = models.ForeignKey(Merchant, null=True, on_delete=models.CASCADE)
-       # ... other field
+Register the trust
+------------------
 
-Alternative 2
-+++++++++++++
+Register the model paths when the application starts:
 
-Use ``Junction`` ::
+.. code-block:: python
 
-   # app/models.py
+   # documents/apps.py
 
-   from django.db import models
-   from django.contrib.auth.models import Group
-   from trusts.models import Junction
+   from trusts.apps import TrustsImplementationConfig
 
-   # New Junction to model that is not under your control
-   class GroupJunction(Junction, models.Model):
-       # field name must be named as `content` and unique=True, null=False, blank=False
-       content = models.ForeignKey(django.contrib.auth.models.Group, unique=True, null=False, blank=False, on_delete=models.CASCADE)
 
-Permission Assignments
+   class DocumentsConfig(TrustsImplementationConfig):
+       name = "documents"
+       trusts_backend_paths = (
+           "documents.backends.DocumentBackend",
+       )
+
+       def ready(self):
+           super().ready()
+
+           from .models import Document, DocumentPermission
+
+           backend = self.configured_backend()
+           backend.register(
+               trust=DocumentPermission,
+               user=lambda t: t.user,
+               permission=lambda t: t.permission,
+               content=lambda t: t.document,
+           )
+           backend.add_named_filter(
+               Document,
+               "non_confidential",
+               predicate=lambda u, p, o: o.confidential != True,
+           )
+
+``DocumentPermission`` is the trust model. The three paths identify the user,
+permission, and protected content associated with each trust record.
+
+``user``, ``permission``, and ``content`` each accept either a one-argument
+path lambda (the form in ``ready()`` above) or a Django ``__``
+path string. Both forms of the same registration are valid; the string
+equivalent is:
+
+.. code-block:: python
+
+   backend.register(
+       trust=DocumentPermission,
+       user="user",
+       permission="permission",
+       content="document",
+   )
+
+
+Configure Django
+----------------
+
+Install the application that owns the permission implementation and add its
+backend:
+
+.. code-block:: python
+
+   # settings.py
+
+   INSTALLED_APPS = [
+       "django.contrib.contenttypes",
+       "django.contrib.auth",
+       "documents.apps.DocumentsConfig",
+   ]
+
+   AUTHENTICATION_BACKENDS = [
+       "django.contrib.auth.backends.ModelBackend",
+       "documents.backends.DocumentBackend",
+   ]
+
+Django's ``ModelBackend`` remains available for ordinary global permissions.
+``DocumentBackend`` answers object-level permission questions declared
+through ``django-trusts``.
+
+Ask permission questions
+------------------------
+
+Use Django's familiar object-permission API:
+
+.. code-block:: python
+
+   user.has_perm(
+       "documents.change_document",
+       document,
+   )
+
+List the user's permissions on an object:
+
+.. code-block:: python
+
+   user.get_all_permissions(document)
+   # {"documents.change_document"}
+
+Filter a queryset to the objects authorized for a particular permission:
+
+.. code-block:: python
+
+   change_document = Permission.objects.get(
+       content_type__app_label="documents",
+       codename="change_document",
+   )
+
+   documents = Document.objects.authorized(
+       user,
+       change_document,
+   )
+
+Protect a view with the Trusts-only primary-key guard:
+
+.. code-block:: python
+
+   # documents/views.py
+
+   from django.http import HttpResponse
+
+   from trusts.decorators import authorization_required
+
+   from .models import Document
+
+
+   @authorization_required(
+       Document,
+       "documents.change_document",
+       ("non_confidential",),
+   )
+   def edit_document(request, pk):
+       return HttpResponse("Authorized")
+
+The guard binds only the URL keyword argument named ``pk`` to the model's
+primary-key field. It performs configuration preflight before candidate lookup;
+a missing object produces 404 and an existing unauthorized object produces
+403.
+
+Object checks, permission enumeration, queryset filtering, and view protection
+consume the same normalized registrations.
+
+Named filters
+-------------
+
+A named filter further constrains an existing permission; it cannot grant
+permission by itself. Register it against the protected model during
+``AppConfig.ready()`` with ``backend.add_named_filter(...)``.
+
+Its predicate is a three-argument lambda or function: ``u`` is the requesting
+user, ``p`` is the requested permission, and ``o`` is the protected object. It
+must return a supported boolean expression that django-trusts can translate
+into the Django QuerySet used for authorization. The example above registers
+``non_confidential`` against ``Document.confidential``. Object checks select
+one named filter with the ``:name`` suffix; ``authorization_required`` accepts
+a tuple of names. Unsupported expressions fail registration.
+
+.. code-block:: python
+
+   user.has_perm("documents.change_document:non_confidential", document)
+
+More expressive permission policies
+-----------------------------------
+
+The ``DocumentPermission`` example uses the shortest useful trust: one record
+directly connects a user, a permission, and a document. The same registration
+API also supports paths through multiple relationships:
+
+.. code-block:: python
+
+   backend.register(
+       trust=TeamDocumentPermission,
+       user=lambda t: t.team.members,  # or "team__members"
+       permission=lambda t: t.permission,  # or "permission"
+       content=lambda t: t.document,  # or "document"
+   )
+
+The ``condition=`` argument on ``register`` is a one-argument symbolic
+predicate rooted at the trust model. django-trusts invokes it once during
+registration and stores no callable. The 1.0 grammar is path equality
+(``==``), collection-rooted membership (``.contains(member)``), and
+conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
+Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
+``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
+reserved method on the condition proxy; a model field actually named
+``contains`` cannot be walked there. ``predicate=`` is reserved and
+unsupported in 1.0.
+
+.. code-block:: python
+
+   backend.register(
+       trust=TeamDocumentPermission,
+       user=lambda t: t.team.members,
+       permission=lambda t: t.permission,
+       content=lambda t: t.document,
+       condition=lambda t: (
+           t.team.allowed_operations.contains(t.permission)
+           & (t.team.organization == t.document.organization)
+       ),
+   )
+
+A relationship condition is always applied to its branch; a named filter is
+selected by an authorization caller. Neither can create permission by itself.
+
+Applications may register more than one valid path to the same content. A
+direct user grant and a team-derived grant can coexist, with either complete
+path providing permission.
+
+Inherited relationships
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Inherited relationships are provisional. A bounded hierarchical walk may be
+declared with ``along=("parent", 8)`` on ``backend.register``.
+django-trusts evaluates the walk with a recursive common table expression
+rather than traversing the hierarchy in Python. The database combinations
+currently exercised by CI are recorded in the `support matrix
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
+
+Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Example::
+`django-trusts-ordered-fold
+<https://github.com/django-trusts/django-trusts-ordered-fold>`_ is a
+provisional extension of django-trusts for ordered allow and deny policies.
+An example Windows declaration lives in
+`django-trusts-windows-acl
+<https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
-   from django.contrib.auth.models import User, Group, Permission
-   from trusts.models import Trust
+Reference implementations
+-------------------------
 
-   # Helper function
-   def grant_user_group_permission_to_model(user, group_name, model_name, code='change', app='app'):
-       # Django's auth permission mechanism, nothing specific to `django-trust`
+Two reference implementations demonstrate how different permission systems
+can be built with ``django-trusts``.
 
-       # get perm by name
-       perm = Permission.objects.get_by_natural_key('change_%s' % model_name, app, model_name)
-       group = Group.objects.get(name=group_name)
+Organization and team permissions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-       # connect them
-       user.groups.add(group)
-       perm.group_set.add(group)
+`django-trusts-gh-permissions
+<https://github.com/django-trusts/django-trusts-gh-permissions>`_ models
+permissions implied by organization, team, repository, and membership
+relationships.
 
-       # user.has_perm('%s.change_%s' % (app, model_name)) ==> True
-       # user.has_perm('%s.change_%s' % (app, model_name), obj) ==> False
+It demonstrates:
 
-   # View
-   def create_receipt_object_for_user(request, title, details):
-       trust = Trust.objects.get_or_create_settlor_default(settlor=request.user)
+* direct and team-derived permission paths;
+* many-to-many team membership;
+* operation ceilings;
+* organization-alignment conditions; and
+* multiple valid paths to the same protected content.
 
-       content = Receipt(trust=trust, title=title, details=details)
-       content.save()
+It is a focused example of a GitHub-shaped permission model, not a complete
+reimplementation of GitHub.
 
-       model_name = receipt.__class__.__name__.lower()
-       perm = Permission.objects.get_by_natural_key('%_%' % ('change', model_name), 'app', model_name)
+Ordered access-control entries
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-       tup = TrustUserPermission(trust=trust, entity=request.user, permission=perm)
-       tup.save()
+`django-trusts-windows-acl
+<https://github.com/django-trusts/django-trusts-windows-acl>`_ models
+permissions using persisted access-control entries with ordering, allow and
+deny effects, permission masks, and inheritance.
 
-       # request.user.has_perm('%s.change_%s' % ('app', model_name), content) ==> True
+It demonstrates an ACL-style permission system built with
+``django-trusts-ordered-fold``, a provisional extension of ``django-trusts``,
+while
+retaining the same Django-facing permission APIs. It is not intended to
+reproduce every feature or security behavior of Windows ACLs.
 
-   # View
-   def give_user_change_permission_on_existing_group(request, user, group_name):
-       grant_user_permssion_to_model(request.user, group_name, code='change', app='auth')
+Migrating from django-trusts 0.x
+--------------------------------
 
-       group = Group.objects.get(name=group_name)
-       junction = GroupJunction(trust=trust, content=group)
-       junction.save()
+Earlier versions of ``django-trusts`` included a concrete permission system
+based on ``Trust``, ``Content``, groups, roles, and their associated
+migrations.
 
-       # request.user.has_perm('auth.change_group', group) ==> True
+That implementation now continues as `django-trusts-zero
+<https://github.com/django-trusts/django-trusts-zero>`_. Applications
+upgrading from 0.x, or applications that specifically want that model, should
+use ``django-trusts-zero``.
 
-Inheritance
-~~~~~~~~~~~
+Its Django application label, database tables, content types, permissions, and
+migration identities are preserved. Python imports and Django settings move to
+the explicit ``trusts.zero`` paths described in the `Zero migration guide
+<https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
-Dependent model can inherit Trust from a related model. Such class need to be registered manually
-with ``fieldlookup`` specified.
+django-trusts keeps a terse migration-boundary record in `migrates.md
+<https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_,
+while the supported 0.x migration guide is Zero's ``migrates.md``
+(linked above).
 
-Consider ReceiptImage as a dependent model of Receipt, and ReceiptImageMeta as a dependent
-model of ReceiptImage. The following code makes both model available for permission checking::
+A runnable application using that implementation is available in
+`django-trusts-zero-example
+<https://github.com/django-trusts/django-trusts-zero-example/tree/dev>`_.
 
-   Content.register_content(ReceiptImage, '%s__image' % Content.get_content_fieldlookup('app.Receipt'))
-   Content.register_content(ReceiptImageMeta, '%s__image' % Content.get_content_fieldlookup(ReceiptImage))
+Validation and support
+----------------------
 
-Role
-~~~~
+Run Django's system checks during development and deployment:
 
-``Role`` can be specified in a ``Content`` model's ``Meta`` class. The management command ``python manage.py update_roles_permissions`` updates the corresponding database entries.
+.. code-block:: console
 
-Here is an example of how roles can be specified::
+   python manage.py check
 
-   class Receipt(Content):
+django-trusts is designed to reject invalid declarations during application
+setup. Missing registrations and unsupported permission paths are intended to
+fail closed.
 
-       name = models.CharField(max_length=40, null=False, blank=False)
+Current Python, Django, database, and evaluation-strategy support is recorded
+in the `support matrix
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 
-       class Meta:
-           abstract = True
-           default_permissions = ('add', 'read', 'change', 'delete')
-           permissions = (
-               ('ask_question_about_receipt', 'Ask question about a receipt'),
-           )
-           roles = (
-               ('user', ('read_receipt', 'ask_question_about_receipt')),
-               ('manager', ('read_receipt', 'change_receipt', 'ask_question_about_receipt')),
-               ('accounting', ('read_receipt', 'add_receipt', 'change_receipt', 'ask_question_about_receipt')),
-           )
-
-Roles specified in different models with the same role name are merged. Once
-the database entries are created, those role permissions become part of the
-group's **global capability ceiling**. Associating a group with a trust
-(``trust.groups.add``) does not grant access by itself. A group permission
-applies to Trust-controlled content only when the user is a member, a
-``TrustGroup`` row exists, the permission is enabled locally on that
-``TrustGroup``, and the permission is in the group's ceiling
-(``Group.permissions`` or a role assigned to the group).
-
-Add a role to a group, associate the group, then enable the local subset::
-
-   from trusts.models import TrustGroup
-
-   accountants = Group.objects.get(name='accountants')
-   accountants.roles.add(Role.objects.get(name='accounting'))
-
-   trust.groups.add(accountants)
-   tg = TrustGroup.objects.get(trust=trust, group=accountants)
-   tg.grant_permission(change_receipt)
-   r = Receipt(trust=trust, ...)
-   r.save()
-
-
-Permissions Checking
-~~~~~~~~~~~~~~~~~~~~
-
-To check permission, simply use Django builtin API::
-
-   def check_permission_to_a_specific_receipt(request, receipt_id):
-     return request.user.has_perm('app.change_receipt', Receipt.objects.get(id=receipt_id))
-
-   def check_permission_to_a_specific_group(request, group_id):
-     return request.user.has_perm('app.change_group', Group.objects.get(id=group_id))
-
-Decorators
-~~~~~~~~~~
-
-Trusts provides a decorator that checks permissions at the object level::
-
-   from trusts.decorators import permission_required
-   from app.models import Xyz
-
-   @permission_required('app.change_xyz', fieldlookups_kwargs={'pk': 'xyz_id'})
-   def edit_xyz_view(request, xyz_id):
-     # ...
-     pass
-
-The argument `fieldlookups_kwargs` specifies the mapping between permissible object's field and view's arguments list.
-
-The mapping is used to load the permissible object for permission check.
-
-
-K(), G(), O() Lookups
-+++++++++++++++++++++
-
-Alternatively, `fieldlookups_kwargs` can be expressed with K() lookup::
-
-   from trusts.decorators import permission_required, K, G, O
-   from app.models import Xyz
-
-   @permission_required('app.change_xyz', pk=K('xyz_id'))
-   def edit_xyz_view(request, xyz_id):
-     # ...
-     pass
-
-Similar to K() lookup, G() and O() can also be used.
-
-``G()`` maps a permissible object's field to the request's ``GET`` dictionary.
-
-``O()`` maps a permissible object's field to the request's ``POST`` dictionary.
-
-
-Permission Conditions
-+++++++++++++++++++++
-
-In addition to ``Group`` and ``Permission`` based checks, an object-level permission condition can be used.
-
-For example, a user may modify a ``Receipt`` only if the user owns it. In this case, register a condition code::
-
-   Content.register_permission_condition(Receipt, 'own', lambda u, p, o: u == o.user)
-
-Callables stay object-only (``has_perm``); they are never invoked with
-symbolic references. They require
-``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True`` (see the migration
-record). Register an ``Expr`` from ``condition_refs()`` to compile a V1
-expression for ``.permitted()`` (see below).
-
-To check ``own`` permission, a colon and the condition name should be added after the condition name::
-
-   def check_permission_to_a_specific_receipt(request, receipt_id):
-     return request.user.has_perm('app.change_receipt:own', Receipt.objects.get(id=receipt_id))
-
-A condition can also be used with the decorator::
-
-   @permission_required('app.change_receipt:own', pk=K('pk'))
-   def edit_receipt_view(request, pk):
-     # ...
-     pass
-
-.. warning::
-
-   A permission condition is an additional constraint; it does not grant the underlying permission. For example, ``change_receipt:own`` requires both ``change_receipt`` and a successful ``own`` condition.
-
-   V1 declarative conditions are **registered expression objects** (``==``, ``!=``, ``&``, ``|`` over principal and object fields), not probed lambdas. ``has_perm`` and ``.permitted()`` consume the same tree: object checks evaluate it in Python, and queryset filtering is ``base relational grant AND compiled condition`` before pagination.
-
-   Callables remain object-only. They are a system-check error
-   (``trusts.E002``) unless ``TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS`` is
-   True. ``ContentQuerySet.permitted`` and ``filter_by_user_content_perm``
-   raise ``PermissionConditionNotQueryable`` for those callbacks so they
-   cannot silently return the underlying grant. Invalid registered
-   expressions fail closed on both paths.
-
-   Run ``python manage.py check`` in CI and before deploy so invalid
-   ``Expr`` registrations (``trusts.E001``) are reported before requests
-   are served. Silencing a check ID does not make the policy executable.
-
-
-Queryable permission conditions
-+++++++++++++++++++++++++++++++
-
-Build an ``Expr`` from symbolic ``u``, ``p``, ``o`` and register that tree.
-Django ``Q`` is a compiler target, not the canonical form. Dispatch is by
-type: an ``Expr`` is queryable policy data; a callable is never probed::
-
-   from trusts.conditions import condition_refs
-   from trusts.models import Content
-
-   u, p, o = condition_refs()
-   Content.register_permission_condition(
-       Receipt, 'editable',
-       (u == o.owner) |
-       ((u == o.organization.manager) & (o.status != "locked")),
-   )
-
-   request.user.has_perm('app.change_receipt:editable', receipt)
-   Receipt.objects.permitted('app.change_receipt:editable', request.user)
-
-``django_trusts.Query`` / ``TQ`` is the reserved namespace for later
-Django-style lookups (not a ``QuerySet``). V1 does not implement extra
-lookups; equality uses ``==`` / ``!=`` on the refs.
-
-Supported in this experiment:
-
-* Principal and object field references, including ``ForeignKey`` / ``OneToOneField`` traversal (``o.organization.manager``)
-* Literal constants (``None``, booleans, numbers, strings) whose Python type matches the field; relations compare to model instances, not raw primary keys
-* ``==`` and ``!=``
-* Nested ``&`` and ``|`` (grouping is preserved)
-
-Unsupported (fail closed; do not drop the condition):
-
-* Python ``and`` / ``or`` / ``not`` (they cannot be overloaded). Symbolic truth testing raises ``PermissionConditionBooleanError`` directing callers to ``&`` / ``|``.
-* Chained comparisons such as ``0 < o.amount < 100`` (they truth-test the first comparison). Ordering comparisons are not in V1.
-* Function or method calls, loops, indexing, I/O, arithmetic, assignment to symbolic fields
-* Source or bytecode inspection; automatic probing of callables
-* Permission attribute traversal (``p.codename``); ``p`` is unused in V1 except as a ref
-* Terminal ``ManyToManyField`` and reverse one-to-many refs (``o.owner.groups``) until membership is defined
-* Django field coercion (``Q(status=1)`` becoming ``"1"`` on a ``CharField``, or a ``ForeignKey`` accepting a raw PK). Incompatible ``Eq`` / ``Ne`` operands raise ``PermissionConditionError`` on both ``has_perm`` and ``.permitted()``.
-
-Object and principal field paths are resolved against the target model and
-``TRUSTS_ENTITY_MODEL`` / ``AUTH_USER_MODEL`` respectively (``_meta`` fields
-and ``ForeignKey`` / ``OneToOneField`` traversal). Unknown or misspelled
-names raise ``PermissionConditionError`` on both ``has_perm`` and
-``.permitted()``; they are not treated as SQL/Python ``NULL``. Legitimate
-nullable relations may still compare as ``None``. Python ``@property``
-values are not V1 field paths. Operand types are checked without Django
-``get_prep_value`` coercion: ``o.status == 1`` and ``o.owner == "1"``
-raise ``PermissionConditionError`` on both ``has_perm`` and
-``.permitted()``. ``filter_by_user_content_perm`` still rejects
-every ``:condition`` suffix: that API filters Trust rows, not the content
-model the condition is registered on. Field names, relation traversal, and
-operand types are also reported by ``python manage.py check``
-(``trusts.E001``) after models load.
-
-
-P() Expressions
-+++++++++++++++
-
-Trusts' decorator supports P() expression, permitting the construction of compound permission using | (OR) and & (AND) operators;
-In particular, it is not otherwise possible to use OR in permission::
-
-   from trusts.decorators import permission_required, P, K, G, O
-   from app.models import Xyz
-
-   @permission_required(P('app.change_project:own', pk=K('project_id')) | P('app.move_receipt', pk=O('receipt_id')))
-   def move_xyz_to_project_view(request, project_id):
-     # ...
-     pass
-
-
-Customization
-~~~~~~~~~~~~~
-
-The following Django settings allow customization and adaptation.
-
-
-Initial Options
-+++++++++++++++
-
-.. warning::
-
-   Set ``TRUSTS_ENTITY_MODEL``, ``TRUSTS_GROUP_MODEL``, ``TRUSTS_PERMISSION_MODEL``, ``TRUSTS_ALLOW_NULL_SETTLOR``, and ``TRUSTS_DEFAULT_SETTLOR`` before creating migrations or running ``manage.py migrate`` for the first time. These settings affect model fields and relationships. Changing them after tables exist is not handled automatically by ``makemigrations`` and requires an explicit schema and data migration.
-
-   The root settings control initial root creation. Changing ``TRUSTS_CREATE_ROOT``, ``TRUSTS_ROOT_PK``, ``TRUSTS_ROOT_SETTLOR``, or ``TRUSTS_ROOT_TITLE`` after the root exists does not update that row automatically. In particular, changing ``TRUSTS_ROOT_PK`` can invalidate existing references and defaults and requires a deliberate data migration.
-
-* TRUSTS_ENTITY_MODEL -- The model name for `settlors` and `trustees` field. Must be specified in contenttypes format, ie, 'app_label.model_name'. (default: `settings.AUTH_USER_MODEL`.)
-* TRUSTS_GROUP_MODEL -- The model name for `groups` field. (default: `auth.Group`)
-* TRUSTS_PERMISSION_MODEL -- The model name for `Permission`. (default: `auth.Permission`)
-* TRUSTS_CREATE_ROOT -- A boolean set to True indicates root Trust model object to be created during the initial migration. (default: True)
-* TRUSTS_ROOT_PK -- The `pk` of the root trust model object. (default: 1)
-* TRUSTS_ROOT_SETTLOR -- The `pk` of settlor of the root trust object. (default: None)
-* TRUSTS_ALLOW_NULL_SETTLOR -- A boolean set to True indicates Trust.settlor field can be null. (default: TRUSTS_DEFAULT_SETTLOR == None)
-* TRUSTS_DEFAULT_SETTLOR -- The default value for `settlor` field on Trust model. (default: None)
-* TRUSTS_ROOT_TITLE -- The title of the root trust object. (default: "In Trust We Trust")
-* TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS -- Opt-in for registered callable permission conditions on ``has_perm`` (default: False). See the migration record.
-
-
-Further Documentation
-~~~~~~~~~~~~~~~~~~~~~
-
-* `Migration record <https://github.com/django-trusts/django-trusts/blob/master/migrates.md>`_
-* `Supported Python and Django versions <https://github.com/django-trusts/django-trusts/blob/master/docs/support-matrix.md>`_
-* `Runnable example application <https://github.com/django-trusts/django-trusts-example>`_
+Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.

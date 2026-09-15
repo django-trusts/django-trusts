@@ -1,34 +1,60 @@
-from django.db.models import Q, QuerySet
-from django.contrib.auth.backends import ModelBackend
+"""Generic Trusts backend mixin.
 
-from trusts.models import Trust, Content, legacy_permission_callbacks_allowed
-from trusts.query import permission_granted_via_group_exists
-from trusts.conditions import PermissionConditionError, evaluate_registered_expression
-from trusts import get_permission_model, utils
+``TrustModelBackendMixin`` lives only here. Core does not ship
+``TrustModelBackend`` or ``HistoricalGroupQueryCompiler``; those names
+are ``trusts.zero.backends``. ``trusts.core_backends`` is gone.
+"""
+
+from django.contrib.auth.models import Permission
+from django.db.models import Model, QuerySet, Subquery
+
+from trusts.conditions import (
+    PermissionConditionError,
+    permission_has_condition,
+)
+from trusts.conditions._ir import evaluate_registered_expression
+from trusts.query import (
+    is_active_principal,
+)
+from trusts.core import (
+    PlanQueryCompiler,
+    _compile_common_permissions,
+    _compiler_applies,
+    all_match,
+    instance_match,
+)
+from trusts import utils
+
+
+def _permission_binding(perm, model):
+    """Unevaluated Permission pk for ``perm`` (instance or dotted code).
+
+    Unknown codes become an empty subquery and match nothing. This is
+    permission identity in SQL, not a second authorization source.
+    """
+    if isinstance(perm, Permission):
+        return perm
+    applabel, modelname, action, _cond = utils.parse_perm_code(perm)
+    return Subquery(
+        Permission.objects.filter(
+            codename='%s_%s' % (action, modelname),
+            content_type__app_label=applabel.lower(),
+            content_type__model=modelname,
+        ).values('pk')[:1]
+    )
+
+
+def _perm_codes(permission_qs):
+    return set(
+        '%s.%s' % (app, code)
+        for app, code in permission_qs.values_list(
+            'content_type__app_label', 'codename',
+        )
+    )
 
 
 class TrustModelBackendMixin(object):
-    perm_model = get_permission_model()
-
-    @staticmethod
-    def _get_perm_code(perm):
-        return '%s.%s' % (
-            perm.content_type.app_label, perm.codename
-        )
-
-    @staticmethod
-    def _get_trusts(obj):
-        if not Content.is_content(obj):
-            return []
-
-        trusts = Trust.objects.filter_by_content(obj)
-        if trusts is None:
-            return []
-
-        if not hasattr(trusts, '__iter__'):
-            trusts = [trusts]
-
-        return trusts
+    query_compiler = PlanQueryCompiler()
 
     @staticmethod
     def _get_class(obj):
@@ -38,54 +64,67 @@ class TrustModelBackendMixin(object):
             klass = obj.__class__
         return klass
 
+    def _trusts_config(self):
+        from trusts.apps import implementation_for_class
+
+        return implementation_for_class(type(self), required=True)
+
+    def _own_handle(self):
+        config = self._trusts_config()
+        return config.configured_backend(config.path_for_backend(self))
+
+    def _own_plan_applies(self, obj, user_obj):
+        """True when this path's compiler applies to ``obj``.
+
+        Routes through ``QueryCompiler.applies``. Inapplicable is
+        ``False`` at zero SQL, before ``:name`` overlay.
+        """
+        handle = self._own_handle()
+        plan = handle.registry.plan_for(obj, user=user_obj)
+        return _compiler_applies(handle.compiler, plan)
+
+    def _ensure_perm_cache(self, user_obj):
+        """Documented ``_trust_perm_cache`` attribute; not an auth source."""
+        if not hasattr(user_obj, '_trust_perm_cache'):
+            setattr(user_obj, '_trust_perm_cache', dict())
+        return getattr(user_obj, '_trust_perm_cache')
+
+    def _path_permissions(self, user_obj, obj, *, kind):
+        handle = self._own_handle()
+        qs = _compile_common_permissions((handle,), obj, user_obj, kind=kind)
+        if qs is None:
+            return set()
+        return _perm_codes(qs)
+
     def get_group_permissions(self, user_obj, obj=None):
         """
         Returns a set of permission strings that this user has through his/her
         groups.
         """
+        if obj is None or not is_active_principal(user_obj):
+            return set()
 
-        if user_obj.is_anonymous or obj is None:
-            return super(TrustModelBackendMixin, self).get_group_permissions(user_obj, obj)
-
-        if Content.is_content(obj):
-            trusts = self._get_trusts(obj)
-            if not trusts:
-                return self.perm_model.objects.none()
-            return self.perm_model.objects.filter(
-                permission_granted_via_group_exists(user_obj, trusts)
-            )
-
-        return []
+        if isinstance(obj, QuerySet) or isinstance(obj, Model):
+            return self._path_permissions(user_obj, obj, kind='group')
+        return set()
 
     def get_all_permissions(self, user_obj, obj=None):
-        if user_obj.is_anonymous or obj is None:
-            return super(TrustModelBackendMixin, self).get_all_permissions(user_obj, obj)
+        if obj is None or not is_active_principal(user_obj):
+            return set()
 
-        if not hasattr(user_obj, '_trust_perm_cache'):
-            setattr(user_obj, '_trust_perm_cache', dict())
-        perm_cache = getattr(user_obj, '_trust_perm_cache')
+        self._ensure_perm_cache(user_obj)
 
-        trusts = self._get_trusts(obj)
-        if len(trusts):
-            all_perms = []
-            for trust in trusts:
-                if trust.pk not in perm_cache.keys():
-                    trust_perm = set([self._get_perm_code(p) for p in
-                        self.perm_model.objects.filter(
-                            Q(trustentities__trust=trust, trustentities__entity=user_obj) |
-                            permission_granted_via_group_exists(user_obj, trust)
-                        )
-                    ])
-
-                    perm_cache[trust.pk] = trust_perm
-                else:
-                    trust_perm = perm_cache[trust.pk]
-
-                all_perms.append(trust_perm)
-            return set.intersection(*all_perms)
-        return []
+        if isinstance(obj, QuerySet) or isinstance(obj, Model):
+            return self._path_permissions(user_obj, obj, kind='complete')
+        return set()
 
     def permission_condition_met(self, record, user_obj, perm, obj):
+        if record.expr is None:
+            model = obj.model if isinstance(obj, QuerySet) else getattr(obj, '__class__', obj)
+            raise PermissionConditionError(
+                'Permission condition on %s is unbound.'
+                % getattr(getattr(model, '_meta', None), 'label', model)
+            )
         if isinstance(obj, QuerySet):
             objs = obj.all()
             model = obj.model
@@ -96,41 +135,102 @@ class TrustModelBackendMixin(object):
             objs = [obj]
             model = obj.__class__
 
-        if record.expr is not None:
-            return all([
-                evaluate_registered_expression(
-                    record.expr, user_obj, perm, o, model=model or o.__class__
-                )
-                for o in objs
-            ])
-        if not legacy_permission_callbacks_allowed():
-            raise PermissionConditionError(
-                'Callable permission conditions are disabled. Set '
-                'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True to use '
-                'the object-only has_perm path, or register an Expr from '
-                'condition_refs(). Silencing trusts.E002 does not enable '
-                'the callback.'
+        return all([
+            evaluate_registered_expression(
+                record.expr, user_obj, perm, o, model=model or o.__class__
             )
-        return all([record.func(user_obj, perm, o) for o in objs])
+            for o in objs
+        ])
+
+    def _bound_condition_lookup(self, obj):
+        """Bound ``ConditionLookup`` on this backend path's registry.
+
+        Unbound (after explicit ``set_condition_lookup(None)``) is
+        ``None``. A name absent from this path is a local fail-closed
+        non-match. Malformed or unbound policy this path owns still
+        raises.
+        """
+        return self._own_handle().registry.condition_lookup
+
+    def _condition_overlay(self, permext, obj, user_obj):
+        """Return (record, extra_q) for a ``:condition`` suffix.
+
+        Stored IR on a QuerySet compiles to SQL (AND overlay) from this
+        path only. A name absent from this path is ``(None, None)`` so
+        the caller can fail closed without raising. An explicit unbound
+        lookup on an instance is still a loud configuration failure.
+
+        A bound ``ConditionLookup`` is the only condition path. Core
+        does not import Zero modules or discover helpers from a model
+        ``__module__``.
+        """
+        if not permission_has_condition(permext):
+            return None, None
+        applabel, modelname, action, cond = utils.parse_perm_code(permext)
+        model = self._get_class(obj)
+        lookup = self._bound_condition_lookup(obj)
+        if lookup is None:
+            if isinstance(obj, QuerySet):
+                return None, None
+            raise AttributeError(
+                'Permission condition code "%s" is not associate with model "%s_%s"'
+                % (cond, applabel, modelname)
+            )
+        record = lookup.record_for(model, cond)
+        if record is None:
+            return None, None
+        extra_q = None
+        if isinstance(obj, QuerySet):
+            extra_q = lookup.compile_q(obj.model, permext, user_obj)
+        return record, extra_q
+
+    def _collection_has_perm(self, user_obj, perm, obj, extra_q=None):
+        handle = self._own_handle()
+        binding = _permission_binding(perm, obj.model)
+        matched = all_match(
+            (handle,), obj, user_obj, binding, kind='complete', extra_q=extra_q,
+        )
+        if matched is None:
+            return False
+        return matched
+
+    def _instance_has_perm(self, user_obj, perm, obj, extra_q=None):
+        handle = self._own_handle()
+        binding = _permission_binding(perm, obj.__class__)
+        matched = instance_match(
+            handle, obj, user_obj, binding, kind='complete', extra_q=extra_q,
+        )
+        if matched is None:
+            return False
+        return matched
 
     def has_perm(self, user_obj, permext, obj=None):
-        applabel, modelname, action, cond = utils.parse_perm_code(permext)
-        record = None
-        if len(cond) != 0:
-            record = Content.get_permission_condition_record(self._get_class(obj), cond)
-            if record is None:
-                raise AttributeError('Permission condition code "%s" is not associate with model "%s_%s"' % (cond, applabel, modelname))
+        if obj is None or not is_active_principal(user_obj):
+            return False
 
+        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
+            return False
+
+        if not self._own_plan_applies(obj, user_obj):
+            return False
+
+        record, extra_q = self._condition_overlay(permext, obj, user_obj)
+        applabel, modelname, action, _cond = utils.parse_perm_code(permext)
         perm = '%s.%s_%s' % (applabel, action, modelname)
-        positive = super(TrustModelBackendMixin, self).has_perm(user_obj=user_obj, perm=perm, obj=obj)
-        if positive:
-            if len(cond) == 0:
-                return True
 
-            if self.permission_condition_met(record, user_obj, perm, obj):
-                return True
-        return False
+        if permission_has_condition(permext) and record is None:
+            return False
 
-
-class TrustModelBackend(TrustModelBackendMixin, ModelBackend):
-    pass
+        if isinstance(obj, QuerySet):
+            positive = self._collection_has_perm(
+                user_obj, perm, obj, extra_q=extra_q,
+            )
+        else:
+            positive = self._instance_has_perm(
+                user_obj, perm, obj, extra_q=extra_q,
+            )
+        if not positive:
+            return False
+        if record is None or extra_q is not None:
+            return True
+        return self.permission_condition_met(record, user_obj, perm, obj)

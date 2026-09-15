@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Companion wheel isolation: django-trusts 1.0.0rc1 + exact Zero candidate.
+
+Proves Zero RECORD does not own trusts/__init__.py or trusts/apps.py,
+and that both companion layouts work:
+
+1. Kernel wheel then Zero overlay (site-packages merge).
+2. Isolated Zero wheel (no kernel trusts/__init__.py) still imports ZeroConfig.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from management_archive import ships_trusts_management
+
+ROOT = Path(__file__).resolve().parents[1]
+# Exact Zero candidate companion.
+ZERO_HEAD = 'd413bde81738966930c5733e3971bbfe8b350bf7'
+FORBIDDEN_ZERO_PATHS = (
+    'trusts/__init__.py',
+    'trusts/apps.py',
+)
+
+OVERLAY_PROBE = r'''
+import sys
+from pathlib import Path
+from django.conf import settings
+
+if not settings.configured:
+    settings.configure(
+        SECRET_KEY="companion-overlay",
+        USE_TZ=True,
+        DEFAULT_AUTO_FIELD="django.db.models.AutoField",
+        INSTALLED_APPS=[
+            "django.contrib.contenttypes",
+            "django.contrib.auth",
+            "trusts.zero.apps.ZeroConfig",
+        ],
+        AUTHENTICATION_BACKENDS=["trusts.zero.backends.TrustModelBackend"],
+        DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+    )
+import django
+django.setup()
+import trusts
+import importlib
+import trusts.apps as trusts_apps
+from trusts.backends import TrustModelBackendMixin
+from trusts.zero.apps import ZeroConfig
+from trusts.zero.models import Trust
+from django.apps import apps as django_apps
+
+assert ZeroConfig.label == "trusts"
+assert django_apps.get_app_config("trusts").name == "trusts.zero"
+assert Trust._meta.app_label == "trusts"
+assert TrustModelBackendMixin.__module__ == "trusts.backends"
+try:
+    importlib.import_module("trusts.core_backends")
+except ModuleNotFoundError:
+    pass
+else:
+    raise SystemExit("trusts.core_backends still imports")
+if hasattr(trusts_apps, "kernel_config") or hasattr(trusts_apps, "AppConfig"):
+    raise SystemExit("overlay still exposes kernel_config or AppConfig")
+init = Path(trusts.__file__)
+assert init.name == "__init__.py"
+assert (init.parent / "zero" / "apps.py").is_file()
+assert (init.parent / "apps.py").is_file()
+assert not (init.parent / "core_backends.py").is_file()
+from trusts.conditions import permission_has_condition, PermissionConditionError
+assert permission_has_condition("change_trust:own")
+assert PermissionConditionError is not None
+try:
+    from trusts.conditions import Expr
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.Expr")
+try:
+    from trusts.conditions import ConditionRegistry
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.ConditionRegistry")
+try:
+    from trusts.conditions import validate_expression
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports trusts.conditions.validate_expression")
+try:
+    from django_trusts import condition_refs
+except ImportError:
+    pass
+else:
+    raise SystemExit("companion overlay still exports django_trusts.condition_refs")
+print("companion-overlay-ok")
+'''
+
+ISOLATED_ZERO_PROBE = r'''
+import sys
+from pathlib import Path
+from django.conf import settings
+
+extracted = Path(%r)
+kept = []
+for p in sys.path:
+    if Path(p, "trusts", "__init__.py").is_file():
+        continue
+    kept.append(p)
+sys.path[:] = kept
+sys.path.insert(0, str(extracted))
+for name in list(sys.modules):
+    if name == "trusts" or name.startswith("trusts."):
+        del sys.modules[name]
+if not settings.configured:
+    settings.configure(SECRET_KEY="companion-zero-isolated")
+from trusts.zero.apps import ZeroConfig
+assert ZeroConfig.name == "trusts.zero"
+assert ZeroConfig.label == "trusts"
+print("companion-zero-isolated-ok")
+'''
+
+
+def _wheel(dist: Path, pattern: str) -> Path:
+    wheels = sorted(dist.glob(pattern))
+    if not wheels:
+        raise SystemExit('no wheel matching %s in %s' % (pattern, dist))
+    return wheels[-1]
+
+
+def _ensure_kernel_wheel() -> Path:
+    dist = ROOT / 'dist'
+    wheels = sorted(dist.glob('django_trusts-*.whl'))
+    if wheels:
+        return wheels[-1]
+    subprocess.run([sys.executable, '-m', 'pip', 'install', 'build'], check=True)
+    subprocess.run([sys.executable, '-m', 'build', '--wheel'], cwd=str(ROOT), check=True)
+    return _wheel(ROOT / 'dist', 'django_trusts-*.whl')
+
+
+def _ensure_zero_wheel(zero_root: Path) -> Path:
+    dist = zero_root / 'dist'
+    wheels = sorted(dist.glob('django_trusts_zero-*.whl'))
+    if wheels:
+        return wheels[-1]
+    subprocess.run([sys.executable, '-m', 'pip', 'install', 'build'], check=True)
+    subprocess.run([sys.executable, '-m', 'build', '--wheel'], cwd=str(zero_root), check=True)
+    return _wheel(zero_root / 'dist', 'django_trusts_zero-*.whl')
+
+
+def resolved_zero_head(zero_root: Path) -> str:
+    """Return ``git rev-parse HEAD`` for the Zero checkout.
+
+    Raises ``SystemExit`` if the path is not a git checkout whose HEAD
+    can be resolved. Does not treat ``ZERO_HEAD`` as proven.
+    """
+    try:
+        completed = subprocess.run(
+            ['git', '-C', str(zero_root), 'rev-parse', 'HEAD'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, 'stderr', None) or exc
+        if isinstance(detail, str):
+            detail = detail.strip() or exc
+        raise SystemExit(
+            'ZERO_CHECKOUT HEAD could not be resolved at %s: %s'
+            % (zero_root, detail)
+        ) from exc
+    head = completed.stdout.strip()
+    if not head:
+        raise SystemExit('ZERO_CHECKOUT HEAD is empty at %s' % zero_root)
+    return head
+
+
+def assert_zero_checkout_matches_head(zero_root: Path, expected=None) -> str:
+    """Fail unless the checkout at *zero_root* is the exact Zero candidate."""
+    if expected is None:
+        expected = ZERO_HEAD
+    head = resolved_zero_head(zero_root)
+    if head != expected:
+        raise SystemExit(
+            'ZERO_CHECKOUT HEAD %s does not match exact Zero candidate %s'
+            % (head, expected)
+        )
+    return head
+
+
+def _assert_zero_record(wheel: Path) -> None:
+    with zipfile.ZipFile(wheel) as zf:
+        names = zf.namelist()
+    for path in FORBIDDEN_ZERO_PATHS:
+        if any(n == path or n.endswith('/' + path) for n in names):
+            raise SystemExit('Zero wheel owns forbidden path %s' % path)
+    if not any(n.endswith('trusts/zero/apps.py') for n in names):
+        raise SystemExit('Zero wheel missing trusts/zero/apps.py')
+
+
+def main() -> int:
+    zero_root = Path(os.environ.get('ZERO_CHECKOUT', ROOT / '.deps' / 'django-trusts-zero'))
+    if not zero_root.is_dir():
+        raise SystemExit('ZERO_CHECKOUT missing: %s (expected exact Zero candidate %s)' % (
+            zero_root, ZERO_HEAD,
+        ))
+    zero_head = assert_zero_checkout_matches_head(zero_root)
+
+    kernel_wheel = _ensure_kernel_wheel()
+    zero_wheel = _ensure_zero_wheel(zero_root)
+    with zipfile.ZipFile(kernel_wheel) as zf:
+        names = zf.namelist()
+    if any(n.endswith('trusts/core_backends.py') for n in names):
+        raise SystemExit('library wheel still ships trusts/core_backends.py')
+    if ships_trusts_management(names):
+        raise SystemExit('library wheel still ships trusts/management/**')
+    _assert_zero_record(zero_wheel)
+
+    tmp = Path(tempfile.mkdtemp(prefix='trusts-dev3-companion-'))
+    try:
+        extracted = tmp / 'zero-extracted'
+        extracted.mkdir()
+        with zipfile.ZipFile(zero_wheel) as zf:
+            zf.extractall(extracted)
+        env = os.environ.copy()
+        env.pop('DJANGO_SETTINGS_MODULE', None)
+        out = subprocess.check_output(
+            [sys.executable, '-c', ISOLATED_ZERO_PROBE % str(extracted)],
+            env=env,
+            cwd=str(tmp),
+            text=True,
+        )
+        if 'companion-zero-isolated-ok' not in out:
+            raise SystemExit('isolated Zero probe failed: %r' % out)
+
+        site = tmp / 'overlay-site'
+        site.mkdir()
+        subprocess.check_call(
+            [sys.executable, '-m', 'pip', 'install', '-q', '--target', str(site), str(kernel_wheel)],
+        )
+        with zipfile.ZipFile(zero_wheel) as zf:
+            zf.extractall(site)
+        if not (site / 'trusts' / 'zero' / 'apps.py').is_file():
+            raise SystemExit('overlay missing trusts/zero/apps.py')
+        if not (site / 'trusts' / '__init__.py').is_file():
+            raise SystemExit('overlay lost kernel trusts/__init__.py')
+        if not (site / 'trusts' / 'apps.py').is_file():
+            raise SystemExit('overlay lost kernel trusts/apps.py')
+
+        overlay_env = os.environ.copy()
+        overlay_env['PYTHONPATH'] = str(site)
+        overlay_env.pop('DJANGO_SETTINGS_MODULE', None)
+        out2 = subprocess.check_output(
+            [sys.executable, '-c', OVERLAY_PROBE],
+            env=overlay_env,
+            cwd=str(tmp),
+            text=True,
+        )
+        if 'companion-overlay-ok' not in out2:
+            raise SystemExit('overlay probe failed: %r' % out2)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print('companion wheels ok')
+    print('kernel_wheel', kernel_wheel)
+    print('zero_wheel', zero_wheel)
+    print('zero_head', zero_head)
+    return 0
+
+
+if __name__ == '__main__':
+    os.chdir(ROOT)
+    raise SystemExit(main())

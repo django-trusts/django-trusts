@@ -1,16 +1,6 @@
-"""SQL grant filters shared by list APIs and trust-row checks.
+"""Generic authorized queryset/manager. No Zero-noun grant helpers."""
 
-These expressions JOIN the same trustee / TrustGroup / ceiling tables
-that ``TrustModelBackend.get_all_permissions`` reads. Callers must apply
-them on a QuerySet (then paginate). They are not Python predicates.
-
-Group-derived access is fail-closed. A group permission matches only when
-the user is a member, a ``TrustGroup`` row exists, the permission is in
-``TrustGroup.permissions``, and the permission is in the group's global
-ceiling (``Group.permissions`` or role-derived). Incomplete rows deny.
-"""
-
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Manager, Model, QuerySet
 
 
 def is_active_principal(user):
@@ -30,67 +20,47 @@ def is_active_principal(user):
     return True
 
 
-def _trust_lookup(trusts):
-    if trusts is None:
-        return {}
-    if hasattr(trusts, 'pk') and not hasattr(trusts, 'model'):
-        return {'trust': trusts}
-    return {'trust__in': trusts}
+class AuthorizedQuerySet(QuerySet):
+    """Instance-only authorized-row filter. No Django permission codec.
 
+    ``permission`` must be a model instance. Strings and auth.Permission
+    *codenames* raise ``TrustsConfigurationError`` with zero SQL. This
+    method does not parse ``:condition``, does not call
+    ``is_active_principal``, and does not call ``get_permission``.
 
-def group_local_grant_exists(user, permission, trust_id_outerref):
-    """Exists: same TrustGroup, member, local grant, and global ceiling.
-
-    ``trust_id_outerref`` is the outer row's Trust PK column (``pk`` on
-    Trust, ``trust_id`` on Content).
+    Callers that need Django inactivity checks or string permissions wrap
+    this; they do not belong on this class. There is no ``.permitted`` and
+    no ``.get_permission``. Core ``.authorized`` includes
+    relationship-family handles only; it is not Django's object-level
+    backend OR.
     """
-    from trusts.models import TrustGroup
 
-    return Exists(
-        TrustGroup.objects.filter(
-            trust_id=OuterRef(trust_id_outerref),
-            group__user=user,
-            permissions=permission,
-        ).filter(
-            Q(group__permissions=permission) |
-            Q(group__roles__permissions=permission)
+    def authorized(self, user, permission, extra_q=None):
+        from trusts.apps import _relationship_implementation_handles
+        from trusts.core import TrustsConfigurationError, granted
+
+        if not isinstance(permission, Model):
+            raise TrustsConfigurationError(
+                'permission must be a model instance, not %r.' % (permission,)
+            )
+        granted_q = granted(
+            _relationship_implementation_handles(),
+            self, user, permission, kind='complete',
         )
-    )
+        if granted_q is None:
+            return self.none()
+        if extra_q is not None:
+            granted_q = granted_q & extra_q
+        return self.filter(granted_q).distinct()
 
 
-def permission_granted_via_group_exists(user, trusts):
-    """Exists against an outer Permission queryset for ``user`` on ``trusts``.
+class AuthorizedManagerMixin:
+    """Add ``authorized()`` without replacing an application's manager."""
 
-    ``trusts`` is a Trust instance, queryset, or id list. Empty ``trust__in``
-    matches nothing.
-    """
-    from trusts.models import TrustGroup
-
-    return Exists(
-        TrustGroup.objects.filter(
-            group__user=user,
-            permissions=OuterRef('pk'),
-            **_trust_lookup(trusts)
-        ).filter(
-            Q(group__permissions=OuterRef('pk')) |
-            Q(group__roles__permissions=OuterRef('pk'))
+    def authorized(self, user, permission, extra_q=None):
+        return AuthorizedQuerySet.authorized(
+            self.get_queryset(), user, permission, extra_q=extra_q,
         )
-    )
 
 
-def trust_grant_q(user, permission, trust_fk=''):
-    """Return a Q matching trustee grants or the group local/global intersection.
-
-    ``trust_fk`` is the lookup prefix to the Trust row:
-    - ``''`` filters ``Trust`` rows themselves (create-under-trust).
-    - ``'trust'`` filters Content rows via ``Content.trust``.
-    """
-    prefix = ('%s__' % trust_fk) if trust_fk else ''
-    trust_id_ref = 'pk' if not trust_fk else '%s_id' % trust_fk
-    return (
-        Q(**{
-            '%strustees__entity' % prefix: user,
-            '%strustees__permission' % prefix: permission,
-        }) |
-        group_local_grant_exists(user, permission, trust_id_ref)
-    )
+AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)

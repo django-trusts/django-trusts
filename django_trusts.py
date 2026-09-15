@@ -1,9 +1,10 @@
-"""Public alias for django-trusts declarative condition builders.
+"""Public alias for django-trusts library helpers.
 
-The Django app package remains ``trusts``. Import ``Query``, ``TQ``, and
-``condition_refs`` from here or from ``trusts.conditions``.
+The Django app package remains ``trusts``. Named conditions are
+registered as builders on ``BackendHandle.add_named_filter``.
+
+``Expr``, ``Query`` / ``TQ``, and ``condition_refs`` are not exported
+here (issue #142 Stage B).
 """
 
-from trusts.conditions import Expr, Query, TQ, condition_refs
-
-__all__ = ['Expr', 'Query', 'TQ', 'condition_refs']
+__all__ = []

@@ -2,7 +2,7 @@
 
 Recorded on **2026-09-07** while implementing #14 and the coordinated
 Django/CI work from #15. This is the current development-line claim for
-`1.0.0.dev0`. It is not a published PyPI release.
+`1.0.0rc1`. It is not a published PyPI release.
 
 A Python-only intermediate against Django 1.8 is not a supported or testable
 state: Django 1.8 does not install on current CPython, and the preserved
@@ -25,11 +25,26 @@ declares one matrix and tests it in CI.
 | Python | 3.12, 3.13, 3.14 (`requires-python >=3.12`) | Intersection of currently supported CPython and Django 6.1's official matrix. 3.10/3.11 remain in CPython security support but are not in Django 6.1's matrix. 3.15 is not a stable release yet. |
 | Django | `>=6.1,<6.2` (tested against 6.1.1) | Latest stable Django at implementation time, per #15. |
 
-CI (`.github/workflows/ci.yml`) runs authorization tests, a fresh migrate,
-and `scripts/verify-legacy-upgrade.py` on **each** declared Python version
-with Django 6.1. The `package` job (sdist/wheel build, `twine check`, and
-an out-of-checkout wheel import) runs on **Python 3.12** as a representative
+CI (`.github/workflows/ci.yml`) runs kernel-only authorization tests, a
+fresh migrate (no Trusts schema), and `manage.py check` on **each**
+declared Python version with Django 6.1, plus the django-trusts/Zero pair job
+and a `package` job. The `package` job
+(sdist/wheel build, `twine check`, metadata/LICENSE proof, and an
+out-of-checkout wheel import) runs on **Python 3.12** as a representative
 install of the declared range.
+
+## Database (provisional inherited relationships)
+
+The provisional `along=` evaluator is currently exercised in CI only with
+Django's `django.db.backends.sqlite3` engine, the JSON functions
+`json_array`, `json_group_array`, `json_array_length`, and `json_each`,
+and `WITH RECURSIVE`.
+
+CI does not currently exercise this evaluator on PostgreSQL, MySQL, MariaDB,
+Oracle, or another vendor. In the current implementation, compilation on a
+non-SQLite connection raises `TrustsConfigurationError` before the walk
+query. `trusts.E005` checks the aliases Django supplies in `databases`; an
+absent or empty argument should not be read as a database all-clear.
 
 ## What is intentionally not declared
 
