@@ -62,6 +62,44 @@ Migration-bot checklist:
 - `diagnostics`
 - named-filter `args`
 
+## Policy lock generate and check (#147 C3)
+
+Additive commands and path resolution. Authorization entry points are
+unchanged: C3 does not define `ensure_policy_lockfile_verified` and does
+not alter `has_perm`, permission enumeration, `.authorized()`, or
+`authorization_required`. Core remains absent from `INSTALLED_APPS` and
+still does not ship `trusts/management` (#129). The commands register
+from `TrustsImplementationConfig.ready()`; a subclass that replaces
+`ready()` must call `super()`.
+
+| | Old (through C2) | New |
+| --- | --- | --- |
+| Generate / check | No command and no path API | `trusts_policy_generate` writes quiet canonical bytes. `trusts_policy_check` compares them. Both are zero SQL and do not authorize |
+| Conventional path | None | `resolve_lockfile_path()` uses `settings.BASE_DIR / "trusts-policy.lock.json"` when `BASE_DIR` is absolute. The process working directory is not used and parent directories are not searched |
+| Explicit path | None | `settings.TRUSTS_POLICY_LOCKFILE`, or `--lockfile` on either command, is an absolute override. `--lockfile` wins when both are set. A relative path fails closed. `None` means unset |
+| Conventional absence | Not applicable | Check returns inactive and does not create the file. Generate creates it when the parent directory exists |
+| Explicit absence | Not applicable | Generate creates the file. Check fails closed. A missing parent, a parent that is not a directory, and permission denied are different failures. Generate does not create missing parents |
+| Present file | Not applicable | Generate replaces it, including a malformed file, and drops `diagnostics`. Check fail-closes on malformed, unknown `schema_version` / `compiler_version`, unknown fields, a directory path, or semantic drift |
+| Comparison | None | Pass/fail is canonical semantic bytes (whitespace and top-level `diagnostics` are not drift). `format_policy_diff` reports fingerprint-first registration add/remove/change, then condition, path, model, target, and Along strategy lines. A label match is a likely change only when exactly one unmatched row remains on each side. Named filters match on `(model, code)`. Handle, compiler, renderer, and version lines are included. Verbosity 2 also prints a unified canonical JSON diff. The human diff does not decide pass/fail |
+| Runtime gate | None | Still none |
+
+Migration-bot checklist:
+
+- `trusts_policy_generate`
+- `trusts_policy_check`
+- `TRUSTS_POLICY_LOCKFILE`
+- `--lockfile`
+- `trusts-policy.lock.json`
+- `resolve_lockfile_path`
+- `generate_policy_lockfile`
+- `check_policy_lockfile`
+- `format_policy_diff`
+- `PolicyLockDrift`
+- `PolicyLockLocation`
+- `PolicyLockCheck`
+- `CONVENTIONAL_LOCKFILE_NAME`
+- `TrustsImplementationConfig.ready`
+
 ## Unused `get_short_model_name` helper (#217)
 
 | | Old | New |
