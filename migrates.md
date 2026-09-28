@@ -15,6 +15,32 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## Policy lock snapshot seam (#147 C1)
+
+Additive inspection API. Authorization entry points are unchanged: C1
+does not call `ensure_policy_lockfile_verified` and does not alter
+`has_perm`, permission enumeration, `.authorized()`, or
+`authorization_required`.
+
+| | Old | New |
+| --- | --- | --- |
+| Finalized policy snapshot | No manifest API | `trusts.policy_lock.build_policy_manifest` returns an immutable `PolicyManifest` projected from frozen relationship handles |
+| Public conversion | No JSON-ready export | `manifest_to_json_data` returns a detached dict. It is not a mutable alias of live `RegisteredRelation`, `AlongWalk`, or `Expr` objects |
+| Registration identity | No semantic fingerprint | `fingerprint_registration` is `sha256:` plus lowercase hex of the UTF-8 canonical payload. Readable labels are diagnostic and gain a fingerprint suffix only when they collide on one handle |
+| Renderer profile | Not recorded | Each handle records Django's `DEFAULT_DB_ALIAS` through `django.db.connections` (`alias`, `engine`, `profile`, `profile_version`, `along`) with zero SQL. A caller-supplied alias is ignored |
+| Unsupported family | Not applicable | A configured handle whose family is not `relationship` fails closed. Empty relationship handles are still emitted |
+
+Later lockfile slices (canonical `int_dec` reader, generate/check commands, runtime gating, audit-doc organization) are not in this change.
+
+Migration-bot checklist:
+
+- `trusts.policy_lock`
+- `build_policy_manifest`
+- `manifest_to_json_data`
+- `fingerprint_registration`
+- `PolicyManifest`
+- `DEFAULT_DB_ALIAS`
+
 ## Unused `get_short_model_name` helper (#217)
 
 | | Old | New |
