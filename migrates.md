@@ -30,7 +30,7 @@ does not call `ensure_policy_lockfile_verified` and does not alter
 | Renderer profile | Not recorded | Each handle records Django's `DEFAULT_DB_ALIAS` through `django.db.connections` (`alias`, `engine`, `profile`, `profile_version`, `along`) with zero SQL. A caller-supplied alias is ignored |
 | Unsupported family | Not applicable | A configured handle whose family is not `relationship` fails closed. Empty relationship handles are still emitted |
 
-Later lockfile slices (canonical `int_dec` reader, generate/check commands, runtime gating, audit-doc organization) are not in this change.
+C2 (below) adds the quiet serializer, the strict reader, and `int_dec`. Generate/check commands, runtime gating, and audit-doc organization are not in the C1 change.
 
 Migration-bot checklist:
 
@@ -40,6 +40,27 @@ Migration-bot checklist:
 - `fingerprint_registration`
 - `PolicyManifest`
 - `DEFAULT_DB_ALIAS`
+
+## Policy lock canonical document (#147 C2)
+
+Additive document boundary on the C1 snapshot. Authorization entry points
+are unchanged: C2 does not add management commands, path selection, or
+`ensure_policy_lockfile_verified`.
+
+| | Old (through C1) | New |
+| --- | --- | --- |
+| Quiet lockfile bytes | No public serializer. An internal UTF-8 form feeds registration fingerprints only | `canonicalize(source)` returns UTF-8, no BOM, LF-only, two-space indent, schema key order, trailing newline. A `PolicyManifest` never emits `diagnostics`. Bytes, `str`, or a dict are strict-read first, so regeneration drops `diagnostics` |
+| Strict reader | None. Unknown document fields were not a read boundary | `read_canonical_policy` accepts UTF-8 bytes, text, or a JSON object. `schema_version` and `compiler_version` must be integer `1`. Unknown fields fail at every semantic level. Top-level `diagnostics` is the only nonsemantic key and is omitted from the result |
+| Named-filter AND/OR | Binary `left` / `right` as stored | Commutative `and` / `or` flatten to a sorted `args` list. `eq` / `ne` stay ordered pairs |
+| Integers | IEEE-safe `int` only. Out-of-range integers fail closed | IEEE-safe values use `{"type":"int","value": <JSON number>}` (`abs(n) <= 2**53 - 1`, bool excluded). Outside that range, `{"type":"int_dec","value":"<decimal text>"}` with an optional leading `-`, ASCII digits, no `+`, and no leading zeroes. Cross-shape encodings and noncanonical `int_dec` spellings fail. Floats, `ModelIdentity`, and other constants still fail |
+
+Migration-bot checklist:
+
+- `canonicalize`
+- `read_canonical_policy`
+- `int_dec`
+- `diagnostics`
+- named-filter `args`
 
 ## Unused `get_short_model_name` helper (#217)
 
