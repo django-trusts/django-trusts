@@ -1,4 +1,4 @@
-"""Finalized authorization-policy snapshot (lockfile C1–C2, issue #147).
+"""Finalized authorization-policy snapshot (lockfile C1–C3, issue #147).
 
 Projects frozen relationship registries into an immutable snapshot and a
 detached JSON-ready document. Registration fingerprints and readable
@@ -7,18 +7,31 @@ strict canonical reader: ``schema_version`` / ``compiler_version``,
 named-filter IR with commutative ``and`` / ``or``, the v1 constant
 allowlist, and ``int`` versus canonical ``int_dec``.
 
+C3 resolves the lockfile path, writes it (``generate_policy_lockfile``),
+and compares it (``check_policy_lockfile``). The conventional file is
+``settings.BASE_DIR / "trusts-policy.lock.json"``. An explicit
+``TRUSTS_POLICY_LOCKFILE`` or command ``--lockfile`` is enforcement
+intent. Paths are never taken from the process working directory and
+parent directories are never searched for a lockfile. Command classes
+live in ``trusts.policy_commands``. Runtime authorization gating is not
+performed here.
+
 The portable document never contains runtime object identity, source
 locations, or database credentials. Callers cannot select a database
 alias: the renderer profile is always Django's ``DEFAULT_DB_ALIAS``
-resolved through ``django.db.connections``, with zero SQL. Management
-commands, path selection, and runtime gating are later slices and are
-not performed.
+resolved through ``django.db.connections``, with zero SQL.
 """
 
 from __future__ import annotations
 
+import difflib
+import errno
 import hashlib
 import json
+import os
+import stat
+import tempfile
+from pathlib import Path
 from types import MappingProxyType
 
 from trusts.core import (
@@ -1485,19 +1498,730 @@ def _thaw(value):
     return value
 
 
+CONVENTIONAL_LOCKFILE_NAME = 'trusts-policy.lock.json'
+
+_DIFF_PATH_FIELDS = (
+    ('user', 'path user'),
+    ('permission', 'path permission'),
+    ('content', 'path content'),
+)
+_DIFF_MODEL_FIELDS = (
+    ('root', 'model root'),
+    ('user_model', 'model user'),
+    ('permission_model', 'model permission'),
+    ('content_model', 'model content'),
+)
+_DIFF_TARGET_FIELDS = (
+    ('user_target', 'target user'),
+    ('permission_target', 'target permission'),
+    ('content_target', 'target content'),
+)
+_DIFF_RENDERER_FIELDS = (
+    'alias',
+    'engine',
+    'profile',
+    'profile_version',
+    'along',
+)
+
+
+class PolicyLockLocation(object):
+    """Exact lockfile path plus how presence was classified.
+
+    ``path`` is absolute. ``explicit`` is true when the path came from
+    ``TRUSTS_POLICY_LOCKFILE`` or a command override. ``state`` is
+    ``absent``, ``present``, ``missing_parent``, ``not_a_directory``, or
+    ``permission``. Classification inspects this path and its immediate
+    parent only.
+    """
+
+    __slots__ = ('path', 'explicit', 'state')
+
+    def __init__(self, path, explicit, state):
+        self.path = path
+        self.explicit = explicit
+        self.state = state
+
+    def __repr__(self):
+        return '<PolicyLockLocation %s explicit=%s %s>' % (
+            self.state, self.explicit, self.path,
+        )
+
+
+class PolicyLockCheck(object):
+    """Inactive or matching lockfile check. Drift raises instead."""
+
+    __slots__ = ('path', 'status')
+
+    def __init__(self, path, status):
+        self.path = path
+        self.status = status
+
+    def __repr__(self):
+        return '<PolicyLockCheck %s %s>' % (self.status, self.path)
+
+
+class PolicyLockDrift(TrustsConfigurationError):
+    """Recorded lockfile and live policy are not semantically identical.
+
+    Pass/fail is canonical bytes. ``diff`` is the human authorization
+    report and does not decide the mismatch. ``raw_diff`` is the unified
+    canonical JSON diff.
+    """
+
+    def __init__(self, path, diff, raw_diff):
+        self.path = path
+        self.diff = diff
+        self.raw_diff = raw_diff
+        super(PolicyLockDrift, self).__init__(
+            'Policy lock drift: %s\n%s' % (path, diff)
+        )
+
+
+def resolve_lockfile_path(*, override=None):
+    """Return the lockfile location. Never consults the process CWD.
+
+    ``override`` is an explicit CLI path. When it is omitted, a set
+    ``settings.TRUSTS_POLICY_LOCKFILE`` (anything other than ``None``)
+    is the explicit path. Otherwise the conventional path is
+    ``settings.BASE_DIR / "trusts-policy.lock.json"`` when ``BASE_DIR``
+    is an absolute path string or ``Path``. A missing or relative
+    ``BASE_DIR`` is not usable and requires an explicit absolute path.
+    Relative explicit paths fail closed. This function does not create
+    directories, read the file, or issue SQL.
+    """
+    if override is not None:
+        path = _absolute_lock_path(override)
+        explicit = True
+    else:
+        configured = _configured_lock_override()
+        if configured is not None:
+            path = _absolute_lock_path(configured)
+            explicit = True
+        else:
+            base = _usable_base_dir()
+            if base is None:
+                raise TrustsConfigurationError(
+                    'Policy lock requires an absolute TRUSTS_POLICY_LOCKFILE '
+                    'or --lockfile when BASE_DIR is unset or not absolute. '
+                    'The process working directory is not used.'
+                )
+            path = base / CONVENTIONAL_LOCKFILE_NAME
+            explicit = False
+    return PolicyLockLocation(path, explicit, _classify_lockfile(path))
+
+
+def generate_policy_lockfile(*, override=None):
+    """Create or replace the lockfile with quiet canonical bytes.
+
+    An explicit missing path is created. A present file is replaced.
+    A missing parent directory, a parent that is not a directory, and
+    permission failures are distinct and do not create parents. Manifest
+    construction runs only after the parent can accept a file; a
+    construction failure writes nothing. This does not compare an
+    existing document and does not enter a verifier. Zero SQL.
+    """
+    location = resolve_lockfile_path(override=override)
+    _require_writable_parent(location)
+    if location.state == 'present' and _lockfile_is_directory(location.path):
+        raise TrustsConfigurationError(
+            'Policy lock path is a directory: %s.' % location.path
+        )
+    payload = canonicalize(
+        build_policy_manifest(_frozen_configured_handles())
+    )
+    _atomic_write(location.path, payload)
+    return location.path
+
+
+def check_policy_lockfile(*, override=None):
+    """Compare the live policy to the lockfile, or report inactive.
+
+    Conventional absence (no explicit path, file not present, including
+    a missing conventional parent) returns status ``inactive`` and does
+    not build a manifest. An explicit missing file, a missing explicit
+    parent, a parent that is not a directory, a permission failure, a
+    directory path, and a malformed or unsupported document fail closed.
+    A present file is strict-read, diagnostics are dropped, and both
+    sides are re-canonicalized. Equal canonical bytes return status
+    ``match``. Any other difference raises :class:`PolicyLockDrift`.
+    Zero SQL. This does not authorize.
+    """
+    location = resolve_lockfile_path(override=override)
+    action = _presence_action(location, writing=False)
+    if action == 'inactive':
+        return PolicyLockCheck(location.path, 'inactive')
+    if _lockfile_is_directory(location.path):
+        raise TrustsConfigurationError(
+            'Policy lock path is a directory: %s.' % location.path
+        )
+    try:
+        raw = location.path.read_bytes()
+    except PermissionError as exc:
+        raise TrustsConfigurationError(
+            'Policy lock permission denied: %s.' % location.path
+        ) from exc
+    except FileNotFoundError:
+        if location.explicit:
+            raise TrustsConfigurationError(
+                'Policy lock file is missing: %s.' % location.path
+            )
+        return PolicyLockCheck(location.path, 'inactive')
+    recorded = canonicalize(raw)
+    live = canonicalize(build_policy_manifest(_frozen_configured_handles()))
+    if recorded == live:
+        return PolicyLockCheck(location.path, 'match')
+    diff = format_policy_diff(
+        read_canonical_policy(recorded),
+        read_canonical_policy(live),
+    )
+    if diff == '':
+        diff = (
+            'policy lock drift (recorded -> live)\n'
+            'semantic bytes differ without a classified authorization '
+            'change\n'
+        )
+    raise PolicyLockDrift(
+        location.path, diff, _canonical_unified_diff(recorded, live),
+    )
+
+
+def format_policy_diff(recorded, live):
+    """Human authorization diff. Empty when the documents classify equal.
+
+    Registrations inside one handle match by fingerprint first. A
+    fingerprint pair that still differs in label, path, model, target,
+    condition, or Along is a change. Unmatched rows pair as a likely
+    change only when exactly one recorded row and one live row share a
+    label; every other leftover is added or removed. Named filters match
+    by ``(model, code)``. Handle path, family, compiler, renderer, and
+    document versions are first-class. This report does not decide
+    pass/fail and does not issue SQL.
+    """
+    if not isinstance(recorded, dict) or not isinstance(live, dict):
+        raise TypeError(
+            'format_policy_diff expected semantic documents, not %s and %s.'
+            % (type(recorded).__name__, type(live).__name__)
+        )
+    lines = []
+    if recorded.get('schema_version') != live.get('schema_version'):
+        lines.append('schema_version: %s -> %s' % (
+            _diff_show(recorded.get('schema_version')),
+            _diff_show(live.get('schema_version')),
+        ))
+    if recorded.get('compiler_version') != live.get('compiler_version'):
+        lines.append('compiler_version: %s -> %s' % (
+            _diff_show(recorded.get('compiler_version')),
+            _diff_show(live.get('compiler_version')),
+        ))
+    recorded_handles = _index_handles(recorded.get('handles') or [])
+    live_handles = _index_handles(live.get('handles') or [])
+    for path in sorted(set(recorded_handles) | set(live_handles)):
+        if path not in live_handles:
+            lines.extend(_handle_side_lines(recorded_handles[path], removed=True))
+            continue
+        if path not in recorded_handles:
+            lines.extend(_handle_side_lines(live_handles[path], removed=False))
+            continue
+        section = []
+        section.extend(_handle_meta_lines(
+            recorded_handles[path], live_handles[path],
+        ))
+        section.extend(_registration_section(
+            recorded_handles[path].get('registrations') or [],
+            live_handles[path].get('registrations') or [],
+        ))
+        section.extend(_named_diff_lines(
+            recorded_handles[path].get('named_filters') or [],
+            live_handles[path].get('named_filters') or [],
+        ))
+        if section:
+            lines.append('handle %s' % path)
+            lines.extend(section)
+    if not lines:
+        return ''
+    return 'policy lock drift (recorded -> live)\n' + '\n'.join(lines) + '\n'
+
+
+def _configured_lock_override():
+    from django.conf import settings
+
+    if not settings.configured:
+        return None
+    return getattr(settings, 'TRUSTS_POLICY_LOCKFILE', None)
+
+
+def _usable_base_dir():
+    from django.conf import settings
+
+    if not settings.configured:
+        return None
+    base = getattr(settings, 'BASE_DIR', None)
+    if base is None or isinstance(base, bool):
+        return None
+    if not isinstance(base, (str, os.PathLike)):
+        return None
+    text = os.fspath(base)
+    if not isinstance(text, str) or text == '':
+        return None
+    path = Path(text)
+    if not path.is_absolute():
+        return None
+    return path
+
+
+def _absolute_lock_path(value):
+    if isinstance(value, bool) or not isinstance(value, (str, os.PathLike)):
+        raise TrustsConfigurationError(
+            'Policy lock path must be an absolute path, not %s. It is not '
+            'resolved against the process working directory.'
+            % type(value).__name__
+        )
+    text = os.fspath(value)
+    if not isinstance(text, str):
+        raise TrustsConfigurationError(
+            'Policy lock path must be an absolute path, not %s. It is not '
+            'resolved against the process working directory.'
+            % type(text).__name__
+        )
+    if not Path(text).is_absolute():
+        raise TrustsConfigurationError(
+            'Policy lock path must be absolute, not %r. It is not resolved '
+            'against the process working directory.' % (text,)
+        )
+    return Path(text)
+
+
+def _classify_lockfile(path):
+    """Classify ``path`` without searching parents for a lockfile."""
+    parent = path.parent
+    try:
+        parent_mode = os.stat(parent).st_mode
+    except FileNotFoundError:
+        return 'missing_parent'
+    except PermissionError:
+        return 'permission'
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return 'permission'
+        raise
+    if not stat.S_ISDIR(parent_mode):
+        return 'not_a_directory'
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return 'absent'
+    except PermissionError:
+        return 'permission'
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return 'permission'
+        raise
+    return 'present'
+
+
+def _presence_action(location, *, writing):
+    """Map presence to inactive, create, or present. Fail closed otherwise."""
+    state = location.state
+    path = location.path
+    if state == 'permission':
+        raise TrustsConfigurationError(
+            'Policy lock permission denied: %s.' % path
+        )
+    if state == 'missing_parent':
+        if location.explicit or writing:
+            raise TrustsConfigurationError(
+                'Policy lock parent directory is missing: %s.' % path.parent
+            )
+        return 'inactive'
+    if state == 'not_a_directory':
+        if location.explicit or writing:
+            raise TrustsConfigurationError(
+                'Policy lock parent is not a directory: %s.' % path.parent
+            )
+        return 'inactive'
+    if state == 'absent':
+        if writing:
+            return 'create'
+        if location.explicit:
+            raise TrustsConfigurationError(
+                'Policy lock file is missing: %s.' % path
+            )
+        return 'inactive'
+    if state == 'present':
+        return 'present'
+    raise TrustsConfigurationError(
+        'Policy lock path state %r is unsupported.' % (state,)
+    )
+
+
+def _require_writable_parent(location):
+    action = _presence_action(location, writing=True)
+    if action not in ('create', 'present'):
+        raise TrustsConfigurationError(
+            'Policy lock path %s cannot be written (state %s).'
+            % (location.path, location.state)
+        )
+    return action
+
+
+def _lockfile_is_directory(path):
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError:
+        return False
+    return stat.S_ISDIR(mode)
+
+
+def _frozen_configured_handles():
+    from trusts.apps import configured_implementation_handles
+
+    handles = configured_implementation_handles()
+    for handle in handles:
+        registry = getattr(handle, 'registry', None)
+        freeze = getattr(registry, 'freeze', None)
+        if callable(freeze):
+            freeze()
+    return handles
+
+
+def _atomic_write(path, payload):
+    """Replace ``path`` via a temp file in the same directory. No CWD."""
+    if not isinstance(payload, bytes):
+        raise TypeError(
+            'Policy lock payload must be bytes, not %s.'
+            % type(payload).__name__
+        )
+    parent = path.parent
+    fd = None
+    tmp_name = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix='.trusts-policy.',
+            suffix='.tmp',
+            dir=os.fspath(parent),
+        )
+        with os.fdopen(fd, 'wb') as handle:
+            fd = None
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, os.fspath(path))
+        tmp_name = None
+    except PermissionError as exc:
+        raise TrustsConfigurationError(
+            'Policy lock permission denied: %s.' % path
+        ) from exc
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            raise TrustsConfigurationError(
+                'Policy lock permission denied: %s.' % path
+            ) from exc
+        if exc.errno in (errno.EISDIR, errno.ENOTDIR):
+            raise TrustsConfigurationError(
+                'Policy lock path is a directory: %s.' % path
+            ) from exc
+        raise TrustsConfigurationError(
+            'Policy lock could not be written: %s.' % (exc,)
+        ) from exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def _canonical_unified_diff(recorded_bytes, live_bytes):
+    recorded_lines = recorded_bytes.decode('utf-8').splitlines(keepends=True)
+    live_lines = live_bytes.decode('utf-8').splitlines(keepends=True)
+    text = ''.join(difflib.unified_diff(
+        recorded_lines,
+        live_lines,
+        fromfile='recorded',
+        tofile='live',
+    ))
+    if text and not text.endswith('\n'):
+        text += '\n'
+    return text
+
+
+def _diff_show(value):
+    if value is None:
+        return 'null'
+    if isinstance(value, str):
+        return value
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    )
+
+
+def _index_handles(handles):
+    if isinstance(handles, (str, bytes)) or not isinstance(handles, (list, tuple)):
+        raise TrustsConfigurationError(
+            'Policy diff handles must be a list, not %s.'
+            % type(handles).__name__
+        )
+    indexed = {}
+    for handle in handles:
+        path = handle['path']
+        if path in indexed:
+            raise TrustsConfigurationError(
+                'Policy diff handle path %r is duplicated.' % (path,)
+            )
+        indexed[path] = handle
+    return indexed
+
+
+def _index_fingerprints(rows):
+    indexed = {}
+    for row in rows:
+        fingerprint = row['fingerprint']
+        if fingerprint in indexed:
+            raise TrustsConfigurationError(
+                'Policy diff registration fingerprint %r is duplicated.'
+                % (fingerprint,)
+            )
+        indexed[fingerprint] = row
+    return indexed
+
+
+def _index_named(rows):
+    indexed = {}
+    for row in rows:
+        key = (row['model'], row['code'])
+        if key in indexed:
+            raise TrustsConfigurationError(
+                'Policy diff named filter %s:%s is duplicated.' % key
+            )
+        indexed[key] = row
+    return indexed
+
+
+def _handle_side_lines(handle, *, removed):
+    verb = 'removed' if removed else 'added'
+    lines = ['handle %s: %s' % (verb, handle['path'])]
+    lines.append('  family: %s' % handle['family'])
+    lines.append('  compiler: %s' % handle['compiler'])
+    renderer = handle.get('renderer') or {}
+    for key in _DIFF_RENDERER_FIELDS:
+        lines.append('  renderer.%s: %s' % (key, _diff_show(renderer.get(key))))
+    registrations = sorted(
+        handle.get('registrations') or [],
+        key=lambda item: item['fingerprint'],
+    )
+    for row in registrations:
+        lines.append('  registration %s: %s fingerprint %s' % (
+            verb, row['label'], row['fingerprint'],
+        ))
+    named = sorted(
+        handle.get('named_filters') or [],
+        key=lambda item: (item['model'], item['code']),
+    )
+    for row in named:
+        lines.append('  named filter %s: %s:%s fingerprint %s' % (
+            verb, row['model'], row['code'], row['fingerprint'],
+        ))
+    return lines
+
+
+def _handle_meta_lines(recorded, live):
+    lines = []
+    if recorded.get('family') != live.get('family'):
+        lines.append('  family: %s -> %s' % (
+            _diff_show(recorded.get('family')),
+            _diff_show(live.get('family')),
+        ))
+    if recorded.get('compiler') != live.get('compiler'):
+        lines.append('  compiler: %s -> %s' % (
+            _diff_show(recorded.get('compiler')),
+            _diff_show(live.get('compiler')),
+        ))
+    old_renderer = recorded.get('renderer') or {}
+    new_renderer = live.get('renderer') or {}
+    for key in _DIFF_RENDERER_FIELDS:
+        if old_renderer.get(key) != new_renderer.get(key):
+            lines.append('  renderer.%s: %s -> %s' % (
+                key,
+                _diff_show(old_renderer.get(key)),
+                _diff_show(new_renderer.get(key)),
+            ))
+    return lines
+
+
+def _registration_section(recorded_rows, live_rows):
+    recorded = _index_fingerprints(recorded_rows)
+    live = _index_fingerprints(live_rows)
+    lines = []
+    for fingerprint in sorted(set(recorded) & set(live)):
+        lines.extend(_registration_diff_lines(
+            recorded[fingerprint], live[fingerprint], likely=False,
+        ))
+    left = [
+        recorded[fingerprint]
+        for fingerprint in sorted(set(recorded) - set(live))
+    ]
+    right = [
+        live[fingerprint]
+        for fingerprint in sorted(set(live) - set(recorded))
+    ]
+    likely_pairs, left, right = _pair_likely(left, right)
+    for old, new in likely_pairs:
+        lines.extend(_registration_diff_lines(old, new, likely=True))
+    for row in sorted(left, key=lambda item: item['fingerprint']):
+        lines.append('  registration removed: %s fingerprint %s' % (
+            row['label'], row['fingerprint'],
+        ))
+    for row in sorted(right, key=lambda item: item['fingerprint']):
+        lines.append('  registration added: %s fingerprint %s' % (
+            row['label'], row['fingerprint'],
+        ))
+    return lines
+
+
+def _pair_likely(left, right):
+    by_left = {}
+    for row in left:
+        by_left.setdefault(row['label'], []).append(row)
+    by_right = {}
+    for row in right:
+        by_right.setdefault(row['label'], []).append(row)
+    paired = []
+    used_left = set()
+    used_right = set()
+    shared = set(by_left) & set(by_right)
+    for label in sorted(shared):
+        if len(by_left[label]) == 1 and len(by_right[label]) == 1:
+            paired.append((by_left[label][0], by_right[label][0]))
+            used_left.add(id(by_left[label][0]))
+            used_right.add(id(by_right[label][0]))
+    left_rest = [row for row in left if id(row) not in used_left]
+    right_rest = [row for row in right if id(row) not in used_right]
+    return paired, left_rest, right_rest
+
+
+def _registration_diff_lines(recorded, live, *, likely):
+    body = []
+    if recorded.get('label') != live.get('label'):
+        body.append('    label: %s -> %s' % (
+            _diff_show(recorded.get('label')),
+            _diff_show(live.get('label')),
+        ))
+    if recorded.get('kind') != live.get('kind'):
+        body.append('    strategy kind: %s -> %s' % (
+            _diff_show(recorded.get('kind')),
+            _diff_show(live.get('kind')),
+        ))
+    fields = _DIFF_PATH_FIELDS + _DIFF_MODEL_FIELDS + _DIFF_TARGET_FIELDS
+    for key, title in fields:
+        if recorded.get(key) != live.get(key):
+            body.append('    %s: %s -> %s' % (
+                title,
+                _diff_show(recorded.get(key)),
+                _diff_show(live.get(key)),
+            ))
+    if recorded.get('condition') != live.get('condition'):
+        body.append('    condition: %s -> %s' % (
+            _diff_show(recorded.get('condition')),
+            _diff_show(live.get('condition')),
+        ))
+    body.extend(_along_diff_lines(recorded.get('along'), live.get('along')))
+    fingerprints_differ = recorded.get('fingerprint') != live.get('fingerprint')
+    if not body and not fingerprints_differ:
+        return []
+    if fingerprints_differ:
+        header = '  registration changed: %s fingerprint %s -> %s' % (
+            recorded.get('label'),
+            recorded.get('fingerprint'),
+            live.get('fingerprint'),
+        )
+    else:
+        header = '  registration changed: %s fingerprint %s' % (
+            recorded.get('label'),
+            recorded.get('fingerprint'),
+        )
+    lines = [header]
+    if likely and fingerprints_differ:
+        lines.append('    likely change: label stable, fingerprint moved')
+    lines.extend(body)
+    return lines
+
+
+def _along_diff_lines(old, new):
+    if old == new:
+        return []
+    if old is None:
+        return ['    strategy along: added %s' % _diff_show(new)]
+    if new is None:
+        return ['    strategy along: removed %s' % _diff_show(old)]
+    lines = []
+    for key in _ALONG_KEYS:
+        if old.get(key) != new.get(key):
+            lines.append('    strategy along.%s: %s -> %s' % (
+                key, _diff_show(old.get(key)), _diff_show(new.get(key)),
+            ))
+    return lines
+
+
+def _named_diff_lines(recorded_rows, live_rows):
+    recorded = _index_named(recorded_rows)
+    live = _index_named(live_rows)
+    lines = []
+    shared = set(recorded) & set(live)
+    for key in sorted(shared):
+        old = recorded[key]
+        new = live[key]
+        if old == new:
+            continue
+        lines.append(
+            '  named filter changed: %s:%s fingerprint %s -> %s' % (
+                key[0], key[1], old.get('fingerprint'), new.get('fingerprint'),
+            )
+        )
+        if old.get('expr') != new.get('expr'):
+            lines.append('    expr: %s -> %s' % (
+                _diff_show(old.get('expr')), _diff_show(new.get('expr')),
+            ))
+    for key in sorted(set(recorded) - set(live)):
+        row = recorded[key]
+        lines.append('  named filter removed: %s:%s fingerprint %s' % (
+            key[0], key[1], row.get('fingerprint'),
+        ))
+    for key in sorted(set(live) - set(recorded)):
+        row = live[key]
+        lines.append('  named filter added: %s:%s fingerprint %s' % (
+            key[0], key[1], row.get('fingerprint'),
+        ))
+    return lines
+
+
 __all__ = (
     'ALONG_SUPPORTED',
     'ALONG_UNSUPPORTED',
     'COMPILER_VERSION',
+    'CONVENTIONAL_LOCKFILE_NAME',
     'GENERIC_UNSUPPORTED_ALONG_PROFILE',
     'PROFILE_VERSION',
+    'PolicyLockCheck',
+    'PolicyLockDrift',
+    'PolicyLockLocation',
     'PolicyManifest',
     'RELATIONSHIP_FAMILY',
     'SCHEMA_VERSION',
     'SQLITE_JSON1_RCTE_PROFILE',
     'build_policy_manifest',
     'canonicalize',
+    'check_policy_lockfile',
     'fingerprint_registration',
+    'format_policy_diff',
+    'generate_policy_lockfile',
     'manifest_to_json_data',
     'read_canonical_policy',
+    'resolve_lockfile_path',
 )
