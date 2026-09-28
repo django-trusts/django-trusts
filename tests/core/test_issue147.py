@@ -784,6 +784,42 @@ class PolicyLockSnapshotTest(SimpleTestCase):
         self.assertIn('non-string', str(ctx.exception))
         self.assertIn('None', str(ctx.exception))
 
+    def test_fingerprint_rejects_missing_condition_keys(self):
+        base = _minimal_registration_payload()
+        cases = (
+            ({'op': 'all'}, 'all', 'predicates'),
+            ({'op': 'equal', 'left': ['tenant']}, 'equal', 'right'),
+            ({'op': 'permission_in'}, 'permission_in', 'refs'),
+        )
+        for condition, op, missing in cases:
+            payload = dict(base)
+            payload['condition'] = condition
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                fingerprint_registration(payload)
+            message = str(ctx.exception)
+            self.assertIn(op, message)
+            self.assertIn(missing, message)
+            self.assertIn('missing', message)
+            self.assertNotIsInstance(ctx.exception, KeyError)
+
+        both = dict(base)
+        both['condition'] = {'op': 'equal'}
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            fingerprint_registration(both)
+        message = str(ctx.exception)
+        self.assertIn('left', message)
+        self.assertIn('right', message)
+
+        nested = dict(base)
+        nested['condition'] = {
+            'op': 'all',
+            'predicates': [{'op': 'equal', 'left': ['tenant']}],
+        }
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            fingerprint_registration(nested)
+        self.assertIn('right', str(ctx.exception))
+        self.assertIn("'equal'", str(ctx.exception))
+
     def test_named_filter_projects_allowlisted_constants(self):
         _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
         registry = TrustsRegistry()

@@ -139,13 +139,17 @@ def fingerprint_registration(payload):
     """Return ``sha256:`` plus the lowercase hex of the canonical payload.
 
     ``payload`` is the registration semantic object (kind, paths, models,
-    targets, condition, along). Derived ``fingerprint`` and ``label``
+    targets, condition, along).     Derived ``fingerprint`` and ``label``
     keys are accepted and ignored. Every other unexpected key is
     rejected, recursively, at the registration, closed-condition, and
-    Along levels. Path components must already be strings; they are not
-    coerced. Key order does not affect the digest. Closed ``all`` /
-    ``equal`` / ``permission_in`` nodes are normalized so commutative
-    order is not identity.
+    Along levels. Each closed-condition op is checked for its required
+    keys before those keys are read: ``all`` requires ``predicates``,
+    ``equal`` requires ``left`` and ``right``, and ``permission_in``
+    requires ``refs``. A missing key is a configuration error. Path
+    components must already be strings; they are not coerced. Key order
+    does not affect the digest. Closed ``all`` / ``equal`` /
+    ``permission_in`` nodes are normalized so commutative order is not
+    identity.
     """
     if isinstance(payload, MappingProxyType):
         payload = dict(payload)
@@ -685,6 +689,16 @@ def _reject_unexpected(mapping, allowed, what):
         )
 
 
+def _require_present(mapping, required, op):
+    """Reject a closed-condition variant before its keys are indexed."""
+    missing = [key for key in required if key not in mapping]
+    if missing:
+        raise TrustsConfigurationError(
+            'Closed condition op %r is missing %s.'
+            % (op, ', '.join(missing))
+        )
+
+
 def _require_text(value, what):
     if not isinstance(value, str) or value == '':
         raise TrustsConfigurationError(
@@ -771,6 +785,7 @@ def _canonicalize_condition(condition):
     op = mapping['op']
     if op == 'all':
         _reject_unexpected(mapping, ('op', 'predicates'), 'Closed condition')
+        _require_present(mapping, ('predicates',), op)
         predicates_in = mapping['predicates']
         if (
             isinstance(predicates_in, (str, bytes))
@@ -788,6 +803,7 @@ def _canonicalize_condition(condition):
         return {'op': 'all', 'predicates': predicates}
     if op == 'equal':
         _reject_unexpected(mapping, ('op', 'left', 'right'), 'Closed condition')
+        _require_present(mapping, ('left', 'right'), op)
         left = _require_string_path(mapping['left'], 'Equal left')
         right = _require_string_path(mapping['right'], 'Equal right')
         if tuple(left) > tuple(right):
@@ -795,6 +811,7 @@ def _canonicalize_condition(condition):
         return {'op': 'equal', 'left': left, 'right': right}
     if op == 'permission_in':
         _reject_unexpected(mapping, ('op', 'refs'), 'Closed condition')
+        _require_present(mapping, ('refs',), op)
         refs_in = mapping['refs']
         if (
             isinstance(refs_in, (str, bytes))
