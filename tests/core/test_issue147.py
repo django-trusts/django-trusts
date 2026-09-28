@@ -7,7 +7,7 @@ profile. No generate/check command, no runtime gate, no SQL.
 
 import hashlib
 import json
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -33,6 +33,10 @@ from trusts.core import (
     TrustsConfigurationError,
     TrustsRegistry,
 )
+
+
+class PortableOtherCompiler(PlanQueryCompiler):
+    """Module-level compiler so its identity round-trips through import."""
 from trusts.policy_lock import (
     ALONG_SUPPORTED,
     ALONG_UNSUPPORTED,
@@ -147,8 +151,88 @@ def _handle(registry, path, compiler=None):
     )
 
 
+_owner_seq = 0
+
+
+@contextmanager
+def _installed_owner(path, family='relationship', label=None):
+    """Install one strict implementation owner for a synthetic backend path."""
+    global _owner_seq
+    from django.apps import apps as django_apps
+
+    import tests as tests_module
+    from trusts.apps import TrustsImplementationConfig
+
+    _owner_seq += 1
+    label = label or ('policy_own_%s' % _owner_seq)
+    if label in django_apps.app_configs:
+        raise AssertionError('app label %r is already installed' % label)
+
+    class Owner(TrustsImplementationConfig):
+        pass
+
+    Owner.label = label
+    Owner.trusts_backend_paths = (path,)
+    Owner._authorization_family = family
+    owner = Owner('tests.%s' % label, tests_module)
+    owner.apps = django_apps
+    django_apps.app_configs[label] = owner
+    try:
+        yield owner
+    finally:
+        django_apps.app_configs.pop(label, None)
+
+
+@contextmanager
+def _owned(*handles):
+    with ExitStack() as stack:
+        seen = set()
+        for handle in handles:
+            if handle.path in seen:
+                continue
+            seen.add(handle.path)
+            stack.enter_context(_installed_owner(handle.path))
+        yield
+
+
 def _data(handles, **kwargs):
-    return manifest_to_json_data(build_policy_manifest(handles, **kwargs))
+    with _owned(*handles):
+        return manifest_to_json_data(build_policy_manifest(handles, **kwargs))
+
+
+def _minimal_registration_payload():
+    return {
+        'kind': 'any_path',
+        'root': 'app.Grant',
+        'user': ['user'],
+        'user_model': 'auth.User',
+        'user_target': 'id',
+        'permission': ['permission'],
+        'permission_model': 'auth.Permission',
+        'permission_target': 'id',
+        'content': ['document'],
+        'content_model': 'app.Doc',
+        'content_target': 'id',
+        'condition': None,
+        'along': None,
+    }
+
+
+def _minimal_along():
+    return {
+        'bound': 3,
+        'shape': 'S',
+        'walk_path': ['node'],
+        'walk_model': 'app.Node',
+        'walk_ident': 'id',
+        'suffix_path': ['items'],
+        'ident_family': 'integer',
+        'parent_attname': 'parent_id',
+        'edge_model': None,
+        'edge_parent_attname': None,
+        'edge_child_attname': None,
+        'rewrite_attname': None,
+    }
 
 
 def _semantic_digest(data):
@@ -212,7 +296,8 @@ class PolicyLockSnapshotTest(SimpleTestCase):
             Doc, 'non_confidential',
         )
         handle = _handle(registry, 'tests.policy.direct')
-        manifest = build_policy_manifest([handle])
+        with _owned(handle):
+            manifest = build_policy_manifest([handle])
         self.assertIsInstance(manifest, PolicyManifest)
         with self.assertRaises(TrustsConfigurationError):
             manifest.schema_version = 2
@@ -265,9 +350,11 @@ class PolicyLockSnapshotTest(SimpleTestCase):
             compiler=PlanQueryCompiler(),
         )
         self.assertFalse(registry.frozen)
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            build_policy_manifest([handle])
+        with _owned(handle):
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                build_policy_manifest([handle])
         self.assertIn('tests.policy.thawed', str(ctx.exception))
+        self.assertIn('frozen', str(ctx.exception))
         self.assertFalse(registry.frozen)
         self.assertEqual(len(registry.records), 1)
 
@@ -519,16 +606,15 @@ class PolicyLockSnapshotTest(SimpleTestCase):
     def test_backend_compiler_change_changes_semantic_fingerprint(self):
         _org, _doc, Grant, _node, _item, _node_grant = _policy_models()
 
-        class OtherCompiler(PlanQueryCompiler):
-            """Distinct compiler type with the same methods."""
-
         def snapshot(compiler, path):
             registry = TrustsRegistry()
             _direct(registry, Grant)
             return _data([_handle(registry, path, compiler=compiler)])
 
+        from django.utils.module_loading import import_string
+
         base = snapshot(PlanQueryCompiler(), 'tests.policy.compiler')
-        changed = snapshot(OtherCompiler(), 'tests.policy.compiler')
+        changed = snapshot(PortableOtherCompiler(), 'tests.policy.compiler')
         moved = snapshot(PlanQueryCompiler(), 'tests.policy.other-backend')
         self.assertEqual(
             base['handles'][0]['registrations'][0]['fingerprint'],
@@ -540,9 +626,15 @@ class PolicyLockSnapshotTest(SimpleTestCase):
         )
         self.assertEqual(
             changed['handles'][0]['compiler'],
-            'tests.core.test_issue147.PolicyLockSnapshotTest.'
-            'test_backend_compiler_change_changes_semantic_fingerprint.'
-            '<locals>.OtherCompiler',
+            'tests.core.test_issue147.PortableOtherCompiler',
+        )
+        self.assertIs(
+            import_string(base['handles'][0]['compiler']),
+            PlanQueryCompiler,
+        )
+        self.assertIs(
+            import_string(changed['handles'][0]['compiler']),
+            PortableOtherCompiler,
         )
         self.assertNotEqual(_semantic_digest(base), _semantic_digest(changed))
         self.assertNotEqual(_semantic_digest(base), _semantic_digest(moved))
@@ -571,19 +663,8 @@ class PolicyLockSnapshotTest(SimpleTestCase):
         bad_registry = TrustsRegistry()
         bad = _handle(bad_registry, 'tests.policy.fold')
 
-        class FoldOwner(object):
-            _authorization_family = 'ordered_fold'
-
-        real = __import__(
-            'trusts.apps', fromlist=['implementation_for_path'],
-        ).implementation_for_path
-
-        def family_for(path, apps_registry=None):
-            if path == 'tests.policy.fold':
-                return FoldOwner()
-            return real(path, apps_registry)
-
-        with patch('trusts.apps.implementation_for_path', side_effect=family_for):
+        with _installed_owner('tests.policy.good', 'relationship'), \
+                _installed_owner('tests.policy.fold', 'ordered_fold'):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 build_policy_manifest([good, bad])
         message = str(ctx.exception)
@@ -591,6 +672,117 @@ class PolicyLockSnapshotTest(SimpleTestCase):
         self.assertIn('ordered_fold', message)
         self.assertIn('relationship', message)
         self.assertNotIn('tests.policy.good', message)
+
+    def test_missing_and_duplicate_owners_fail_closed(self):
+        missing = _handle(TrustsRegistry(), 'tests.policy.missing-owner')
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            build_policy_manifest([missing])
+        message = str(ctx.exception)
+        self.assertIn('tests.policy.missing-owner', message)
+        self.assertIn('No implementation owns', message)
+        self.assertIn('exact owner', message)
+
+        duplicated = _handle(TrustsRegistry(), 'tests.policy.duplicate-owner')
+        with _installed_owner(
+            'tests.policy.duplicate-owner', 'relationship', label='policy_dup_rel',
+        ), _installed_owner(
+            'tests.policy.duplicate-owner', 'ordered_fold', label='policy_dup_fold',
+        ):
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                build_policy_manifest([duplicated])
+        message = str(ctx.exception)
+        self.assertIn('tests.policy.duplicate-owner', message)
+        self.assertIn('multiple implementation owners', message)
+        self.assertIn('policy_dup_rel', message)
+        self.assertIn('policy_dup_fold', message)
+        self.assertNotIn('sha256:', message)
+
+    def test_local_compiler_identity_is_rejected(self):
+        class LocalCompiler(PlanQueryCompiler):
+            """Source-scoped type; not importable in another process."""
+
+        local = _handle(
+            TrustsRegistry(), 'tests.policy.local-compiler',
+            compiler=LocalCompiler(),
+        )
+        with _owned(local):
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                build_policy_manifest([local])
+        message = str(ctx.exception)
+        self.assertIn('tests.policy.local-compiler', message)
+        self.assertIn('portable', message.lower())
+        self.assertIn('<locals>', message)
+
+        dynamic = type('DynCompiler', (PlanQueryCompiler,), {})
+        dyn_handle = _handle(
+            TrustsRegistry(), 'tests.policy.dyn-compiler', compiler=dynamic(),
+        )
+        with _owned(dyn_handle):
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                build_policy_manifest([dyn_handle])
+        self.assertIn('tests.policy.dyn-compiler', str(ctx.exception))
+        self.assertIn('portable', str(ctx.exception).lower())
+
+    def test_fingerprint_rejects_unknown_fields_and_bad_path_types(self):
+        base = _minimal_registration_payload()
+        accepted = fingerprint_registration(base)
+        self.assertRegex(accepted, _FINGERPRINT)
+        labeled = dict(base)
+        labeled['fingerprint'] = 'sha256:' + ('ab' * 32)
+        labeled['label'] = 'app.Grant:document'
+        self.assertEqual(fingerprint_registration(labeled), accepted)
+
+        extra = dict(base)
+        extra['source'] = 'registrations.py:12'
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            fingerprint_registration(extra)
+        self.assertIn('source', str(ctx.exception))
+        self.assertIn('unexpected', str(ctx.exception))
+
+        nested = dict(base)
+        nested['condition'] = {
+            'op': 'equal',
+            'left': ['team_org'],
+            'right': ['repo_org'],
+            'lineno': 40,
+        }
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            fingerprint_registration(nested)
+        self.assertIn('lineno', str(ctx.exception))
+        self.assertIn('unexpected', str(ctx.exception))
+
+        along = dict(base)
+        along['along'] = dict(_minimal_along(), walk_field='node')
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            fingerprint_registration(along)
+        self.assertIn('walk_field', str(ctx.exception))
+        self.assertIn('unexpected', str(ctx.exception))
+
+        bad_component = dict(base)
+        bad_component['content'] = ['document', 1]
+        coerced = dict(base)
+        coerced['content'] = ['document', '1']
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            fingerprint_registration(bad_component)
+        self.assertIn('content', str(ctx.exception))
+        self.assertIn('1', str(ctx.exception))
+        self.assertNotEqual(accepted, fingerprint_registration(coerced))
+        other_component = dict(base)
+        other_component['content'] = ['document', 2]
+        with self.assertRaises(TrustsConfigurationError) as other_ctx:
+            fingerprint_registration(other_component)
+        self.assertNotEqual(str(ctx.exception), str(other_ctx.exception))
+
+        bad_equal = dict(base)
+        bad_equal['condition'] = {
+            'op': 'equal',
+            'left': ['team_org', None],
+            'right': ['repo_org'],
+        }
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            fingerprint_registration(bad_equal)
+        self.assertIn('non-string', str(ctx.exception))
+        self.assertIn('None', str(ctx.exception))
 
     def test_named_filter_projects_allowlisted_constants(self):
         _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
@@ -738,10 +930,11 @@ class PolicyLockSnapshotTest(SimpleTestCase):
             along=Along(root.node.parent, bound=3),
         )
         handle = _handle(registry, 'tests.policy.along-engine')
-        with _engine('django.db.backends.postgresql'):
-            with _forbid_sql():
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    build_policy_manifest([handle])
+        with _owned(handle):
+            with _engine('django.db.backends.postgresql'):
+                with _forbid_sql():
+                    with self.assertRaises(TrustsConfigurationError) as ctx:
+                        build_policy_manifest([handle])
         message = str(ctx.exception)
         self.assertIn('tests.policy.along-engine', message)
         self.assertIn('postgresql', message)

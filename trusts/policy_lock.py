@@ -110,10 +110,13 @@ def build_policy_manifest(handles=None, *, alias=None):
     supplied value is ignored, including a real non-default database
     alias. The recorded renderer is always Django's default connection.
 
-    An unfrozen registry, an unsupported authorization family, an Along
-    registration on a renderer whose ``along`` is not ``supported``, or
-    a non-portable named-filter constant fails closed. This function
-    does not freeze registries, open a connection, or probe the server.
+    An unfrozen registry, a missing or duplicate implementation owner,
+    an unsupported authorization family, an Along registration on a
+    renderer whose ``along`` is not ``supported``, or a non-portable
+    named-filter constant fails closed. Ownership is the exact
+    configured implementation for the path, not the authorization
+    helper's permissive family fallback. This function does not freeze
+    registries, open a connection, or probe the server.
     """
     del alias  # Caller-selected aliases never choose the verify target.
     if handles is None:
@@ -137,9 +140,12 @@ def fingerprint_registration(payload):
 
     ``payload`` is the registration semantic object (kind, paths, models,
     targets, condition, along). Derived ``fingerprint`` and ``label``
-    keys are ignored when present. Key order does not affect the digest.
-    Closed ``all`` / ``equal`` / ``permission_in`` nodes are normalized
-    so commutative order is not identity.
+    keys are accepted and ignored. Every other unexpected key is
+    rejected, recursively, at the registration, closed-condition, and
+    Along levels. Path components must already be strings; they are not
+    coerced. Key order does not affect the digest. Closed ``all`` /
+    ``equal`` / ``permission_in`` nodes are normalized so commutative
+    order is not identity.
     """
     if isinstance(payload, MappingProxyType):
         payload = dict(payload)
@@ -292,33 +298,75 @@ def _project_handle(handle, renderer):
 
 
 def _family_for_path(path):
-    from trusts.apps import _handle_authorization_family
+    """Exact configured owner/family for a lockfile snapshot.
 
-    class _PathHandle(object):
-        pass
+    ``_handle_authorization_family`` turns a missing owner and a
+    duplicate-owner error into ``"relationship"`` so isolated
+    authorization tests keep working. A manifest must not. This
+    resolver calls ``implementation_for_path`` and fails closed.
+    """
+    from trusts.apps import implementation_for_path
 
-    probe = _PathHandle()
-    probe.path = path
-    return _handle_authorization_family(probe)
+    try:
+        config = implementation_for_path(path)
+    except TrustsConfigurationError as exc:
+        raise TrustsConfigurationError(
+            'Policy snapshot cannot bind an exact owner for backend '
+            'path %r: %s' % (path, exc)
+        ) from exc
+    family = getattr(config, '_authorization_family', None)
+    if not isinstance(family, str) or family == '':
+        raise TrustsConfigurationError(
+            'Policy snapshot backend path %r has a missing or malformed '
+            'authorization family: %r.' % (path, family)
+        )
+    return family
 
 
 def _compiler_identity(compiler, path):
+    """Importable module-qualified class identity that round-trips.
+
+    Local and dynamic classes (``<locals>``, ``type()`` results that
+    are not module attributes) are rejected. The returned string is
+    suitable for ``import_string`` in another process.
+    """
+    from django.utils.module_loading import import_string
+
     if isinstance(compiler, type):
         cls = compiler
+    elif compiler is not None:
+        cls = type(compiler)
     else:
-        cls = type(compiler) if compiler is not None else None
+        cls = None
     module = getattr(cls, '__module__', None) if cls is not None else None
     qualname = getattr(cls, '__qualname__', None) if cls is not None else None
-    if (
-        not module
-        or not qualname
-        or module == 'builtins'
-    ):
-        raise TrustsConfigurationError(
-            'Policy snapshot backend %r has no portable compiler type '
-            '(got %r).' % (path, compiler)
-        )
-    return '%s.%s' % (module, qualname)
+    identity = None
+    if isinstance(module, str) and isinstance(qualname, str):
+        identity = '%s.%s' % (module, qualname)
+    portable = (
+        isinstance(module, str)
+        and isinstance(qualname, str)
+        and module not in ('', 'builtins', '__main__')
+        and qualname != ''
+        and '<' not in qualname
+        and '>' not in qualname
+    )
+    if portable:
+        try:
+            resolved = import_string(identity)
+        except Exception as exc:
+            raise TrustsConfigurationError(
+                'Policy snapshot backend %r compiler %r is not a portable '
+                'importable type identity (got %r): %s'
+                % (path, compiler, identity, exc)
+            ) from exc
+        if resolved is cls:
+            return identity
+    raise TrustsConfigurationError(
+        'Policy snapshot backend %r compiler %r is not a portable '
+        'importable type identity (got %r).'
+        % (path, compiler, identity)
+    )
 
 
 def _project_registrations(registry, path):
@@ -609,23 +657,104 @@ def _portable_constant(value, where):
     )
 
 
+_DERIVED_REGISTRATION_KEYS = ('fingerprint', 'label')
+
+
+def _as_dict(value):
+    if isinstance(value, MappingProxyType):
+        return dict(value)
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _unexpected_keys(mapping, allowed):
+    allowed_set = set(allowed)
+    return sorted(
+        (key for key in mapping if key not in allowed_set),
+        key=repr,
+    )
+
+
+def _reject_unexpected(mapping, allowed, what):
+    unknown = _unexpected_keys(mapping, allowed)
+    if unknown:
+        raise TrustsConfigurationError(
+            '%s has unexpected field(s) %s.'
+            % (what, ', '.join(repr(key) for key in unknown))
+        )
+
+
+def _require_text(value, what):
+    if not isinstance(value, str) or value == '':
+        raise TrustsConfigurationError(
+            '%s must be a non-empty string, not %r.' % (what, value)
+        )
+    return value
+
+
+def _require_string_path(value, what, *, allow_empty=False):
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise TrustsConfigurationError(
+            '%s must be a list of strings, not %s.'
+            % (what, type(value).__name__)
+        )
+    if not value and not allow_empty:
+        raise TrustsConfigurationError('%s is empty.' % (what,))
+    parts = []
+    for part in value:
+        if isinstance(part, bool) or not isinstance(part, str) or part == '':
+            raise TrustsConfigurationError(
+                '%s has a non-string component %r.' % (what, part)
+            )
+        parts.append(part)
+    return parts
+
+
+def _optional_text(value, what):
+    if value is None:
+        return None
+    return _require_text(value, what)
+
+
 def _canonicalize_registration(payload):
-    missing = [key for key in _REGISTRATION_KEYS if key not in payload]
+    mapping = _as_dict(payload)
+    if mapping is None:
+        raise TrustsConfigurationError(
+            'Registration fingerprint payload must be an object, not %s.'
+            % type(payload).__name__
+        )
+    _reject_unexpected(
+        mapping,
+        _REGISTRATION_KEYS + _DERIVED_REGISTRATION_KEYS,
+        'Registration fingerprint payload',
+    )
+    for key in _DERIVED_REGISTRATION_KEYS:
+        if key in mapping and not isinstance(mapping[key], str):
+            raise TrustsConfigurationError(
+                'Registration fingerprint payload field %s must be a '
+                'string, not %s.' % (key, type(mapping[key]).__name__)
+            )
+    missing = [key for key in _REGISTRATION_KEYS if key not in mapping]
     if missing:
         raise TrustsConfigurationError(
             'Registration fingerprint payload is missing %s.'
             % ', '.join(missing)
         )
-    ordered = {key: payload[key] for key in _REGISTRATION_KEYS}
+    ordered = {key: mapping[key] for key in _REGISTRATION_KEYS}
     if ordered['kind'] != 'any_path':
         raise TrustsConfigurationError(
             'Registration fingerprint kind must be %r, not %r.'
             % ('any_path', ordered['kind'])
         )
     for key in (
-        'user', 'permission', 'content',
+        'root', 'user_model', 'user_target',
+        'permission_model', 'permission_target',
+        'content_model', 'content_target',
     ):
-        ordered[key] = [str(part) for part in ordered[key]]
+        ordered[key] = _require_text(ordered[key], 'Registration %s' % key)
+    for key in ('user', 'permission', 'content'):
+        ordered[key] = _require_string_path(ordered[key], 'Registration %s' % key)
     ordered['condition'] = _canonicalize_condition(ordered['condition'])
     ordered['along'] = _canonicalize_along(ordered['along'])
     return ordered
@@ -634,26 +763,50 @@ def _canonicalize_registration(payload):
 def _canonicalize_condition(condition):
     if condition is None:
         return None
-    if not isinstance(condition, dict) or 'op' not in condition:
+    mapping = _as_dict(condition)
+    if mapping is None or 'op' not in mapping:
         raise TrustsConfigurationError(
             'Closed condition is not portable lockfile IR: %r.' % (condition,)
         )
-    op = condition['op']
+    op = mapping['op']
     if op == 'all':
+        _reject_unexpected(mapping, ('op', 'predicates'), 'Closed condition')
+        predicates_in = mapping['predicates']
+        if (
+            isinstance(predicates_in, (str, bytes))
+            or not isinstance(predicates_in, (list, tuple))
+            or not predicates_in
+        ):
+            raise TrustsConfigurationError(
+                'Closed condition predicates must be a non-empty list, '
+                'not %r.' % (predicates_in,)
+            )
         predicates = [
-            _canonicalize_condition(item) for item in condition['predicates']
+            _canonicalize_condition(item) for item in predicates_in
         ]
         predicates.sort(key=_json_sort_key)
         return {'op': 'all', 'predicates': predicates}
     if op == 'equal':
-        left = [str(part) for part in condition['left']]
-        right = [str(part) for part in condition['right']]
+        _reject_unexpected(mapping, ('op', 'left', 'right'), 'Closed condition')
+        left = _require_string_path(mapping['left'], 'Equal left')
+        right = _require_string_path(mapping['right'], 'Equal right')
         if tuple(left) > tuple(right):
             left, right = right, left
         return {'op': 'equal', 'left': left, 'right': right}
     if op == 'permission_in':
+        _reject_unexpected(mapping, ('op', 'refs'), 'Closed condition')
+        refs_in = mapping['refs']
+        if (
+            isinstance(refs_in, (str, bytes))
+            or not isinstance(refs_in, (list, tuple))
+            or not refs_in
+        ):
+            raise TrustsConfigurationError(
+                'permission_in refs must be a non-empty list, not %r.'
+                % (refs_in,)
+            )
         refs = [
-            [str(part) for part in ref] for ref in condition['refs']
+            _require_string_path(ref, 'permission_in ref') for ref in refs_in
         ]
         refs.sort(key=tuple)
         return {'op': 'permission_in', 'refs': refs}
@@ -665,35 +818,37 @@ def _canonicalize_condition(condition):
 def _canonicalize_along(along):
     if along is None:
         return None
-    if not isinstance(along, dict):
+    mapping = _as_dict(along)
+    if mapping is None:
         raise TrustsConfigurationError(
             'Along fingerprint payload is not an object: %r.' % (along,)
         )
-    missing = [key for key in _ALONG_KEYS if key not in along]
+    _reject_unexpected(mapping, _ALONG_KEYS, 'Along fingerprint payload')
+    missing = [key for key in _ALONG_KEYS if key not in mapping]
     if missing:
         raise TrustsConfigurationError(
             'Along fingerprint payload is missing %s.' % ', '.join(missing)
         )
-    ordered = {key: along[key] for key in _ALONG_KEYS}
+    ordered = {key: mapping[key] for key in _ALONG_KEYS}
     bound = ordered['bound']
     if isinstance(bound, bool) or not isinstance(bound, int):
         raise TrustsConfigurationError(
             'Along bound is not a portable integer: %r.' % (bound,)
         )
-    shape = ordered['shape']
-    if not isinstance(shape, str) or shape == '':
-        raise TrustsConfigurationError(
-            'Along shape is not portable: %r.' % (shape,)
-        )
-    for key in ('walk_ident', 'ident_family'):
-        if not isinstance(ordered[key], str) or ordered[key] == '':
-            raise TrustsConfigurationError(
-                'Along %s is not portable: %r.' % (key, ordered[key])
-            )
-    ordered['walk_path'] = [str(part) for part in ordered['walk_path']]
-    ordered['suffix_path'] = [str(part) for part in ordered['suffix_path']]
-    if not ordered['walk_path']:
-        raise TrustsConfigurationError('Along walk_path is empty.')
+    ordered['shape'] = _require_text(ordered['shape'], 'Along shape')
+    for key in ('walk_ident', 'ident_family', 'walk_model'):
+        ordered[key] = _require_text(ordered[key], 'Along %s' % key)
+    for key in (
+        'parent_attname', 'edge_model', 'edge_parent_attname',
+        'edge_child_attname', 'rewrite_attname',
+    ):
+        ordered[key] = _optional_text(ordered[key], 'Along %s' % key)
+    ordered['walk_path'] = _require_string_path(
+        ordered['walk_path'], 'Along walk_path',
+    )
+    ordered['suffix_path'] = _require_string_path(
+        ordered['suffix_path'], 'Along suffix_path', allow_empty=True,
+    )
     return ordered
 
 
