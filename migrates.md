@@ -30,7 +30,35 @@ does not call `ensure_policy_lockfile_verified` and does not alter
 | Renderer profile | Not recorded | Each handle records Django's `DEFAULT_DB_ALIAS` through `django.db.connections` (`alias`, `engine`, `profile`, `profile_version`, `along`) with zero SQL. A caller-supplied alias is ignored |
 | Unsupported family | Not applicable | A configured handle whose family is not `relationship` fails closed. Empty relationship handles are still emitted |
 
-Later lockfile slices (canonical `int_dec` reader, generate/check commands, runtime gating, audit-doc organization) are not in this change.
+Later lockfile slices (generate/check commands, runtime gating, audit-doc organization) are not in the C1 change. C2, below, adds the quiet serializer, strict reader, and `int_dec` boundary.
+
+## Policy lock canonical document (#147 C2)
+
+Quiet lockfile bytes and a strict reader on the C1 snapshot. Authorization
+entry points are unchanged: C2 does not add management commands, path or
+presence behavior, or runtime gating.
+
+| | Old (C1 snapshot) | New |
+| --- | --- | --- |
+| Quiet bytes | No document serializer. Fingerprint payloads already used UTF-8, LF, two-space indent, and a trailing newline | `canonicalize(manifest)` returns that quiet form for the whole document: UTF-8, no BOM, LF only, schema key order, one trailing newline, and no `diagnostics` |
+| Reader | No reader | `read_policy_document` accepts UTF-8 JSON text or bytes. It rejects unknown fields at every semantic level, unknown schema or compiler versions, and fingerprints that do not match their canonical payloads |
+| Regeneration | Not available | `encode_policy_document(read_policy_document(payload))` rewrites quiet bytes. A top-level `diagnostics` object is dropped on read and rejected by the encoder |
+| Semantic comparison | Not available | Equality of `read_policy_document` results. `diagnostics` is omitted before that comparison |
+| Named-filter AND/OR | Binary `left` / `right` trees | Flattened commutative `operands` lists, sorted by canonical subtree text. `A & B` and `B & A` encode the same document; the same rule applies to `\|` |
+| Integers | IEEE-safe JSON `int` only. A larger integer failed export | IEEE-safe values stay `{"type":"int","value": <JSON number>}`. Larger integers are `{"type":"int_dec","value":"<decimal text>"}`: optional leading `-`, digits only, no `+`, no leading zeroes. The other shape, and any noncanonical spelling, fails |
+| Other constants | `null`, bool, and str were portable. Float, `ModelIdentity`, and every other constant type failed | Unchanged allowlist. Those rejected types still fail closed |
+| Versions | `schema_version` and `compiler_version` were recorded as `1` | Still `1`. The reader accepts only those integers |
+
+`schema_version` stays 1 because no quiet lockfile had been emitted yet. The C1 binary AND/OR spelling was the unfinished snapshot, not a second document schema.
+
+Migration-bot checklist:
+
+- `canonicalize`
+- `read_policy_document`
+- `encode_policy_document`
+- `int_dec`
+- `diagnostics`
+- `operands`
 
 Migration-bot checklist:
 

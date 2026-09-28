@@ -1,10 +1,13 @@
-"""Finalized authorization-policy snapshot (lockfile C1, issue #147).
+"""Finalized authorization-policy snapshot and lockfile document (issue #147).
 
-Projects frozen relationship registries into an immutable snapshot and a
-detached JSON-ready document. Registration fingerprints and readable
-labels are derived here. Runtime verification, lockfile read/write,
-``int_dec`` constant decoding, and commutative named-filter boolean
-normalization are later slices and are not performed.
+C1 projects frozen relationship registries into an immutable snapshot and
+a detached JSON-ready document. Registration fingerprints and readable
+labels are derived here. C2 adds the quiet UTF-8/LF serializer, the
+strict canonical reader, commutative named-filter ``and`` / ``or``
+normalization, and the ``int`` / ``int_dec`` constant boundary.
+
+Generate/check commands, path and presence rules, and runtime gating are
+later slices and are not performed.
 
 The portable document never contains runtime object identity, source
 locations, or database credentials. Callers cannot select a database
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from types import MappingProxyType
 
 from trusts.core import (
@@ -37,6 +41,26 @@ ALONG_SUPPORTED = 'supported'
 ALONG_UNSUPPORTED = 'unsupported'
 _DUMMY_ENGINE = 'django.db.backends.dummy'
 _IEEE_SAFE_INT = 2**53 - 1
+_INT_DEC_TEXT = re.compile(r'-?(0|[1-9][0-9]*)\Z')
+
+_DOCUMENT_KEYS = ('schema_version', 'compiler_version', 'handles')
+_HANDLE_KEYS = (
+    'path',
+    'family',
+    'compiler',
+    'renderer',
+    'registrations',
+    'named_filters',
+)
+_RENDERER_KEYS = (
+    'alias',
+    'engine',
+    'profile',
+    'profile_version',
+    'along',
+)
+_NAMED_FILTER_KEYS = ('model', 'code', 'fingerprint', 'expr')
+_REF_SOURCES = ('principal', 'permission', 'object')
 
 _REGISTRATION_KEYS = (
     'kind',
@@ -177,17 +201,80 @@ def manifest_to_json_data(manifest):
     return _thaw(manifest._document)
 
 
+def canonicalize(manifest):
+    """Return quiet UTF-8/LF lockfile bytes for ``manifest``.
+
+    The encoding is UTF-8 with LF newlines, no BOM, two-space indent,
+    schema key order, and one trailing newline. ``diagnostics`` is
+    omitted. A second call on the same snapshot returns the same bytes.
+    This does not read or write a file and does not open a connection.
+    """
+    if not isinstance(manifest, PolicyManifest):
+        raise TypeError(
+            'canonicalize expected a PolicyManifest, not %s.'
+            % type(manifest).__name__
+        )
+    return encode_policy_document(manifest_to_json_data(manifest))
+
+
+def read_policy_document(payload):
+    """Return the semantic document for UTF-8 JSON ``payload``.
+
+    ``payload`` is ``bytes`` or ``str``. A top-level ``diagnostics``
+    object is accepted and omitted; it does not participate in semantic
+    comparison. Every other unknown field is rejected, recursively, at
+    the document, handle, renderer, registration, closed-condition,
+    Along, named-filter, and expression levels. Commutative ``and`` /
+    ``or`` operands and closed ``all`` predicates are normalized.
+    Fingerprints must match their canonical payloads. The result has no
+    ``diagnostics`` key. Equality of these results is semantic
+    comparison. This does not open a connection.
+    """
+    data = _parse_json_document(payload)
+    if not isinstance(data, dict):
+        raise TrustsConfigurationError(
+            'Policy document must be a JSON object, not %s.'
+            % type(data).__name__
+        )
+    document = dict(data)
+    if 'diagnostics' in document:
+        diagnostics = document.pop('diagnostics')
+        if not isinstance(diagnostics, dict):
+            raise TrustsConfigurationError(
+                'Policy document diagnostics must be an object, not %s.'
+                % type(diagnostics).__name__
+            )
+    return _canonicalize_document(document)
+
+
+def encode_policy_document(document):
+    """Return quiet UTF-8/LF bytes for a semantic document.
+
+    ``diagnostics`` is not part of the semantic document and is
+    rejected here. Call :func:`read_policy_document` first so
+    regeneration drops it, then encode the result. Unknown fields are
+    rejected. This does not open a connection.
+    """
+    if isinstance(document, MappingProxyType):
+        document = dict(document)
+    if not isinstance(document, dict):
+        raise TypeError(
+            'encode_policy_document expected a dict, not %s.'
+            % type(document).__name__
+        )
+    return _canonical_bytes(_canonicalize_document(dict(document)))
+
+
 def _digest(payload_bytes):
     return 'sha256:' + hashlib.sha256(payload_bytes).hexdigest()
 
 
 def _canonical_bytes(obj):
-    """Quiet UTF-8 form used as the registration fingerprint input.
+    """Quiet UTF-8/LF form shared by fingerprints and the lockfile.
 
-    Same serializer the lockfile generator will use for the document
-    (indent 2, schema key order, trailing LF). Full-file quiet
-    regeneration and the nonsemantic ``diagnostics`` reader stay in a
-    later slice; this helper only feeds fingerprints.
+    Two-space indent, schema key order, no BOM, one trailing LF.
+    ``diagnostics`` is never added here. Callers pass an already
+    canonical semantic object.
     """
     text = json.dumps(
         obj,
@@ -195,6 +282,7 @@ def _canonical_bytes(obj):
         indent=2,
         separators=(',', ': '),
         sort_keys=False,
+        allow_nan=False,
     )
     if not text.endswith('\n'):
         text += '\n'
@@ -572,10 +660,10 @@ def _base_label(payload):
 def _project_named_filters(registry):
     """Project model-scoped named filters.
 
-    Expr encoding covers the v1 portable constant allowlist already
-    decided for null, bool, IEEE-safe int, and str. Floats, model
-    primary keys, and other IR constants fail closed. ``int_dec`` and
-    commutative ``and`` / ``or`` flattening are not applied here.
+    Expr encoding uses the v1 portable constant allowlist: null, bool,
+    str, IEEE-safe ``int``, and canonical ``int_dec`` outside that
+    range. Floats, model primary keys, and other IR constants fail
+    closed. Commutative ``and`` / ``or`` nodes are flattened and sorted.
     """
     rows = []
     iterator = getattr(registry, 'iter_permission_conditions', None)
@@ -588,17 +676,18 @@ def _project_named_filters(registry):
                 'Named filter on %s has a non-portable code %r.'
                 % (model_label, code)
             )
+        where = '%s:%s' % (model_label, code)
         expr = _canonicalize_expr(
             _project_expr(
                 getattr(record, 'expr', None),
-                where='%s:%s' % (model_label, code),
-            )
+                where=where,
+            ),
+            where=where,
         )
-        payload = {'model': model_label, 'code': code, 'expr': expr}
         rows.append({
             'model': model_label,
             'code': code,
-            'fingerprint': _digest(_canonical_bytes(payload)),
+            'fingerprint': _named_filter_fingerprint(model_label, code, expr),
             'expr': expr,
         })
     rows.sort(key=lambda row: (row['model'], row['code']))
@@ -622,17 +711,21 @@ def _project_expr(node, *, where):
     if isinstance(node, _ir.Const):
         kind, value = _portable_constant(node.value, where)
         return {'const': {'type': kind, 'value': value}}
-    if isinstance(node, (_ir.Eq, _ir.Ne, _ir.And, _ir.Or)):
-        op = {
-            _ir.Eq: 'eq',
-            _ir.Ne: 'ne',
-            _ir.And: 'and',
-            _ir.Or: 'or',
-        }[type(node)]
+    if isinstance(node, (_ir.Eq, _ir.Ne)):
+        op = 'eq' if isinstance(node, _ir.Eq) else 'ne'
         return {
             'op': op,
             'left': _project_expr(node.left, where=where),
             'right': _project_expr(node.right, where=where),
+        }
+    if isinstance(node, (_ir.And, _ir.Or)):
+        op = 'and' if isinstance(node, _ir.And) else 'or'
+        return {
+            'op': op,
+            'operands': [
+                _project_expr(node.left, where=where),
+                _project_expr(node.right, where=where),
+            ],
         }
     raise TrustsConfigurationError(
         'Named filter %s has non-portable expression %s.'
@@ -646,19 +739,20 @@ def _portable_constant(value, where):
     if isinstance(value, bool):
         return 'bool', bool(value)
     if isinstance(value, int) and not isinstance(value, bool):
-        if abs(value) > _IEEE_SAFE_INT:
-            raise TrustsConfigurationError(
-                'Named filter %s integer %r is outside the IEEE-safe JSON '
-                'integer range. int_dec encoding is not part of lockfile C1.'
-                % (where, value)
-            )
-        return 'int', value
+        if abs(value) <= _IEEE_SAFE_INT:
+            return 'int', value
+        return 'int_dec', str(value)
     if isinstance(value, str):
         return 'str', value
     raise TrustsConfigurationError(
         'Named filter %s constant type %s is not portable in lockfile v1.'
         % (where, type(value).__name__)
     )
+
+
+def _named_filter_fingerprint(model, code, expr):
+    payload = {'model': model, 'code': code, 'expr': expr}
+    return _digest(_canonical_bytes(payload))
 
 
 _DERIVED_REGISTRATION_KEYS = ('fingerprint', 'label')
@@ -689,13 +783,13 @@ def _reject_unexpected(mapping, allowed, what):
         )
 
 
-def _require_present(mapping, required, op):
-    """Reject a closed-condition variant before its keys are indexed."""
+def _require_present(mapping, required, op, *, what='Closed condition'):
+    """Reject a variant before its required keys are indexed."""
     missing = [key for key in required if key not in mapping]
     if missing:
         raise TrustsConfigurationError(
-            'Closed condition op %r is missing %s.'
-            % (op, ', '.join(missing))
+            '%s op %r is missing %s.'
+            % (what, op, ', '.join(missing))
         )
 
 
@@ -869,35 +963,432 @@ def _canonicalize_along(along):
     return ordered
 
 
-def _canonicalize_expr(expr):
-    if not isinstance(expr, dict):
+def _canonicalize_expr(expr, *, where='Named-filter expr'):
+    mapping = _as_dict(expr)
+    if mapping is None:
         raise TrustsConfigurationError(
-            'Named-filter expr is not an object: %r.' % (expr,)
+            '%s is not an object: %r.' % (where, expr)
         )
-    if 'ref' in expr:
+    if 'ref' in mapping:
+        _reject_unexpected(mapping, ('ref', 'path'), '%s ref' % where)
+        if 'path' not in mapping:
+            raise TrustsConfigurationError(
+                '%s ref is missing path.' % where
+            )
+        source = mapping['ref']
+        if source not in _REF_SOURCES:
+            raise TrustsConfigurationError(
+                '%s ref source %r is not portable.' % (where, source)
+            )
         return {
-            'ref': expr['ref'],
-            'path': [str(part) for part in expr['path']],
+            'ref': source,
+            'path': _require_string_path(
+                mapping['path'], '%s ref path' % where, allow_empty=True,
+            ),
         }
-    if 'const' in expr:
-        const = expr['const']
+    if 'const' in mapping:
+        _reject_unexpected(mapping, ('const',), '%s const' % where)
+        return {'const': _canonicalize_const(mapping['const'], where=where)}
+    if 'op' not in mapping:
+        raise TrustsConfigurationError(
+            '%s is not portable lockfile IR: %r.' % (where, expr)
+        )
+    op = mapping['op']
+    if op in ('eq', 'ne'):
+        _reject_unexpected(
+            mapping, ('op', 'left', 'right'), '%s comparison' % where,
+        )
+        _require_present(mapping, ('left', 'right'), op, what=where)
         return {
-            'const': {
-                'type': const['type'],
-                'value': const['value'],
-            },
+            'op': op,
+            'left': _canonicalize_expr(mapping['left'], where=where),
+            'right': _canonicalize_expr(mapping['right'], where=where),
         }
-    return {
-        'op': expr['op'],
-        'left': _canonicalize_expr(expr['left']),
-        'right': _canonicalize_expr(expr['right']),
-    }
+    if op in ('and', 'or'):
+        _reject_unexpected(
+            mapping, ('op', 'operands'), '%s %s' % (where, op),
+        )
+        _require_present(mapping, ('operands',), op, what=where)
+        operands_in = mapping['operands']
+        if (
+            isinstance(operands_in, (str, bytes))
+            or not isinstance(operands_in, (list, tuple))
+        ):
+            raise TrustsConfigurationError(
+                '%s %s operands must be a list, not %s.'
+                % (where, op, type(operands_in).__name__)
+            )
+        flat = []
+        for item in operands_in:
+            flat.extend(_flatten_same_op(item, op, where))
+        if len(flat) < 2:
+            raise TrustsConfigurationError(
+                '%s %s requires at least two operands.' % (where, op)
+            )
+        flat.sort(key=_json_sort_key)
+        return {'op': op, 'operands': flat}
+    raise TrustsConfigurationError(
+        '%s has unsupported op %r.' % (where, op)
+    )
+
+
+def _flatten_same_op(expr, op, where):
+    """Canonical children of ``expr``, flattening nested ``op`` nodes."""
+    mapping = _as_dict(expr)
+    if mapping is not None and mapping.get('op') == op:
+        nested = _canonicalize_expr(expr, where=where)
+        return list(nested['operands'])
+    return [_canonicalize_expr(expr, where=where)]
+
+
+def _canonicalize_const(const, *, where):
+    mapping = _as_dict(const)
+    if mapping is None:
+        raise TrustsConfigurationError(
+            '%s constant is not an object: %r.' % (where, const)
+        )
+    _reject_unexpected(mapping, ('type', 'value'), '%s constant' % where)
+    missing = [key for key in ('type', 'value') if key not in mapping]
+    if missing:
+        raise TrustsConfigurationError(
+            '%s constant is missing %s.' % (where, ', '.join(missing))
+        )
+    kind = mapping['type']
+    value = mapping['value']
+    if not isinstance(kind, str):
+        raise TrustsConfigurationError(
+            '%s constant type %r is not portable in lockfile v1.'
+            % (where, kind)
+        )
+    if kind == 'null':
+        if value is not None:
+            raise TrustsConfigurationError(
+                '%s null value must be null, not %r.' % (where, value)
+            )
+        return {'type': 'null', 'value': None}
+    if kind == 'bool':
+        if not isinstance(value, bool):
+            raise TrustsConfigurationError(
+                '%s bool value must be true or false, not %r.'
+                % (where, value)
+            )
+        return {'type': 'bool', 'value': bool(value)}
+    if kind == 'str':
+        if not isinstance(value, str):
+            raise TrustsConfigurationError(
+                '%s str value must be a string, not %s.'
+                % (where, type(value).__name__)
+            )
+        return {'type': 'str', 'value': value}
+    if kind == 'int':
+        return {'type': 'int', 'value': _require_ieee_int(value, where)}
+    if kind == 'int_dec':
+        return {'type': 'int_dec', 'value': _require_int_dec(value, where)}
+    raise TrustsConfigurationError(
+        '%s constant type %s is not portable in lockfile v1.'
+        % (where, kind)
+    )
+
+
+def _require_ieee_int(value, where):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TrustsConfigurationError(
+            '%s int value %r is a cross-shape; IEEE-safe integers must '
+            'be JSON numbers, not %s.'
+            % (where, value, type(value).__name__)
+        )
+    if abs(value) > _IEEE_SAFE_INT:
+        raise TrustsConfigurationError(
+            '%s integer %r is outside the IEEE-safe range and must use '
+            'int_dec, not int (cross-shape).' % (where, value)
+        )
+    return value
+
+
+def _require_int_dec(value, where):
+    if not isinstance(value, str):
+        raise TrustsConfigurationError(
+            '%s int_dec value %r is a cross-shape; out-of-range integers '
+            'must be canonical decimal text, not %s.'
+            % (where, value, type(value).__name__)
+        )
+    if value == '-0' or _INT_DEC_TEXT.fullmatch(value) is None:
+        raise TrustsConfigurationError(
+            '%s int_dec spelling %r is noncanonical. Use an optional '
+            "leading '-', digits only, and no leading zeroes."
+            % (where, value)
+        )
+    number = int(value, 10)
+    if abs(number) <= _IEEE_SAFE_INT:
+        raise TrustsConfigurationError(
+            '%s int_dec value %r is inside the IEEE-safe range and must '
+            'use int, not int_dec (cross-shape).' % (where, value)
+        )
+    return value
 
 
 def _json_sort_key(node):
     return json.dumps(
-        node, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        node,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+        allow_nan=False,
     )
+
+
+def _parse_json_document(payload):
+    if isinstance(payload, str):
+        if payload.startswith('\ufeff'):
+            raise TrustsConfigurationError(
+                'Policy document must be UTF-8 without a BOM.'
+            )
+        text = payload
+    elif isinstance(payload, bytes):
+        if payload.startswith(b'\xef\xbb\xbf'):
+            raise TrustsConfigurationError(
+                'Policy document must be UTF-8 without a BOM.'
+            )
+        try:
+            text = payload.decode('utf-8')
+        except UnicodeDecodeError as exc:
+            raise TrustsConfigurationError(
+                'Policy document is not UTF-8: %s' % exc
+            ) from exc
+    else:
+        raise TypeError(
+            'read_policy_document expected bytes or str, not %s.'
+            % type(payload).__name__
+        )
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise TrustsConfigurationError(
+            'Policy document is not JSON: %s' % exc
+        ) from exc
+
+
+def _require_exact_int(value, expected, what):
+    if isinstance(value, bool) or type(value) is not int or value != expected:
+        raise TrustsConfigurationError(
+            '%s %r is not supported (expected %s).' % (what, value, expected)
+        )
+    return value
+
+
+def _require_list(value, what):
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise TrustsConfigurationError(
+            '%s must be a list, not %s.' % (what, type(value).__name__)
+        )
+    return list(value)
+
+
+def _canonicalize_document(document):
+    mapping = _as_dict(document)
+    if mapping is None:
+        raise TrustsConfigurationError(
+            'Policy document must be a JSON object, not %s.'
+            % type(document).__name__
+        )
+    _reject_unexpected(mapping, _DOCUMENT_KEYS, 'Policy document')
+    missing = [key for key in _DOCUMENT_KEYS if key not in mapping]
+    if missing:
+        raise TrustsConfigurationError(
+            'Policy document is missing %s.' % ', '.join(missing)
+        )
+    schema_version = _require_exact_int(
+        mapping['schema_version'], SCHEMA_VERSION,
+        'Policy document schema_version',
+    )
+    compiler_version = _require_exact_int(
+        mapping['compiler_version'], COMPILER_VERSION,
+        'Policy document compiler_version',
+    )
+    handles = [
+        _canonicalize_handle(item)
+        for item in _require_list(mapping['handles'], 'Policy document handles')
+    ]
+    handles.sort(key=_handle_sort_key)
+    return {
+        'schema_version': schema_version,
+        'compiler_version': compiler_version,
+        'handles': handles,
+    }
+
+
+def _canonicalize_handle(handle):
+    mapping = _as_dict(handle)
+    if mapping is None:
+        raise TrustsConfigurationError(
+            'Policy handle must be an object, not %s.'
+            % type(handle).__name__
+        )
+    _reject_unexpected(mapping, _HANDLE_KEYS, 'Policy handle')
+    missing = [key for key in _HANDLE_KEYS if key not in mapping]
+    if missing:
+        raise TrustsConfigurationError(
+            'Policy handle is missing %s.' % ', '.join(missing)
+        )
+    path = _require_text(mapping['path'], 'Policy handle path')
+    family = mapping['family']
+    if family != RELATIONSHIP_FAMILY:
+        raise TrustsConfigurationError(
+            'Core lockfile v1 only serializes family %r; backend path %r '
+            'has unsupported family %r.'
+            % (RELATIONSHIP_FAMILY, path, family)
+        )
+    compiler = _require_text(mapping['compiler'], 'Policy handle compiler')
+    registrations = _canonicalize_registration_rows(
+        mapping['registrations'], path,
+    )
+    named_filters = _canonicalize_named_filter_rows(
+        mapping['named_filters'], path,
+    )
+    return {
+        'path': path,
+        'family': family,
+        'compiler': compiler,
+        'renderer': _canonicalize_renderer(mapping['renderer']),
+        'registrations': registrations,
+        'named_filters': named_filters,
+    }
+
+
+def _canonicalize_renderer(renderer):
+    mapping = _as_dict(renderer)
+    if mapping is None:
+        raise TrustsConfigurationError(
+            'Renderer profile must be an object, not %s.'
+            % type(renderer).__name__
+        )
+    _reject_unexpected(mapping, _RENDERER_KEYS, 'Renderer profile')
+    missing = [key for key in _RENDERER_KEYS if key not in mapping]
+    if missing:
+        raise TrustsConfigurationError(
+            'Renderer profile is missing %s.' % ', '.join(missing)
+        )
+    alias = _require_text(mapping['alias'], 'Renderer alias')
+    engine = _require_text(mapping['engine'], 'Renderer engine')
+    profile = mapping['profile']
+    if profile not in (
+        SQLITE_JSON1_RCTE_PROFILE,
+        GENERIC_UNSUPPORTED_ALONG_PROFILE,
+    ):
+        raise TrustsConfigurationError(
+            'Renderer profile %r is not a v1 lockfile profile.' % (profile,)
+        )
+    profile_version = _require_exact_int(
+        mapping['profile_version'], PROFILE_VERSION,
+        'Renderer profile_version',
+    )
+    along = mapping['along']
+    if along not in (ALONG_SUPPORTED, ALONG_UNSUPPORTED):
+        raise TrustsConfigurationError(
+            'Renderer along %r is not portable.' % (along,)
+        )
+    expected_along = (
+        ALONG_SUPPORTED
+        if profile == SQLITE_JSON1_RCTE_PROFILE
+        else ALONG_UNSUPPORTED
+    )
+    if along != expected_along:
+        raise TrustsConfigurationError(
+            'Renderer profile %r does not match along %r.'
+            % (profile, along)
+        )
+    return {
+        'alias': alias,
+        'engine': engine,
+        'profile': profile,
+        'profile_version': profile_version,
+        'along': along,
+    }
+
+
+def _canonicalize_registration_rows(rows, path):
+    canonical = [
+        _canonicalize_registration_row(item, path)
+        for item in _require_list(rows, 'Registrations on %s' % path)
+    ]
+    canonical.sort(key=lambda row: row['fingerprint'])
+    return canonical
+
+
+def _canonicalize_registration_row(row, path):
+    mapping = _as_dict(row)
+    if mapping is None:
+        raise TrustsConfigurationError(
+            'Registration on %s must be an object, not %s.'
+            % (path, type(row).__name__)
+        )
+    allowed = ('fingerprint', 'label') + _REGISTRATION_KEYS
+    _reject_unexpected(mapping, allowed, 'Registration on %s' % path)
+    missing = [key for key in ('fingerprint', 'label') if key not in mapping]
+    if missing:
+        raise TrustsConfigurationError(
+            'Registration on %s is missing %s.' % (path, ', '.join(missing))
+        )
+    fingerprint = mapping['fingerprint']
+    if not isinstance(fingerprint, str):
+        raise TrustsConfigurationError(
+            'Registration on %s has a non-portable fingerprint %r.'
+            % (path, fingerprint)
+        )
+    label = _require_text(mapping['label'], 'Registration label on %s' % path)
+    semantic = _canonicalize_registration(mapping)
+    expected = fingerprint_registration(semantic)
+    if fingerprint != expected:
+        raise TrustsConfigurationError(
+            'Registration %r on %s fingerprint does not match its '
+            'canonical payload.' % (label, path)
+        )
+    ordered = {'fingerprint': fingerprint, 'label': label}
+    ordered.update(semantic)
+    return ordered
+
+
+def _canonicalize_named_filter_rows(rows, path):
+    canonical = [
+        _canonicalize_named_filter_row(item, path)
+        for item in _require_list(rows, 'Named filters on %s' % path)
+    ]
+    canonical.sort(key=lambda row: (row['model'], row['code']))
+    return canonical
+
+
+def _canonicalize_named_filter_row(row, path):
+    mapping = _as_dict(row)
+    if mapping is None:
+        raise TrustsConfigurationError(
+            'Named filter on %s must be an object, not %s.'
+            % (path, type(row).__name__)
+        )
+    _reject_unexpected(mapping, _NAMED_FILTER_KEYS, 'Named filter on %s' % path)
+    missing = [
+        key for key in _NAMED_FILTER_KEYS if key not in mapping
+    ]
+    if missing:
+        raise TrustsConfigurationError(
+            'Named filter on %s is missing %s.' % (path, ', '.join(missing))
+        )
+    model = _require_text(mapping['model'], 'Named filter model on %s' % path)
+    code = _require_text(mapping['code'], 'Named filter code on %s' % path)
+    where = '%s:%s' % (model, code)
+    expr = _canonicalize_expr(mapping['expr'], where=where)
+    expected = _named_filter_fingerprint(model, code, expr)
+    fingerprint = mapping['fingerprint']
+    if not isinstance(fingerprint, str) or fingerprint != expected:
+        raise TrustsConfigurationError(
+            'Named filter %s fingerprint does not match its canonical '
+            'payload.' % where
+        )
+    return {
+        'model': model,
+        'code': code,
+        'fingerprint': fingerprint,
+        'expr': expr,
+    }
 
 
 def _handle_sort_key(handle):
@@ -953,6 +1444,9 @@ __all__ = (
     'SCHEMA_VERSION',
     'SQLITE_JSON1_RCTE_PROFILE',
     'build_policy_manifest',
+    'canonicalize',
+    'encode_policy_document',
     'fingerprint_registration',
     'manifest_to_json_data',
+    'read_policy_document',
 )

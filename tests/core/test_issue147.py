@@ -1,14 +1,22 @@
-"""Lockfile C1 snapshot seam (#147).
+"""Lockfile C1 snapshot and C2 canonical document (#147).
 
-Immutable finalized projection, registration fingerprints, readable
+C1: immutable finalized projection, registration fingerprints, readable
 labels, unsupported-family failure, and the default-alias renderer
-profile. No generate/check command, no runtime gate, no SQL.
+profile. C2: quiet UTF-8/LF serializer and strict reader, commutative
+named-filter AND/OR, and the ``int`` / ``int_dec`` constant boundary.
+No generate/check command, no runtime gate, no SQL.
 """
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from contextlib import ExitStack, contextmanager
+from datetime import date
+from decimal import Decimal
 from unittest.mock import patch
+from uuid import UUID
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -46,8 +54,11 @@ from trusts.policy_lock import (
     SCHEMA_VERSION,
     SQLITE_JSON1_RCTE_PROFILE,
     build_policy_manifest,
+    canonicalize,
+    encode_policy_document,
     fingerprint_registration,
     manifest_to_json_data,
+    read_policy_document,
 )
 
 
@@ -855,12 +866,25 @@ class PolicyLockSnapshotTest(SimpleTestCase):
         })
         ranked = rows[1]
         self.assertEqual(ranked['expr']['op'], 'and')
-        self.assertEqual(ranked['expr']['left']['right']['const'], {
-            'type': 'int', 'value': 2,
-        })
-        self.assertEqual(ranked['expr']['right']['right']['const'], {
-            'type': 'str', 'value': 'x',
-        })
+        self.assertNotIn('left', ranked['expr'])
+        self.assertNotIn('right', ranked['expr'])
+        self.assertCountEqual(
+            [operand['right']['const'] for operand in ranked['expr']['operands']],
+            [
+                {'type': 'int', 'value': 2},
+                {'type': 'str', 'value': 'x'},
+            ],
+        )
+        self.assertEqual(
+            ranked['expr']['operands'],
+            sorted(
+                ranked['expr']['operands'],
+                key=lambda node: json.dumps(
+                    node, ensure_ascii=False, sort_keys=True,
+                    separators=(',', ':'),
+                ),
+            ),
+        )
 
     def test_named_filter_rejects_nonportable_constants(self):
         _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
@@ -874,15 +898,6 @@ class PolicyLockSnapshotTest(SimpleTestCase):
             _data([_handle(registry, 'tests.policy.float')])
         self.assertIn('ratio', str(ctx.exception))
         self.assertIn('float', str(ctx.exception))
-
-        huge = TrustsRegistry()
-        _direct(huge, Grant)
-        huge.register_permission_condition(
-            Doc, 'big', lambda u, p, o: o.rank == (2**53),
-        )
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            _data([_handle(huge, 'tests.policy.huge')])
-        self.assertIn('int_dec', str(ctx.exception))
 
         identity = TrustsRegistry()
         _direct(identity, Grant)
@@ -1071,6 +1086,467 @@ class PolicyLockSnapshotTest(SimpleTestCase):
         codes = [row['code'] for row in document['named_filters']]
         self.assertIn('non_confidential', codes)
         self.assertEqual(document['renderer']['alias'], 'default')
+
+
+def _lock_bytes(handles):
+    with _owned(*handles):
+        manifest = build_policy_manifest(handles)
+        return manifest, canonicalize(manifest)
+
+
+def _filter_const(document, code):
+    for handle in document['handles']:
+        for row in handle['named_filters']:
+            if row['code'] == code:
+                return row['expr']['right']['const']
+    raise AssertionError('named filter %r is missing' % code)
+
+
+def _replace_filter_const(raw, code, const):
+    data = json.loads(raw)
+    found = False
+    for handle in data['handles']:
+        for row in handle['named_filters']:
+            if row['code'] == code:
+                row['expr']['right']['const'] = const
+                found = True
+    if not found:
+        raise AssertionError('named filter %r is missing' % code)
+    return json.dumps(data)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class PolicyLockCanonicalDocumentTest(SimpleTestCase):
+    """C2 quiet serializer, strict reader, and named-filter IR."""
+
+    def test_quiet_regeneration_is_byte_stable(self):
+        _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
+        registry = TrustsRegistry()
+        _direct(registry, Grant)
+        registry.register_permission_condition(
+            Doc, 'titled', lambda u, p, o: o.title == 'café',
+        )
+        handle = _handle(registry, 'tests.policy.quiet')
+        with _owned(handle):
+            manifest = build_policy_manifest([handle])
+            with _forbid_sql():
+                first = canonicalize(manifest)
+                second = canonicalize(manifest)
+                semantic = manifest_to_json_data(manifest)
+        self.assertEqual(first, second)
+        self.assertIsInstance(first, bytes)
+        self.assertTrue(first.endswith(b'\n'))
+        self.assertFalse(first.endswith(b'\n\n'))
+        self.assertNotIn(b'\r', first)
+        self.assertFalse(first.startswith(b'\xef\xbb\xbf'))
+        self.assertIn('café'.encode('utf-8'), first)
+        self.assertNotIn(b'\\u00e9', first)
+        self.assertNotIn(b'"diagnostics"', first)
+        self.assertEqual(read_policy_document(first), semantic)
+        self.assertEqual(encode_policy_document(read_policy_document(first)), first)
+        parsed = json.loads(first)
+        parsed['diagnostics'] = {
+            'package': '1.0.0rc1',
+            'generated_at': '2020-01-01T00:00:00Z',
+            'checkout': '/tmp/not-semantic',
+        }
+        messy = json.dumps(parsed, indent=4, ensure_ascii=False).replace('\n', '\r\n')
+        self.assertIn('\r\n', messy)
+        with _forbid_sql():
+            reread = read_policy_document(messy)
+            regenerated = encode_policy_document(reread)
+        self.assertEqual(reread, semantic)
+        self.assertNotIn('diagnostics', reread)
+        self.assertEqual(regenerated, first)
+        self.assertNotIn(b'diagnostics', regenerated)
+        self.assertNotIn(b'generated_at', regenerated)
+        self.assertNotIn(b'checkout', regenerated)
+
+    def test_fresh_process_bytes_match_across_hash_seeds(self):
+        parent = canonicalize(build_policy_manifest())
+        root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__),
+        )))
+        source = (
+            'import django\n'
+            'django.setup()\n'
+            'from trusts.policy_lock import build_policy_manifest, canonicalize\n'
+            'import sys\n'
+            'sys.stdout.buffer.write(canonicalize(build_policy_manifest()))\n'
+        )
+        for seed in ('0', '1'):
+            env = os.environ.copy()
+            env['DJANGO_SETTINGS_MODULE'] = 'tests.settings'
+            env['PYTHONHASHSEED'] = seed
+            env['PYTHONPATH'] = os.pathsep.join(
+                [root, env['PYTHONPATH']] if env.get('PYTHONPATH') else [root]
+            )
+            result = subprocess.run(
+                [sys.executable, '-c', source],
+                cwd=root,
+                env=env,
+                capture_output=True,
+            )
+            self.assertEqual(
+                result.returncode, 0,
+                result.stderr.decode('utf-8', 'replace'),
+            )
+            self.assertEqual(result.stdout, parent)
+            self.assertNotIn(b'\r', result.stdout)
+            self.assertNotIn(b'"diagnostics"', result.stdout)
+
+    def test_commutative_named_filters_encode_identically(self):
+        _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
+
+        def _row(builder, path):
+            registry = TrustsRegistry()
+            _direct(registry, Grant)
+            registry.register_permission_condition(Doc, 'both', builder)
+            data = _data([_handle(registry, path)])
+            return data['handles'][0]['named_filters'][0]
+
+        left = _row(
+            lambda u, p, o: (o.rank == 1) & (o.title == 'a'),
+            'tests.policy.and-left',
+        )
+        right = _row(
+            lambda u, p, o: (o.title == 'a') & (o.rank == 1),
+            'tests.policy.and-right',
+        )
+        self.assertEqual(left['fingerprint'], right['fingerprint'])
+        self.assertEqual(left['expr'], right['expr'])
+        self.assertEqual(left['expr']['op'], 'and')
+        self.assertEqual(len(left['expr']['operands']), 2)
+
+        nested_left = _row(
+            lambda u, p, o: ((o.rank == 1) & (o.rank == 2)) & (o.title == 'a'),
+            'tests.policy.and-nest-left',
+        )
+        nested_right = _row(
+            lambda u, p, o: (o.title == 'a') & ((o.rank == 2) & (o.rank == 1)),
+            'tests.policy.and-nest-right',
+        )
+        self.assertEqual(nested_left['fingerprint'], nested_right['fingerprint'])
+        self.assertEqual(nested_left['expr'], nested_right['expr'])
+        self.assertEqual(len(nested_left['expr']['operands']), 3)
+        self.assertTrue(all(
+            operand['op'] in ('eq', 'ne')
+            for operand in nested_left['expr']['operands']
+        ))
+
+        or_left = _row(
+            lambda u, p, o: (o.rank == 1) | (o.rank == 2) | (o.title == 'z'),
+            'tests.policy.or-left',
+        )
+        or_right = _row(
+            lambda u, p, o: (o.title == 'z') | ((o.rank == 2) | (o.rank == 1)),
+            'tests.policy.or-right',
+        )
+        self.assertEqual(or_left['fingerprint'], or_right['fingerprint'])
+        self.assertEqual(or_left['expr']['op'], 'or')
+        self.assertEqual(len(or_left['expr']['operands']), 3)
+
+        mixed = _row(
+            lambda u, p, o: ((o.rank == 1) & (o.title == 'a')) | (o.rank == 3),
+            'tests.policy.mixed',
+        )
+        swapped_and = _row(
+            lambda u, p, o: (o.rank == 3) | ((o.title == 'a') & (o.rank == 1)),
+            'tests.policy.mixed-swap',
+        )
+        self.assertEqual(mixed['fingerprint'], swapped_and['fingerprint'])
+        self.assertEqual(mixed['expr']['op'], 'or')
+        self.assertEqual(len(mixed['expr']['operands']), 2)
+        different = _row(
+            lambda u, p, o: ((o.rank == 1) | (o.title == 'a')) & (o.rank == 3),
+            'tests.policy.mixed-different',
+        )
+        self.assertNotEqual(mixed['fingerprint'], different['fingerprint'])
+
+    def test_reader_normalizes_commutative_document_order(self):
+        _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
+        root = Ref(Grant)
+        registry = TrustsRegistry()
+        registry.register(
+            content=root.document,
+            user=root.user,
+            permission=root.permission,
+            condition=All(
+                Equal(root.team_org, root.repo_org),
+                Equal(root.alt_org, root.team_org),
+            ),
+        )
+        registry.register_permission_condition(
+            Doc, 'both', lambda u, p, o: (o.rank == 1) & (o.title == 'a'),
+        )
+        handle = _handle(registry, 'tests.policy.reorder')
+        _manifest, raw = _lock_bytes([handle])
+        data = json.loads(raw)
+        predicates = data['handles'][0]['registrations'][0]['condition']['predicates']
+        predicates.reverse()
+        operands = data['handles'][0]['named_filters'][0]['expr']['operands']
+        operands.reverse()
+        data['handles'].reverse()
+        with _forbid_sql():
+            regenerated = encode_policy_document(read_policy_document(
+                json.dumps(data),
+            ))
+        self.assertEqual(regenerated, raw)
+
+    def test_integer_encoding_uses_int_and_int_dec(self):
+        _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
+        safe = 2**53 - 1
+        outside = 2**53
+        registry = TrustsRegistry()
+        _direct(registry, Grant)
+        registry.register_permission_condition(
+            Doc, 'zero', lambda u, p, o: o.rank == 0,
+        )
+        registry.register_permission_condition(
+            Doc, 'negative', lambda u, p, o: o.rank == -1,
+        )
+        registry.register_permission_condition(
+            Doc, 'safe', lambda u, p, o: o.rank == safe,
+        )
+        registry.register_permission_condition(
+            Doc, 'safe_neg', lambda u, p, o: o.rank == -safe,
+        )
+        registry.register_permission_condition(
+            Doc, 'outside', lambda u, p, o: o.rank == outside,
+        )
+        registry.register_permission_condition(
+            Doc, 'outside_neg', lambda u, p, o: o.rank == -outside,
+        )
+        data = _data([_handle(registry, 'tests.policy.ints')])
+        self.assertEqual(_filter_const(data, 'zero'), {'type': 'int', 'value': 0})
+        self.assertEqual(_filter_const(data, 'negative'), {'type': 'int', 'value': -1})
+        self.assertEqual(_filter_const(data, 'safe'), {'type': 'int', 'value': safe})
+        self.assertEqual(
+            _filter_const(data, 'safe_neg'), {'type': 'int', 'value': -safe},
+        )
+        self.assertEqual(
+            _filter_const(data, 'outside'),
+            {'type': 'int_dec', 'value': str(outside)},
+        )
+        self.assertEqual(
+            _filter_const(data, 'outside_neg'),
+            {'type': 'int_dec', 'value': str(-outside)},
+        )
+        handle = _handle(registry, 'tests.policy.ints-bytes')
+        _manifest, raw = _lock_bytes([handle])
+        text = raw.decode('utf-8')
+        self.assertIn('"type": "int_dec"', text)
+        self.assertIn('"value": "%s"' % outside, text)
+        self.assertNotIn('"value": %s' % outside, text)
+        self.assertEqual(encode_policy_document(read_policy_document(raw)), raw)
+
+    def test_cross_shape_and_noncanonical_int_dec_are_rejected(self):
+        _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
+        outside = 2**53
+        registry = TrustsRegistry()
+        _direct(registry, Grant)
+        registry.register_permission_condition(
+            Doc, 'outside', lambda u, p, o: o.rank == outside,
+        )
+        registry.register_permission_condition(
+            Doc, 'small', lambda u, p, o: o.rank == 2,
+        )
+        _manifest, raw = _lock_bytes([
+            _handle(registry, 'tests.policy.int-shape'),
+        ])
+        cases = (
+            ('outside', {'type': 'int', 'value': outside}, 'cross-shape'),
+            ('outside', {'type': 'int_dec', 'value': outside}, 'cross-shape'),
+            ('small', {'type': 'int', 'value': '2'}, 'cross-shape'),
+            ('small', {'type': 'int', 'value': True}, 'cross-shape'),
+            ('small', {'type': 'int', 'value': 2.0}, 'cross-shape'),
+            ('small', {'type': 'int_dec', 'value': '2'}, 'cross-shape'),
+            ('outside', {'type': 'int_dec', 'value': '+' + str(outside)}, 'noncanonical'),
+            ('outside', {'type': 'int_dec', 'value': '0' + str(outside)}, 'noncanonical'),
+            ('outside', {'type': 'int_dec', 'value': '-0' + str(outside)}, 'noncanonical'),
+            ('small', {'type': 'int_dec', 'value': '01'}, 'noncanonical'),
+            ('small', {'type': 'int_dec', 'value': '-0'}, 'noncanonical'),
+            ('small', {'type': 'int_dec', 'value': '2.0'}, 'noncanonical'),
+            ('small', {'type': 'int_dec', 'value': ' 2'}, 'noncanonical'),
+        )
+        for code, const, needle in cases:
+            mutated = _replace_filter_const(raw, code, const)
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                read_policy_document(mutated)
+            self.assertIn(needle, str(ctx.exception))
+            self.assertIn(code, str(ctx.exception))
+
+    def test_unsupported_constants_fail_closed(self):
+        _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
+        samples = (
+            ('ratio', 1.5, 'float'),
+            ('blob', b'\x00\x01', 'bytes'),
+            ('money', Decimal('1.50'), 'Decimal'),
+            ('ident', UUID('12345678-1234-5678-1234-567812345678'), 'UUID'),
+            ('when', date(2020, 1, 2), 'date'),
+            ('tenant', ModelIdentity('myapp', 'doc', 9), 'ModelIdentity'),
+        )
+        for code, value, needle in samples:
+            registry = TrustsRegistry()
+            _direct(registry, Grant)
+            registry.conditions._records[(Doc._meta.label, code)] = ConditionRecord(
+                expr=Eq(FilterRef('object', ('title',)), Const(value)),
+                model=Doc,
+            )
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                _data([_handle(registry, 'tests.policy.%s' % code)])
+            message = str(ctx.exception)
+            self.assertIn(code, message)
+            self.assertIn(needle, message)
+            self.assertIn('not portable', message)
+            if needle == 'ModelIdentity':
+                self.assertNotIn('myapp', message.split('ModelIdentity')[0])
+
+    def test_unknown_fields_are_rejected_recursively(self):
+        _org, Doc, Grant, _node, _item, NodeGrant = _policy_models()
+        registry = TrustsRegistry()
+        root = Ref(Grant)
+        registry.register(
+            content=root.document,
+            user=root.user,
+            permission=root.permission,
+            condition=Equal(root.team_org, root.repo_org),
+        )
+        node = Ref(NodeGrant)
+        registry.register(
+            content=node.node.items,
+            user=node.user,
+            permission=node.permission,
+            along=Along(node.node.parent, bound=3),
+        )
+        registry.register_permission_condition(
+            Doc, 'ranked', lambda u, p, o: (o.rank == 2) & (o.title != 'x'),
+        )
+        _manifest, raw = _lock_bytes([
+            _handle(registry, 'tests.policy.unknown'),
+        ])
+        data = json.loads(raw)
+
+        def _reject(mutator, needle):
+            cloned = json.loads(json.dumps(data))
+            mutator(cloned)
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                read_policy_document(json.dumps(cloned))
+            self.assertIn(needle, str(ctx.exception))
+            self.assertIn('unexpected', str(ctx.exception))
+
+        _reject(lambda doc: doc.__setitem__('extra', 1), 'extra')
+        _reject(
+            lambda doc: doc['handles'][0].__setitem__('diagnostics', {}),
+            'diagnostics',
+        )
+        _reject(
+            lambda doc: doc['handles'][0].__setitem__('note', 'x'),
+            'note',
+        )
+        _reject(
+            lambda doc: doc['handles'][0]['renderer'].__setitem__('password', 'x'),
+            'password',
+        )
+        _reject(
+            lambda doc: doc['handles'][0]['registrations'][0].__setitem__(
+                'source', 'line 1',
+            ),
+            'source',
+        )
+        def _conditioned(doc):
+            for row in doc['handles'][0]['registrations']:
+                if row['condition'] is not None and row['along'] is None:
+                    row['condition']['note'] = True
+                    return
+            raise AssertionError('conditioned registration is missing')
+
+        def _along(doc):
+            for row in doc['handles'][0]['registrations']:
+                if row['along'] is not None:
+                    row['along']['note'] = True
+                    return
+            raise AssertionError('along registration is missing')
+
+        _reject(_conditioned, 'note')
+        _reject(_along, 'note')
+        _reject(
+            lambda doc: doc['handles'][0]['named_filters'][0].__setitem__('note', 1),
+            'note',
+        )
+        _reject(
+            lambda doc: doc['handles'][0]['named_filters'][0]['expr'].__setitem__(
+                'left', {'ref': 'object', 'path': ['rank']},
+            ),
+            'left',
+        )
+        _reject(
+            lambda doc: doc['handles'][0]['named_filters'][0]['expr']['operands'][0].__setitem__(
+                'note', 1,
+            ),
+            'note',
+        )
+        _reject(
+            lambda doc: doc['handles'][0]['named_filters'][0]['expr']['operands'][0]['right']['const'].__setitem__(
+                'base', 10,
+            ),
+            'base',
+        )
+
+        encoded = dict(data)
+        encoded['diagnostics'] = {'kept': False}
+        with self.assertRaises(TrustsConfigurationError):
+            encode_policy_document(encoded)
+
+    def test_schema_and_compiler_versions_are_strict(self):
+        _org, _doc, Grant, _node, _item, _node_grant = _policy_models()
+        registry = TrustsRegistry()
+        _direct(registry, Grant)
+        _manifest, raw = _lock_bytes([
+            _handle(registry, 'tests.policy.version'),
+        ])
+        data = json.loads(raw)
+        for key, bad in (
+            ('schema_version', 2),
+            ('schema_version', True),
+            ('schema_version', '1'),
+            ('compiler_version', 2),
+            ('compiler_version', 1.0),
+        ):
+            cloned = dict(data)
+            cloned[key] = bad
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                read_policy_document(json.dumps(cloned))
+            self.assertIn(key, str(ctx.exception))
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            read_policy_document('{')
+        self.assertIn('JSON', str(ctx.exception))
+        with self.assertRaises(TrustsConfigurationError):
+            read_policy_document(b'\xef\xbb\xbf' + raw)
+        with self.assertRaises(TrustsConfigurationError):
+            read_policy_document(b'\xff')
+
+    def test_diagnostics_do_not_affect_semantic_comparison(self):
+        _org, _doc, Grant, _node, _item, _node_grant = _policy_models()
+        registry = TrustsRegistry()
+        _direct(registry, Grant)
+        _manifest, raw = _lock_bytes([
+            _handle(registry, 'tests.policy.semantic'),
+        ])
+        with_notes = json.loads(raw)
+        with_notes['diagnostics'] = {'package': '9.9.9', 'noise': [1, {'a': True}]}
+        quiet = read_policy_document(raw)
+        noted = read_policy_document(json.dumps(with_notes))
+        self.assertEqual(quiet, noted)
+        self.assertNotIn('diagnostics', quiet)
+        changed = json.loads(raw)
+        changed['handles'][0]['compiler'] += '.Other'
+        self.assertNotEqual(read_policy_document(json.dumps(changed)), quiet)
+        tampered = json.loads(raw)
+        tampered['handles'][0]['registrations'][0]['content'].append('other')
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            read_policy_document(json.dumps(tampered))
+        self.assertIn('fingerprint', str(ctx.exception))
 
 
 class PolicyLockImportTest(SimpleTestCase):
