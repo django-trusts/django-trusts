@@ -1257,6 +1257,281 @@ class PolicyLockCanonicalTest(SimpleTestCase):
         self.assertIn('diagnostics', str(ctx.exception))
         self.assertIn('unexpected', str(ctx.exception))
 
+    def test_non_object_diagnostics_are_rejected(self):
+        base = _lock_document(_eq_expr('rank', {'type': 'int', 'value': 1}))
+        samples = (
+            (None, 'NoneType'),
+            ('note', 'str'),
+            (['a'], 'list'),
+            (1, 'int'),
+            (1.5, 'float'),
+            (True, 'bool'),
+        )
+        for value, type_name in samples:
+            document = copy.deepcopy(base)
+            document['diagnostics'] = value
+            for source in (document, json.dumps(document), json.dumps(document).encode('utf-8')):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    read_canonical_policy(source)
+                message = str(ctx.exception)
+                self.assertIn('diagnostics', message)
+                self.assertIn('object', message)
+                self.assertIn(type_name, message)
+                with self.assertRaises(TrustsConfigurationError):
+                    canonicalize(source)
+        empty = copy.deepcopy(base)
+        empty['diagnostics'] = {}
+        self.assertNotIn('diagnostics', read_canonical_policy(empty))
+        self.assertNotIn(b'diagnostics', canonicalize(empty))
+        absent = copy.deepcopy(base)
+        self.assertEqual(canonicalize(absent), canonicalize(empty))
+
+    def test_duplicate_semantic_identities_are_rejected(self):
+        base = _lock_document(_eq_expr('rank', {'type': 'int', 'value': 1}))
+        path = base['handles'][0]['path']
+        fingerprint = base['handles'][0]['registrations'][0]['fingerprint']
+
+        def reject(document, needles):
+            for source in (document, json.dumps(document).encode('utf-8')):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    canonicalize(source)
+                message = str(ctx.exception)
+                self.assertIn('duplicates', message)
+                for needle in needles:
+                    self.assertIn(needle, message)
+                with self.assertRaises(TrustsConfigurationError):
+                    read_canonical_policy(source)
+
+        left = copy.deepcopy(base['handles'][0])
+        right = copy.deepcopy(base['handles'][0])
+        right['renderer']['alias'] = 'other'
+        for handles in ((left, right), (right, left)):
+            document = copy.deepcopy(base)
+            document['handles'] = [copy.deepcopy(item) for item in handles]
+            reject(document, (path, 'handle path', 'handles[1]', 'handles[0]'))
+
+        changed_compiler = copy.deepcopy(right)
+        changed_compiler['compiler'] = 'tests.core.test_issue147.PortableOtherCompiler'
+        document = copy.deepcopy(base)
+        document['handles'] = [left, changed_compiler]
+        reject(document, (path, 'handle path'))
+
+        third = copy.deepcopy(left)
+        third['renderer']['engine'] = 'django.db.backends.postgresql'
+        document = copy.deepcopy(base)
+        other_path = copy.deepcopy(left)
+        other_path['path'] = 'tests.policy.other'
+        document['handles'] = [left, other_path, third]
+        reject(document, (path, 'handles[2]', 'handles[0]'))
+
+        first_reg = copy.deepcopy(base['handles'][0]['registrations'][0])
+        second_reg = copy.deepcopy(first_reg)
+        second_reg['label'] = 'app.Grant:other'
+        second_reg['content'] = ['other']
+        for regs in ((first_reg, second_reg), (second_reg, first_reg)):
+            document = copy.deepcopy(base)
+            document['handles'][0]['registrations'] = [
+                copy.deepcopy(item) for item in regs
+            ]
+            reject(document, (
+                fingerprint,
+                'registration fingerprint',
+                'registrations[1]',
+                'registrations[0]',
+            ))
+
+        same_reg = copy.deepcopy(first_reg)
+        document = copy.deepcopy(base)
+        document['handles'][0]['registrations'] = [first_reg, same_reg]
+        reject(document, (fingerprint, 'registration fingerprint'))
+
+        first_filter = copy.deepcopy(base['handles'][0]['named_filters'][0])
+        second_filter = copy.deepcopy(first_filter)
+        second_filter['fingerprint'] = _sha('cd')
+        second_filter['expr'] = _eq_expr('title', {'type': 'str', 'value': 'x'})
+        for filters in ((first_filter, second_filter), (second_filter, first_filter)):
+            document = copy.deepcopy(base)
+            document['handles'][0]['named_filters'] = [
+                copy.deepcopy(item) for item in filters
+            ]
+            reject(document, (
+                'app.Doc:ranked',
+                'named filter',
+                'named_filters[1]',
+                'named_filters[0]',
+            ))
+
+        same_code = copy.deepcopy(second_filter)
+        same_code['model'] = 'app.Other'
+        other_model = copy.deepcopy(first_filter)
+        other_model['code'] = 'titled'
+        other_model['fingerprint'] = _sha('ef')
+        document = copy.deepcopy(base)
+        document['handles'][0]['named_filters'] = [
+            first_filter, same_code, other_model,
+        ]
+        semantic = read_canonical_policy(document)
+        codes = [
+            (row['model'], row['code'])
+            for row in semantic['handles'][0]['named_filters']
+        ]
+        self.assertEqual(codes, [
+            ('app.Doc', 'ranked'),
+            ('app.Doc', 'titled'),
+            ('app.Other', 'ranked'),
+        ])
+
+        shared = copy.deepcopy(base)
+        shared['handles'].append(copy.deepcopy(base['handles'][0]))
+        shared['handles'][1]['path'] = 'tests.policy.other'
+        semantic = read_canonical_policy(shared)
+        self.assertEqual(
+            [row['fingerprint'] for row in semantic['handles'][0]['registrations']],
+            [row['fingerprint'] for row in semantic['handles'][1]['registrations']],
+        )
+        self.assertEqual(
+            [
+                (row['model'], row['code'])
+                for row in semantic['handles'][0]['named_filters']
+            ],
+            [
+                (row['model'], row['code'])
+                for row in semantic['handles'][1]['named_filters']
+            ],
+        )
+
+    def test_admitted_documents_have_one_canonical_byte_form(self):
+        def registration(label, content, digest, predicates):
+            payload = _minimal_registration_payload()
+            payload['content'] = [content]
+            payload['condition'] = {'op': 'all', 'predicates': predicates}
+            row = {'fingerprint': digest, 'label': label}
+            row.update(payload)
+            return row
+
+        def named(model, code, args, digest):
+            return {
+                'model': model,
+                'code': code,
+                'fingerprint': digest,
+                'expr': {'op': 'and', 'args': args},
+            }
+
+        def handle(path, registrations, named_filters, alias):
+            return {
+                'path': path,
+                'family': 'relationship',
+                'compiler': 'trusts.core.PlanQueryCompiler',
+                'renderer': {
+                    'alias': alias,
+                    'engine': 'django.db.backends.sqlite3',
+                    'profile': SQLITE_JSON1_RCTE_PROFILE,
+                    'profile_version': 1,
+                    'along': ALONG_SUPPORTED,
+                },
+                'registrations': registrations,
+                'named_filters': named_filters,
+            }
+
+        eq_team = {'op': 'equal', 'left': ['team'], 'right': ['repo']}
+        perm_za = {'op': 'permission_in', 'refs': [['z'], ['a']]}
+        perm_az = {'op': 'permission_in', 'refs': [['a'], ['z']]}
+        arg_rank = _eq_expr('rank', {'type': 'int', 'value': 1})
+        arg_title = _eq_expr('title', {'type': 'str', 'value': 'x'})
+
+        def document(reverse):
+            def order(items):
+                rows = [copy.deepcopy(item) for item in items]
+                if reverse:
+                    rows.reverse()
+                return rows
+
+            if reverse:
+                predicates = [perm_az, eq_team]
+            else:
+                predicates = [eq_team, perm_za]
+            low_regs = order((
+                registration(
+                    'app.Grant:late', 'late', _sha('bb'), predicates,
+                ),
+                registration(
+                    'app.Grant:early', 'early', _sha('aa'),
+                    list(reversed(predicates)),
+                ),
+            ))
+            high_regs = order((
+                registration('app.Grant:zeta', 'zeta', _sha('dd'), [eq_team, perm_za]),
+                registration('app.Grant:mid', 'mid', _sha('cc'), [perm_az, eq_team]),
+            ))
+            low_named = order((
+                named('app.Zed', 'open', [arg_title, arg_rank], _sha('22')),
+                named('app.Alpha', 'ranked', [arg_rank, arg_title], _sha('11')),
+            ))
+            high_named = order((
+                named('app.Zed', 'visible', [arg_rank, arg_title], _sha('44')),
+                named('app.Mid', 'titled', [arg_title, arg_rank], _sha('33')),
+            ))
+            handles = [
+                handle('tests.policy.z', high_regs, high_named, 'other'),
+                handle('tests.policy.a', low_regs, low_named, 'default'),
+            ]
+            if not reverse:
+                handles.reverse()
+            return {
+                'schema_version': SCHEMA_VERSION,
+                'compiler_version': COMPILER_VERSION,
+                'handles': handles,
+            }
+
+        forward = document(False)
+        backward = document(True)
+        handles_only = copy.deepcopy(forward)
+        handles_only['handles'].reverse()
+        blobs = [
+            canonicalize(forward),
+            canonicalize(backward),
+            canonicalize(handles_only),
+            canonicalize(json.dumps(backward)),
+            canonicalize(json.dumps(forward).encode('utf-8')),
+        ]
+        self.assertEqual(len(set(blobs)), 1)
+        self.assertEqual(canonicalize(blobs[0]), blobs[0])
+        semantic = read_canonical_policy(forward)
+        self.assertEqual(read_canonical_policy(backward), semantic)
+        self.assertEqual(
+            [row['path'] for row in semantic['handles']],
+            ['tests.policy.a', 'tests.policy.z'],
+        )
+        self.assertEqual(
+            [row['path'] for row in forward['handles']],
+            ['tests.policy.a', 'tests.policy.z'],
+        )
+        self.assertEqual(
+            [row['path'] for row in backward['handles']],
+            ['tests.policy.z', 'tests.policy.a'],
+        )
+        low = semantic['handles'][0]
+        self.assertEqual(
+            [row['fingerprint'] for row in low['registrations']],
+            [_sha('aa'), _sha('bb')],
+        )
+        self.assertEqual(
+            [(row['model'], row['code']) for row in low['named_filters']],
+            [('app.Alpha', 'ranked'), ('app.Zed', 'open')],
+        )
+        for row in low['named_filters']:
+            args = row['expr']['args']
+            self.assertEqual(
+                [arg['left']['path'] for arg in args],
+                [['rank'], ['title']],
+            )
+        predicates = low['registrations'][0]['condition']['predicates']
+        self.assertEqual(
+            [row['op'] for row in predicates],
+            ['equal', 'permission_in'],
+        )
+        self.assertEqual(predicates[1]['refs'], [['a'], ['z']])
+
     def test_commutative_named_filters_are_byte_stable(self):
         _org, Doc, Grant, _node, _item, _node_grant = _policy_models()
 

@@ -186,11 +186,14 @@ def canonicalize(source):
 
     A :class:`PolicyManifest` is encoded from its detached semantic
     document. Bytes, ``str``, or a JSON object are strict-read first
-    (:func:`read_canonical_policy`), so regeneration drops top-level
-    ``diagnostics`` and rejects unknown fields, cross-shape integers,
-    and noncanonical ``int_dec`` spellings. The generator form is
-    UTF-8, no BOM, LF-only, two-space indent, schema key order, and a
-    trailing newline. This function does not touch the database.
+    (:func:`read_canonical_policy`), so regeneration drops a top-level
+    ``diagnostics`` object and rejects a non-object ``diagnostics``
+    value, unknown fields, duplicate handle paths, duplicate
+    registration fingerprints, duplicate named-filter ``(model, code)``
+    keys, cross-shape integers, and noncanonical ``int_dec`` spellings.
+    The generator form is UTF-8, no BOM, LF-only, two-space indent,
+    schema key order, and a trailing newline. This function does not
+    touch the database.
     """
     if isinstance(source, PolicyManifest):
         document = read_canonical_policy(manifest_to_json_data(source))
@@ -203,13 +206,17 @@ def read_canonical_policy(source):
     """Strict-read a lockfile document and return the semantic dict.
 
     ``source`` is UTF-8 bytes, text, or a JSON object. Top-level
-    ``diagnostics`` is the only nonsemantic key: it is dropped and is
-    not present on the result. Every other unknown field fails closed,
-    recursively, at each semantic schema level. ``schema_version`` and
-    ``compiler_version`` must be integer ``1``. Named-filter ``and`` /
-    ``or`` are flattened and sorted. Integer constants must already be
-    the canonical ``int`` or ``int_dec`` shape; this reader does not
-    rewrite cross-shape or noncanonical spellings. No SQL.
+    ``diagnostics`` is the only nonsemantic key. When present it must
+    be an object; it is dropped and is not present on the result.
+    Every other unknown field fails closed, recursively, at each
+    semantic schema level. ``schema_version`` and ``compiler_version``
+    must be integer ``1``. Duplicate handle paths, registration
+    fingerprints, and named-filter ``(model, code)`` keys are rejected,
+    so every admitted document has one canonical byte form.
+    Named-filter ``and`` / ``or`` are flattened and sorted. Integer
+    constants must already be the canonical ``int`` or ``int_dec``
+    shape; this reader does not rewrite cross-shape or noncanonical
+    spellings. No SQL.
     """
     if isinstance(source, PolicyManifest):
         raise TypeError(
@@ -1240,6 +1247,25 @@ def _load_json_source(source):
     )
 
 
+def _reject_duplicate_rows(rows, identity, describe, where):
+    """Reject rows that share a semantic identity.
+
+    Handle paths, registration fingerprints, and named-filter
+    ``(model, code)`` pairs are identities, and the canonical sort uses
+    those keys. A tie with differing remaining fields would otherwise
+    preserve input order. Indexes in the error are input positions.
+    """
+    seen = {}
+    for index, row in enumerate(rows):
+        key = identity(row)
+        if key in seen:
+            raise TrustsConfigurationError(
+                '%s[%s] duplicates %s (also at %s[%s]).'
+                % (where, index, describe(key), where, seen[key])
+            )
+        seen[key] = index
+
+
 def _canonicalize_document(data):
     mapping = _as_dict(data)
     if mapping is None:
@@ -1250,6 +1276,11 @@ def _canonicalize_document(data):
     _reject_unexpected(
         mapping, _DOCUMENT_KEYS + ('diagnostics',), 'Policy document',
     )
+    if 'diagnostics' in mapping and _as_dict(mapping['diagnostics']) is None:
+        raise TrustsConfigurationError(
+            'Policy document diagnostics must be an object, not %s.'
+            % type(mapping['diagnostics']).__name__
+        )
     _missing_keys(mapping, _DOCUMENT_KEYS, 'Policy document')
     schema_version = _require_exact_version(
         mapping['schema_version'], SCHEMA_VERSION, 'schema_version',
@@ -1262,6 +1293,12 @@ def _canonicalize_document(data):
         _canonicalize_handle(item, 'handles[%s]' % index)
         for index, item in enumerate(handles_in)
     ]
+    _reject_duplicate_rows(
+        handles,
+        lambda row: row['path'],
+        lambda path: 'handle path %r' % (path,),
+        'handles',
+    )
     handles.sort(key=_handle_sort_key)
     return {
         'schema_version': schema_version,
@@ -1296,6 +1333,12 @@ def _canonicalize_handle(value, where):
         )
         for index, item in enumerate(registrations_in)
     ]
+    _reject_duplicate_rows(
+        registrations,
+        lambda row: row['fingerprint'],
+        lambda fingerprint: 'registration fingerprint %r' % (fingerprint,),
+        '%s.registrations' % where,
+    )
     registrations.sort(key=lambda row: row['fingerprint'])
     named_filters = [
         _canonicalize_named_filter(
@@ -1303,6 +1346,12 @@ def _canonicalize_handle(value, where):
         )
         for index, item in enumerate(named_in)
     ]
+    _reject_duplicate_rows(
+        named_filters,
+        lambda row: (row['model'], row['code']),
+        lambda key: 'named filter %r' % ('%s:%s' % key,),
+        '%s.named_filters' % where,
+    )
     named_filters.sort(key=lambda row: (row['model'], row['code']))
     return {
         'path': _require_text(mapping['path'], '%s path' % where),
