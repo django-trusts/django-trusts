@@ -92,8 +92,6 @@ from trusts.policy_lock import (
     _policy_lock_verification_state,
     _reset_policy_lock_verification,
 )
-from tests.backends import HostTrustModelBackend
-from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document
 
 
@@ -2537,6 +2535,39 @@ _runtime_view = authorization_required(
 )(_runtime_view)
 
 
+def _installed_owner_handle():
+    """Wrapper owned by the active installed implementation.
+
+    ``live_config()`` is the kernel host when several owners are
+    installed, and the sole Zero owner on the pair. The handle is that
+    owner's configured backend, so the gate binds to the exact
+    installed owner instead of a hard-coded host path.
+    """
+    from tests.apps import live_config
+
+    owner = live_config()
+    handles = owner.configured_handles()
+    if not handles:
+        raise TrustsConfigurationError(
+            'active implementation owns no configured Trusts backend.'
+        )
+    return owner, handles[0]
+
+
+def _installed_backend():
+    """Disposable backend instance for the active installed owner."""
+    from django.utils.module_loading import import_string
+
+    _owner, handle = _installed_owner_handle()
+    return import_string(handle.path)()
+
+
+def _same_type_compiler(compiler):
+    """New compiler of the verified type. The wrapper object is not shared."""
+    cls = compiler if isinstance(compiler, type) else type(compiler)
+    return cls()
+
+
 class PolicyLockRuntimeGateTest(SimpleTestCase):
     """C4a runtime gate. Sticky, zero-SQL, and handle membership."""
 
@@ -2547,7 +2578,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
         _reset_policy_lock_verification()
 
     def test_conventional_absence_is_sticky_inactive(self):
-        backend = HostTrustModelBackend()
+        backend = _installed_backend()
         with tempfile.TemporaryDirectory() as base_s:
             project = Path(base_s)
             with override_settings(BASE_DIR=str(project), TRUSTS_POLICY_LOCKFILE=None):
@@ -2572,7 +2603,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                 self.assertEqual(lock.read_bytes(), b'{}')
 
     def test_no_usable_base_dir_stays_inactive_after_a_file_appears(self):
-        backend = HostTrustModelBackend()
+        backend = _installed_backend()
         with tempfile.TemporaryDirectory() as base_s:
             project = Path(base_s)
             lock = project / 'explicit.lock.json'
@@ -2686,7 +2717,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                 self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
 
     def test_every_result_path_is_gated_before_an_early_result(self):
-        backend = HostTrustModelBackend()
+        backend = _installed_backend()
         user = get_user_model()()
         perm = Permission()
         queryset = Document.objects.all()
@@ -2704,8 +2735,9 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                     'trusts.backends.is_active_principal',
                     side_effect=AssertionError('principal'),
                 ):
-                    with self.assertRaises(TrustsConfigurationError):
+                    with self.assertRaises(TrustsConfigurationError) as ctx:
                         backend.has_perm(user, 'myapp.change_document')
+                    self.assertIn('missing', str(ctx.exception))
                     with self.assertRaises(TrustsConfigurationError):
                         backend.get_all_permissions(user)
                     with self.assertRaises(TrustsConfigurationError):
@@ -2747,7 +2779,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                 self.assertEqual(_policy_lock_verification_state(), 'FAILED')
 
     def test_inactive_early_results_keep_previous_behavior(self):
-        backend = HostTrustModelBackend()
+        backend = _installed_backend()
         user = get_user_model()()
         perm = Permission()
         queryset = Document.objects.all()
@@ -2792,8 +2824,6 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
             self.assertEqual(_policy_lock_verification_state(), 'INACTIVE')
 
     def test_membership_rejects_strangers_and_accepts_a_rewrapped_handle(self):
-        from trusts.apps import implementation_for_path
-
         user = get_user_model()()
         perm = Permission()
         queryset = Document.objects.all()
@@ -2802,13 +2832,12 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
             generate_policy_lockfile(override=str(path))
             _reset_policy_lock_verification()
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(path)):
-                owner = implementation_for_path(DOCUMENT_BACKEND)
-                configured = owner.configured_backend()
-                again = owner.configured_backend()
+                owner, configured = _installed_owner_handle()
+                again = owner.configured_backend(configured.path)
                 fresh = BackendHandle(
                     path=configured.path,
                     registry=configured.registry,
-                    compiler=PlanQueryCompiler(),
+                    compiler=_same_type_compiler(configured.compiler),
                 )
                 self.assertIsNot(configured, again)
                 self.assertIsNot(fresh, configured)
@@ -2858,15 +2887,12 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                 self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
 
     def test_family_and_renderer_profile_bind_the_verified_handle(self):
-        from trusts.apps import implementation_for_path
-
         with tempfile.TemporaryDirectory() as base_s:
             path = Path(base_s) / 'policy.lock.json'
             generate_policy_lockfile(override=str(path))
             _reset_policy_lock_verification()
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(path)):
-                owner = implementation_for_path(DOCUMENT_BACKEND)
-                handle = owner.configured_backend()
+                owner, handle = _installed_owner_handle()
                 ensure_policy_lockfile_verified(handle)
                 had_instance = '_authorization_family' in owner.__dict__
                 previous = owner._authorization_family
