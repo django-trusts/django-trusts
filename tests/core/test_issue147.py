@@ -3087,12 +3087,23 @@ def _fresh_lock_process(case, *, lock=None, base=None):
     The child uses this process's settings module and import path, so
     kernel-only and Zero-pair runs stay on the installed owner. It does
     not receive this process's verification memory.
-    """
-    from django.conf import settings
 
-    env = os.environ.copy()
-    env['DJANGO_SETTINGS_MODULE'] = settings.SETTINGS_MODULE
-    env['PYTHONPATH'] = os.pathsep.join(sys.path)
+    ``override_settings`` hides ``settings.SETTINGS_MODULE``. The
+    process environment still names the installed settings module
+    (kernel ``tests.settings`` or the Zero pair module).
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if isinstance(value, str)
+    }
+    if not env.get('DJANGO_SETTINGS_MODULE'):
+        raise AssertionError('DJANGO_SETTINGS_MODULE is not set')
+    env['PYTHONPATH'] = os.pathsep.join(
+        os.fspath(entry)
+        for entry in sys.path
+        if isinstance(entry, (str, os.PathLike))
+    )
     env['C4B_CASE'] = case
     env['C4B_LOCK'] = '' if lock is None else str(lock)
     env['C4B_BASE'] = '' if base is None else str(base)
