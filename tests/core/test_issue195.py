@@ -31,6 +31,12 @@ FOLD_NAMES = (
 )
 
 
+_FOLD_IMPORT_ROOTS = (
+    'trusts.ordered_fold',
+    'trusts_ordered_fold',
+)
+
+
 def _suite_sources(tests_root, module):
     """Return the Python sources a suite label loads.
 
@@ -48,6 +54,13 @@ def _suite_sources(tests_root, module):
             if path.is_file() and '__pycache__' not in path.parts
         )
     return []
+
+
+def _is_deleted_fold_import(name):
+    return any(
+        name == root or name.startswith(root + '.')
+        for root in _FOLD_IMPORT_ROOTS
+    )
 
 
 class CoreOrderedFoldDeletedTest(SimpleTestCase):
@@ -134,29 +147,33 @@ class PairSuiteDoesNotImportDeletedEngineTest(SimpleTestCase):
         self.assertIn('tests.core.test_issue195', PAIR_KERNEL_SUITE)
 
     def test_pair_suite_modules_do_not_import_trusts_ordered_fold(self):
+        from tests.core.test_issue147 import SLICE_MODULES
+
         tests_root = ROOT / 'tests' / 'core'
         for module in PAIR_KERNEL_SUITE:
             sources = _suite_sources(tests_root, module)
             self.assertTrue(sources, msg=module)
+            if module == 'tests.core.test_issue147':
+                scanned = {path.resolve() for path in sources}
+                for slice_module in SLICE_MODULES:
+                    relative = slice_module[len('tests.core.'):]
+                    slice_path = (
+                        tests_root / (relative.replace('.', '/') + '.py')
+                    ).resolve()
+                    self.assertIn(slice_path, scanned, msg=slice_module)
             for path in sources:
                 tree = ast.parse(path.read_text(), filename=str(path))
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Import):
                         for alias in node.names:
-                            self.assertNotEqual(
-                                alias.name, 'trusts.ordered_fold', msg=path,
-                            )
                             self.assertFalse(
-                                alias.name.startswith('trusts.ordered_fold.'),
+                                _is_deleted_fold_import(alias.name),
                                 msg=path,
                             )
                     elif isinstance(node, ast.ImportFrom):
                         module_name = node.module or ''
-                        self.assertNotEqual(
-                            module_name, 'trusts.ordered_fold', msg=path,
-                        )
                         self.assertFalse(
-                            module_name.startswith('trusts.ordered_fold.'),
+                            _is_deleted_fold_import(module_name),
                             msg=path,
                         )
                         if module_name == 'trusts.core':
