@@ -7,8 +7,12 @@ AND/OR, and ``int`` / ``int_dec``.
 C3: ``trusts_policy_generate`` / ``trusts_policy_check``, path and
 presence rules, and the fingerprint-first human diff.
 C4a: process-local runtime verification before authorization results.
-No SQL during verification. No C4b late-registration or multi-process
-isolation.
+C4b: after a successful verification, late ``register`` and
+``add_named_filter`` fail before mutating the frozen registry or the
+verified snapshot. Fresh processes start ``UNCHECKED`` and do not
+inherit ``VERIFIED``, ``INACTIVE``, or ``FAILED``. A sticky failure is
+re-raised without rereading the file.
+No SQL during verification.
 """
 
 import copy
@@ -3021,3 +3025,291 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
         elif isinstance(node, list):
             for item in node:
                 self._assert_no_runtime_identity(item)
+
+
+_ISOLATION_CHILD = """\
+import json
+import os
+
+import django
+django.setup()
+
+from django.conf import settings
+from django.db import connections
+from trusts.policy_lock import (
+    ensure_policy_lockfile_verified,
+    generate_policy_lockfile,
+    _policy_lock_verification_state,
+)
+
+sql = {'n': 0}
+
+
+def wrapper(execute, sql_text, params, many, context):
+    sql['n'] += 1
+    return execute(sql_text, params, many, context)
+
+
+case = os.environ['C4B_CASE']
+lock = os.environ.get('C4B_LOCK') or None
+base = os.environ.get('C4B_BASE') or None
+before = _policy_lock_verification_state()
+error = None
+connection = connections['default']
+with connection.execute_wrapper(wrapper):
+    try:
+        if case == 'generate':
+            generate_policy_lockfile(override=lock)
+        elif case == 'verify-explicit':
+            settings.TRUSTS_POLICY_LOCKFILE = lock
+            ensure_policy_lockfile_verified()
+        elif case == 'verify-conventional':
+            settings.TRUSTS_POLICY_LOCKFILE = None
+            settings.BASE_DIR = base
+            ensure_policy_lockfile_verified()
+        else:
+            raise RuntimeError('unknown case %r' % (case,))
+    except Exception as exc:
+        error = '%s: %s' % (type(exc).__name__, exc)
+after = _policy_lock_verification_state()
+print(json.dumps({
+    'before': before,
+    'after': after,
+    'error': error,
+    'sql': sql['n'],
+}))
+"""
+
+
+def _fresh_lock_process(case, *, lock=None, base=None):
+    """Run one lockfile action in a new interpreter.
+
+    The child uses this process's settings module and import path, so
+    kernel-only and Zero-pair runs stay on the installed owner. It does
+    not receive this process's verification memory.
+
+    ``override_settings`` hides ``settings.SETTINGS_MODULE``. The
+    process environment still names the installed settings module
+    (kernel ``tests.settings`` or the Zero pair module).
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if isinstance(value, str)
+    }
+    if not env.get('DJANGO_SETTINGS_MODULE'):
+        raise AssertionError('DJANGO_SETTINGS_MODULE is not set')
+    env['PYTHONPATH'] = os.pathsep.join(
+        os.fspath(entry)
+        for entry in sys.path
+        if isinstance(entry, (str, os.PathLike))
+    )
+    env['C4B_CASE'] = case
+    env['C4B_LOCK'] = '' if lock is None else str(lock)
+    env['C4B_BASE'] = '' if base is None else str(base)
+    root = Path(__file__).resolve().parents[2]
+    proc = subprocess.run(
+        [sys.executable, '-c', _ISOLATION_CHILD],
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        check=False,
+    )
+    detail = proc.stdout + '\n' + proc.stderr
+    if proc.returncode != 0:
+        raise AssertionError(detail)
+    try:
+        return json.loads(proc.stdout)
+    except ValueError as exc:
+        raise AssertionError(detail) from exc
+
+
+def _registry_surface(handle):
+    """Identity of the frozen registry contents, not a semantic copy."""
+    registry = handle.registry
+    filters = tuple(
+        (id(model), code, id(record))
+        for model, code, record in registry.iter_permission_conditions()
+    )
+    return (
+        id(registry),
+        registry.frozen,
+        tuple(id(record) for record in registry.records),
+        filters,
+    )
+
+
+class PolicyLockIsolationTest(SimpleTestCase):
+    """C4b isolation. Late registration and fresh-process memory.
+
+    The installed configured handles are the snapshot membership.
+    Backend class names are not hard-coded, so the same proofs run
+    under kernel settings and the Zero pair.
+    """
+
+    def setUp(self):
+        _reset_policy_lock_verification()
+
+    def tearDown(self):
+        _reset_policy_lock_verification()
+
+    def _assert_fresh_start(self, data):
+        self.assertEqual(data['before'], 'UNCHECKED')
+        self.assertEqual(data['sql'], 0)
+
+    def test_late_register_and_named_filter_do_not_change_verified_snapshot(self):
+        from trusts.apps import configured_implementation_handles
+
+        handles = configured_implementation_handles()
+        self.assertTrue(handles)
+        invoked = []
+
+        def boom(*args, **kwargs):
+            invoked.append((args, kwargs))
+            raise AssertionError('late builder invoked')
+
+        with tempfile.TemporaryDirectory() as base_s:
+            path = Path(base_s) / 'policy.lock.json'
+            generate_policy_lockfile(override=str(path))
+            _reset_policy_lock_verification()
+            with override_settings(TRUSTS_POLICY_LOCKFILE=str(path)):
+                with _forbid_sql():
+                    ensure_policy_lockfile_verified(*handles)
+                self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
+                recorded = path.read_bytes()
+                surfaces = tuple(_registry_surface(handle) for handle in handles)
+                for handle in handles:
+                    self.assertTrue(handle.registry.frozen)
+                with _forbid_sql():
+                    self.assertEqual(canonicalize(build_policy_manifest()), recorded)
+                user = get_user_model()
+                with _forbid_sql():
+                    for handle in handles:
+                        with self.assertRaises(TrustsConfigurationError) as ctx:
+                            handle.register(
+                                trust=user,
+                                user=boom,
+                                permission=boom,
+                                content=boom,
+                                condition=boom,
+                            )
+                        self.assertIn('frozen', str(ctx.exception))
+                        with self.assertRaises(TrustsConfigurationError) as ctx:
+                            handle.add_named_filter(user, 'c4b_late', boom)
+                        self.assertIn('frozen', str(ctx.exception))
+                self.assertEqual(invoked, [])
+                self.assertEqual(
+                    tuple(_registry_surface(handle) for handle in handles),
+                    surfaces,
+                )
+                with _forbid_sql():
+                    self.assertEqual(
+                        canonicalize(build_policy_manifest()), recorded,
+                    )
+                self.assertEqual(path.read_bytes(), recorded)
+                sample = handles[0]
+                fresh = BackendHandle(
+                    path=sample.path,
+                    registry=sample.registry,
+                    compiler=_same_type_compiler(sample.compiler),
+                )
+                other = BackendHandle(
+                    path=sample.path,
+                    registry=TrustsRegistry(),
+                    compiler=_same_type_compiler(sample.compiler),
+                )
+                other.registry.freeze()
+                with patch(
+                    'trusts.policy_lock._read_lock_bytes',
+                    side_effect=AssertionError('reread'),
+                ), _forbid_sql():
+                    ensure_policy_lockfile_verified(fresh)
+                    with self.assertRaises(TrustsConfigurationError) as ctx:
+                        ensure_policy_lockfile_verified(other)
+                self.assertIn('registry', str(ctx.exception))
+                self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
+
+    def test_fresh_process_does_not_inherit_verified_state(self):
+        with tempfile.TemporaryDirectory() as base_s:
+            path = Path(base_s) / 'policy.lock.json'
+            generate_policy_lockfile(override=str(path))
+            _reset_policy_lock_verification()
+            with override_settings(TRUSTS_POLICY_LOCKFILE=str(path)):
+                with _forbid_sql():
+                    ensure_policy_lockfile_verified()
+                self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
+                document = json.loads(path.read_text(encoding='utf-8'))
+                document['schema_version'] = document['schema_version'] + 1
+                path.write_text(json.dumps(document), encoding='utf-8')
+                with patch(
+                    'trusts.policy_lock._read_lock_bytes',
+                    side_effect=AssertionError('reread'),
+                ), _forbid_sql():
+                    ensure_policy_lockfile_verified()
+                self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
+                checked = _fresh_lock_process('verify-explicit', lock=path)
+                self._assert_fresh_start(checked)
+                self.assertEqual(checked['after'], 'FAILED')
+                self.assertIsNotNone(checked['error'])
+                self.assertIn('schema_version', checked['error'])
+                self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
+
+    def test_fresh_process_does_not_inherit_inactive_state(self):
+        with tempfile.TemporaryDirectory() as base_s:
+            project = Path(base_s)
+            lock = project / CONVENTIONAL_LOCKFILE_NAME
+            with override_settings(
+                BASE_DIR=str(project), TRUSTS_POLICY_LOCKFILE=None,
+            ):
+                with _forbid_sql():
+                    ensure_policy_lockfile_verified()
+                self.assertEqual(_policy_lock_verification_state(), 'INACTIVE')
+                self.assertFalse(lock.exists())
+                generated = _fresh_lock_process('generate', lock=lock)
+                self._assert_fresh_start(generated)
+                self.assertIsNone(generated['error'])
+                self.assertEqual(generated['after'], 'UNCHECKED')
+                self.assertTrue(lock.is_file())
+                with patch(
+                    'trusts.policy_lock._read_lock_bytes',
+                    side_effect=AssertionError('reread'),
+                ), _forbid_sql():
+                    ensure_policy_lockfile_verified()
+                self.assertEqual(_policy_lock_verification_state(), 'INACTIVE')
+                checked = _fresh_lock_process(
+                    'verify-conventional', base=project,
+                )
+                self._assert_fresh_start(checked)
+                self.assertIsNone(checked['error'], checked)
+                self.assertEqual(checked['after'], 'VERIFIED')
+                self.assertEqual(_policy_lock_verification_state(), 'INACTIVE')
+
+    def test_sticky_failure_is_reraise_without_reread_and_fresh_process_rechecks(self):
+        with tempfile.TemporaryDirectory() as base_s:
+            path = Path(base_s) / 'policy.lock.json'
+            path.write_text('{', encoding='utf-8')
+            with override_settings(TRUSTS_POLICY_LOCKFILE=str(path)):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    ensure_policy_lockfile_verified()
+                self.assertIn('JSON', str(ctx.exception))
+                self.assertEqual(_policy_lock_verification_state(), 'FAILED')
+                generated = _fresh_lock_process('generate', lock=path)
+                self._assert_fresh_start(generated)
+                self.assertIsNone(generated['error'], generated)
+                self.assertEqual(generated['after'], 'UNCHECKED')
+                self.assertIn(b'"schema_version": 1', path.read_bytes())
+                with patch(
+                    'trusts.policy_lock._read_lock_bytes',
+                    side_effect=AssertionError('reread'),
+                ), _forbid_sql():
+                    with self.assertRaises(TrustsConfigurationError) as again:
+                        ensure_policy_lockfile_verified()
+                self.assertIs(again.exception, ctx.exception)
+                self.assertEqual(_policy_lock_verification_state(), 'FAILED')
+                checked = _fresh_lock_process('verify-explicit', lock=path)
+                self._assert_fresh_start(checked)
+                self.assertIsNone(checked['error'], checked)
+                self.assertEqual(checked['after'], 'VERIFIED')
+                self.assertEqual(_policy_lock_verification_state(), 'FAILED')
