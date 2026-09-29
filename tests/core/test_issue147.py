@@ -92,7 +92,6 @@ from trusts.policy_lock import (
     _policy_lock_verification_state,
     _reset_policy_lock_verification,
 )
-from tests.myapp.models import Document
 
 
 _FINGERPRINT = __import__('re').compile(r'^sha256:[0-9a-f]{64}$')
@@ -2526,50 +2525,60 @@ class _RuntimeManager(AuthorizedManagerMixin, Manager):
         raise AssertionError('queryset built before the policy gate')
 
 
-def _runtime_view(request, **kwargs):
-    raise AssertionError('authorization_required view body ran')
+def _active_owner():
+    """Installed implementation for this process.
 
-
-_runtime_view = authorization_required(
-    Document, 'myapp.change_document',
-)(_runtime_view)
-
-
-def _installed_owner_handle():
-    """Wrapper owned by the active installed implementation.
-
-    ``live_config()`` is the kernel host when several owners are
-    installed, and the sole Zero owner on the pair. The handle is that
-    owner's configured backend, so the gate binds to the exact
-    installed owner instead of a hard-coded host path.
+    Kernel settings own ``HostTrustModelBackend``. The Zero pair owns
+    ``trusts.zero.backends.TrustModelBackend``. Neither path is hard-coded.
     """
     from tests.apps import live_config
 
-    owner = live_config()
-    handles = owner.configured_handles()
-    if not handles:
-        raise TrustsConfigurationError(
-            'active implementation owns no configured Trusts backend.'
-        )
-    return owner, handles[0]
+    return live_config()
 
 
-def _installed_backend():
-    """Disposable backend instance for the active installed owner."""
+def _active_backend():
     from django.utils.module_loading import import_string
 
-    _owner, handle = _installed_owner_handle()
-    return import_string(handle.path)()
+    owner = _active_owner()
+    handles = owner.configured_handles()
+    if not handles:
+        raise AssertionError(
+            '%s has no configured backend in this environment.'
+            % type(owner).__name__
+        )
+    return import_string(handles[0].path)()
 
 
 def _same_type_compiler(compiler):
-    """New compiler of the verified type. The wrapper object is not shared."""
-    cls = compiler if isinstance(compiler, type) else type(compiler)
-    return cls()
+    """New compiler object of the installed type. Not the same instance."""
+    if isinstance(compiler, type):
+        return compiler()
+    return type(compiler)()
+
+
+def _candidate_queryset():
+    """Authorized queryset for a model installed in both environments."""
+    return AuthorizedQuerySet(get_user_model())
+
+
+def _authorization_view():
+    """Guard whose model is installed under kernel settings and the pair."""
+    model = get_user_model()
+    permission = '%s.change_%s' % (model._meta.app_label, model._meta.model_name)
+
+    @authorization_required(model, permission)
+    def view(request, **kwargs):
+        raise AssertionError('authorization_required view body ran')
+
+    return view
 
 
 class PolicyLockRuntimeGateTest(SimpleTestCase):
-    """C4a runtime gate. Sticky, zero-SQL, and handle membership."""
+    """C4a runtime gate. Sticky, zero-SQL, and handle membership.
+
+    Uses the installed implementation so the same cases run under
+    kernel-only settings and the Zero pair. Owner membership is unchanged.
+    """
 
     def setUp(self):
         _reset_policy_lock_verification()
@@ -2577,8 +2586,13 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
     def tearDown(self):
         _reset_policy_lock_verification()
 
+    def _assert_policy_lock_blocked(self, func):
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            func()
+        self.assertIn('Policy lock', str(ctx.exception))
+
     def test_conventional_absence_is_sticky_inactive(self):
-        backend = _installed_backend()
+        backend = _active_backend()
         with tempfile.TemporaryDirectory() as base_s:
             project = Path(base_s)
             with override_settings(BASE_DIR=str(project), TRUSTS_POLICY_LOCKFILE=None):
@@ -2587,9 +2601,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                     side_effect=AssertionError('built'),
                 ):
                     ensure_policy_lockfile_verified()
-                    self.assertFalse(
-                        backend.has_perm(None, 'myapp.change_document'),
-                    )
+                    self.assertFalse(backend.has_perm(None, 'auth.change_user'))
                 self.assertEqual(_policy_lock_verification_state(), 'INACTIVE')
                 lock = project / CONVENTIONAL_LOCKFILE_NAME
                 lock.write_bytes(b'{}')
@@ -2603,7 +2615,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                 self.assertEqual(lock.read_bytes(), b'{}')
 
     def test_no_usable_base_dir_stays_inactive_after_a_file_appears(self):
-        backend = _installed_backend()
+        backend = _active_backend()
         with tempfile.TemporaryDirectory() as base_s:
             project = Path(base_s)
             lock = project / 'explicit.lock.json'
@@ -2616,7 +2628,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                     'trusts.policy_lock._read_lock_bytes',
                     side_effect=AssertionError('reread'),
                 ):
-                    self.assertFalse(backend.has_perm(None, 'myapp.change_document'))
+                    self.assertFalse(backend.has_perm(None, 'auth.change_user'))
                 self.assertEqual(_policy_lock_verification_state(), 'INACTIVE')
 
     def test_explicit_failures_stick_until_restart(self):
@@ -2717,10 +2729,11 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                 self.assertEqual(_policy_lock_verification_state(), 'VERIFIED')
 
     def test_every_result_path_is_gated_before_an_early_result(self):
-        backend = _installed_backend()
+        backend = _active_backend()
         user = get_user_model()()
         perm = Permission()
-        queryset = Document.objects.all()
+        queryset = _candidate_queryset()
+        content = get_user_model()
         stray = BackendHandle(
             path='tests.policy.runtime-stray',
             registry=TrustsRegistry(),
@@ -2728,6 +2741,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
         )
         request = RequestFactory().get('/')
         request.user = AnonymousUser()
+        view = _authorization_view()
         with tempfile.TemporaryDirectory() as base_s:
             missing = Path(base_s) / 'missing.lock.json'
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(missing)):
@@ -2735,56 +2749,66 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                     'trusts.backends.is_active_principal',
                     side_effect=AssertionError('principal'),
                 ):
-                    with self.assertRaises(TrustsConfigurationError) as ctx:
-                        backend.has_perm(user, 'myapp.change_document')
-                    self.assertIn('missing', str(ctx.exception))
-                    with self.assertRaises(TrustsConfigurationError):
-                        backend.get_all_permissions(user)
-                    with self.assertRaises(TrustsConfigurationError):
-                        backend.get_group_permissions(user)
+                    self._assert_policy_lock_blocked(
+                        lambda: backend.has_perm(user, 'auth.change_user'),
+                    )
+                    self._assert_policy_lock_blocked(
+                        lambda: backend.get_all_permissions(user),
+                    )
+                    self._assert_policy_lock_blocked(
+                        lambda: backend.get_group_permissions(user),
+                    )
                 with patch(
                     'trusts.core.granted',
                     side_effect=AssertionError('granted'),
                 ):
-                    with self.assertRaises(TrustsConfigurationError):
-                        queryset.authorized(user, perm)
-                    with self.assertRaises(TrustsConfigurationError):
-                        _RuntimeManager().authorized(user, perm)
+                    self._assert_policy_lock_blocked(
+                        lambda: queryset.authorized(user, perm),
+                    )
+                    self._assert_policy_lock_blocked(
+                        lambda: _RuntimeManager().authorized(user, perm),
+                    )
                 with patch(
                     'trusts.core._compile_granted',
                     side_effect=AssertionError('compiled'),
                 ):
-                    with self.assertRaises(TrustsConfigurationError):
-                        granted((), queryset, user, perm)
-                    with self.assertRaises(TrustsConfigurationError):
-                        all_match((), queryset, user, perm)
-                    with self.assertRaises(TrustsConfigurationError):
-                        instance_match(stray, object(), user, perm)
+                    self._assert_policy_lock_blocked(
+                        lambda: granted((), queryset, user, perm),
+                    )
+                    self._assert_policy_lock_blocked(
+                        lambda: all_match((), queryset, user, perm),
+                    )
+                    self._assert_policy_lock_blocked(
+                        lambda: instance_match(stray, object(), user, perm),
+                    )
                 with patch(
                     'trusts.core._compile_common_permissions',
                     side_effect=AssertionError('common'),
                 ):
-                    with self.assertRaises(TrustsConfigurationError):
-                        common_permissions((), queryset, user)
+                    self._assert_policy_lock_blocked(
+                        lambda: common_permissions((), queryset, user),
+                    )
                 with patch(
                     'trusts.core._require_instance',
                     side_effect=AssertionError('scopes'),
                 ):
-                    with self.assertRaises(TrustsConfigurationError):
-                        filter_authorized_scopes(
-                            queryset, user, perm, content=Document,
-                        )
-                with self.assertRaises(TrustsConfigurationError):
-                    _runtime_view(request)
+                    self._assert_policy_lock_blocked(
+                        lambda: filter_authorized_scopes(
+                            queryset, user, perm, content=content,
+                        ),
+                    )
+                self._assert_policy_lock_blocked(lambda: view(request))
                 self.assertEqual(_policy_lock_verification_state(), 'FAILED')
 
     def test_inactive_early_results_keep_previous_behavior(self):
-        backend = _installed_backend()
+        backend = _active_backend()
         user = get_user_model()()
         perm = Permission()
-        queryset = Document.objects.all()
+        queryset = _candidate_queryset()
+        content = get_user_model()
         request = RequestFactory().get('/')
         request.user = AnonymousUser()
+        view = _authorization_view()
         stray = BackendHandle(
             path='tests.policy.runtime-stray',
             registry=TrustsRegistry(),
@@ -2792,7 +2816,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
         )
         with override_settings(BASE_DIR=None, TRUSTS_POLICY_LOCKFILE=None):
             with _forbid_sql():
-                self.assertFalse(backend.has_perm(user, 'myapp.change_document'))
+                self.assertFalse(backend.has_perm(user, 'auth.change_user'))
                 self.assertEqual(backend.get_all_permissions(user), set())
                 self.assertEqual(backend.get_group_permissions(user), set())
                 with patch(
@@ -2811,7 +2835,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                     self.assertIsNone(common_permissions((), queryset, user))
                 self.assertEqual(common.call_count, 1)
                 scoped = filter_authorized_scopes(
-                    queryset, user, perm, content=Document,
+                    queryset, user, perm, content=content,
                 )
                 self.assertIn('QuerySet', type(scoped).__name__)
                 with patch(
@@ -2820,20 +2844,21 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                     authorized = queryset.authorized(user, perm)
                 self.assertIn('QuerySet', type(authorized).__name__)
                 with self.assertRaises(Http404):
-                    _runtime_view(request)
+                    view(request)
             self.assertEqual(_policy_lock_verification_state(), 'INACTIVE')
 
     def test_membership_rejects_strangers_and_accepts_a_rewrapped_handle(self):
         user = get_user_model()()
         perm = Permission()
-        queryset = Document.objects.all()
+        queryset = _candidate_queryset()
         with tempfile.TemporaryDirectory() as base_s:
             path = Path(base_s) / 'policy.lock.json'
             generate_policy_lockfile(override=str(path))
             _reset_policy_lock_verification()
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(path)):
-                owner, configured = _installed_owner_handle()
-                again = owner.configured_backend(configured.path)
+                owner = _active_owner()
+                configured = owner.configured_backend()
+                again = owner.configured_backend()
                 fresh = BackendHandle(
                     path=configured.path,
                     registry=configured.registry,
@@ -2853,7 +2878,7 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
                 other = BackendHandle(
                     path=configured.path,
                     registry=TrustsRegistry(),
-                    compiler=PlanQueryCompiler(),
+                    compiler=_same_type_compiler(configured.compiler),
                 )
                 other.registry.freeze()
                 with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -2892,7 +2917,8 @@ class PolicyLockRuntimeGateTest(SimpleTestCase):
             generate_policy_lockfile(override=str(path))
             _reset_policy_lock_verification()
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(path)):
-                owner, handle = _installed_owner_handle()
+                owner = _active_owner()
+                handle = owner.configured_backend()
                 ensure_policy_lockfile_verified(handle)
                 had_instance = '_authorization_family' in owner.__dict__
                 previous = owner._authorization_family
