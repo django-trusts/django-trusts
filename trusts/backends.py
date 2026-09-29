@@ -73,6 +73,17 @@ class TrustModelBackendMixin(object):
         config = self._trusts_config()
         return config.configured_backend(config.path_for_backend(self))
 
+    def _gate_policy_lock(self):
+        """Verify this backend's handle before any authorization result.
+
+        Runs before early denials and empty permission sets. The handle
+        is the configured wrapper for this instance, not a caller-supplied
+        object.
+        """
+        from trusts.policy_lock import ensure_policy_lockfile_verified
+
+        ensure_policy_lockfile_verified(self._own_handle())
+
     def _own_plan_applies(self, obj, user_obj):
         """True when this path's compiler applies to ``obj``.
 
@@ -101,6 +112,7 @@ class TrustModelBackendMixin(object):
         Returns a set of permission strings that this user has through his/her
         groups.
         """
+        self._gate_policy_lock()
         if obj is None or not is_active_principal(user_obj):
             return set()
 
@@ -109,6 +121,7 @@ class TrustModelBackendMixin(object):
         return set()
 
     def get_all_permissions(self, user_obj, obj=None):
+        self._gate_policy_lock()
         if obj is None or not is_active_principal(user_obj):
             return set()
 
@@ -205,6 +218,7 @@ class TrustModelBackendMixin(object):
         return matched
 
     def has_perm(self, user_obj, permext, obj=None):
+        self._gate_policy_lock()
         if obj is None or not is_active_principal(user_obj):
             return False
 

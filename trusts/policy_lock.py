@@ -13,8 +13,16 @@ and compares it (``check_policy_lockfile``). The conventional file is
 ``TRUSTS_POLICY_LOCKFILE`` or command ``--lockfile`` is enforcement
 intent. Paths are never taken from the process working directory and
 parent directories are never searched for a lockfile. Command classes
-live in ``trusts.policy_commands``. Runtime authorization gating is not
-performed here.
+live in ``trusts.policy_commands``.
+
+C4a adds :func:`ensure_policy_lockfile_verified`. That gate is one
+process-local, thread-safe state machine (``UNCHECKED``, sticky
+``INACTIVE``, sticky ``VERIFIED``, sticky ``FAILED``). It runs only
+after apps are ready, freezes registries, then uses the same canonical
+comparison as ``check_policy_lockfile``. Conventional absence and a
+missing usable ``BASE_DIR`` are ``INACTIVE`` until process restart.
+``trusts_policy_generate`` does not enter the state machine. There is
+no second enable or disable switch.
 
 The portable document never contains runtime object identity, source
 locations, or database credentials. Callers cannot select a database
@@ -31,6 +39,7 @@ import json
 import os
 import stat
 import tempfile
+import threading
 from pathlib import Path
 from types import MappingProxyType
 
@@ -1645,18 +1654,36 @@ def check_policy_lockfile(*, override=None):
     A present file is strict-read, diagnostics are dropped, and both
     sides are re-canonicalized. Equal canonical bytes return status
     ``match``. Any other difference raises :class:`PolicyLockDrift`.
-    Zero SQL. This does not authorize.
+    Zero SQL. This does not authorize and does not enter the runtime
+    verifier state machine.
     """
     location = resolve_lockfile_path(override=override)
     action = _presence_action(location, writing=False)
     if action == 'inactive':
         return PolicyLockCheck(location.path, 'inactive')
+    raw = _read_lock_bytes(location)
+    if raw is None:
+        return PolicyLockCheck(location.path, 'inactive')
+    _compare_lock_bytes(
+        location.path, raw, _frozen_configured_handles(),
+    )
+    return PolicyLockCheck(location.path, 'match')
+
+
+def _read_lock_bytes(location):
+    """Return lockfile bytes, or None if a conventional file vanished.
+
+    A directory path, permission failure, and an explicit missing file
+    fail closed. A conventional file that disappears between classify
+    and read is absence, not drift. This does not search parent
+    directories and does not issue SQL.
+    """
     if _lockfile_is_directory(location.path):
         raise TrustsConfigurationError(
             'Policy lock path is a directory: %s.' % location.path
         )
     try:
-        raw = location.path.read_bytes()
+        return location.path.read_bytes()
     except PermissionError as exc:
         raise TrustsConfigurationError(
             'Policy lock permission denied: %s.' % location.path
@@ -1666,11 +1693,24 @@ def check_policy_lockfile(*, override=None):
             raise TrustsConfigurationError(
                 'Policy lock file is missing: %s.' % location.path
             )
-        return PolicyLockCheck(location.path, 'inactive')
+        return None
+
+
+def _compare_lock_bytes(path, raw, handles):
+    """Return the live manifest when canonical bytes match.
+
+    ``path`` is only the error location. Comparison is
+    :func:`canonicalize` of the recorded bytes against
+    :func:`canonicalize` of :func:`build_policy_manifest`. Whitespace
+    and a top-level ``diagnostics`` object are not drift. Any other
+    difference raises :class:`PolicyLockDrift`. Check and runtime both
+    use this helper. Zero SQL.
+    """
     recorded = canonicalize(raw)
-    live = canonicalize(build_policy_manifest(_frozen_configured_handles()))
+    manifest = build_policy_manifest(handles)
+    live = canonicalize(manifest)
     if recorded == live:
-        return PolicyLockCheck(location.path, 'match')
+        return manifest
     diff = format_policy_diff(
         read_canonical_policy(recorded),
         read_canonical_policy(live),
@@ -1682,7 +1722,7 @@ def check_policy_lockfile(*, override=None):
             'change\n'
         )
     raise PolicyLockDrift(
-        location.path, diff, _canonical_unified_diff(recorded, live),
+        path, diff, _canonical_unified_diff(recorded, live),
     )
 
 
@@ -1883,6 +1923,245 @@ def _frozen_configured_handles():
         if callable(freeze):
             freeze()
     return handles
+
+
+_STATE_UNCHECKED = 'UNCHECKED'
+_STATE_INACTIVE = 'INACTIVE'
+_STATE_VERIFIED = 'VERIFIED'
+_STATE_FAILED = 'FAILED'
+_RENDERER_MEMBER_KEYS = (
+    'alias', 'engine', 'profile', 'profile_version', 'along',
+)
+
+_verification_lock = threading.Lock()
+_verification_state = _STATE_UNCHECKED
+_verification_failure = None
+_verification_members = {}
+
+
+class _VerifiedMember(object):
+    """Process-local membership of one verified handle.
+
+    The portable lockfile does not store this object. ``registry`` and
+    ``compiler_type`` are runtime identities used only inside this
+    process. ``renderer`` is the profile already recorded in the
+    manifest.
+    """
+
+    __slots__ = (
+        'path', 'family', 'owner', 'registry',
+        'compiler_type', 'compiler_identity', 'renderer',
+    )
+
+    def __init__(
+        self, path, family, owner, registry,
+        compiler_type, compiler_identity, renderer,
+    ):
+        self.path = path
+        self.family = family
+        self.owner = owner
+        self.registry = registry
+        self.compiler_type = compiler_type
+        self.compiler_identity = compiler_identity
+        self.renderer = renderer
+
+
+def ensure_policy_lockfile_verified(*handles):
+    """Fail closed unless this process may authorize with ``handles``.
+
+    One shared state machine, process-local and guarded by a lock:
+
+    * ``UNCHECKED`` — verification has not finished. It runs only when
+      Django apps are ready, then freezes configured registries before
+      comparing the lockfile. Apps that are not ready fail closed and
+      stay ``UNCHECKED``.
+    * ``INACTIVE`` — sticky. Conventional absence, or no explicit path
+      and no usable ``BASE_DIR``. Handles are not checked. A file
+      created later is ignored until the process restarts. Results keep
+      their previous behavior.
+    * ``VERIFIED`` — sticky. Canonical bytes matched. Every handle must
+      be a member of that snapshot: exact configured path, the same
+      owner and family, the same frozen registry object, compiler
+      type identity, and the verified renderer profile. A newly built
+      wrapper is accepted when those components match. Wrapper object
+      identity is neither required nor recorded in the lockfile.
+    * ``FAILED`` — sticky. An explicit missing file, a malformed
+      document, semantic drift, and the other closed path failures
+      raise and stick. Later calls raise the same failure and do not
+      re-read the file.
+
+    ``trusts_policy_generate`` and system checks do not call this.
+    There is no enable or disable setting. Zero SQL.
+    """
+    with _verification_lock:
+        if _verification_state == _STATE_UNCHECKED:
+            _verify_policy_lock_unlocked()
+        _require_verified_handles_unlocked(handles)
+
+
+def _policy_lock_verification_state():
+    """Return the process verification state. Tests and diagnostics."""
+    with _verification_lock:
+        return _verification_state
+
+
+def _reset_policy_lock_verification():
+    """Return the state machine to ``UNCHECKED``.
+
+    Not an enable or disable mode. Tests use it so one process can
+    exercise more than one sticky outcome. Production code does not
+    call it; leaving ``INACTIVE``, ``VERIFIED``, or ``FAILED`` requires
+    a process restart.
+    """
+    with _verification_lock:
+        _stick_verification(_STATE_UNCHECKED)
+
+
+def _stick_verification(state, failure=None, members=None):
+    global _verification_state, _verification_failure, _verification_members
+    _verification_state = state
+    _verification_failure = failure
+    _verification_members = {} if members is None else members
+
+
+def _verify_policy_lock_unlocked():
+    """Transition out of ``UNCHECKED``. Caller holds the lock."""
+    from django.apps import apps as django_apps
+
+    if not django_apps.ready:
+        raise TrustsConfigurationError(
+            'Policy lock verification cannot run before Django apps '
+            'are ready.'
+        )
+    if _configured_lock_override() is None and _usable_base_dir() is None:
+        _stick_verification(_STATE_INACTIVE)
+        return
+    try:
+        location = resolve_lockfile_path()
+        action = _presence_action(location, writing=False)
+        if action == 'inactive':
+            _stick_verification(_STATE_INACTIVE)
+            return
+        raw = _read_lock_bytes(location)
+        if raw is None:
+            _stick_verification(_STATE_INACTIVE)
+            return
+        handles = _frozen_configured_handles()
+        manifest = _compare_lock_bytes(location.path, raw, handles)
+        _stick_verification(
+            _STATE_VERIFIED,
+            members=_capture_verified_members(handles, manifest),
+        )
+    except TrustsConfigurationError as exc:
+        _stick_verification(_STATE_FAILED, failure=exc)
+        raise
+
+
+def _capture_verified_members(handles, manifest):
+    """Bind portable manifest rows to the frozen registries just compared.
+
+    Registry object identity stays in this process. It is not written
+    into ``manifest``.
+    """
+    from trusts.apps import implementation_for_path
+
+    rows = {
+        row['path']: row
+        for row in manifest_to_json_data(manifest)['handles']
+    }
+    members = {}
+    for handle in handles:
+        path = handle.path
+        row = rows[path]
+        members[path] = _VerifiedMember(
+            path=path,
+            family=row['family'],
+            owner=implementation_for_path(path),
+            registry=handle.registry,
+            compiler_type=_compiler_type(handle.compiler),
+            compiler_identity=row['compiler'],
+            renderer=_renderer_member_key(row['renderer']),
+        )
+    return members
+
+
+def _compiler_type(compiler):
+    if isinstance(compiler, type):
+        return compiler
+    return type(compiler)
+
+
+def _renderer_member_key(renderer):
+    return tuple(renderer[key] for key in _RENDERER_MEMBER_KEYS)
+
+
+def _require_verified_handles_unlocked(handles):
+    if _verification_state == _STATE_INACTIVE:
+        return
+    if _verification_state == _STATE_FAILED:
+        raise _verification_failure
+    if _verification_state != _STATE_VERIFIED:
+        raise TrustsConfigurationError(
+            'Policy lock verification did not reach a terminal state.'
+        )
+    if not handles:
+        return
+    renderer = _renderer_member_key(_resolve_default_renderer())
+    for handle in handles:
+        _require_one_verified_handle(handle, renderer)
+
+
+def _require_one_verified_handle(handle, renderer):
+    path = getattr(handle, 'path', None)
+    member = _verification_members.get(path)
+    if member is None:
+        raise TrustsConfigurationError(
+            'Policy lock rejected an unconfigured handle %r. It is not '
+            'part of the verified snapshot.' % (path,)
+        )
+    registry = getattr(handle, 'registry', None)
+    if registry is not member.registry:
+        raise TrustsConfigurationError(
+            'Policy lock rejected handle %r: registry is not the frozen '
+            'registry in the verified snapshot.' % (path,)
+        )
+    from trusts.apps import implementation_for_path
+
+    try:
+        owner = implementation_for_path(path)
+    except TrustsConfigurationError as exc:
+        raise TrustsConfigurationError(
+            'Policy lock rejected handle %r: owner cannot be bound.'
+            % (path,)
+        ) from exc
+    family = getattr(owner, '_authorization_family', None)
+    if owner is not member.owner or family != member.family:
+        raise TrustsConfigurationError(
+            'Policy lock rejected handle %r: owner/family %r does not '
+            'match the verified snapshot family %r.'
+            % (path, family, member.family)
+        )
+    compiler = getattr(handle, 'compiler', None)
+    compiler_type = _compiler_type(compiler)
+    if compiler_type is not member.compiler_type:
+        raise TrustsConfigurationError(
+            'Policy lock rejected handle %r: compiler type %s does not '
+            'match the verified snapshot compiler %s.'
+            % (path, compiler_type, member.compiler_type)
+        )
+    identity = _compiler_identity(compiler, path)
+    if identity != member.compiler_identity:
+        raise TrustsConfigurationError(
+            'Policy lock rejected handle %r: compiler %r does not match '
+            'the verified snapshot compiler %r.'
+            % (path, identity, member.compiler_identity)
+        )
+    if renderer != member.renderer:
+        raise TrustsConfigurationError(
+            'Policy lock rejected handle %r: renderer profile %r does '
+            'not match the verified snapshot profile %r.'
+            % (path, renderer, member.renderer)
+        )
 
 
 def _atomic_write(path, payload):
@@ -2218,6 +2497,7 @@ __all__ = (
     'build_policy_manifest',
     'canonicalize',
     'check_policy_lockfile',
+    'ensure_policy_lockfile_verified',
     'fingerprint_registration',
     'format_policy_diff',
     'generate_policy_lockfile',
