@@ -32,13 +32,16 @@ class AuthorizedQuerySet(QuerySet):
     this; they do not belong on this class. There is no ``.permitted`` and
     no ``.get_permission``. Core ``.authorized`` includes
     relationship-family handles only; it is not Django's object-level
-    backend OR.
+    backend OR. The policy lock is verified before a queryset or
+    ``.none()`` is returned.
     """
 
     def authorized(self, user, permission, extra_q=None):
         from trusts.apps import _relationship_implementation_handles
         from trusts.core import TrustsConfigurationError, granted
+        from trusts.policy_lock import ensure_policy_lockfile_verified
 
+        ensure_policy_lockfile_verified(*_relationship_implementation_handles())
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
@@ -55,9 +58,17 @@ class AuthorizedQuerySet(QuerySet):
 
 
 class AuthorizedManagerMixin:
-    """Add ``authorized()`` without replacing an application's manager."""
+    """Add ``authorized()`` without replacing an application's manager.
+
+    ``authorized()`` verifies the policy lock before delegating to
+    :meth:`AuthorizedQuerySet.authorized`.
+    """
 
     def authorized(self, user, permission, extra_q=None):
+        from trusts.apps import _relationship_implementation_handles
+        from trusts.policy_lock import ensure_policy_lockfile_verified
+
+        ensure_policy_lockfile_verified(*_relationship_implementation_handles())
         return AuthorizedQuerySet.authorized(
             self.get_queryset(), user, permission, extra_q=extra_q,
         )
