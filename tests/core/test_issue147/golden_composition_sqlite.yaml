@@ -1,19 +1,36 @@
 schema_version: 1
-lockfile: false
-role: "composition-evidence"
-first_drop:
-  - "trust.authorized"
-  - "named_filter"
-rules:
-  - "A reference is valid only when the fragment SQL, aliases included, occurs in the expanded statement and that fragment's parameters occupy the same contiguous span."
-  - "Expansion replaces each placeholder with the fragment SQL and splices the fragment parameters at that position. Parameters that sit outside the fragment stay in template order."
-  - "Outer aliases or a different permission bind that change the fragment text require the full statement. There is no token whose expansion is guessed."
-  - "The lockfile named-filter row is the full SELECT. Filter-to-grant composition references only that statement's WHERE predicate."
-  - "Instance has_perm is a candidate primary-key predicate plus grant EXISTS, not IN (<< .authorized() subquery >>). .authorized() is a content SELECT."
 database:
   engine: "django.db.backends.sqlite3"
 backends:
   - path: "documents.backends.DocumentBackend"
+    trusts:
+      - id: "documents.DocumentPermission:document"
+        root: "documents.DocumentPermission"
+        user:
+          path: "user"
+          model: "auth.User"
+          target: "id"
+        permission:
+          path: "permission"
+          model: "auth.Permission"
+          target: "id"
+        content:
+          path: "document"
+          model: "documents.Document"
+          target: "id"
+        sql: |-
+          SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
+        params:
+          - const: 1
+          - bind: "permission.id"
+          - bind: "user.id"
+    named_filters:
+      - model: "documents.Document"
+        code: "non_confidential"
+        sql: |-
+          SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE ("documents_document"."confidential" IS NULL OR NOT ("documents_document"."confidential" = %s))
+        params:
+          - const: true
     fragments:
       - id: "grant:documents.DocumentPermission:document"
         kind: "grant_exists"
@@ -32,31 +49,8 @@ backends:
         params:
           - const: true
     operations:
-      - id: "authorized:documents.DocumentPermission:document"
-        kind: "trust.authorized"
-        enters_lockfile: true
-        representation: "full_sql"
-        reason: "Lockfile row. Full content SELECT for this trust."
-        expanded:
-          sql: |-
-            SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
-          params:
-            - const: 1
-            - bind: "permission.id"
-            - bind: "user.id"
-      - id: "named_filter:documents.Document:non_confidential"
-        kind: "named_filter"
-        enters_lockfile: true
-        representation: "full_sql"
-        reason: "Lockfile row. Standalone named-filter SELECT, not combined with a grant."
-        expanded:
-          sql: |-
-            SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE ("documents_document"."confidential" IS NULL OR NOT ("documents_document"."confidential" = %s))
-          params:
-            - const: true
-      - id: "has_perm_permission_instance"
+      - id: "has_perm_permission_instance:documents.Document"
         kind: "has_perm_permission_instance"
-        enters_lockfile: false
         representation: "structured"
         reason: "Candidate primary-key predicate plus grant EXISTS. Reuses the grant fragment only when that text matches. This is not the .authorized() SELECT and not IN (authorized subquery). Parameter order is the exists() probe, the candidate primary-key sentinel, then the fragment parameters."
         structured:
@@ -74,11 +68,10 @@ backends:
             - const: 1
             - bind: "permission.id"
             - bind: "user.id"
-      - id: "has_perm_permission_code"
+      - id: "has_perm_permission_code:documents.Document"
         kind: "has_perm_permission_code"
-        enters_lockfile: false
         representation: "full_sql"
-        reason: "Permission-code has_perm binds permission through a codename subquery. Full SQL when that changes the grant text or aliases."
+        reason: "Permission-code has_perm binds permission through a codename subquery. The codename, app label, and model constants are the inspection probe change_<model>, not a declared permission. Full SQL when that bind changes the grant text or aliases."
         expanded:
           sql: |-
             SELECT %s AS "a" FROM "documents_document" WHERE ("documents_document"."id" = %s AND EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "V0" WHERE ("V0"."permission_id" = (SELECT "U0"."id" AS "pk" FROM "auth_permission" "U0" INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id") WHERE ("U0"."codename" = %s AND "U1"."app_label" = %s AND "U1"."model" = %s) ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC LIMIT 1) AND "V0"."user_id" = %s AND "V0"."document_id" = ("documents_document"."id")) LIMIT 1)) LIMIT 1
@@ -95,9 +88,8 @@ backends:
         expanded_exists:
           - sql: |-
               SELECT %s AS "a" FROM "documents_documentpermission" "V0" WHERE ("V0"."permission_id" = (SELECT "U0"."id" AS "pk" FROM "auth_permission" "U0" INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id") WHERE ("U0"."codename" = %s AND "U1"."app_label" = %s AND "U1"."model" = %s) ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC LIMIT 1) AND "V0"."user_id" = %s AND "V0"."document_id" = ("documents_document"."id")) LIMIT 1
-      - id: "authorized_and_named_filter:non_confidential"
+      - id: "authorized_and_named_filter:documents.Document:non_confidential"
         kind: "authorized_and_named_filter"
-        enters_lockfile: false
         representation: "structured"
         reason: "Runtime AND of the grant EXISTS with the named-filter predicate. The named-filter SELECT stays a separate lockfile row."
         structured:
@@ -116,9 +108,8 @@ backends:
             - bind: "permission.id"
             - bind: "user.id"
             - const: true
-      - id: "queryset_has_perm"
+      - id: "queryset_has_perm:documents.Document"
         kind: "queryset_has_perm"
-        enters_lockfile: false
         representation: "structured"
         reason: "all_match COUNT/FILTER statement. The grant EXISTS is nested under NOT. The outer aggregate is not the .authorized() SELECT."
         structured:
@@ -135,6 +126,50 @@ backends:
             - bind: "permission.id"
             - bind: "user.id"
   - path: "documents.backends.OrBackend"
+    trusts:
+      - id: "documents.DocumentPermission:document"
+        root: "documents.DocumentPermission"
+        user:
+          path: "user"
+          model: "auth.User"
+          target: "id"
+        permission:
+          path: "permission"
+          model: "auth.Permission"
+          target: "id"
+        content:
+          path: "document"
+          model: "documents.Document"
+          target: "id"
+        or_group: "documents.Document"
+        sql: |-
+          SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
+        params:
+          - const: 1
+          - bind: "permission.id"
+          - bind: "user.id"
+      - id: "documents.TeamDocumentPermission:document"
+        root: "documents.TeamDocumentPermission"
+        user:
+          path: "team__members"
+          model: "auth.User"
+          target: "id"
+        permission:
+          path: "permission"
+          model: "auth.Permission"
+          target: "id"
+        content:
+          path: "document"
+          model: "documents.Document"
+          target: "id"
+        or_group: "documents.Document"
+        sql: |-
+          SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_teamdocumentpermission" "U0" INNER JOIN "documents_team" "U2" ON ("U0"."team_id" = "U2"."id") INNER JOIN "documents_team_members" "U3" ON ("U2"."id" = "U3"."team_id") WHERE ("U0"."permission_id" = %s AND "U3"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
+        params:
+          - const: 1
+          - bind: "permission.id"
+          - bind: "user.id"
+    named_filters: []
     fragments:
       - id: "grant:documents.DocumentPermission:document"
         kind: "grant_exists"
@@ -155,33 +190,8 @@ backends:
           - bind: "permission.id"
           - bind: "user.id"
     operations:
-      - id: "authorized:documents.DocumentPermission:document"
-        kind: "trust.authorized"
-        enters_lockfile: true
-        representation: "full_sql"
-        reason: "Lockfile row. Full content SELECT for this trust."
-        expanded:
-          sql: |-
-            SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
-          params:
-            - const: 1
-            - bind: "permission.id"
-            - bind: "user.id"
-      - id: "authorized:documents.TeamDocumentPermission:document"
-        kind: "trust.authorized"
-        enters_lockfile: true
-        representation: "full_sql"
-        reason: "Lockfile row. Full content SELECT for this trust."
-        expanded:
-          sql: |-
-            SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_teamdocumentpermission" "U0" INNER JOIN "documents_team" "U2" ON ("U0"."team_id" = "U2"."id") INNER JOIN "documents_team_members" "U3" ON ("U2"."id" = "U3"."team_id") WHERE ("U0"."permission_id" = %s AND "U3"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
-          params:
-            - const: 1
-            - bind: "permission.id"
-            - bind: "user.id"
-      - id: "has_perm_permission_instance"
+      - id: "has_perm_permission_instance:documents.Document"
         kind: "has_perm_permission_instance"
-        enters_lockfile: false
         representation: "structured"
         reason: "Candidate primary-key predicate plus grant EXISTS. Reuses the grant fragment only when that text matches. This is not the .authorized() SELECT and not IN (authorized subquery). Parameter order is the exists() probe, the candidate primary-key sentinel, then the fragment parameters."
         structured:
@@ -204,11 +214,10 @@ backends:
             - const: 1
             - bind: "permission.id"
             - bind: "user.id"
-      - id: "has_perm_permission_code"
+      - id: "has_perm_permission_code:documents.Document"
         kind: "has_perm_permission_code"
-        enters_lockfile: false
         representation: "full_sql"
-        reason: "Permission-code has_perm binds permission through a codename subquery. Full SQL when that changes the grant text or aliases."
+        reason: "Permission-code has_perm binds permission through a codename subquery. The codename, app label, and model constants are the inspection probe change_<model>, not a declared permission. Full SQL when that bind changes the grant text or aliases."
         expanded:
           sql: |-
             SELECT %s AS "a" FROM "documents_document" WHERE ("documents_document"."id" = %s AND (EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "V0" WHERE ("V0"."permission_id" = (SELECT "U0"."id" AS "pk" FROM "auth_permission" "U0" INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id") WHERE ("U0"."codename" = %s AND "U1"."app_label" = %s AND "U1"."model" = %s) ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC LIMIT 1) AND "V0"."user_id" = %s AND "V0"."document_id" = ("documents_document"."id")) LIMIT 1) OR EXISTS(SELECT %s AS "a" FROM "documents_teamdocumentpermission" "V0" INNER JOIN "documents_team" "V2" ON ("V0"."team_id" = "V2"."id") INNER JOIN "documents_team_members" "V3" ON ("V2"."id" = "V3"."team_id") WHERE ("V0"."permission_id" = (SELECT "U0"."id" AS "pk" FROM "auth_permission" "U0" INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id") WHERE ("U0"."codename" = %s AND "U1"."app_label" = %s AND "U1"."model" = %s) ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC LIMIT 1) AND "V3"."user_id" = %s AND "V0"."document_id" = ("documents_document"."id")) LIMIT 1))) LIMIT 1
@@ -233,9 +242,8 @@ backends:
               SELECT %s AS "a" FROM "documents_documentpermission" "V0" WHERE ("V0"."permission_id" = (SELECT "U0"."id" AS "pk" FROM "auth_permission" "U0" INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id") WHERE ("U0"."codename" = %s AND "U1"."app_label" = %s AND "U1"."model" = %s) ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC LIMIT 1) AND "V0"."user_id" = %s AND "V0"."document_id" = ("documents_document"."id")) LIMIT 1
           - sql: |-
               SELECT %s AS "a" FROM "documents_teamdocumentpermission" "V0" INNER JOIN "documents_team" "V2" ON ("V0"."team_id" = "V2"."id") INNER JOIN "documents_team_members" "V3" ON ("V2"."id" = "V3"."team_id") WHERE ("V0"."permission_id" = (SELECT "U0"."id" AS "pk" FROM "auth_permission" "U0" INNER JOIN "django_content_type" "U1" ON ("U0"."content_type_id" = "U1"."id") WHERE ("U0"."codename" = %s AND "U1"."app_label" = %s AND "U1"."model" = %s) ORDER BY "U1"."app_label" ASC, "U1"."model" ASC, "U0"."codename" ASC LIMIT 1) AND "V3"."user_id" = %s AND "V0"."document_id" = ("documents_document"."id")) LIMIT 1
-      - id: "or_group_authorized"
+      - id: "or_group_authorized:documents.Document"
         kind: "or_group_authorized"
-        enters_lockfile: false
         representation: "structured"
         reason: "Runtime OR of per-trust grant EXISTS bodies. The lockfile keeps each trust statement separate and records or_group instead of this combined statement."
         structured:
@@ -256,9 +264,8 @@ backends:
             - const: 1
             - bind: "permission.id"
             - bind: "user.id"
-      - id: "queryset_has_perm"
+      - id: "queryset_has_perm:documents.Document"
         kind: "queryset_has_perm"
-        enters_lockfile: false
         representation: "structured"
         reason: "all_match COUNT/FILTER statement. The grant EXISTS is nested under NOT. The outer aggregate is not the .authorized() SELECT."
         structured:

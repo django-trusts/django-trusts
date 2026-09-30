@@ -3,8 +3,12 @@
 ``trusts_policy_sql`` renders schema version 1 as canonical YAML: one
 ``.authorized()`` statement per registered trust, standalone
 named-filter SQL, and ``or_group`` when two trusts on a backend share a
-content model. The alias is not stored. ``trusts.E009`` compares those
-bytes to the committed file. It is the only lockfile enforcement.
+content model. The same document records composed operations. A
+reference is emitted only when the fragment SQL and its parameters are
+an exact contiguous span of the compiler output. Otherwise the
+operation stores that output in full. The alias is not stored.
+``trusts.E009`` compares those bytes to the committed file. It is the
+only lockfile enforcement.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from django.db.models.lookups import Lookup
 from trusts.core import (
     RelationPlan,
     TrustsConfigurationError,
+    _compile_granted,
 )
 from trusts.policy_yaml import (
     PolicyYamlError,
@@ -156,8 +161,10 @@ def render_policy_sql_bytes(*, alias=None, handles=None):
     ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call only.
     ``handles`` defaults to the configured implementation handles.
     Compilation uses ``as_sql()`` / ``sql_with_params()`` and does not
-    execute the exported statements. A failure raises before a partial
-    document is returned.
+    execute the exported statements. Composed operations are checked
+    before the bytes are returned: a structured reference that does not
+    expand to the compiler SQL and parameter order raises, and no
+    partial document is returned.
     """
     resolved = resolve_policy_database(alias)
     if handles is None:
@@ -275,6 +282,7 @@ def _project_backend(handle, alias):
         label for label in content_labels if content_labels.count(label) > 1
     }
     trusts = []
+    grants = []
     for record, trust_id, content_label in zip(records, ids, content_labels):
         sql, params = _compile_authorized(record, alias)
         row = {
@@ -289,10 +297,30 @@ def _project_backend(handle, alias):
         row['sql'] = sql
         row['params'] = params
         trusts.append(row)
+        grants.append({
+            'id': trust_id,
+            'record': record,
+            'content_model': record.content_model,
+            'content_label': content_label,
+            'sql': sql,
+            'params': params,
+        })
+    filters = _named_filter_details(registry, alias)
+    fragments, operations = _compose_backend(handle, alias, grants, filters)
     return {
         'path': path,
         'trusts': trusts,
-        'named_filters': _project_named_filters(registry, alias),
+        'named_filters': [
+            {
+                'model': row['model'],
+                'code': row['code'],
+                'sql': row['sql'],
+                'params': row['params'],
+            }
+            for row in filters
+        ],
+        'fragments': fragments,
+        'operations': operations,
     }
 
 
@@ -334,7 +362,7 @@ def _base_id(record):
     return label
 
 
-def _project_named_filters(registry, alias):
+def _named_filter_details(registry, alias):
     rows = []
     iterator = getattr(registry, 'iter_permission_conditions', None)
     if not callable(iterator):
@@ -350,11 +378,639 @@ def _project_named_filters(registry, alias):
         sql, params = _compile_named_filter(model, expr, alias)
         rows.append({
             'model': model_label,
+            'model_cls': model,
             'code': code,
+            'expr': expr,
             'sql': sql,
             'params': params,
         })
     return rows
+
+
+_GRANT_DENOTES = (
+    'EXISTS body of this trust\'s .authorized() statement, including '
+    'aliases and parameter order.'
+)
+_PREDICATE_DENOTES = (
+    'WHERE predicate of the named-filter SELECT. Not that SELECT and '
+    'not a grant.'
+)
+_REASON_INSTANCE = (
+    'Candidate primary-key predicate plus grant EXISTS. Reuses the '
+    'grant fragment only when that text matches. This is not the '
+    '.authorized() SELECT and not IN (authorized subquery). '
+    'Parameter order is the exists() probe, the candidate '
+    'primary-key sentinel, then the fragment parameters.'
+)
+_REASON_CODE = (
+    'Permission-code has_perm binds permission through a codename '
+    'subquery. The codename, app label, and model constants are the '
+    'inspection probe change_<model>, not a declared permission. '
+    'Full SQL when that bind changes the grant text or aliases.'
+)
+_REASON_AND = (
+    'Runtime AND of the grant EXISTS with the named-filter predicate. '
+    'The named-filter SELECT stays a separate lockfile row.'
+)
+_REASON_OR = (
+    'Runtime OR of per-trust grant EXISTS bodies. The lockfile keeps '
+    'each trust statement separate and records or_group instead of '
+    'this combined statement.'
+)
+_REASON_QUERYSET = (
+    'all_match COUNT/FILTER statement. The grant EXISTS is nested '
+    'under NOT. The outer aggregate is not the .authorized() SELECT.'
+)
+
+
+def _compose_backend(handle, alias, grants, filters):
+    """Return ``(fragments, operations)`` for one backend.
+
+    Fragments are leaves: grant EXISTS bodies in trust order, then
+    named-filter WHERE predicates in ``add_named_filter`` order. An
+    operation template may name those fragments. It is stored only when
+    each fragment's SQL occurs exactly once, in order, and that
+    fragment's parameters occupy the same contiguous span. Expansion
+    replaces each ``{{fragment-id}}`` with that SQL and splices the
+    fragment parameters at that position. Parameters outside every
+    fragment stay in compiler order. A cycle, a missing reference, or a
+    duplicate fragment id fails the render. Alias correlation that
+    changes the fragment text stores the compiler statement in full.
+    """
+    fragments = []
+    seen = set()
+    for grant in grants:
+        body = _grant_fragment_span(grant['sql'], grant['params'])
+        if body is None:
+            continue
+        sql, params = body
+        _add_fragment(fragments, seen, {
+            'id': 'grant:%s' % grant['id'],
+            'kind': 'grant_exists',
+            'denotes': _GRANT_DENOTES,
+            'sql': sql,
+            'params': params,
+        })
+    for row in filters:
+        predicate = _predicate_span(row['sql'], row['params'])
+        if predicate is None:
+            continue
+        sql, params = predicate
+        _add_fragment(fragments, seen, {
+            'id': 'predicate:%s:%s' % (row['model'], row['code']),
+            'kind': 'named_filter_predicate',
+            'denotes': _PREDICATE_DENOTES,
+            'sql': sql,
+            'params': params,
+        })
+    by_id = {row['id']: row for row in fragments}
+    operations = []
+    operation_ids = set()
+    for group in _content_groups(grants):
+        _append_group_operations(
+            operations, operation_ids, by_id, group, filters, handle, alias,
+        )
+    _verify_composed_operations(fragments, operations)
+    return fragments, operations
+
+
+def _content_groups(grants):
+    groups = []
+    index = {}
+    for grant in grants:
+        label = grant['content_label']
+        slot = index.get(label)
+        if slot is None:
+            index[label] = len(groups)
+            groups.append({
+                'label': label,
+                'model': grant['content_model'],
+                'grants': [],
+            })
+            slot = index[label]
+        groups[slot]['grants'].append(grant)
+    return groups
+
+
+def _add_fragment(fragments, seen, row):
+    fragment_id = row['id']
+    if not isinstance(fragment_id, str) or fragment_id == '':
+        raise TrustsConfigurationError(
+            'Composition fragment id must be a non-empty string.'
+        )
+    if any(char in fragment_id for char in '{}%\r\n'):
+        raise TrustsConfigurationError(
+            'Composition fragment id %r collides with reference syntax.'
+            % (fragment_id,)
+        )
+    if fragment_id in seen:
+        raise TrustsConfigurationError(
+            'Duplicate composition fragment %s.' % fragment_id
+        )
+    if '{{' in row['sql']:
+        raise TrustsConfigurationError(
+            'Composition cycle: fragment %s contains a reference token. '
+            'Fragments are leaves.' % fragment_id
+        )
+    seen.add(fragment_id)
+    fragments.append(row)
+
+
+def _append_group_operations(
+    operations, operation_ids, by_id, group, filters, handle, alias,
+):
+    records = [grant['record'] for grant in group['grants']]
+    _require_one_terminal(records, group['label'])
+    record = records[0]
+    content_model = group['model']
+    user = _sentinel(record.user_model, record.user_target, alias=alias)
+    permission = _sentinel(
+        record.permission_model, record.permission_target, alias=alias,
+    )
+    pieces = _group_pieces(by_id, group['grants'])
+    granted = _compile_granted(
+        (handle,), _content_sentinel(content_model, alias), user,
+        permission, kind='complete',
+    )
+    if granted is None:
+        raise TrustsConfigurationError(
+            'Policy SQL render found no grant for %s.' % group['label']
+        )
+    instance = _content_sentinel(content_model, alias)
+    exists_sql, exists_params = _compile_exists(
+        content_model._default_manager.using(alias).filter(
+            pk=instance.pk,
+        ).filter(granted),
+        alias, record, None, records,
+    )
+    _append_factored(
+        operations, operation_ids,
+        'has_perm_permission_instance:%s' % group['label'],
+        'has_perm_permission_instance',
+        _REASON_INSTANCE,
+        exists_sql, exists_params, pieces,
+    )
+    from trusts.backends import _permission_binding
+
+    binding = _permission_binding(
+        _permission_probe(content_model), content_model,
+    )
+    granted_code = _compile_granted(
+        (handle,), instance, user, binding, kind='complete',
+    )
+    if granted_code is None:
+        raise TrustsConfigurationError(
+            'Policy SQL render found no permission-code grant for %s.'
+            % group['label']
+        )
+    code_sql, code_params = _compile_exists(
+        content_model._default_manager.using(alias).filter(
+            pk=instance.pk,
+        ).filter(granted_code),
+        alias, record, None, records,
+    )
+    _append_factored(
+        operations, operation_ids,
+        'has_perm_permission_code:%s' % group['label'],
+        'has_perm_permission_code',
+        _REASON_CODE,
+        code_sql, code_params, pieces,
+    )
+    for row in filters:
+        if row['model_cls'] is not content_model:
+            continue
+        from trusts.conditions._ir import compile_expression_q
+
+        compiled = compile_expression_q(
+            row['expr'], content_model, user, permission,
+        )
+        combined = content_model._default_manager.using(alias).filter(
+            granted & compiled,
+        ).distinct()
+        sql, params = _compile_queryset(
+            combined, alias, record=record, expr=row['expr'],
+            records=tuple(records),
+        )
+        and_pieces = list(pieces)
+        predicate_id = 'predicate:%s:%s' % (row['model'], row['code'])
+        predicate = by_id.get(predicate_id)
+        if predicate is not None:
+            and_pieces.append(predicate)
+        elif pieces:
+            # A grant reference without the predicate would describe a
+            # different composition than the one compiled. Store full SQL.
+            and_pieces = []
+        _append_factored(
+            operations, operation_ids,
+            'authorized_and_named_filter:%s:%s' % (
+                row['model'], row['code'],
+            ),
+            'authorized_and_named_filter',
+            _REASON_AND,
+            sql, params, and_pieces,
+        )
+    if len(records) > 1:
+        listed = content_model._default_manager.using(alias).all()
+        granted_all = _compile_granted(
+            (handle,), listed, user, permission, kind='complete',
+        )
+        if granted_all is None:
+            raise TrustsConfigurationError(
+                'Policy SQL render found no OR grant for %s.'
+                % group['label']
+            )
+        sql, params = _compile_queryset(
+            listed.filter(granted_all).distinct(), alias, record=record,
+            expr=None, records=tuple(records),
+        )
+        _append_factored(
+            operations, operation_ids,
+            'or_group_authorized:%s' % group['label'],
+            'or_group_authorized',
+            _REASON_OR,
+            sql, params, pieces,
+        )
+    listed = content_model._default_manager.using(alias).all()
+    granted_rows = _compile_granted(
+        (handle,), listed, user, permission, kind='complete',
+    )
+    if granted_rows is None:
+        raise TrustsConfigurationError(
+            'Policy SQL render found no queryset grant for %s.'
+            % group['label']
+        )
+    query = _capture_aggregate_query(listed, granted_rows, alias)
+    sql, params = _compile_queryset(
+        _ComposedQuery(query), alias, record=record, expr=None,
+        records=tuple(records),
+    )
+    _append_factored(
+        operations, operation_ids,
+        'queryset_has_perm:%s' % group['label'],
+        'queryset_has_perm',
+        _REASON_QUERYSET,
+        sql, params, pieces,
+    )
+
+
+def _require_one_terminal(records, label):
+    user_models = {
+        record.user_model._meta.concrete_model for record in records
+    }
+    permission_models = {
+        record.permission_model._meta.concrete_model for record in records
+    }
+    if len(user_models) != 1 or len(permission_models) != 1:
+        raise TrustsConfigurationError(
+            'Composed policy SQL for %s requires one user model and one '
+            'permission model.' % label
+        )
+
+
+def _group_pieces(by_id, grants):
+    pieces = []
+    for grant in grants:
+        row = by_id.get('grant:%s' % grant['id'])
+        if row is None:
+            return []
+        pieces.append(row)
+    return pieces
+
+
+def _append_factored(
+    operations, operation_ids, operation_id, kind, reason, sql, params,
+    pieces,
+):
+    if operation_id in operation_ids:
+        raise TrustsConfigurationError(
+            'Duplicate composition operation %s.' % operation_id
+        )
+    operation_ids.add(operation_id)
+    template, refs = _template_for(sql, params, pieces)
+    if template is None:
+        operation = _full_operation(
+            operation_id, kind, reason, sql, params,
+        )
+        bodies = _exists_bodies(sql)
+        if bodies and pieces:
+            operation['locked_fragments'] = [piece['id'] for piece in pieces]
+            operation['expanded_exists'] = [{'sql': body} for body in bodies]
+        operations.append(operation)
+        return
+    operations.append({
+        'id': operation_id,
+        'kind': kind,
+        'representation': 'structured',
+        'reason': reason,
+        'structured': {
+            'sql': template,
+            'refs': refs,
+        },
+        'expanded': {
+            'sql': sql,
+            'params': params,
+        },
+    })
+
+
+def _full_operation(operation_id, kind, reason, sql, params):
+    return {
+        'id': operation_id,
+        'kind': kind,
+        'representation': 'full_sql',
+        'reason': reason,
+        'expanded': {
+            'sql': sql,
+            'params': params,
+        },
+    }
+
+
+def _template_for(sql, params, pieces):
+    """Return ``(template, refs)`` when every piece is an exact span."""
+    if not pieces:
+        return None, None
+    if '{{' in sql:
+        return None, None
+    remaining_sql = sql
+    remaining_params = list(params)
+    parts = []
+    refs = []
+    for piece in pieces:
+        frag_sql = piece['sql']
+        index = remaining_sql.find(frag_sql)
+        if index < 0:
+            return None, None
+        before = remaining_sql[:index]
+        count = before.count('%s')
+        remaining_params = remaining_params[count:]
+        width = len(piece['params'])
+        if remaining_params[:width] != piece['params']:
+            return None, None
+        remaining_params = remaining_params[width:]
+        placeholder = '{{%s}}' % piece['id']
+        if (
+            '%s' in placeholder
+            or placeholder in frag_sql
+            or placeholder in sql
+        ):
+            raise TrustsConfigurationError(
+                'Composition placeholder %s is not safe.' % placeholder
+            )
+        parts.append(before)
+        parts.append(placeholder)
+        refs.append({
+            'placeholder': placeholder,
+            'fragment': piece['id'],
+        })
+        remaining_sql = remaining_sql[index + len(frag_sql):]
+    if remaining_sql.count('%s') != len(remaining_params):
+        return None, None
+    parts.append(remaining_sql)
+    return ''.join(parts), refs
+
+
+def _verify_composed_operations(fragments, operations):
+    """Fail unless every structured operation expands to its compiler SQL.
+
+    Fragment parameters must occupy one contiguous span of the expanded
+    parameter list, in reference order. Parameters outside those spans
+    stay in the compiler's order. A missing reference or a second use
+    of the same placeholder fails the render.
+    """
+    by_id = {}
+    for row in fragments:
+        if row['id'] in by_id:
+            raise TrustsConfigurationError(
+                'Duplicate composition fragment %s.' % row['id']
+            )
+        if '{{' in row['sql']:
+            raise TrustsConfigurationError(
+                'Composition cycle: fragment %s contains a reference '
+                'token. Fragments are leaves.' % row['id']
+            )
+        by_id[row['id']] = row
+    seen_ops = set()
+    for operation in operations:
+        if operation['id'] in seen_ops:
+            raise TrustsConfigurationError(
+                'Duplicate composition operation %s.' % operation['id']
+            )
+        seen_ops.add(operation['id'])
+        structured = operation.get('structured')
+        if structured is None:
+            continue
+        expanded = operation['expanded']
+        sql = _substitute(structured['sql'], structured['refs'], by_id)
+        if sql != expanded['sql']:
+            raise TrustsConfigurationError(
+                'Composition template for %s does not expand to the '
+                'compiled statement.' % operation['id']
+            )
+        _assert_param_span(
+            expanded['sql'], expanded['params'], structured['refs'], by_id,
+        )
+
+
+def _assert_param_span(sql, params, refs, fragments):
+    remaining_sql = sql
+    remaining = list(params)
+    built = []
+    for ref in refs:
+        frag = fragments.get(ref['fragment'])
+        if frag is None:
+            raise TrustsConfigurationError(
+                'Missing composition reference %s.' % ref['fragment']
+            )
+        index = remaining_sql.find(frag['sql'])
+        if index < 0:
+            raise TrustsConfigurationError(
+                'Expanded SQL lost fragment %s.' % ref['fragment']
+            )
+        before = remaining_sql[:index]
+        count = before.count('%s')
+        built.extend(remaining[:count])
+        remaining = remaining[count:]
+        width = len(frag['params'])
+        if remaining[:width] != frag['params']:
+            raise TrustsConfigurationError(
+                'Fragment %s parameters are not a contiguous span.'
+                % ref['fragment']
+            )
+        built.extend(remaining[:width])
+        remaining = remaining[width:]
+        remaining_sql = remaining_sql[index + len(frag['sql']):]
+    count = remaining_sql.count('%s')
+    built.extend(remaining[:count])
+    remaining = remaining[count:]
+    if remaining or built != list(params):
+        raise TrustsConfigurationError(
+            'Composition parameter expansion does not match compiler order.'
+        )
+
+
+def _substitute(template, refs, fragments):
+    sql = template
+    for ref in refs:
+        placeholder = ref['placeholder']
+        expected = '{{%s}}' % ref['fragment']
+        if placeholder != expected:
+            raise TrustsConfigurationError(
+                'Composition placeholder %s does not name %s.'
+                % (placeholder, ref['fragment'])
+            )
+        frag = fragments.get(ref['fragment'])
+        if frag is None:
+            raise TrustsConfigurationError(
+                'Missing composition reference %s.' % ref['fragment']
+            )
+        frag_sql = frag['sql']
+        if '{{' in frag_sql:
+            raise TrustsConfigurationError(
+                'Composition cycle: fragment %s contains a reference '
+                'token. Fragments are leaves.' % ref['fragment']
+            )
+        if sql.count(placeholder) != 1:
+            raise TrustsConfigurationError(
+                'Placeholder %s must occur once.' % placeholder
+            )
+        sql = sql.replace(placeholder, frag_sql, 1)
+    if '{{' in sql:
+        raise TrustsConfigurationError(
+            'Composition template left an unresolved reference.'
+        )
+    return sql
+
+
+def _grant_fragment_span(sql, params):
+    bodies = _exists_bodies(sql)
+    if len(bodies) != 1:
+        return None
+    body = bodies[0]
+    if body == '' or sql.count(body) != 1 or '{{' in body:
+        return None
+    index = sql.find(body)
+    before = sql[:index].count('%s')
+    width = body.count('%s')
+    if sql.count('%s') != len(params) or before + width > len(params):
+        return None
+    return body, list(params[before:before + width])
+
+
+def _predicate_span(sql, params):
+    marker = ' WHERE '
+    where = sql.find(marker)
+    if where < 0:
+        return None
+    predicate = sql[where + len(marker):]
+    if predicate == '' or sql.count(predicate) != 1 or '{{' in predicate:
+        return None
+    before = sql[:where + len(marker)].count('%s')
+    width = predicate.count('%s')
+    if before + width != len(params) or sql.count('%s') != len(params):
+        return None
+    return predicate, list(params[before:before + width])
+
+
+def _compile_exists(queryset, alias, record, expr, records):
+    exists_query = queryset.query.exists(limit=True)
+    return _compile_queryset(
+        _ComposedQuery(exists_query), alias, record=record, expr=expr,
+        records=tuple(records),
+    )
+
+
+def _capture_aggregate_query(queryset, granted_q, alias):
+    """Return the ``all_match`` aggregate query without executing it.
+
+    ``QuerySet.aggregate`` compiles through ``Query.get_aggregation``
+    and then asks that compiler to execute. A capturing compiler is
+    installed on this thread's connection for that call and the
+    connection is restored before anything else compiles. The Django
+    compiler class is not modified.
+    """
+    from django.db import connections
+    from django.db.models import Count
+
+    real = connections[alias]
+    captured = {}
+
+    class _CapturingOps(object):
+        def compiler(self, compiler_name):
+            base = real.ops.compiler(compiler_name)
+
+            class _CapturingCompiler(base):
+                def execute_sql(self, *args, **kwargs):
+                    del args, kwargs
+                    captured['query'] = self.query.clone()
+                    return (0, 1)
+
+            _CapturingCompiler.__name__ = 'Capturing%s' % base.__name__
+            return _CapturingCompiler
+
+        def __getattr__(self, name):
+            return getattr(real.ops, name)
+
+    class _CapturingConnection(object):
+        def __init__(self):
+            self.ops = _CapturingOps()
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    connections[alias] = _CapturingConnection()
+    try:
+        queryset.aggregate(
+            total=Count('pk', distinct=True),
+            lacking=Count('pk', distinct=True, filter=~granted_q),
+        )
+    finally:
+        connections[alias] = real
+    if 'query' not in captured:
+        raise TrustsConfigurationError(
+            'Policy SQL render did not capture queryset has_perm SQL.'
+        )
+    return captured['query']
+
+
+def _exists_bodies(sql):
+    bodies = []
+    needle = 'EXISTS('
+    start = 0
+    while True:
+        found = sql.find(needle, start)
+        if found < 0:
+            return bodies
+        index = found + len(needle)
+        depth = 1
+        while index < len(sql) and depth:
+            char = sql[index]
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            index += 1
+        if depth:
+            raise TrustsConfigurationError(
+                'Policy SQL render found an unclosed EXISTS.'
+            )
+        bodies.append(sql[found + len(needle):index - 1])
+        start = index
+
+
+def _content_sentinel(model, alias):
+    pk = model._meta.pk
+    return _sentinel(model, pk.attname, alias=alias)
+
+
+def _permission_probe(model):
+    meta = model._meta
+    return '%s.change_%s' % (meta.app_label, meta.model_name)
+
+
+class _ComposedQuery(object):
+    def __init__(self, query):
+        self.query = query
 
 
 def _compile_authorized(record, alias):
@@ -519,10 +1175,11 @@ def _fallback_sentinel(field, alias):
     )
 
 
-def _compile_queryset(queryset, alias, *, record, expr):
+def _compile_queryset(queryset, alias, *, record, expr, records=None):
     from django.db import connections
 
     _ctx.record = record
+    _ctx.records = tuple(records) if records else None
     _ctx.filter_queues = None if expr is None else _filter_queues(expr)
     token = _export_scope.set(object())
     try:
@@ -533,6 +1190,7 @@ def _compile_queryset(queryset, alias, *, record, expr):
     finally:
         _export_scope.reset(token)
         _ctx.record = None
+        _ctx.records = None
         _ctx.filter_queues = None
     if not isinstance(sql, str):
         raise TrustsConfigurationError(
@@ -750,25 +1408,55 @@ def _classify_compiled(node, sql, params):
 def _symbol_for_new_param(node):
     if isinstance(node, Value):
         return {'const': _json_const(node.value)}
+    if not isinstance(node, Lookup):
+        return None
+    queued = _queued_filter_symbol(node)
+    if queued is not None:
+        return queued
     record = getattr(_ctx, 'record', None)
-    if record is not None and isinstance(node, Lookup):
+    if record is not None:
         bind = _bind_name(node, record)
         if bind is not None:
             return {'bind': bind}
-    queues = getattr(_ctx, 'filter_queues', None)
-    if queues and isinstance(node, Lookup):
-        path = _lookup_field_name(node)
-        pending = queues.get(path) if path else None
-        if pending:
-            return pending.pop(0)
-    if isinstance(node, Lookup):
-        rhs = getattr(node, 'rhs', None)
-        if rhs is not None and not hasattr(rhs, 'as_sql'):
-            return {'const': _json_const(rhs)}
+    rhs = getattr(node, 'rhs', None)
+    if rhs is not None and not hasattr(rhs, 'as_sql'):
+        return {'const': _json_const(rhs)}
     return None
 
 
+def _queued_filter_symbol(node):
+    queues = getattr(_ctx, 'filter_queues', None)
+    if not queues:
+        return None
+    path = _lookup_field_name(node)
+    pending = queues.get(path) if path else None
+    if not pending:
+        return None
+    return pending.pop(0)
+
+
 def _bind_name(node, record):
+    grouped = getattr(_ctx, 'records', None)
+    if grouped:
+        names = []
+        for item in grouped:
+            name = _bind_name_one(node, item)
+            if name is not None and name not in names:
+                names.append(name)
+        if len(names) > 1:
+            raise TrustsConfigurationError(
+                'Policy SQL render found conflicting binds %s for one '
+                'lookup.' % (names,)
+            )
+        if len(names) == 1:
+            return names[0]
+        return None
+    if record is None:
+        return None
+    return _bind_name_one(node, record)
+
+
+def _bind_name_one(node, record):
     target = getattr(getattr(node, 'lhs', None), 'target', None)
     if target is None:
         return None

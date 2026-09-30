@@ -48,15 +48,12 @@ GOLDEN_CONSTANTS = (
 )
 
 _FORBIDDEN = (
-    'change_document',
     'fingerprint',
     'sha256',
     '\nexpr:',
     '\nhandles:',
-    '\nkind:',
     '\nfamily:',
     '\ncompiler:',
-    'codename',
 )
 
 
@@ -328,8 +325,17 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('documents_documentpermission', named['sql'])
         self.assertNotIn('confidential" IS NULL', trust['sql'])
         self.assertNotIn('confidential" = %s', trust['sql'])
+        self.assertNotIn('codename', trust['sql'])
+        self.assertNotIn('change_document', trust['sql'])
         for token in _FORBIDDEN:
             self.assertNotIn(token, text)
+        code = next(
+            row for row in document['backends'][0]['operations']
+            if row['kind'] == 'has_perm_permission_code'
+        )
+        self.assertEqual(code['representation'], 'full_sql')
+        self.assertIn('codename', code['expanded']['sql'])
+        self.assertIn({'const': 'change_document'}, code['expanded']['params'])
 
     def test_register_and_named_filter_order_changes_bytes(self):
         def render(trusts, filters):
@@ -427,6 +433,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
         ])
         self.assertEqual(document['backends'][1]['trusts'], [])
         self.assertEqual(document['backends'][1]['named_filters'], [])
+        self.assertEqual(document['backends'][1]['fragments'], [])
+        self.assertEqual(document['backends'][1]['operations'], [])
 
     def test_unsupported_family_fails_closed(self):
         with patch(

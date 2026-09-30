@@ -115,3 +115,129 @@ backends:
           SELECT "documents_constantdocument"."id", "documents_constantdocument"."amount", "documents_constantdocument"."payload", "documents_constantdocument"."price", "documents_constantdocument"."token", "documents_constantdocument"."day", "documents_constantdocument"."clock", "documents_constantdocument"."stamp", "documents_constantdocument"."span", "documents_constantdocument"."label", "documents_constantdocument"."owner_id" FROM "documents_constantdocument" WHERE "documents_constantdocument"."label" = %s
         params:
           - const: "alpha"
+    fragments:
+      - id: "predicate:documents.ConstantDocument:amount"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."amount" = %s
+        params:
+          - const: 1.5
+      - id: "predicate:documents.ConstantDocument:negzero"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."amount" = %s
+        params:
+          - const: -0.0
+      - id: "predicate:documents.ConstantDocument:nan"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."amount" = %s
+        params:
+          - const:
+              type: "float"
+              value: "NaN"
+      - id: "predicate:documents.ConstantDocument:infinity"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."amount" = %s
+        params:
+          - const:
+              type: "float"
+              value: "Infinity"
+      - id: "predicate:documents.ConstantDocument:negative_infinity"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."amount" = %s
+        params:
+          - const:
+              type: "float"
+              value: "-Infinity"
+      - id: "predicate:documents.ConstantDocument:payload"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."payload" = %s
+        params:
+          - const:
+              type: "bytes"
+              hex: "00ff"
+      - id: "predicate:documents.ConstantDocument:price"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."price" = %s
+        params:
+          - const:
+              type: "decimal"
+              value: "12.50"
+      - id: "predicate:documents.ConstantDocument:token"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."token" = %s
+        params:
+          - const:
+              type: "uuid"
+              value: "12345678-1234-5678-1234-567812345678"
+      - id: "predicate:documents.ConstantDocument:day"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."day" = %s
+        params:
+          - const:
+              type: "date"
+              value: "2024-03-04"
+      - id: "predicate:documents.ConstantDocument:clock"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."clock" = %s
+        params:
+          - const:
+              type: "time"
+              value: "05:06:07"
+      - id: "predicate:documents.ConstantDocument:stamp"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."stamp" = %s
+        params:
+          - const:
+              type: "datetime"
+              value: "2024-03-04T05:06:07+00:00"
+      - id: "predicate:documents.ConstantDocument:span"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."span" = %s
+        params:
+          - const:
+              type: "timedelta"
+              days: 1
+              seconds: 2
+              microseconds: 3
+      - id: "predicate:documents.ConstantDocument:owner"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."owner_id" = %s
+        params:
+          - const:
+              type: "model"
+              app_label: "auth"
+              model: "user"
+              pk: 7
+      - id: "predicate:documents.ConstantDocument:label"
+        kind: "named_filter_predicate"
+        denotes: "WHERE predicate of the named-filter SELECT. Not that SELECT and not a grant."
+        sql: |-
+          "documents_constantdocument"."label" = %s
+        params:
+          - const: "alpha"
+    operations: []
