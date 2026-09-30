@@ -1,18 +1,25 @@
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 
+import datetime
 import json
+import math
 import tempfile
+import threading
+import uuid
+from decimal import Decimal
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Permission, User
 from django.core import checks as django_checks
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection, models
-from django.test import SimpleTestCase, override_settings
+from django.db.models.sql.compiler import SQLCompiler
+from django.test import SimpleTestCase, TestCase, override_settings
 
+from trusts.conditions._ir import ModelIdentity
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
@@ -21,11 +28,21 @@ from trusts.core import (
 )
 from trusts.policy_lock import (
     CHECK_ID_POLICY_LOCK,
+    _Symbol,
+    _classify_compiled,
+    _const_from_json,
+    _json_const,
+    _sentinel,
     render_policy_sql_bytes,
 )
 
 GOLDEN_SQLITE = (
     Path(__file__).with_name('golden_document_sqlite.json').read_bytes()
+)
+GOLDEN_CONSTANTS = (
+    Path(__file__).with_name(
+        'golden_condition_constants_sqlite.json',
+    ).read_bytes()
 )
 
 _FORBIDDEN = (
@@ -104,6 +121,56 @@ class Folder(models.Model):
         app_label = 'documents'
 
 
+class PolicyActor(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
+
+    class Meta:
+        app_label = 'documents'
+
+
+class PolicyActorGrant(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    user = models.ForeignKey(PolicyActor, on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'documents'
+
+
+class PolicyAccount(models.Model):
+    code = models.CharField(max_length=16, unique=True)
+
+    class Meta:
+        app_label = 'documents'
+
+
+class PolicyAccountGrant(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    user = models.ForeignKey(
+        PolicyAccount, to_field='code', on_delete=models.CASCADE,
+    )
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'documents'
+
+
+class ConstantDocument(models.Model):
+    amount = models.FloatField(default=0)
+    payload = models.BinaryField(null=True)
+    price = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    token = models.UUIDField(null=True)
+    day = models.DateField(null=True)
+    clock = models.TimeField(null=True)
+    stamp = models.DateTimeField(null=True)
+    span = models.DurationField(null=True)
+    label = models.CharField(max_length=40, default='')
+    owner = models.ForeignKey(User, null=True, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'documents'
+
+
 class FolderGrant(models.Model):
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
     user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
@@ -137,6 +204,93 @@ def _document_handle(path='documents.backends.DocumentBackend'):
         content='document',
     )
     handle.add_named_filter(Document, 'non_confidential', _non_confidential)
+    return handle
+
+
+def _constant_family_handle():
+    """One named filter for each IR constant family the export must record."""
+    handle = _handle('documents.backends.ConstantBackend')
+
+    def amount(user, permission, obj):
+        del user, permission
+        return obj.amount == 1.5
+
+    def negzero(user, permission, obj):
+        del user, permission
+        return obj.amount == -0.0
+
+    def nan(user, permission, obj):
+        del user, permission
+        return obj.amount == float('nan')
+
+    def infinity(user, permission, obj):
+        del user, permission
+        return obj.amount == float('inf')
+
+    def negative_infinity(user, permission, obj):
+        del user, permission
+        return obj.amount == float('-inf')
+
+    def payload(user, permission, obj):
+        del user, permission
+        return obj.payload == b'\x00\xff'
+
+    def price(user, permission, obj):
+        del user, permission
+        return obj.price == Decimal('12.50')
+
+    def token(user, permission, obj):
+        del user, permission
+        return obj.token == uuid.UUID('12345678-1234-5678-1234-567812345678')
+
+    def day(user, permission, obj):
+        del user, permission
+        return obj.day == datetime.date(2024, 3, 4)
+
+    def clock(user, permission, obj):
+        del user, permission
+        return obj.clock == datetime.time(5, 6, 7)
+
+    def stamp(user, permission, obj):
+        del user, permission
+        return obj.stamp == datetime.datetime(
+            2024, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc,
+        )
+
+    def span(user, permission, obj):
+        del user, permission
+        return obj.span == datetime.timedelta(
+            days=1, seconds=2, microseconds=3,
+        )
+
+    def owner(user, permission, obj):
+        del user, permission
+        saved = User(pk=7)
+        saved._state.adding = False
+        return obj.owner == saved
+
+    def label(user, permission, obj):
+        del user, permission
+        return obj.label == 'alpha'
+
+    filters = (
+        ('amount', amount),
+        ('negzero', negzero),
+        ('nan', nan),
+        ('infinity', infinity),
+        ('negative_infinity', negative_infinity),
+        ('payload', payload),
+        ('price', price),
+        ('token', token),
+        ('day', day),
+        ('clock', clock),
+        ('stamp', stamp),
+        ('span', span),
+        ('owner', owner),
+        ('label', label),
+    )
+    for code, builder in filters:
+        handle.add_named_filter(ConstantDocument, code, builder)
     return handle
 
 
@@ -431,21 +585,39 @@ class PolicySqlCheckTest(SimpleTestCase):
         self.assertEqual(incompatible[0].id, CHECK_ID_POLICY_LOCK)
         self.assertIn('bytes differ', incompatible[0].msg)
 
-    def test_bad_policy_database_is_e009_without_a_lockfile(self):
-        with override_settings(
-            TRUSTS_POLICY_DATABASE='',
-            TRUSTS_POLICY_LOCKFILE=None,
-        ):
-            blank = _e009()
-        self.assertEqual(len(blank), 1)
-        self.assertIn('TRUSTS_POLICY_DATABASE', blank[0].msg)
-        with override_settings(
-            TRUSTS_POLICY_DATABASE='missing-alias',
-            TRUSTS_POLICY_LOCKFILE=None,
-        ):
-            unknown = _e009()
-        self.assertEqual(len(unknown), 1)
-        self.assertIn('missing-alias', unknown[0].msg)
+    def test_conventional_absence_is_quiet_before_database_resolution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with override_settings(
+                BASE_DIR=tmp,
+                TRUSTS_POLICY_LOCKFILE=None,
+                TRUSTS_POLICY_DATABASE='',
+            ):
+                self.assertEqual(_e009(), [])
+            with override_settings(
+                BASE_DIR=tmp,
+                TRUSTS_POLICY_LOCKFILE=None,
+                TRUSTS_POLICY_DATABASE='missing-alias',
+            ):
+                self.assertEqual(_e009(), [])
+            target = Path(tmp) / 'trusts-policy.lock.json'
+            target.write_bytes(b'{}\n')
+            with override_settings(
+                BASE_DIR=tmp,
+                TRUSTS_POLICY_LOCKFILE=None,
+                TRUSTS_POLICY_DATABASE='missing-alias',
+            ):
+                present = _e009()
+        self.assertEqual(len(present), 1)
+        self.assertIn('missing-alias', present[0].msg)
+        with tempfile.TemporaryDirectory() as tmp:
+            explicit = Path(tmp) / 'trusts-policy.lock.json'
+            with override_settings(
+                TRUSTS_POLICY_LOCKFILE=str(explicit),
+                TRUSTS_POLICY_DATABASE='missing-alias',
+            ):
+                errors = _e009()
+        self.assertEqual(len(errors), 1)
+        self.assertIn('missing-alias', errors[0].msg)
 
     def test_relative_explicit_path_is_e009(self):
         with override_settings(
@@ -455,3 +627,173 @@ class PolicySqlCheckTest(SimpleTestCase):
             errors = _e009()
         self.assertEqual(len(errors), 1)
         self.assertIn('absolute', errors[0].msg)
+
+
+class PolicySqlSentinelTest(SimpleTestCase):
+    def test_uuid_pk_and_non_integer_target_export(self):
+        actor = _sentinel(PolicyActor, 'id', alias='default')
+        self.assertIsInstance(actor.pk, uuid.UUID)
+        self.assertEqual(actor.pk, uuid.UUID(int=1))
+
+        account = _sentinel(PolicyAccount, 'code', alias='default')
+        self.assertIsInstance(account.pk, int)
+        self.assertIsInstance(account.code, str)
+        self.assertEqual(account.code, '1')
+
+        actor_handle = _handle('documents.backends.ActorBackend')
+        actor_handle.register(
+            trust=PolicyActorGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        actor_doc = json.loads(render_policy_sql_bytes(handles=[actor_handle]))
+        actor_trust = actor_doc['backends'][0]['trusts'][0]
+        self.assertEqual(actor_trust['user']['target'], 'id')
+        self.assertEqual(actor_trust['params'], [
+            {'const': 1},
+            {'bind': 'permission.id'},
+            {'bind': 'user.id'},
+        ])
+
+        account_handle = _handle('documents.backends.AccountBackend')
+        account_handle.register(
+            trust=PolicyAccountGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        account_doc = json.loads(
+            render_policy_sql_bytes(handles=[account_handle]),
+        )
+        account_trust = account_doc['backends'][0]['trusts'][0]
+        self.assertEqual(account_trust['user'], {
+            'path': 'user',
+            'model': 'documents.PolicyAccount',
+            'target': 'code',
+        })
+        self.assertEqual(account_trust['params'], [
+            {'const': 1},
+            {'bind': 'permission.id'},
+            {'bind': 'user.code'},
+        ])
+
+
+class PolicySqlConstantTest(SimpleTestCase):
+    def test_supported_constant_families_match_golden_and_round_trip(self):
+        payload = render_policy_sql_bytes(handles=[_constant_family_handle()])
+        self.assertEqual(payload, GOLDEN_CONSTANTS)
+        document = json.loads(payload.decode('utf-8'))
+        by_code = {
+            row['code']: row['params']
+            for row in document['backends'][0]['named_filters']
+        }
+
+        def restored(code):
+            return _const_from_json(by_code[code][0]['const'])
+
+        self.assertEqual(restored('amount'), 1.5)
+        self.assertEqual(restored('negzero'), 0.0)
+        self.assertTrue(math.copysign(1.0, restored('negzero')) < 0)
+        self.assertTrue(math.isnan(restored('nan')))
+        self.assertEqual(restored('infinity'), float('inf'))
+        self.assertEqual(restored('negative_infinity'), float('-inf'))
+        self.assertEqual(restored('payload'), b'\x00\xff')
+        self.assertEqual(restored('price'), Decimal('12.50'))
+        self.assertEqual(
+            restored('token'),
+            uuid.UUID('12345678-1234-5678-1234-567812345678'),
+        )
+        self.assertEqual(restored('day'), datetime.date(2024, 3, 4))
+        self.assertEqual(restored('clock'), datetime.time(5, 6, 7))
+        self.assertEqual(restored('stamp'), datetime.datetime(
+            2024, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc,
+        ))
+        self.assertEqual(restored('span'), datetime.timedelta(
+            days=1, seconds=2, microseconds=3,
+        ))
+        self.assertEqual(
+            restored('owner'),
+            ModelIdentity('auth', 'user', 7),
+        )
+        self.assertEqual(restored('label'), 'alpha')
+
+    def test_nonfinite_decimal_constants_round_trip(self):
+        for text in ('NaN', 'Infinity', '-Infinity'):
+            encoded = _json_const(Decimal(text))
+            self.assertEqual(encoded['type'], 'decimal')
+            self.assertEqual(encoded['value'], text)
+            restored = _const_from_json(encoded)
+            if text == 'NaN':
+                self.assertTrue(restored.is_nan())
+            else:
+                self.assertEqual(restored, Decimal(text))
+
+
+class PolicySqlConcurrencyTest(TestCase):
+    def test_normal_query_is_unchanged_while_export_compile_is_paused(self):
+        original_compile = SQLCompiler.compile
+        User.objects.create(username='export-neighbor')
+        queryset = User.objects.filter(username='export-neighbor')
+        control_sql, control_params = queryset.query.get_compiler(
+            using='default',
+        ).as_sql()
+        control_rows = list(queryset.values_list('username', flat=True))
+        expected = render_policy_sql_bytes(handles=[_document_handle()])
+
+        entered = threading.Event()
+        release = threading.Event()
+        outcome = []
+        export_ident = []
+
+        def classifying(node, sql, params):
+            if (
+                threading.get_ident() == export_ident[0]
+                and not classifying.paused
+            ):
+                classifying.paused = True
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError(
+                        'export compilation was not released'
+                    )
+            return _classify_compiled(node, sql, params)
+
+        classifying.paused = False
+
+        def run_export():
+            export_ident.append(threading.get_ident())
+            try:
+                with patch(
+                    'trusts.policy_lock._classify_compiled', classifying,
+                ):
+                    outcome.append(render_policy_sql_bytes(
+                        handles=[_document_handle()],
+                    ))
+            except Exception as exc:
+                outcome.append(exc)
+
+        worker = threading.Thread(target=run_export)
+        worker.start()
+        self.assertTrue(
+            entered.wait(5),
+            'export compilation did not pause: %r' % (outcome,),
+        )
+        try:
+            self.assertIs(SQLCompiler.compile, original_compile)
+            live_sql, live_params = queryset.query.get_compiler(
+                using='default',
+            ).as_sql()
+            live_rows = list(queryset.values_list('username', flat=True))
+            self.assertEqual(live_sql, control_sql)
+            self.assertEqual(list(live_params), list(control_params))
+            self.assertEqual(live_rows, ['export-neighbor'])
+            self.assertEqual(live_rows, control_rows)
+            for param in live_params:
+                self.assertNotIsInstance(param, _Symbol)
+        finally:
+            release.set()
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(outcome, [expected])
+        self.assertIs(SQLCompiler.compile, original_compile)

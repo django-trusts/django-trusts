@@ -9,18 +9,22 @@ committed file. It is the only lockfile enforcement.
 
 from __future__ import annotations
 
+import contextvars
+import datetime
 import errno
 import json
+import math
 import os
 import stat
 import tempfile
 import threading
+import uuid
+from decimal import Decimal
 from pathlib import Path
 
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
-from django.db.models.sql.compiler import SQLCompiler
 
 from trusts.core import (
     RelationPlan,
@@ -31,10 +35,37 @@ SCHEMA_VERSION = 1
 CHECK_ID_POLICY_LOCK = 'trusts.E009'
 CONVENTIONAL_LOCKFILE_NAME = 'trusts-policy.lock.json'
 
-_SENTINEL_PK = 1
-_compile_lock = threading.Lock()
-_compile_depth = 0
-_orig_compile = None
+_INTEGER_SENTINEL_TYPES = frozenset((
+    'AutoField',
+    'BigAutoField',
+    'SmallAutoField',
+    'IntegerField',
+    'BigIntegerField',
+    'SmallIntegerField',
+    'PositiveIntegerField',
+    'PositiveBigIntegerField',
+    'PositiveSmallIntegerField',
+))
+_TEXT_SENTINEL_TYPES = frozenset((
+    'CharField',
+    'TextField',
+    'SlugField',
+    'EmailField',
+    'URLField',
+    'FileField',
+    'FilePathField',
+    'GenericIPAddressField',
+))
+
+# Set only while this task is compiling an export. Classification runs
+# on compilers built for that connection proxy, and only when this
+# context var is set, so another thread's SQLCompiler.compile is the
+# Django method.
+_export_scope = contextvars.ContextVar(
+    'trusts_policy_sql_export', default=None,
+)
+_classifying_classes = {}
+_classifying_class_lock = threading.Lock()
 _ctx = threading.local()
 
 
@@ -323,8 +354,10 @@ def _project_named_filters(registry, alias):
 
 
 def _compile_authorized(record, alias):
-    user = _sentinel(record.user_model, record.user_target)
-    permission = _sentinel(record.permission_model, record.permission_target)
+    user = _sentinel(record.user_model, record.user_target, alias=alias)
+    permission = _sentinel(
+        record.permission_model, record.permission_target, alias=alias,
+    )
     plan = RelationPlan(
         records=(record,),
         permission_model=record.permission_model,
@@ -341,41 +374,160 @@ def _compile_named_filter(model, expr, alias):
     from trusts.conditions._ir import compile_expression_q
 
     compiled = compile_expression_q(
-        expr, model, _any_sentinel_user(), _any_sentinel_permission(),
+        expr, model,
+        _any_sentinel_user(alias),
+        _any_sentinel_permission(alias),
     )
     queryset = model._default_manager.filter(compiled)
     return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
-def _any_sentinel_user():
+def _any_sentinel_user(alias):
     from django.contrib.auth import get_user_model
 
-    return _sentinel(get_user_model(), get_user_model()._meta.pk.attname)
+    user_model = get_user_model()
+    return _sentinel(user_model, user_model._meta.pk.attname, alias=alias)
 
 
-def _any_sentinel_permission():
+def _any_sentinel_permission(alias):
     from django.contrib.auth.models import Permission
 
-    return _sentinel(Permission, Permission._meta.pk.attname)
+    return _sentinel(Permission, Permission._meta.pk.attname, alias=alias)
 
 
-def _sentinel(model, target_attname):
+def _sentinel(model, target_attname, *, alias):
+    """Unsaved instance whose PK and target field preparation succeeds.
+
+    The value is deterministic for a concrete field and is never written.
+    Django rejects related lookups whose primary key is unset, so the PK
+    is populated even when the comparison target is a different column.
+    """
     instance = model()
-    pk_attname = model._meta.pk.attname
-    setattr(instance, pk_attname, _SENTINEL_PK)
-    if target_attname and target_attname != pk_attname:
-        setattr(instance, target_attname, _SENTINEL_PK)
+    pk_field = model._meta.pk
+    setattr(instance, pk_field.attname, _sentinel_value(pk_field, alias))
+    if target_attname and target_attname != pk_field.attname:
+        target = _concrete_target_field(model, target_attname)
+        setattr(instance, target.attname, _sentinel_value(target, alias))
     return instance
 
 
+def _concrete_target_field(model, attname):
+    field = model._meta.get_field(attname)
+    concrete = getattr(field, 'attname', None)
+    if concrete == attname and not getattr(field, 'is_relation', False):
+        return field
+    for candidate in model._meta.concrete_fields:
+        if candidate.attname == attname:
+            return candidate
+    return field
+
+
+def _sentinel_value(field, alias):
+    """Deterministic Python value ``field`` preparation accepts."""
+    internal = field.get_internal_type()
+    if internal in _INTEGER_SENTINEL_TYPES:
+        return 1
+    if internal == 'BooleanField':
+        return True
+    if internal == 'UUIDField':
+        return uuid.UUID(int=1)
+    if internal in _TEXT_SENTINEL_TYPES:
+        return _text_sentinel(field)
+    if internal == 'DecimalField':
+        return Decimal('1')
+    if internal == 'FloatField':
+        return 1.0
+    if internal == 'BinaryField':
+        return b'\x01'
+    if internal == 'DateField':
+        return datetime.date(2000, 1, 1)
+    if internal == 'DateTimeField':
+        return _datetime_sentinel()
+    if internal == 'TimeField':
+        return datetime.time(0, 0)
+    if internal == 'DurationField':
+        return datetime.timedelta(seconds=1)
+    if internal == 'JSONField':
+        return {'sentinel': 1}
+    return _fallback_sentinel(field, alias)
+
+
+def _text_sentinel(field):
+    internal = field.get_internal_type()
+    if internal == 'EmailField':
+        value = 's@e.test'
+    elif internal == 'URLField':
+        value = 'https://e.test/'
+    elif internal == 'GenericIPAddressField':
+        value = '127.0.0.1'
+    else:
+        value = '1'
+    max_length = getattr(field, 'max_length', None)
+    if (
+        isinstance(max_length, int)
+        and max_length >= 0
+        and len(value) > max_length
+    ):
+        if max_length == 0:
+            return ''
+        return '1'[:max_length]
+    return value
+
+
+def _datetime_sentinel():
+    from django.conf import settings
+
+    if getattr(settings, 'USE_TZ', False):
+        return datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+    return datetime.datetime(2000, 1, 1)
+
+
+def _fallback_sentinel(field, alias):
+    from django.db import connections
+
+    connection = connections[alias]
+    candidates = (
+        1,
+        '1',
+        True,
+        1.0,
+        Decimal('1'),
+        b'\x01',
+        uuid.UUID(int=1),
+        datetime.date(2000, 1, 1),
+        _datetime_sentinel(),
+        datetime.time(0, 0),
+        datetime.timedelta(seconds=1),
+    )
+    for candidate in candidates:
+        try:
+            field.get_db_prep_value(
+                field.get_prep_value(candidate), connection, prepared=True,
+            )
+        except Exception:
+            continue
+        return candidate
+    model = getattr(field, 'model', None)
+    label = model._meta.label if model is not None else '?'
+    raise TrustsConfigurationError(
+        'Policy SQL render could not build an unsaved sentinel for %s.%s '
+        '(%s).' % (label, field.attname, field.get_internal_type())
+    )
+
+
 def _compile_queryset(queryset, alias, *, record, expr):
+    from django.db import connections
+
     _ctx.record = record
     _ctx.filter_queues = None if expr is None else _filter_queues(expr)
+    token = _export_scope.set(object())
     try:
-        with _patched_compiler():
-            compiler = queryset.query.get_compiler(using=alias)
-            sql, params = compiler.as_sql()
+        compiler = queryset.query.get_compiler(
+            connection=_ExportConnection(connections[alias]),
+        )
+        sql, params = compiler.as_sql()
     finally:
+        _export_scope.reset(token)
         _ctx.record = None
         _ctx.filter_queues = None
     if not isinstance(sql, str):
@@ -391,8 +543,10 @@ def check_policy_sql_lockfile(app_configs, **kwargs):
 
     Untagged, so plain ``manage.py check`` runs it and tag-selected
     runs that omit untagged checks do not. A missing conventional file
-    reports nothing. An explicit missing or unreadable file, a bad
-    ``TRUSTS_POLICY_DATABASE``, and a byte mismatch report
+    reports nothing, even when ``TRUSTS_POLICY_DATABASE`` is invalid:
+    the check does not apply until that file is present or an explicit
+    path is configured. When the check applies, a bad database alias,
+    an explicit missing or unreadable file, and a byte mismatch report
     ``trusts.E009``. This is not a request-time authorization gate.
     """
     del app_configs, kwargs
@@ -415,17 +569,23 @@ def check_policy_sql_lockfile(app_configs, **kwargs):
 
 
 def _lockfile_check_message():
-    """Return an E009 message, or None when the check does not apply."""
-    try:
-        resolve_policy_database(None)
-    except TrustsConfigurationError as exc:
-        return str(exc)
+    """Return an E009 message, or None when the check does not apply.
+
+    Conventional absence is decided before the database alias is
+    resolved. An invalid ``TRUSTS_POLICY_DATABASE`` is reported only
+    when a conventional file is present or an explicit path is
+    configured.
+    """
     try:
         location = resolve_lockfile_path()
     except TrustsConfigurationError as exc:
         if _configured_lock_override() is None:
             return None
+        resolve_policy_database(None)
         return str(exc)
+    if not _lockfile_enforcement_applies(location):
+        return None
+    resolve_policy_database(None)
     action = _presence_action(location, writing=False)
     if action == 'inactive':
         return None
@@ -436,6 +596,19 @@ def _lockfile_check_message():
     if raw == live:
         return None
     return 'Policy lock bytes differ: %s.' % location.path
+
+
+def _lockfile_enforcement_applies(location):
+    """True when this location is in the lockfile check's scope.
+
+    An explicit path always applies. A conventional path applies only
+    when the file is present (or cannot be classified as absence).
+    """
+    if location.explicit:
+        return True
+    return location.state not in (
+        'absent', 'missing_parent', 'not_a_directory',
+    )
 
 
 def _filter_queues(expr):
@@ -494,32 +667,63 @@ def _comparison_symbol(node):
     return None
 
 
-def _patched_compiler():
-    return _CompilerPatch()
+class _ExportOps(object):
+    """Database operations that build export-scoped compilers only."""
+
+    def __init__(self, ops):
+        self._ops = ops
+
+    def compiler(self, compiler_name):
+        return _classifying_compiler(self._ops.compiler(compiler_name))
+
+    def __getattr__(self, name):
+        return getattr(self._ops, name)
 
 
-class _CompilerPatch(object):
-    def __enter__(self):
-        global _compile_depth, _orig_compile
-        with _compile_lock:
-            if _compile_depth == 0:
-                _orig_compile = SQLCompiler.compile
-                SQLCompiler.compile = _classifying_compile
-            _compile_depth += 1
-        return self
+class _ExportConnection(object):
+    """Connection proxy whose compilers classify export placeholders.
 
-    def __exit__(self, exc_type, exc, tb):
-        global _compile_depth, _orig_compile
-        with _compile_lock:
-            _compile_depth -= 1
-            if _compile_depth == 0 and _orig_compile is not None:
-                SQLCompiler.compile = _orig_compile
-                _orig_compile = None
-        return False
+    The real connection object is not mutated, and ``SQLCompiler.compile``
+    is not replaced. Nested subquery compilers receive this same proxy,
+    so they classify too. Other threads keep using Django's compiler.
+    """
+
+    def __init__(self, connection):
+        self._connection = connection
+        self.ops = _ExportOps(connection.ops)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name, value):
+        if name in ('_connection', 'ops'):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._connection, name, value)
 
 
-def _classifying_compile(self, node, *args, **kwargs):
-    sql, params = _orig_compile(self, node, *args, **kwargs)
+def _classifying_compiler(base):
+    cached = _classifying_classes.get(base)
+    if cached is not None:
+        return cached
+    with _classifying_class_lock:
+        cached = _classifying_classes.get(base)
+        if cached is not None:
+            return cached
+
+        class ClassifyingCompiler(base):
+            def compile(self, node):
+                if _export_scope.get() is None:
+                    return super().compile(node)
+                sql, params = super().compile(node)
+                return _classify_compiled(node, sql, params)
+
+        ClassifyingCompiler.__name__ = 'Classifying%s' % base.__name__
+        _classifying_classes[base] = ClassifyingCompiler
+        return ClassifyingCompiler
+
+
+def _classify_compiled(node, sql, params):
     if isinstance(params, tuple):
         params = list(params)
     else:
@@ -577,10 +781,18 @@ def _bind_name(node, record):
 
 
 def _lookup_field_name(node):
-    target = getattr(getattr(node, 'lhs', None), 'target', None)
-    name = getattr(target, 'name', None)
-    if isinstance(name, str) and name != '':
-        return name
+    """Field name that matches a condition path for this lookup.
+
+    Relation lookups compile against the remote target column. The
+    output field keeps the relation name (``owner``), which is the path
+    stored on the condition. Scalar lookups use that same output field.
+    """
+    lhs = getattr(node, 'lhs', None)
+    for attr in ('output_field', 'target'):
+        field = getattr(lhs, attr, None)
+        name = getattr(field, 'name', None)
+        if isinstance(name, str) and name != '':
+            return name
     return None
 
 
@@ -596,16 +808,111 @@ def _symbols_from_params(params):
 
 
 def _json_const(value):
+    """JSON value for one condition constant.
+
+    ``null``, booleans, strings, and integers stay bare JSON values, as
+    in the schema-1 samples. Finite floats stay JSON numbers (``1`` and
+    ``1.0`` remain distinct). Bytes, ``Decimal``, ``UUID``, dates,
+    times, datetimes, timedeltas, non-finite floats, and
+    ``ModelIdentity`` have no JSON type that round-trips without
+    colliding with those bare values, so they use a tagged object.
+    """
+    from trusts.conditions._ir import ModelIdentity
+
     if isinstance(value, bool) or value is None or isinstance(value, str):
         return value
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     if isinstance(value, float):
-        raise TrustsConfigurationError(
-            'Policy SQL render cannot record float constant %r.' % (value,)
-        )
+        if math.isnan(value):
+            return {'type': 'float', 'value': 'NaN'}
+        if math.isinf(value):
+            return {
+                'type': 'float',
+                'value': 'Infinity' if value > 0 else '-Infinity',
+            }
+        return value
+    if isinstance(value, bytes):
+        return {'type': 'bytes', 'hex': value.hex()}
+    if isinstance(value, Decimal):
+        if value.is_nan():
+            text = 'NaN'
+        elif not value.is_finite():
+            text = 'Infinity' if value > 0 else '-Infinity'
+        else:
+            text = str(value)
+        return {'type': 'decimal', 'value': text}
+    if isinstance(value, uuid.UUID):
+        return {'type': 'uuid', 'value': str(value)}
+    if isinstance(value, datetime.datetime):
+        return {'type': 'datetime', 'value': value.isoformat()}
+    if isinstance(value, datetime.date):
+        return {'type': 'date', 'value': value.isoformat()}
+    if isinstance(value, datetime.time):
+        return {'type': 'time', 'value': value.isoformat()}
+    if isinstance(value, datetime.timedelta):
+        return {
+            'type': 'timedelta',
+            'days': value.days,
+            'seconds': value.seconds,
+            'microseconds': value.microseconds,
+        }
+    if isinstance(value, ModelIdentity):
+        return {
+            'type': 'model',
+            'app_label': value.app_label,
+            'model': value.model_name,
+            'pk': _json_const(value.pk),
+        }
     raise TrustsConfigurationError(
         'Policy SQL render cannot record constant %r (%s).'
+        % (value, type(value).__name__)
+    )
+
+
+def _const_from_json(value):
+    """Inverse of :func:`_json_const` for the recorded JSON value."""
+    from trusts.conditions._ir import ModelIdentity
+
+    if isinstance(value, dict):
+        kind = value.get('type')
+        if kind == 'float':
+            return float(value['value'])
+        if kind == 'bytes':
+            return bytes.fromhex(value['hex'])
+        if kind == 'decimal':
+            return Decimal(value['value'])
+        if kind == 'uuid':
+            return uuid.UUID(value['value'])
+        if kind == 'date':
+            return datetime.date.fromisoformat(value['value'])
+        if kind == 'time':
+            return datetime.time.fromisoformat(value['value'])
+        if kind == 'datetime':
+            return datetime.datetime.fromisoformat(value['value'])
+        if kind == 'timedelta':
+            return datetime.timedelta(
+                days=value['days'],
+                seconds=value['seconds'],
+                microseconds=value['microseconds'],
+            )
+        if kind == 'model':
+            return ModelIdentity(
+                value['app_label'],
+                value['model'],
+                _const_from_json(value['pk']),
+            )
+        raise TrustsConfigurationError(
+            'Policy SQL render found an unknown constant tag %r.' % (kind,)
+        )
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return value
+    raise TrustsConfigurationError(
+        'Policy SQL render cannot restore constant %r (%s).'
         % (value, type(value).__name__)
     )
 
