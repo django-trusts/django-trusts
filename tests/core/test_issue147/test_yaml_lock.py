@@ -1,10 +1,12 @@
 """Canonical YAML lock bytes, constant spelling, and composition evidence."""
 
 import datetime
+import importlib.util
 import math
 import os
 import subprocess
 import sys
+import threading
 import uuid
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +14,10 @@ from pathlib import Path
 import yaml
 from django.test import SimpleTestCase
 
+from tests.core.test_issue147.composition_evidence import (
+    render_composition_evidence_bytes,
+    verify_composition_document,
+)
 from tests.core.test_issue147.test_sql_export import (
     DocumentPermission,
     TeamDocumentPermission,
@@ -19,10 +25,7 @@ from tests.core.test_issue147.test_sql_export import (
     _handle,
 )
 from trusts.conditions._ir import ModelIdentity
-from trusts.policy_composition import (
-    render_composition_evidence_bytes,
-    verify_composition_document,
-)
+from trusts.core import TrustsConfigurationError
 from trusts.policy_lock import (
     _const_from_json,
     _json_const,
@@ -99,9 +102,7 @@ class PolicyYamlCodecTest(SimpleTestCase):
             cls.__module__.startswith('yaml._yaml')
             for cls in PolicyYamlDumper.__mro__
         ))
-        parts = tuple(int(part) for part in yaml.__version__.split('.')[:3])
-        self.assertGreaterEqual(parts, (6, 0, 3))
-        self.assertLess(parts, (6, 1, 0))
+        self.assertEqual(yaml.__version__, '6.0.3')
 
     def test_every_const_form_round_trips_without_yaml_tags(self):
         values = (
@@ -173,6 +174,7 @@ class PolicyYamlCodecTest(SimpleTestCase):
         self.assertNotIn('\n  - const: yes\n', text)
         self.assertNotIn('\n  - const: 2024-03-04\n', text)
         loaded = load_policy_yaml(first)
+        self.assertEqual(dump_policy_yaml(loaded), first)
         for original, row in zip(values, loaded['params']):
             self.assertTrue(_same(original, _const_from_json(row['const'])))
 
@@ -200,6 +202,42 @@ class PolicyYamlCodecTest(SimpleTestCase):
         self.assertEqual(load_policy_yaml(b'n: "1"\n'), {'n': '1'})
         self.assertIs(load_policy_yaml(b'n: true\n')['n'], True)
         self.assertIsNone(load_policy_yaml(b'n: null\n')['n'])
+
+    def test_loader_rejects_bytes_the_canonical_writer_does_not_emit(self):
+        block_map = dump_policy_yaml({'a': {'b': 1}})
+        block_seq = dump_policy_yaml({'items': [1, 2]})
+        literal = dump_policy_yaml({'sql': 'SELECT 1'})
+        self.assertEqual(load_policy_yaml(block_map), {'a': {'b': 1}})
+        self.assertEqual(load_policy_yaml(block_map.decode('utf-8')), {'a': {'b': 1}})
+        self.assertEqual(load_policy_yaml(block_seq), {'items': [1, 2]})
+        self.assertEqual(load_policy_yaml(literal), {'sql': 'SELECT 1'})
+        self.assertIn(b'\n  b: 1\n', block_map)
+        self.assertNotIn(b'{', block_map)
+        self.assertIn(b'\n  - 1\n', block_seq)
+        self.assertNotIn(b'[', block_seq)
+        self.assertIn(b'sql: |-\n', literal)
+        rejected = (
+            b'a: {b: 1}\n',
+            b'items: [1, 2]\n',
+            b'a:\n- 1\n',
+            b'sql: |\n  SELECT 1\n',
+            b'sql: |+\n  SELECT 1\n',
+            b'sql: >-\n  SELECT 1\n',
+            b'sql: |-2\n  SELECT 1\n',
+            b'label: |-\n  hello\n',
+            b'a: {b: 1}',
+            b"n: 'quoted'\n",
+            b'n: 01\n',
+            b'n: 0x1\n',
+        )
+        for sample in rejected:
+            with self.subTest(sample=sample):
+                with self.assertRaises(PolicyYamlError):
+                    load_policy_yaml(sample)
+        with self.assertRaises(TrustsConfigurationError):
+            load_policy_sql_document(b'a: {b: 1}\n')
+        with self.assertRaises(TrustsConfigurationError):
+            load_policy_sql_document(b'items: [1, 2]\n')
 
     def test_hash_seed_and_locale_do_not_change_bytes(self):
         env = os.environ.copy()
@@ -248,6 +286,39 @@ class PolicyYamlCodecTest(SimpleTestCase):
 
 
 class PolicyCompositionEvidenceTest(SimpleTestCase):
+    def test_composition_is_test_evidence_only(self):
+        self.assertIsNone(importlib.util.find_spec('trusts.policy_composition'))
+        source = Path(render_composition_evidence_bytes.__code__.co_filename)
+        text = source.read_text(encoding='utf-8')
+        self.assertNotIn('SQLCompiler.execute_sql', text)
+        self.assertTrue(str(source).endswith(
+            'tests/core/test_issue147/composition_evidence.py',
+        ))
+
+    def test_capture_does_not_replace_sqlcompiler_execute_sql(self):
+        from django.db.models.sql.compiler import SQLCompiler
+
+        original = SQLCompiler.execute_sql
+        samples = []
+        stop = threading.Event()
+
+        def watch():
+            while not stop.is_set():
+                current = SQLCompiler.execute_sql
+                if current is not original:
+                    samples.append(current)
+
+        watcher = threading.Thread(target=watch)
+        watcher.start()
+        try:
+            payload = render_composition_evidence_bytes(handles=self._handles())
+        finally:
+            stop.set()
+            watcher.join()
+        self.assertEqual(payload, GOLDEN_COMPOSITION)
+        self.assertEqual(samples, [])
+        self.assertIs(SQLCompiler.execute_sql, original)
+
     def _handles(self):
         or_handle = _handle('documents.backends.OrBackend')
         or_handle.register(

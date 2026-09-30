@@ -944,8 +944,9 @@ def load_policy_sql_document(payload):
 
     ``trusts.E009`` does not call this. Equality is raw bytes against
     :func:`render_policy_sql_bytes`. This loader is the diagnostic
-    inverse: it accepts only the spellings :func:`dump_policy_yaml`
-    emits.
+    inverse of :func:`dump_policy_yaml`: :func:`load_policy_yaml` parses
+    the payload, re-dumps it with that writer, and rejects the input
+    unless the bytes are identical.
     """
     try:
         document = load_policy_yaml(payload)

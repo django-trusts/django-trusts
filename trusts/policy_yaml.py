@@ -7,8 +7,8 @@ custom YAML tags. Anchors and aliases are rejected.
 
 PyYAML does not promise that ``yaml.dump`` bytes stay stable across
 versions, hash seeds, or the libyaml build. These representers and the
-golden files are what pin the bytes. The supported library range is
-``PyYAML>=6.0.3,<6.1``.
+golden files are what pin the bytes. The supported library is the exact
+release ``PyYAML==6.0.3``.
 """
 
 from __future__ import annotations
@@ -270,11 +270,15 @@ def dump_policy_yaml(document):
 
 
 class PolicyYamlLoader(yaml.SafeLoader):
-    """Safe loader that accepts only this codec's spellings.
+    """Safe loader used by :func:`load_policy_yaml`.
 
     Implicit YAML 1.1 bool words (``yes``/``on``), timestamps, merge
     keys, sexagesimal numbers, and non-finite float tokens are not
     resolvers here. Explicit tags, anchors, and aliases fail closed.
+    Parsing is not acceptance: :func:`load_policy_yaml` re-dumps with
+    :func:`dump_policy_yaml` and rejects the payload unless the bytes
+    match. Flow collections and noncanonical block or chomping forms
+    fail that compare.
     """
 
     yaml_implicit_resolvers = {}
@@ -383,21 +387,33 @@ PolicyYamlLoader.add_implicit_resolver(_TAG_FLOAT, _FLOAT_RE, list('-0123456789'
 
 
 def load_policy_yaml(payload):
-    """Load canonical policy YAML. This is not how E009 decides equality."""
+    """Load canonical policy YAML. This is not how E009 decides equality.
+
+    After a successful parse, the document is written again with
+    :func:`dump_policy_yaml`. The payload is accepted only when those
+    bytes are identical. Flow mappings (``a: {b: 1}``), flow sequences,
+    folded blocks, and any other chomping or spelling the writer does
+    not emit are rejected.
+    """
     if not isinstance(payload, (bytes, str)):
         raise PolicyYamlError(
             'Policy YAML payload must be bytes or text, not %s.'
             % type(payload).__name__
         )
     if isinstance(payload, bytes):
-        if payload.startswith(b'\xef\xbb\xbf'):
+        raw = payload
+        if raw.startswith(b'\xef\xbb\xbf'):
             raise PolicyYamlError('Policy YAML must not start with a byte-order mark.')
         try:
-            text = payload.decode('utf-8')
+            text = raw.decode('utf-8')
         except UnicodeDecodeError as exc:
             raise PolicyYamlError('Policy YAML must be UTF-8.') from exc
     else:
         text = payload
+        try:
+            raw = text.encode('utf-8')
+        except UnicodeEncodeError as exc:
+            raise PolicyYamlError('Policy YAML must be UTF-8.') from exc
     if '\r' in text or text.startswith('\ufeff'):
         raise PolicyYamlError('Policy YAML must be LF UTF-8 without a BOM.')
     if text.startswith('---') or '\n---' in text or text.startswith('...'):
@@ -410,4 +426,9 @@ def load_policy_yaml(payload):
         raise PolicyYamlError('Policy YAML could not be read: %s' % exc) from exc
     except yaml.YAMLError as exc:
         raise PolicyYamlError('Policy YAML could not be read: %s' % exc) from exc
+    canonical = dump_policy_yaml(document)
+    if raw != canonical:
+        raise PolicyYamlError(
+            'Policy YAML bytes are not the canonical spelling.'
+        )
     return document
