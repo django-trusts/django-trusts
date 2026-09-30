@@ -444,8 +444,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(
             [ref['fragment'] for ref in or_group['refs']],
             [
-                'grant:documents.DocumentPermission:document',
-                'grant:documents.TeamDocumentPermission:document',
+                'trust:documents.DocumentPermission:document',
+                'trust:documents.TeamDocumentPermission:document',
             ],
         )
 

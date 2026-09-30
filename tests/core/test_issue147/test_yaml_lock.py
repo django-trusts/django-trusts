@@ -343,7 +343,7 @@ class PolicyCompositionTest(SimpleTestCase):
         instance = by_id['has_perm_permission_instance:documents.Document']
         self.assertEqual(instance['representation'], 'structured')
         self.assertIn(
-            '{{grant:documents.DocumentPermission:document}}',
+            '{{trust:documents.DocumentPermission:document}}',
             instance['sql'],
         )
         self.assertNotIn(' IN ', instance['expanded']['sql'])
@@ -366,7 +366,7 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertEqual(
             [ref['fragment'] for ref in composed['refs']],
             [
-                'grant:documents.DocumentPermission:document',
+                'trust:documents.DocumentPermission:document',
                 'predicate:documents.Document:non_confidential',
             ],
         )
@@ -384,8 +384,8 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertEqual(
             [ref['fragment'] for ref in or_group['refs']],
             [
-                'grant:documents.DocumentPermission:document',
-                'grant:documents.TeamDocumentPermission:document',
+                'trust:documents.DocumentPermission:document',
+                'trust:documents.TeamDocumentPermission:document',
             ],
         )
         code_or = next(
@@ -421,11 +421,11 @@ class PolicyCompositionTest(SimpleTestCase):
         composition = self._document_composition()
         operation = composition['operations'][0]
         operation['sql'] = operation['sql'].replace(
-            '{{grant:documents.DocumentPermission:document}}',
-            '{{grant:missing}}',
+            '{{trust:documents.DocumentPermission:document}}',
+            '{{trust:missing}}',
         )
-        operation['refs'][0]['fragment'] = 'grant:missing'
-        operation['refs'][0]['placeholder'] = '{{grant:missing}}'
+        operation['refs'][0]['fragment'] = 'trust:missing'
+        operation['refs'][0]['placeholder'] = '{{trust:missing}}'
         with self.assertRaises(TrustsConfigurationError) as ctx:
             _verify_composition(composition)
         self.assertIn('missing fragment', str(ctx.exception))
@@ -475,8 +475,8 @@ class PolicyCompositionTest(SimpleTestCase):
 
     def test_repeated_fragment_text_stays_full_sql(self):
         fragment = {
-            'id': 'grant:example',
-            'kind': 'grant_exists',
+            'id': 'trust:example',
+            'kind': 'trust_exists',
             'sql': 'SELECT %s',
             'params': [{'const': 1}],
         }
@@ -494,6 +494,40 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertEqual(operations[0]['representation'], 'full_sql')
         self.assertEqual(operations[0]['sql'], sql)
         self.assertNotIn('{{', operations[0]['sql'])
+        self.assertEqual(fragments, {})
+        self.assertEqual(order, [])
+
+    def test_later_fragment_on_both_sides_stays_full_sql(self):
+        # Compiled shape B ... A ... B. A occurs once, so a suffix-only
+        # check would reference A and the second B and leave the first
+        # B as raw SQL. The whole statement has two copies of B.
+        piece_a = {
+            'id': 'trust:a',
+            'kind': 'trust_exists',
+            'sql': 'AAA',
+            'params': [],
+        }
+        piece_b = {
+            'id': 'trust:b',
+            'kind': 'trust_exists',
+            'sql': 'BBB',
+            'params': [],
+        }
+        sql = 'BBB AND AAA AND BBB'
+        params = []
+        self.assertIsNone(_factor(sql, params, [piece_a, piece_b]))
+        operations = []
+        fragments = {}
+        order = []
+        _append_operation(
+            operations, fragments, order, 'sided', 'kind', sql, params,
+            [piece_a, piece_b],
+        )
+        self.assertEqual(len(operations), 1)
+        self.assertEqual(operations[0]['representation'], 'full_sql')
+        self.assertEqual(operations[0]['sql'], sql)
+        self.assertNotIn('{{', operations[0]['sql'])
+        self.assertNotIn('refs', operations[0])
         self.assertEqual(fragments, {})
         self.assertEqual(order, [])
 

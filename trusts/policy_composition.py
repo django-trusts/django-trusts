@@ -8,10 +8,10 @@ produced.
 
 A fragment is closed SQL. An operation template may name a fragment
 with ``{{fragment-id}}`` only when that fragment's text, aliases
-included, occurs once in the compiled statement and that fragment's
-parameters occupy the same contiguous span. Anything else is stored as
-the full compiled statement. There is no placeholder whose expansion
-is guessed.
+included, occurs exactly once in the complete compiled statement and
+that fragment's parameters occupy the same contiguous span. A second
+copy anywhere in that statement is stored as the full statement.
+There is no placeholder whose expansion is guessed.
 
 The aggregate statement is captured by a compiler installed on this
 thread's connection for that one call. Django's ``SQLCompiler`` class
@@ -439,13 +439,22 @@ def _remember_fragment(fragments, order, piece):
 def _factor(sql, params, pieces):
     """Return ``(template, owned_params, refs)`` or None.
 
-    ``None`` unless every piece occurs exactly once in the statement
-    still being scanned, and its parameters are the contiguous slice at
-    that span, in piece order. A second copy is left as raw SQL rather
-    than referenced, so the operation stays ``full_sql``.
+    ``None`` unless every piece occurs exactly once in the complete
+    compiled statement before any substitution, and its parameters are
+    the contiguous slice at that span, in piece order. A second copy
+    anywhere, including before the span that would be replaced, is a
+    partial reference, so the operation stays ``full_sql``.
     """
     if not pieces:
         return None
+    for piece in pieces:
+        frag_sql = piece.get('sql')
+        if (
+            not isinstance(frag_sql, str)
+            or frag_sql == ''
+            or sql.count(frag_sql) != 1
+        ):
+            return None
     remaining_sql = sql
     remaining_params = list(params)
     parts = []
@@ -461,9 +470,9 @@ def _factor(sql, params, pieces):
         ):
             return None
         seen.add(piece['id'])
-        if remaining_sql.count(frag_sql) != 1:
-            return None
         index = remaining_sql.find(frag_sql)
+        if index < 0:
+            return None
         before = remaining_sql[:index]
         count = before.count('%s')
         if count > len(remaining_params):
@@ -544,12 +553,12 @@ def _grant_fragment(item):
         return None
     if before + width > len(params):
         return None
-    fragment_id = 'grant:%s' % item['id']
+    fragment_id = 'trust:%s' % item['id']
     if not _safe_placeholder(fragment_id, '{{%s}}' % fragment_id, body):
         return None
     return {
         'id': fragment_id,
-        'kind': 'grant_exists',
+        'kind': 'trust_exists',
         'sql': body,
         'params': params[before:before + width],
     }
