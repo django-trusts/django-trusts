@@ -32,7 +32,7 @@ from trusts.core import (
 from trusts.policy_yaml import (
     PolicyYamlError,
     dump_policy_yaml,
-    load_policy_yaml,
+    _load_policy_yaml,
 )
 
 SCHEMA_VERSION = 1
@@ -939,17 +939,20 @@ def _dump_document(document):
         raise TrustsConfigurationError(str(exc)) from exc
 
 
-def load_policy_sql_document(payload):
-    """Read canonical policy YAML into the schema-1 mapping.
+def _load_policy_sql_document(payload):
+    """Private diagnostic helper for a schema-1 policy document.
 
-    ``trusts.E009`` does not call this. Equality is raw bytes against
-    :func:`render_policy_sql_bytes`. This loader is the diagnostic
-    inverse of :func:`dump_policy_yaml`: :func:`load_policy_yaml` parses
-    the payload, re-dumps it with that writer, and rejects the input
-    unless the bytes are identical.
+    Not a supported public API and not a two-directional mapping
+    contract. Tests use it for coding completeness. ``trusts.E009``
+    does not call this. Equality is raw bytes against
+    :func:`render_policy_sql_bytes`.
+
+    :func:`_load_policy_yaml` parses the payload, re-dumps it with the
+    canonical writer, and rejects the input unless the bytes are
+    identical.
     """
     try:
-        document = load_policy_yaml(payload)
+        document = _load_policy_yaml(payload)
     except PolicyYamlError as exc:
         raise TrustsConfigurationError(str(exc)) from exc
     if not isinstance(document, dict):

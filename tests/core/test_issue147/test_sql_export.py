@@ -34,7 +34,7 @@ from trusts.policy_lock import (
     _const_from_json,
     _json_const,
     _sentinel,
-    load_policy_sql_document,
+    _load_policy_sql_document,
     render_policy_sql_bytes,
 )
 
@@ -314,7 +314,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn(b'!!', payload)
         text = payload.decode('utf-8')
         self.assertNotIn('\r', text)
-        document = load_policy_sql_document(payload)
+        document = _load_policy_sql_document(payload)
         trust = document['backends'][0]['trusts'][0]
         self.assertNotIn('or_group', trust)
         self.assertEqual(list(document['database']), ['engine'])
@@ -392,7 +392,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        document = load_policy_sql_document(
+        document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[handle]),
         )
         trusts = document['backends'][0]['trusts']
@@ -417,7 +417,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_empty_relationship_backend_is_still_emitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
         empty = _handle('zzz.backends.EmptyBackend')
-        document = load_policy_sql_document(
+        document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[empty, populated]),
         )
         paths = [row['path'] for row in document['backends']]
@@ -492,7 +492,7 @@ class PolicySqlCommandTest(SimpleTestCase):
                 call_command(
                     'trusts_policy_sql', database='default', stdout=stdout,
                 )
-                document = load_policy_sql_document(stdout.getvalue())
+                document = _load_policy_sql_document(stdout.getvalue())
                 self.assertEqual(list(document['database']), ['engine'])
                 self.assertEqual(
                     document['database']['engine'],
@@ -656,7 +656,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        actor_doc = load_policy_sql_document(
+        actor_doc = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[actor_handle]),
         )
         actor_trust = actor_doc['backends'][0]['trusts'][0]
@@ -674,7 +674,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        account_doc = load_policy_sql_document(
+        account_doc = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[account_handle]),
         )
         account_trust = account_doc['backends'][0]['trusts'][0]
@@ -694,7 +694,7 @@ class PolicySqlConstantTest(SimpleTestCase):
     def test_supported_constant_families_match_golden_and_round_trip(self):
         payload = render_policy_sql_bytes(handles=[_constant_family_handle()])
         self.assertEqual(payload, GOLDEN_CONSTANTS)
-        document = load_policy_sql_document(payload)
+        document = _load_policy_sql_document(payload)
         by_code = {
             row['code']: row['params']
             for row in document['backends'][0]['named_filters']
