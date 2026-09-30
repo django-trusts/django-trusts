@@ -5,9 +5,9 @@ Core is not an installed Django app and does not ship
 :func:`install_policy_commands` so ``trusts_policy_sql`` is
 discoverable after ``django.setup()``.
 
-The command prints the schema-1 document and, with ``--lock``, writes
-those same bytes. It does not authorize and it does not execute the
-exported statements.
+The command prints the schema-1 canonical YAML document and, with
+``--lock``, writes those same bytes. It does not authorize and it does
+not execute the exported statements.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ class PolicySqlCommand(BaseCommand):
     """Print the policy SQL document. ``--lock`` writes the same bytes."""
 
     help = (
-        'Print the authorization policy SQL document for the database '
+        'Print the canonical YAML authorization policy for the database '
         'alias selected by TRUSTS_POLICY_DATABASE, or Django\'s default '
         'alias when that setting is unset. --database selects another '
         'configured alias for this process only. --lock writes the same '

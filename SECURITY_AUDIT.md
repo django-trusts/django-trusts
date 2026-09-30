@@ -309,7 +309,9 @@ the resulting artifact describes SQLite rather than production SQL.
 The database alias is not stored. `database.engine` identifies the configured
 engine, while the SQL records the renderer's effective quoting, placeholders,
 operators, and dialect. Two aliases that render identical documents produce
-identical bytes. Lockfile equality therefore verifies rendered output rather
+identical bytes. The bytes are canonical YAML. The conventional file is
+`BASE_DIR / "trusts-policy.lock.yaml"` unless `TRUSTS_POLICY_LOCKFILE` sets
+an absolute path. Lockfile equality therefore verifies rendered output rather
 than database identity.
 
 ### Check lifecycle and enforcement
@@ -331,6 +333,8 @@ that authorize the same content model are marked with `or_group`, but their
 runtime OR assembly is covered by library tests. The artifact also leaves
 filter-to-grant AND composition, other authorization operations, zero-SQL
 short circuits, and combination across authentication backends to tests.
+The composition evidence file is not this artifact and is not what `trusts.E009`
+compares.
 
 Equality does not prove:
 

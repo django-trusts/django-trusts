@@ -391,7 +391,7 @@ alias for one invocation with ``--database``:
 
    python manage.py trusts_policy_sql --database policy_inspection
 
-The command writes ordered JSON to stdout. It records the configured Trusts
+The command writes canonical YAML to stdout. It records the configured Trusts
 backend, each registered trust, its ``.authorized()`` SQL, symbolic parameter
 roles, and each named filter's SQL. The selected Django database backend and
 driver determine the SQL dialect. The alias itself is not stored.
@@ -405,56 +405,41 @@ that field.
 The ``DocumentPermission`` trust and ``non_confidential`` named filter in this
 guide produce the following SQLite document:
 
-.. code-block:: json
+.. code-block:: yaml
 
-   {
-     "schema_version": 1,
-     "database": {
-       "engine": "django.db.backends.sqlite3"
-     },
-     "backends": [
-       {
-         "path": "documents.backends.DocumentBackend",
-         "trusts": [
-           {
-             "id": "documents.DocumentPermission:document",
-             "root": "documents.DocumentPermission",
-             "user": {
-               "path": "user",
-               "model": "auth.User",
-               "target": "id"
-             },
-             "permission": {
-               "path": "permission",
-               "model": "auth.Permission",
-               "target": "id"
-             },
-             "content": {
-               "path": "document",
-               "model": "documents.Document",
-               "target": "id"
-             },
-             "sql": "SELECT DISTINCT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE EXISTS(SELECT %s AS \"a\" FROM \"documents_documentpermission\" \"U0\" WHERE (\"U0\".\"permission_id\" = %s AND \"U0\".\"user_id\" = %s AND \"U0\".\"document_id\" = (\"documents_document\".\"id\")) LIMIT 1)",
-             "params": [
-               {"const": 1},
-               {"bind": "permission.id"},
-               {"bind": "user.id"}
-             ]
-           }
-         ],
-         "named_filters": [
-           {
-             "model": "documents.Document",
-             "code": "non_confidential",
-             "sql": "SELECT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE (\"documents_document\".\"confidential\" IS NULL OR NOT (\"documents_document\".\"confidential\" = %s))",
-             "params": [
-               {"const": true}
-             ]
-           }
-         ]
-       }
-     ]
-   }
+   schema_version: 1
+   database:
+     engine: "django.db.backends.sqlite3"
+   backends:
+     - path: "documents.backends.DocumentBackend"
+       trusts:
+         - id: "documents.DocumentPermission:document"
+           root: "documents.DocumentPermission"
+           user:
+             path: "user"
+             model: "auth.User"
+             target: "id"
+           permission:
+             path: "permission"
+             model: "auth.Permission"
+             target: "id"
+           content:
+             path: "document"
+             model: "documents.Document"
+             target: "id"
+           sql: |-
+             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
+           params:
+             - const: 1
+             - bind: "permission.id"
+             - bind: "user.id"
+       named_filters:
+         - model: "documents.Document"
+           code: "non_confidential"
+           sql: |-
+             SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE ("documents_document"."confidential" IS NULL OR NOT ("documents_document"."confidential" = %s))
+           params:
+             - const: true
 
 The export records one ``.authorized()`` query per trust. Named filters are
 separate statements; their AND composition with grant queries remains covered
@@ -471,7 +456,7 @@ Write the same output as a lockfile after registration is complete:
    python manage.py trusts_policy_sql --lock
 
 ``TRUSTS_POLICY_LOCKFILE`` selects the path when configured. Otherwise,
-django-trusts uses ``BASE_DIR / "trusts-policy.lock.json"`` when ``BASE_DIR``
+django-trusts uses ``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR``
 is absolute. Commit the lockfile with the application code that declares the
 policy.
 

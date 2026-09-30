@@ -1,0 +1,338 @@
+"""Canonical YAML lock bytes, constant spelling, and composition evidence."""
+
+import datetime
+import math
+import os
+import subprocess
+import sys
+import uuid
+from decimal import Decimal
+from pathlib import Path
+
+import yaml
+from django.test import SimpleTestCase
+
+from tests.core.test_issue147.test_sql_export import (
+    DocumentPermission,
+    TeamDocumentPermission,
+    _document_handle,
+    _handle,
+)
+from trusts.conditions._ir import ModelIdentity
+from trusts.policy_composition import (
+    render_composition_evidence_bytes,
+    verify_composition_document,
+)
+from trusts.policy_lock import (
+    _const_from_json,
+    _json_const,
+    load_policy_sql_document,
+    render_policy_sql_bytes,
+)
+from trusts.policy_yaml import (
+    PolicyYamlDumper,
+    PolicyYamlError,
+    dump_policy_yaml,
+    load_policy_yaml,
+)
+
+ROOT = Path(__file__).resolve().parents[3]
+GOLDEN_DOCUMENT = (
+    Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
+)
+GOLDEN_COMPOSITION = (
+    Path(__file__).with_name('golden_composition_sqlite.yaml').read_bytes()
+)
+
+_PROBE = r"""
+import hashlib, sys
+from trusts.policy_yaml import dump_policy_yaml
+doc = {
+    "schema_version": 1,
+    "database": {"engine": "django.db.backends.sqlite3"},
+    "flag": True,
+    "other": False,
+    "empty": None,
+    "count": 1,
+    "neg": -2,
+    "amount": 1.5,
+    "one": 1.0,
+    "negzero": -0.0,
+    "sci": 1e16,
+    "small": 1e-7,
+    "label": "yes",
+    "day": "2024-03-04",
+    "sql": "SELECT \"t\".\"id\" FROM \"t\" WHERE \"t\".\"id\" = %s",
+    "params": [
+        {"const": {"type": "decimal", "value": "12.50"}},
+        {"bind": "user.id"},
+    ],
+    "trusts": [],
+}
+first = dump_policy_yaml(doc)
+second = dump_policy_yaml(doc)
+if first != second:
+    sys.exit("repeat mismatch")
+sys.stdout.write(hashlib.sha256(first).hexdigest())
+"""
+
+
+def _same(left, right):
+    if isinstance(left, float) and isinstance(right, float):
+        if math.isnan(left) and math.isnan(right):
+            return True
+        return math.copysign(1.0, left) == math.copysign(1.0, right) and left == right
+    if isinstance(left, Decimal) and isinstance(right, Decimal):
+        if left.is_nan() and right.is_nan():
+            return True
+        return left == right
+    return left == right
+
+
+class PolicyYamlCodecTest(SimpleTestCase):
+    def test_dumper_is_the_pure_safe_dumper(self):
+        self.assertIs(PolicyYamlDumper.__mro__[1], yaml.dumper.SafeDumper)
+        self.assertTrue(PolicyYamlDumper.__mro__[1].__module__.startswith(
+            'yaml.dumper',
+        ))
+        self.assertFalse(any(
+            cls.__module__.startswith('yaml._yaml')
+            for cls in PolicyYamlDumper.__mro__
+        ))
+        parts = tuple(int(part) for part in yaml.__version__.split('.')[:3])
+        self.assertGreaterEqual(parts, (6, 0, 3))
+        self.assertLess(parts, (6, 1, 0))
+
+    def test_every_const_form_round_trips_without_yaml_tags(self):
+        values = (
+            None,
+            True,
+            False,
+            'alpha',
+            'true',
+            'null',
+            'yes',
+            'no',
+            'on',
+            '2024-03-04',
+            '1',
+            '00ff',
+            '12.50',
+            '',
+            0,
+            1,
+            -2,
+            0.0,
+            -0.0,
+            1.0,
+            1.5,
+            1e16,
+            1e-7,
+            float('nan'),
+            float('inf'),
+            float('-inf'),
+            b'',
+            b'\x00\xff',
+            Decimal('12.50'),
+            Decimal('NaN'),
+            Decimal('Infinity'),
+            Decimal('-Infinity'),
+            uuid.UUID('12345678-1234-5678-1234-567812345678'),
+            datetime.date(2024, 3, 4),
+            datetime.time(5, 6, 7),
+            datetime.time(5, 6, 7, 8),
+            datetime.datetime(2024, 3, 4, 5, 6, 7),
+            datetime.datetime(
+                2024, 3, 4, 5, 6, 7, tzinfo=datetime.timezone.utc,
+            ),
+            datetime.timedelta(days=1, seconds=2, microseconds=3),
+            datetime.timedelta(days=-1, seconds=2, microseconds=3),
+            ModelIdentity('auth', 'user', 7),
+            ModelIdentity(
+                'auth', 'user',
+                uuid.UUID('12345678-1234-5678-1234-567812345678'),
+            ),
+            ModelIdentity('app', 'row', ModelIdentity('auth', 'user', 7)),
+        )
+        document = {
+            'params': [{'const': _json_const(value)} for value in values],
+        }
+        first = dump_policy_yaml(document)
+        second = dump_policy_yaml(document)
+        self.assertEqual(first, second)
+        self.assertNotIn(b'!!', first)
+        self.assertNotIn(b'\n---', first)
+        text = first.decode('utf-8')
+        self.assertIn('\n  - const: -0.0\n', text)
+        self.assertIn('\n  - const: 1.0\n', text)
+        self.assertIn('\n  - const: 1.0e+16\n', text)
+        self.assertIn('value: "2024-03-04"', text)
+        self.assertIn('value: "NaN"', text)
+        self.assertIn('value: "12.50"', text)
+        self.assertIn('hex: "00ff"', text)
+        self.assertNotIn('\n  - const: yes\n', text)
+        self.assertNotIn('\n  - const: 2024-03-04\n', text)
+        loaded = load_policy_yaml(first)
+        for original, row in zip(values, loaded['params']):
+            self.assertTrue(_same(original, _const_from_json(row['const'])))
+
+    def test_diagnostic_loader_rejects_implicit_and_unsafe_forms(self):
+        rejected = (
+            b'yes: 1\n',
+            b'value: yes\n',
+            b'day: 2024-03-04\n',
+            b'n: .nan\n',
+            b'n: .inf\n',
+            b'a: &a 1\nb: *a\n',
+            b'!!python/object:x {}\n',
+            b'a: 1\na: 2\n',
+            b'a: {<<: {b: 1}}\n',
+            b'---\nschema_version: 1\n',
+            b'n: True\n',
+            b'n: +1\n',
+            b'n: 1.50\n',
+            b"n: 'quoted'\n",
+        )
+        for sample in rejected:
+            with self.subTest(sample=sample):
+                with self.assertRaises(PolicyYamlError):
+                    load_policy_yaml(sample)
+        self.assertEqual(load_policy_yaml(b'n: "1"\n'), {'n': '1'})
+        self.assertIs(load_policy_yaml(b'n: true\n')['n'], True)
+        self.assertIsNone(load_policy_yaml(b'n: null\n')['n'])
+
+    def test_hash_seed_and_locale_do_not_change_bytes(self):
+        env = os.environ.copy()
+        env['PYTHONPATH'] = str(ROOT) + os.pathsep + env.get('PYTHONPATH', '')
+        env['PYTHONHASHSEED'] = '0'
+        env['LC_ALL'] = 'C'
+        env['LANG'] = 'C'
+        baseline = subprocess.run(
+            [sys.executable, '-c', _PROBE],
+            check=True, capture_output=True, env=env, text=True,
+        ).stdout
+        for seed, locale in (
+            ('1', 'C'),
+            ('random', 'C'),
+            ('random', 'C.UTF-8'),
+            ('random', 'en_US.UTF-8'),
+        ):
+            probe_env = dict(env)
+            probe_env['PYTHONHASHSEED'] = seed
+            probe_env['LC_ALL'] = locale
+            probe_env['LANG'] = locale
+            result = subprocess.run(
+                [sys.executable, '-c', _PROBE],
+                check=False, capture_output=True, env=probe_env, text=True,
+            )
+            if result.returncode != 0 and 'locale' in (result.stderr or '').lower():
+                continue
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, baseline)
+
+    def test_guide_embeds_the_document_golden(self):
+        golden = GOLDEN_DOCUMENT.decode('utf-8')
+        indented = ''.join(
+            '   ' + line if line else line
+            for line in golden.splitlines(True)
+        )
+        for relative in (
+            'docs/source/authorization-policy-sql.rst',
+            'docs/source/index.rst',
+        ):
+            text = (ROOT / relative).read_text(encoding='utf-8')
+            self.assertIn(indented, text)
+            self.assertIn('trusts-policy.lock.yaml', text)
+            self.assertNotIn('trusts-policy.lock.json', text)
+            self.assertNotIn('code-block:: json', text)
+
+
+class PolicyCompositionEvidenceTest(SimpleTestCase):
+    def _handles(self):
+        or_handle = _handle('documents.backends.OrBackend')
+        or_handle.register(
+            trust=DocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        or_handle.register(
+            trust=TeamDocumentPermission,
+            user='team__members',
+            permission='permission',
+            content='document',
+        )
+        return [_document_handle(), or_handle]
+
+    def test_evidence_matches_golden_and_expands(self):
+        payload = render_composition_evidence_bytes(handles=self._handles())
+        self.assertEqual(payload, GOLDEN_COMPOSITION)
+        self.assertEqual(payload, render_composition_evidence_bytes(
+            handles=self._handles(),
+        ))
+        document = load_policy_yaml(payload)
+        verify_composition_document(document)
+        self.assertEqual(document['schema_version'], 1)
+        self.assertIs(document['lockfile'], False)
+        self.assertEqual(document['first_drop'], [
+            'trust.authorized', 'named_filter',
+        ])
+        guide = document['backends'][0]
+        by_id = {row['id']: row for row in guide['operations']}
+        instance = by_id['has_perm_permission_instance']
+        self.assertEqual(instance['representation'], 'structured')
+        self.assertIs(instance['enters_lockfile'], False)
+        self.assertIn(
+            '{{grant:documents.DocumentPermission:document}}',
+            instance['structured']['sql'],
+        )
+        self.assertNotIn(' IN ', instance['expanded']['sql'])
+        code = by_id['has_perm_permission_code']
+        self.assertEqual(code['representation'], 'full_sql')
+        self.assertIn('"V0"', code['expanded']['sql'])
+        self.assertIn('"V0"', code['expanded_exists'][0]['sql'])
+        self.assertNotIn(
+            '"documents_documentpermission" "U0"',
+            code['expanded']['sql'],
+        )
+        named = by_id['named_filter:documents.Document:non_confidential']
+        self.assertIs(named['enters_lockfile'], True)
+        self.assertNotIn('documents_documentpermission', named['expanded']['sql'])
+        composed = by_id['authorized_and_named_filter:non_confidential']
+        self.assertEqual(composed['representation'], 'structured')
+        placeholders = [
+            ref['fragment'] for ref in composed['structured']['refs']
+        ]
+        self.assertEqual(placeholders, [
+            'grant:documents.DocumentPermission:document',
+            'predicate:documents.Document:non_confidential',
+        ])
+        combined = document['backends'][1]['operations']
+        or_group = next(row for row in combined if row['id'] == 'or_group_authorized')
+        self.assertEqual(or_group['representation'], 'structured')
+        self.assertIs(or_group['enters_lockfile'], False)
+        self.assertEqual(
+            [ref['fragment'] for ref in or_group['structured']['refs']],
+            [
+                'grant:documents.DocumentPermission:document',
+                'grant:documents.TeamDocumentPermission:document',
+            ],
+        )
+        code_or = next(
+            row for row in combined if row['id'] == 'has_perm_permission_code'
+        )
+        self.assertEqual(code_or['representation'], 'full_sql')
+        self.assertIn('"V0"', code_or['expanded']['sql'])
+        self.assertIn('"V2"', code_or['expanded']['sql'])
+
+    def test_lockfile_bytes_do_not_include_composition(self):
+        payload = render_policy_sql_bytes(handles=[_document_handle()])
+        self.assertEqual(payload, GOLDEN_DOCUMENT)
+        text = payload.decode('utf-8')
+        self.assertNotIn('composition-evidence', text)
+        self.assertNotIn('has_perm', text)
+        self.assertNotIn('placeholder', text)
+        document = load_policy_sql_document(payload)
+        trust = document['backends'][0]['trusts'][0]
+        self.assertNotIn('structured', trust)
+        self.assertIn('sql', trust)
