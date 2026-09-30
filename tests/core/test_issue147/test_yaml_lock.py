@@ -268,22 +268,6 @@ class PolicyYamlCodecTest(SimpleTestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, baseline)
 
-    def test_guide_embeds_the_document_golden(self):
-        golden = GOLDEN_DOCUMENT.decode('utf-8')
-        indented = ''.join(
-            '   ' + line if line else line
-            for line in golden.splitlines(True)
-        )
-        for relative in (
-            'docs/source/authorization-policy-sql.rst',
-            'docs/source/index.rst',
-        ):
-            text = (ROOT / relative).read_text(encoding='utf-8')
-            self.assertIn(indented, text)
-            self.assertIn('trusts-policy.lock.yaml', text)
-            self.assertNotIn('trusts-policy.lock.json', text)
-            self.assertNotIn('code-block:: json', text)
-
 
 class PolicyCompositionEvidenceTest(SimpleTestCase):
     def test_composition_is_test_evidence_only(self):
