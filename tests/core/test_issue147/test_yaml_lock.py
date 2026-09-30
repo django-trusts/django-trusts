@@ -16,6 +16,8 @@ from django.test import SimpleTestCase
 
 from tests.core.test_issue147.test_sql_export import (
     DocumentPermission,
+    HiddenDocument,
+    HiddenGrant,
     PolicyActorGrant,
     TeamDocumentPermission,
     _document_handle,
@@ -23,7 +25,11 @@ from tests.core.test_issue147.test_sql_export import (
 )
 from trusts.conditions._ir import ModelIdentity
 from trusts.core import TrustsConfigurationError
-from trusts.policy_composition import _verify_composition
+from trusts.policy_composition import (
+    _append_operation,
+    _factor,
+    _verify_composition,
+)
 from trusts.policy_lock import (
     _const_from_json,
     _json_const,
@@ -440,6 +446,56 @@ class PolicyCompositionTest(SimpleTestCase):
         with self.assertRaises(TrustsConfigurationError) as ctx:
             _verify_composition(composition)
         self.assertIn('not closed SQL', str(ctx.exception))
+
+    def test_model_without_objects_manager_still_composes(self):
+        self.assertFalse(hasattr(HiddenDocument, 'objects'))
+        self.assertIs(
+            HiddenDocument._meta.concrete_model._default_manager,
+            HiddenDocument._default_manager,
+        )
+        handle = _handle('documents.backends.HiddenBackend')
+        handle.register(
+            trust=HiddenGrant,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        backend = document['backends'][0]
+        trust = backend['trusts'][0]
+        self.assertIn('documents_hiddendocument', trust['sql'])
+        composition = backend['composition']
+        _verify_composition(composition)
+        by_kind = {row['kind']: row for row in composition['operations']}
+        instance = by_kind['has_perm_permission_instance']
+        self.assertEqual(instance['representation'], 'structured')
+        self.assertIn('documents_hiddendocument', instance['expanded']['sql'])
+
+    def test_repeated_fragment_text_stays_full_sql(self):
+        fragment = {
+            'id': 'grant:example',
+            'kind': 'grant_exists',
+            'sql': 'SELECT %s',
+            'params': [{'const': 1}],
+        }
+        sql = 'SELECT %s AND (SELECT %s)'
+        params = [{'const': 1}, {'const': 1}]
+        self.assertIsNone(_factor(sql, params, [fragment]))
+        operations = []
+        fragments = {}
+        order = []
+        _append_operation(
+            operations, fragments, order, 'repeated', 'kind', sql, params,
+            [fragment],
+        )
+        self.assertEqual(len(operations), 1)
+        self.assertEqual(operations[0]['representation'], 'full_sql')
+        self.assertEqual(operations[0]['sql'], sql)
+        self.assertNotIn('{{', operations[0]['sql'])
+        self.assertEqual(fragments, {})
+        self.assertEqual(order, [])
 
     def test_mixed_user_models_fail_closed(self):
         handle = _handle('documents.backends.MixedBackend')

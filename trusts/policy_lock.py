@@ -381,7 +381,7 @@ def _compile_authorized(record, alias):
         permission_model=record.permission_model,
     )
     queryset = plan.filter_content(
-        record.content_model._default_manager.all(),
+        record.content_model._meta.concrete_model._default_manager.all(),
         user,
         permission,
     )
@@ -396,7 +396,7 @@ def _compile_named_filter(model, expr, alias):
         _any_sentinel_user(alias),
         _any_sentinel_permission(alias),
     )
-    queryset = model._default_manager.filter(compiled)
+    queryset = model._meta.concrete_model._default_manager.filter(compiled)
     return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
