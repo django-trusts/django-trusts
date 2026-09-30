@@ -48,15 +48,12 @@ GOLDEN_CONSTANTS = (
 )
 
 _FORBIDDEN = (
-    'change_document',
     'fingerprint',
     'sha256',
     '\nexpr:',
     '\nhandles:',
-    '\nkind:',
     '\nfamily:',
     '\ncompiler:',
-    'codename',
 )
 
 
@@ -328,6 +325,11 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('documents_documentpermission', named['sql'])
         self.assertNotIn('confidential" IS NULL', trust['sql'])
         self.assertNotIn('confidential" = %s', trust['sql'])
+        self.assertNotIn('kind', trust)
+        self.assertNotIn('kind', named)
+        for token in ('change_document', 'codename'):
+            self.assertNotIn(token, trust['sql'])
+            self.assertNotIn(token, named['sql'])
         for token in _FORBIDDEN:
             self.assertNotIn(token, text)
 
@@ -413,6 +415,20 @@ class PolicySqlGoldenTest(SimpleTestCase):
             {'bind': 'permission.id'},
             {'bind': 'user.id'},
         ])
+        composed = document['backends'][0]['composition']
+        or_group = next(
+            row for row in composed['operations']
+            if row['kind'] == 'or_group_authorized'
+        )
+        self.assertEqual(or_group['representation'], 'structured')
+        self.assertIn(' OR ', or_group['expanded']['sql'])
+        self.assertEqual(
+            [ref['fragment'] for ref in or_group['refs']],
+            [
+                'grant:documents.DocumentPermission:document',
+                'grant:documents.TeamDocumentPermission:document',
+            ],
+        )
 
     def test_empty_relationship_backend_is_still_emitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
@@ -427,6 +443,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
         ])
         self.assertEqual(document['backends'][1]['trusts'], [])
         self.assertEqual(document['backends'][1]['named_filters'], [])
+        self.assertNotIn('composition', document['backends'][1])
+        self.assertIn('composition', document['backends'][0])
 
     def test_unsupported_family_fails_closed(self):
         with patch(
