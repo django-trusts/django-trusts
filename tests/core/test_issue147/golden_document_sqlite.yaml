@@ -33,8 +33,8 @@ backends:
           - const: true
     composition:
       fragments:
-        - id: "grant:documents.DocumentPermission:document"
-          kind: "grant_exists"
+        - id: "trust:documents.DocumentPermission:document"
+          kind: "trust_exists"
           sql: |-
             SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1
           params:
@@ -52,13 +52,13 @@ backends:
           kind: "has_perm_permission_instance"
           representation: "structured"
           sql: |-
-            SELECT %s AS "a" FROM "documents_document" WHERE ("documents_document"."id" = %s AND EXISTS({{grant:documents.DocumentPermission:document}})) LIMIT 1
+            SELECT %s AS "a" FROM "documents_document" WHERE ("documents_document"."id" = %s AND EXISTS({{trust:documents.DocumentPermission:document}})) LIMIT 1
           params:
             - const: 1
             - const: 1
           refs:
-            - placeholder: "{{grant:documents.DocumentPermission:document}}"
-              fragment: "grant:documents.DocumentPermission:document"
+            - placeholder: "{{trust:documents.DocumentPermission:document}}"
+              fragment: "trust:documents.DocumentPermission:document"
           expanded:
             sql: |-
               SELECT %s AS "a" FROM "documents_document" WHERE ("documents_document"."id" = %s AND EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)) LIMIT 1
@@ -85,11 +85,11 @@ backends:
           kind: "authorized_and_named_filter"
           representation: "structured"
           sql: |-
-            SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE (EXISTS({{grant:documents.DocumentPermission:document}}) AND {{predicate:documents.Document:non_confidential}})
+            SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE (EXISTS({{trust:documents.DocumentPermission:document}}) AND {{predicate:documents.Document:non_confidential}})
           params: []
           refs:
-            - placeholder: "{{grant:documents.DocumentPermission:document}}"
-              fragment: "grant:documents.DocumentPermission:document"
+            - placeholder: "{{trust:documents.DocumentPermission:document}}"
+              fragment: "trust:documents.DocumentPermission:document"
             - placeholder: "{{predicate:documents.Document:non_confidential}}"
               fragment: "predicate:documents.Document:non_confidential"
           expanded:
@@ -104,11 +104,11 @@ backends:
           kind: "queryset_has_perm"
           representation: "structured"
           sql: |-
-            SELECT COUNT(DISTINCT "documents_document"."id") AS "total", COUNT(DISTINCT "documents_document"."id") FILTER (WHERE NOT (EXISTS({{grant:documents.DocumentPermission:document}}))) AS "lacking" FROM "documents_document"
+            SELECT COUNT(DISTINCT "documents_document"."id") AS "total", COUNT(DISTINCT "documents_document"."id") FILTER (WHERE NOT (EXISTS({{trust:documents.DocumentPermission:document}}))) AS "lacking" FROM "documents_document"
           params: []
           refs:
-            - placeholder: "{{grant:documents.DocumentPermission:document}}"
-              fragment: "grant:documents.DocumentPermission:document"
+            - placeholder: "{{trust:documents.DocumentPermission:document}}"
+              fragment: "trust:documents.DocumentPermission:document"
           expanded:
             sql: |-
               SELECT COUNT(DISTINCT "documents_document"."id") AS "total", COUNT(DISTINCT "documents_document"."id") FILTER (WHERE NOT (EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1))) AS "lacking" FROM "documents_document"
