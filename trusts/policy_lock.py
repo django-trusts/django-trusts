@@ -1,10 +1,10 @@
-"""SQL-first authorization policy export and lockfile check (issue #237).
+"""SQL-first authorization policy export and lockfile check.
 
-``trusts_policy_sql`` renders schema version 1: one ``.authorized()``
-statement per registered trust, standalone named-filter SQL, and
-``or_group`` when two trusts on a backend share a content model. The
-alias is not stored. ``trusts.E009`` compares those bytes to the
-committed file. It is the only lockfile enforcement.
+``trusts_policy_sql`` renders schema version 1 as canonical YAML: one
+``.authorized()`` statement per registered trust, standalone
+named-filter SQL, and ``or_group`` when two trusts on a backend share a
+content model. The alias is not stored. ``trusts.E009`` compares those
+bytes to the committed file. It is the only lockfile enforcement.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from __future__ import annotations
 import contextvars
 import datetime
 import errno
-import json
 import math
 import os
 import stat
@@ -30,10 +29,15 @@ from trusts.core import (
     RelationPlan,
     TrustsConfigurationError,
 )
+from trusts.policy_yaml import (
+    PolicyYamlError,
+    dump_policy_yaml,
+    load_policy_yaml,
+)
 
 SCHEMA_VERSION = 1
 CHECK_ID_POLICY_LOCK = 'trusts.E009'
-CONVENTIONAL_LOCKFILE_NAME = 'trusts-policy.lock.json'
+CONVENTIONAL_LOCKFILE_NAME = 'trusts-policy.lock.yaml'
 
 _INTEGER_SENTINEL_TYPES = frozenset((
     'AutoField',
@@ -191,7 +195,7 @@ def resolve_lockfile_path(*, override=None):
     ``override`` is an explicit path. When it is omitted, a set
     ``settings.TRUSTS_POLICY_LOCKFILE`` (anything other than ``None``)
     is the explicit path. Otherwise the conventional path is
-    ``settings.BASE_DIR / "trusts-policy.lock.json"`` when ``BASE_DIR``
+    ``settings.BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR``
     is an absolute path string or ``Path``. A missing or relative
     ``BASE_DIR`` is not usable and requires an explicit absolute path.
     Relative explicit paths fail closed. This function does not create
@@ -808,14 +812,15 @@ def _symbols_from_params(params):
 
 
 def _json_const(value):
-    """JSON value for one condition constant.
+    """In-document value for one condition constant.
 
-    ``null``, booleans, strings, and integers stay bare JSON values, as
-    in the schema-1 samples. Finite floats stay JSON numbers (``1`` and
-    ``1.0`` remain distinct). Bytes, ``Decimal``, ``UUID``, dates,
-    times, datetimes, timedeltas, non-finite floats, and
-    ``ModelIdentity`` have no JSON type that round-trips without
-    colliding with those bare values, so they use a tagged object.
+    ``null``, booleans, strings, integers, and finite floats stay bare
+    scalars. ``1`` and ``1.0`` stay distinct, and ``-0.0`` keeps its
+    sign. Bytes, ``Decimal``, ``UUID``, dates, times, datetimes,
+    timedeltas, non-finite floats, and ``ModelIdentity`` use a tagged
+    mapping (``type`` plus fields). The YAML codec writes those
+    mappings as ordinary mappings and quotes every string inside them,
+    so YAML 1.1 does not reinterpret dates, bool words, or decimals.
     """
     from trusts.conditions._ir import ModelIdentity
 
@@ -871,7 +876,7 @@ def _json_const(value):
 
 
 def _const_from_json(value):
-    """Inverse of :func:`_json_const` for the recorded JSON value."""
+    """Inverse of :func:`_json_const` for one recorded constant value."""
     from trusts.conditions._ir import ModelIdentity
 
     if isinstance(value, dict):
@@ -928,57 +933,29 @@ def _model_label(model):
 
 
 def _dump_document(document):
-    text = _dump(document, 0)
-    if not text.endswith('\n'):
-        text += '\n'
-    raw = text.encode('utf-8')
-    if raw.startswith(b'\xef\xbb\xbf'):
+    try:
+        return dump_policy_yaml(document)
+    except PolicyYamlError as exc:
+        raise TrustsConfigurationError(str(exc)) from exc
+
+
+def load_policy_sql_document(payload):
+    """Read canonical policy YAML into the schema-1 mapping.
+
+    ``trusts.E009`` does not call this. Equality is raw bytes against
+    :func:`render_policy_sql_bytes`. This loader is the diagnostic
+    inverse: it accepts only the spellings :func:`dump_policy_yaml`
+    emits.
+    """
+    try:
+        document = load_policy_yaml(payload)
+    except PolicyYamlError as exc:
+        raise TrustsConfigurationError(str(exc)) from exc
+    if not isinstance(document, dict):
         raise TrustsConfigurationError(
-            'Policy SQL render produced a byte-order mark.'
+            'Policy SQL document must be a mapping.'
         )
-    return raw
-
-
-def _dump(value, indent):
-    if _is_param(value):
-        key, item = next(iter(value.items()))
-        return json.dumps(
-            {key: item}, ensure_ascii=False, separators=(', ', ': '),
-        )
-    if isinstance(value, dict):
-        if not value:
-            return '{}'
-        lines = ['{']
-        items = list(value.items())
-        pad = ' ' * (indent + 2)
-        for index, (key, item) in enumerate(items):
-            comma = ',' if index < len(items) - 1 else ''
-            lines.append('%s%s: %s%s' % (
-                pad,
-                json.dumps(key, ensure_ascii=False),
-                _dump(item, indent + 2),
-                comma,
-            ))
-        lines.append('%s}' % (' ' * indent))
-        return '\n'.join(lines)
-    if isinstance(value, list):
-        if not value:
-            return '[]'
-        lines = ['[']
-        pad = ' ' * (indent + 2)
-        for index, item in enumerate(value):
-            comma = ',' if index < len(value) - 1 else ''
-            lines.append('%s%s%s' % (pad, _dump(item, indent + 2), comma))
-        lines.append('%s]' % (' ' * indent))
-        return '\n'.join(lines)
-    return json.dumps(value, ensure_ascii=False)
-
-
-def _is_param(value):
-    if not isinstance(value, dict) or len(value) != 1:
-        return False
-    key = next(iter(value))
-    return key in ('bind', 'const')
+    return document
 
 
 def _configured_lock_override():
