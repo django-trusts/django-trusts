@@ -1,15 +1,8 @@
-"""Suite membership and the single runtime gate.
+"""Suite membership and the removed request-time lockfile gate."""
 
-Kernel and pair labels stay ``tests.core.test_issue147``. The
-slice modules below are what that label loads.
-"""
-
-import inspect
 from pathlib import Path
 
 from django.test import SimpleTestCase
-
-from trusts.core import RelationPlan
 
 
 class PolicyLockImportTest(SimpleTestCase):
@@ -19,61 +12,22 @@ class PolicyLockImportTest(SimpleTestCase):
         self.assertIn('tests.core.test_issue147', KERNEL_SUITE)
         self.assertIn('tests.core.test_issue147', PAIR_KERNEL_SUITE)
 
-    def test_authorization_modules_call_only_the_shared_gate(self):
+    def test_request_time_lockfile_gate_is_removed(self):
         import trusts.backends as backends
         import trusts.core as core
         import trusts.decorators as decorators
+        import trusts.policy_lock as policy_lock
         import trusts.query as query
 
-        gated = {
-            backends: 1,
-            query: 2,
-            decorators: 1,
-            core: 5,
-        }
-        for module, count in gated.items():
+        self.assertFalse(hasattr(policy_lock, 'ensure_policy_lockfile_verified'))
+        self.assertFalse(hasattr(policy_lock, '_policy_lock_verification_state'))
+        for module in (backends, core, decorators, query):
             source = Path(module.__file__).read_text(encoding='utf-8')
-            self.assertEqual(
-                source.count('ensure_policy_lockfile_verified('), count,
-                module.__name__,
-            )
-            self.assertNotIn('build_policy_manifest', source)
-            self.assertNotIn('read_canonical_policy', source)
+            self.assertNotIn('ensure_policy_lockfile_verified', source)
+        lock_source = Path(policy_lock.__file__).read_text(encoding='utf-8')
+        self.assertNotIn('ensure_policy_lockfile_verified', lock_source)
+        self.assertNotIn('probe_along_capabilities', lock_source)
+        self.assertNotIn('INACTIVE', lock_source)
+        self.assertNotIn('VERIFIED', lock_source)
         backend_source = Path(backends.__file__).read_text(encoding='utf-8')
-        self.assertEqual(backend_source.count('self._gate_policy_lock()'), 3)
-        for module in (backends, query, decorators):
-            source = Path(module.__file__).read_text(encoding='utf-8')
-            self.assertNotIn('canonicalize(', source)
-        plan = inspect.getsource(RelationPlan.common_permissions)
-        self.assertNotIn('ensure_policy_lockfile_verified', plan)
-        checks = Path(core.__file__).resolve().parents[1] / 'trusts' / 'checks.py'
-        self.assertNotIn(
-            'ensure_policy_lockfile_verified',
-            checks.read_text(encoding='utf-8'),
-        )
-
-    def test_slice_modules_name_the_audit_layout(self):
-        import importlib
-
-        from tests.core.test_issue147 import SLICE_MODULES
-
-        self.assertEqual(
-            SLICE_MODULES,
-            (
-                'tests.core.test_issue147.test_c1_snapshot',
-                'tests.core.test_issue147.test_unsupported_family',
-                'tests.core.test_issue147.test_c2_canonical',
-                'tests.core.test_issue147.test_c3_commands',
-                'tests.core.test_issue147.test_c4a_runtime',
-                'tests.core.test_issue147.test_c4b_isolation',
-                'tests.core.test_issue147.test_suite_wiring',
-            ),
-        )
-        unsupported = importlib.import_module(
-            'tests.core.test_issue147.test_unsupported_family',
-        )
-        self.assertTrue(hasattr(
-            unsupported.UnsupportedFamilyFailClosedTest,
-            'test_unsupported_family_fails_closed_for_the_whole_snapshot',
-        ))
-
+        self.assertNotIn('_gate_policy_lock', backend_source)

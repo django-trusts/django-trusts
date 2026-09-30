@@ -301,10 +301,10 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
                 )
 
     def ready(self):
-        # Discover generate/check after models are populated. Core is not
+        # Discover trusts_policy_sql after models are populated. Core is not
         # an installed app and does not ship trusts/management (#129), so
-        # the commands attach here. Subclasses that replace ready() must
-        # call super() or the commands stay unregistered.
+        # the command attaches here. Subclasses that replace ready() must
+        # call super() or the command stays unregistered.
         from trusts.policy_commands import install_policy_commands
 
         install_policy_commands()

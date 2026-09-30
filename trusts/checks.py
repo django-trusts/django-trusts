@@ -17,6 +17,8 @@ diagnostics live in ``django-trusts-ordered-fold`` as
 
 from django.core import checks as django_checks
 
+# Importing the lockfile module registers the untagged trusts.E009 check.
+import trusts.policy_lock  # noqa: F401
 from trusts.conditions import PermissionConditionError
 from trusts.conditions._ir import (
     obsolete_legacy_callback_setting_enabled,
