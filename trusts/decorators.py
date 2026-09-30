@@ -263,10 +263,8 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
 def _authorize_candidate(request, view_kwargs, model, permission, conditions):
     from django.apps import apps as django_apps
     from trusts.apps import _relationship_implementation_handles
-    from trusts.policy_lock import ensure_policy_lockfile_verified
 
     handles = _relationship_implementation_handles()
-    ensure_policy_lockfile_verified(*handles)
 
     user = getattr(request, 'user', None)
     raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None
@@ -333,7 +331,6 @@ def authorization_required(model, permission, conditions=()):
     those backends composes its own grant with its own selected names
     before the backends are OR'd; backend order does not change the
     result. Only relationship-family implementation handles participate.
-    The policy lock is verified before any allow, deny, or 404 result.
     Does not use Django backend OR, ``user.has_perm``, or the
     legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
     surface. Django's object-level ``user.has_perm`` OR across

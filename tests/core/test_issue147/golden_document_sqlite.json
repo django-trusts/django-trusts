@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "database": {
+    "engine": "django.db.backends.sqlite3"
+  },
+  "backends": [
+    {
+      "path": "documents.backends.DocumentBackend",
+      "trusts": [
+        {
+          "id": "documents.DocumentPermission:document",
+          "root": "documents.DocumentPermission",
+          "user": {
+            "path": "user",
+            "model": "auth.User",
+            "target": "id"
+          },
+          "permission": {
+            "path": "permission",
+            "model": "auth.Permission",
+            "target": "id"
+          },
+          "content": {
+            "path": "document",
+            "model": "documents.Document",
+            "target": "id"
+          },
+          "sql": "SELECT DISTINCT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE EXISTS(SELECT %s AS \"a\" FROM \"documents_documentpermission\" \"U0\" WHERE (\"U0\".\"permission_id\" = %s AND \"U0\".\"user_id\" = %s AND \"U0\".\"document_id\" = (\"documents_document\".\"id\")) LIMIT 1)",
+          "params": [
+            {"const": 1},
+            {"bind": "permission.id"},
+            {"bind": "user.id"}
+          ]
+        }
+      ],
+      "named_filters": [
+        {
+          "model": "documents.Document",
+          "code": "non_confidential",
+          "sql": "SELECT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE (\"documents_document\".\"confidential\" IS NULL OR NOT (\"documents_document\".\"confidential\" = %s))",
+          "params": [
+            {"const": true}
+          ]
+        }
+      ]
+    }
+  ]
+}
