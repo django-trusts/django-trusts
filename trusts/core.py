@@ -244,14 +244,9 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
 
-    The policy lock is verified before this returns, including a
-    ``None`` result. Only relationship-family handles participate in
-    that check.
+    Only relationship-family handles participate.
     """
-    from trusts.policy_lock import ensure_policy_lockfile_verified
-
     participating = _relationship_handles(handles)
-    ensure_policy_lockfile_verified(*participating)
     return _compile_granted(
         participating,
         candidates, user, permission, kind=kind,
@@ -329,9 +324,6 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     Noun-blind: this builder does not import or name Zero schema models
     and does not use a compiler's historical group
     OR. Group-as-trustee remains a later registered root.
-
-    The policy lock is verified after the queryset type check and
-    before any filtered queryset, including ``none()``.
     """
     if not isinstance(queryset, QuerySet):
         raise TrustsConfigurationError(
@@ -343,9 +335,6 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
         handles = _relationship_implementation_handles()
     else:
         handles = _relationship_handles(handles)
-    from trusts.policy_lock import ensure_policy_lockfile_verified
-
-    ensure_policy_lockfile_verified(*handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
     if not handles:
@@ -375,14 +364,9 @@ def all_match(handles, candidates, user, permission, *, kind='complete', extra_q
 
     One SQL. ``None`` when no handle applies so the caller may use the
     undeclared fallback. ``extra_q`` is an optional overlay (AND); it
-    never creates a grant. The policy lock is verified before that
-    ``None`` or a boolean is returned. Every supplied handle
-    participates.
+    never creates a grant. Every supplied handle participates.
     """
-    from trusts.policy_lock import ensure_policy_lockfile_verified
-
     handles = tuple(handles)
-    ensure_policy_lockfile_verified(*handles)
     granted_q = _compile_granted(handles, candidates, user, permission, kind=kind)
     if granted_q is None:
         return None
@@ -400,13 +384,8 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
     """One grant EXISTS for ``obj`` through ``handle`` only.
 
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
-    overlay (AND); it never creates a grant. The policy lock is
-    verified for ``handle`` before that ``None`` or a boolean is
-    returned.
+    overlay (AND); it never creates a grant.
     """
-    from trusts.policy_lock import ensure_policy_lockfile_verified
-
-    ensure_policy_lockfile_verified(handle)
     granted_q = _compile_granted((handle,), obj, user, permission, kind=kind)
     if granted_q is None:
         return None
@@ -469,15 +448,11 @@ def common_permissions(handles, candidates, user, *, kind='complete'):
     may use the undeclared fallback. Uses nested ``OuterRef`` so the
     permission identity is the outer permission row, not the candidate.
     Applicability is ``compiler.applies(plan)``. Mixin enumeration uses
-    ``_compile_common_permissions`` on ``self._own_handle()``. The
-    policy lock is verified before this returns, including ``None``.
-    Only relationship-family handles participate in that check.
+    ``_compile_common_permissions`` on ``self._own_handle()``.
+    Only relationship-family handles participate.
     ``RelationPlan.common_permissions`` is not this function.
     """
-    from trusts.policy_lock import ensure_policy_lockfile_verified
-
     participating = _relationship_handles(handles)
-    ensure_policy_lockfile_verified(*participating)
     return _compile_common_permissions(
         participating,
         candidates, user, kind=kind,

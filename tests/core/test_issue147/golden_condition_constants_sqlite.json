@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "database": {
+    "engine": "django.db.backends.sqlite3"
+  },
+  "backends": [
+    {
+      "path": "documents.backends.ConstantBackend",
+      "trusts": [],
+      "named_filters": [
+        {
+          "model": "documents.ConstantDocument",
+          "code": "amount",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"amount\" = %s",
+          "params": [
+            {"const": 1.5}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "negzero",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"amount\" = %s",
+          "params": [
+            {"const": -0.0}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "nan",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"amount\" = %s",
+          "params": [
+            {"const": {"type": "float", "value": "NaN"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "infinity",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"amount\" = %s",
+          "params": [
+            {"const": {"type": "float", "value": "Infinity"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "negative_infinity",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"amount\" = %s",
+          "params": [
+            {"const": {"type": "float", "value": "-Infinity"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "payload",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"payload\" = %s",
+          "params": [
+            {"const": {"type": "bytes", "hex": "00ff"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "price",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"price\" = %s",
+          "params": [
+            {"const": {"type": "decimal", "value": "12.50"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "token",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"token\" = %s",
+          "params": [
+            {"const": {"type": "uuid", "value": "12345678-1234-5678-1234-567812345678"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "day",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"day\" = %s",
+          "params": [
+            {"const": {"type": "date", "value": "2024-03-04"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "clock",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"clock\" = %s",
+          "params": [
+            {"const": {"type": "time", "value": "05:06:07"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "stamp",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"stamp\" = %s",
+          "params": [
+            {"const": {"type": "datetime", "value": "2024-03-04T05:06:07+00:00"}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "span",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"span\" = %s",
+          "params": [
+            {"const": {"type": "timedelta", "days": 1, "seconds": 2, "microseconds": 3}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "owner",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"owner_id\" = %s",
+          "params": [
+            {"const": {"type": "model", "app_label": "auth", "model": "user", "pk": 7}}
+          ]
+        },
+        {
+          "model": "documents.ConstantDocument",
+          "code": "label",
+          "sql": "SELECT \"documents_constantdocument\".\"id\", \"documents_constantdocument\".\"amount\", \"documents_constantdocument\".\"payload\", \"documents_constantdocument\".\"price\", \"documents_constantdocument\".\"token\", \"documents_constantdocument\".\"day\", \"documents_constantdocument\".\"clock\", \"documents_constantdocument\".\"stamp\", \"documents_constantdocument\".\"span\", \"documents_constantdocument\".\"label\", \"documents_constantdocument\".\"owner_id\" FROM \"documents_constantdocument\" WHERE \"documents_constantdocument\".\"label\" = %s",
+          "params": [
+            {"const": "alpha"}
+          ]
+        }
+      ]
+    }
+  ]
+}

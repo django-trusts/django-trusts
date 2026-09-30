@@ -292,141 +292,65 @@ treated as a defect and should be closed.
 Where practical, configuration failures should surface during startup or system
 checks. Runtime denial should not fall back to a broader Trusts path.
 
-## Authorization policy lockfile
+## Authorization policy SQL and lockfile
 
-An application can commit the canonical normalized authorization surface as
-`trusts-policy.lock.json` and require later checks to match that artifact.
-Equality proves only that the live declared and normalized authorization
-surface matches the reviewed artifact.
+The user-facing [authorization policy SQL guide](docs/source/authorization-policy-sql.rst)
+describes the inspection, lockfile, and system-check workflow. This section
+records the additional security boundaries.
 
-That match is a review aid for the declared surface. It is not a security
-proof of the compiler, the database, the application, or the pull request
-that produced the file.
+Rendering may open the database alias selected from Django settings for driver
+initialization, server-version discovery, or capability queries. The exported
+authorization statements are compiled without being executed, and rendering
+does not read application or authorization rows. Audit that alias's connection
+settings, installed-driver provenance, server capabilities, and account
+authority. A separate SQLite inspection alias limits production exposure, but
+the resulting artifact describes SQLite rather than production SQL.
 
-`trusts_policy_generate` writes the artifact. `trusts_policy_check` compares
-it. Both are deterministic and issue no SQL. Generation creates or replaces
-the file when the parent directory can accept it, and it fails closed when
-that parent is missing, not a directory, or not writable. It does not treat
-a missing file as inactive, it does not verify, and it does not authorize.
-Django system checks do not verify either. Check and runtime verification
-use the same canonical comparison. Pass or fail is semantic bytes: UTF-8,
-LF, with incidental whitespace and newline style normalized away. The human
-diff explains a mismatch. It does not decide the mismatch. The compared
-document does not carry package version, source location, process identity,
-or wrapper object identity. Those are not authorization semantics. The only
-nonsemantic key the reader drops is a top-level `diagnostics` object.
-Every other unknown field fails closed.
+The database alias is not stored. `database.engine` identifies the configured
+engine, while the SQL records the renderer's effective quoting, placeholders,
+operators, and dialect. Two aliases that render identical documents produce
+identical bytes. Lockfile equality therefore verifies rendered output rather
+than database identity.
+
+### Check lifecycle and enforcement
+
+The lockfile check uses the stable id `trusts.E009`. It is the only lockfile
+enforcement and is not a request-time authorization gate. Silencing it with
+`SILENCED_SYSTEM_CHECKS`, or running a tag-selected check set that omits
+untagged checks, removes that enforcement.
+
+The check runs after application registration is complete. WSGI and ASGI
+startup do not prove that it ran.
 
 ### What equality does not prove
 
-A matching lockfile does not prove:
+Byte-for-byte equality proves only that the finalized declarations and the
+renderer selected in settings produce the reviewed artifact. The artifact
+records each trust's `.authorized()` SQL and each named filter's SQL. Trusts
+that authorize the same content model are marked with `or_group`, but their
+runtime OR assembly is covered by library tests. The artifact also leaves
+filter-to-grant AND composition, other authorization operations, zero-SQL
+short circuits, and combination across authentication backends to tests.
+
+Equality does not prove:
 
 - compiler correctness;
 - trustworthy database rows or grant workflows;
 - the absence of application bypasses;
-- the behavior of other Django auth backends; or
-- the safety of a PR that changes both code and lockfile.
+- the behavior of other Django authentication backends;
+- that an inspection renderer matches production; or
+- the safety of a change that updates both code and lockfile.
 
 Django still grants when any configured authentication backend grants. An
-active superuser remains globally authorized in `PermissionsMixin.has_perm()`
-before backends run. A green lockfile check does not revoke those grants and
-does not make a combined code-and-lockfile change acceptable by itself.
-Review the new surface with the diff below. Review the application, its
-rows, and its other backends as the rest of this guide requires.
+active superuser remains globally authorized in
+`PermissionsMixin.has_perm()` before backends run. A green lockfile check does
+not revoke those grants and does not make a combined code-and-lockfile change
+acceptable by itself.
 
-### How to read a semantic diff
-
-`trusts_policy_check` prints the human authorization diff. Verbosity 2 also
-prints the raw canonical JSON diff. Read the human diff by meaning:
-
-| Signal | Review it as |
-| --- | --- |
-| Registration added or removed | A declared grant path entered or left the surface |
-| Label stable, fingerprint moved | The readable name stayed. The authorization semantics did not |
-| Label changed, fingerprint unchanged | A rename. The normalized registration did not move |
-| Condition added, removed, or changed | The closed predicate on that registration changed |
-| Path user, permission, or content | The relationship walk changed |
-| Model root, user, permission, or content | A terminal model identity changed |
-| Target user, permission, or content | A comparison or `to_field` identity changed |
-| Strategy kind | The registration strategy kind changed |
-| Strategy `along` added, removed, or a field moved | Direction, bound, walk, or edge identity changed |
-| Named filter added, removed, or changed | A restricting overlay changed. A named filter does not grant by itself |
-| Handle added or removed | An implementation backend entered or left the configured surface |
-| Family or compiler | Ownership changed: the authorization family or the compiler identity |
-| Renderer alias, engine, profile, profile version, or Along support | The declared database renderer profile changed |
-| `schema_version` | The manifest schema moved |
-| `compiler_version` | Normalized-policy interpretation moved |
-
-Registrations match by fingerprint first. A single unmatched recorded row
-and a single unmatched live row that share a label are reported as one
-likely change (label stable, fingerprint moved). When several leftovers
-share a label, they are added and removed, not paired. Named filters match
-by model and code. Handle path, family, compiler, renderer, and the two
-version fields are first-class.
-
-The fingerprint is the semantic identity of one registration: kind, paths,
-models, comparison targets, condition, and Along. The label is only a
-reviewer-readable name. Registration order and commutative condition order
-that normalize to the same semantics are not drift. A behavior-affecting
-change must move the fingerprint and appear in this diff.
-
-Core lockfile v1 serializes the relationship family only. A configured
-handle in any other family, including ordered fold, fails the whole
-snapshot closed. The failure names that backend path and its family. It
-does not omit the handle and continue, and it does not open a second
-lockfile for that family. Schema or compiler-version movement is an
-interpretation change,
-not a routine package bump. There is no in-place migration of an older
-document: an unknown version fails closed.
-
-A pull request that changes both code and the lockfile still needs this
-review. A passing check means the file matches the code that produced it.
-It does not mean the new surface is the one reviewers intended.
-
-### Presence, checking, and process-local state
-
-There is no off, check, or enforce mode, and no second setting that can
-disable a lockfile once it is in force.
-
-The conventional path is `settings.BASE_DIR / "trusts-policy.lock.json"`
-when `BASE_DIR` is an absolute path. An explicit absolute path may be set
-with `TRUSTS_POLICY_LOCKFILE` or with `--lockfile` on either command.
-`--lockfile` wins when both are set. `None` means the setting is unset.
-Relative paths fail closed. The process working directory is never used,
-and parent directories are never searched for a lockfile.
-
-Supplying an explicit path is enforcement intent. Absence is inactive only
-for the conventional location.
-
-| Situation | `trusts_policy_check` | Runtime authorization |
-| --- | --- | --- |
-| Conventional file absent, including a missing conventional parent | Inactive. No manifest is built | Sticky `INACTIVE` until this process restarts. A file created later in the same process is ignored. Results keep their previous behavior |
-| No explicit path and no usable absolute `BASE_DIR` | Fail closed. The working directory is not a fallback | Sticky `INACTIVE` until restart |
-| Explicit path missing, unreadable, or not a file | Fail closed | Sticky `FAILED` |
-| File present but malformed, incompatible, or different | Fail closed | Sticky `FAILED`. Later calls in this process re-raise that failure and do not re-read the file |
-| Canonical bytes match | Match | Sticky `VERIFIED` |
-
-Runtime verification is one process-local state machine. It starts
-`UNCHECKED`. It runs only after Django apps are ready, freezes the
-configured registries, and then compares. It runs before every Trusts
-authorization result, including early denials and empty results. A fresh
-process starts `UNCHECKED` and reads the current file itself. It does not
-inherit another process's `VERIFIED`, `INACTIVE`, or `FAILED` memory.
-Leaving a sticky state requires a process restart.
-
-When the state is `VERIFIED`, every handle that participates in a result
-must belong to that snapshot: configured path, the same owner and family,
-the same frozen registry, compiler identity, and the declared renderer
-profile. A newly constructed wrapper is acceptable when those components
-match. Wrapper identity is not written into the portable file. After a
-successful verification, late registration and late named-filter
-registration still fail before they can change the frozen registry or the
-verified snapshot.
-
-The recorded renderer is the conservative declared profile of Django's
-already-configured default database alias. Verification does not open a
-connection, probe server version, or accept a Trusts-specific dialect or
-backend path.
+Review backend paths, trust relationships, `or_group`, named filters,
+parameter roles, `sql`, and `database.engine` as changes to the authorization
+surface. Lockfile equality is a change-control mechanism, not a complete
+security proof.
 
 ## Reference implementations
 
@@ -463,10 +387,10 @@ answer:
 6. Did any unsupported database, callback, private registry, or private IR
    surface become reachable?
 7. If a policy lockfile is in play, does equality show only that the live
-   declared and normalized authorization surface matches the reviewed
-   artifact, and has every semantic addition, removal, fingerprint,
-   condition, path, model, strategy, renderer, ownership, schema, or
-   compiler-version change been reviewed on its own?
+   declared authorization surface and rendered SQL match the reviewed
+   artifact, and has every change to the Trusts backend or registration,
+   operation, parameter roles, `sql`, or `database.engine` been reviewed
+   on its own?
 8. If the implementation disagrees with this guide, is the code wrong, is the
    guide wrong, or has an explicit design decision changed the boundary?
 
