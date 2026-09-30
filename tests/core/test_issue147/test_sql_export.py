@@ -28,20 +28,22 @@ from trusts.core import (
 )
 from trusts.policy_lock import (
     CHECK_ID_POLICY_LOCK,
+    CONVENTIONAL_LOCKFILE_NAME,
     _Symbol,
     _classify_compiled,
     _const_from_json,
     _json_const,
     _sentinel,
+    _load_policy_sql_document,
     render_policy_sql_bytes,
 )
 
 GOLDEN_SQLITE = (
-    Path(__file__).with_name('golden_document_sqlite.json').read_bytes()
+    Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
 )
 GOLDEN_CONSTANTS = (
     Path(__file__).with_name(
-        'golden_condition_constants_sqlite.json',
+        'golden_condition_constants_sqlite.yaml',
     ).read_bytes()
 )
 
@@ -49,11 +51,11 @@ _FORBIDDEN = (
     'change_document',
     'fingerprint',
     'sha256',
-    '"expr"',
-    '"handles"',
-    '"kind"',
-    '"family"',
-    '"compiler"',
+    '\nexpr:',
+    '\nhandles:',
+    '\nkind:',
+    '\nfamily:',
+    '\ncompiler:',
     'codename',
 )
 
@@ -306,10 +308,13 @@ class PolicySqlGoldenTest(SimpleTestCase):
         payload = render_policy_sql_bytes(handles=[_document_handle()])
         self.assertEqual(payload, GOLDEN_SQLITE)
         self.assertTrue(payload.endswith(b'\n'))
+        self.assertFalse(payload.endswith(b'\n\n'))
         self.assertFalse(payload.startswith(b'\xef\xbb\xbf'))
+        self.assertIn(b'sql: |-\n', payload)
+        self.assertNotIn(b'!!', payload)
         text = payload.decode('utf-8')
         self.assertNotIn('\r', text)
-        document = json.loads(text)
+        document = _load_policy_sql_document(payload)
         trust = document['backends'][0]['trusts'][0]
         self.assertNotIn('or_group', trust)
         self.assertEqual(list(document['database']), ['engine'])
@@ -359,18 +364,18 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotEqual(forward, reversed_filters)
         forward_text = forward.decode('utf-8')
         reversed_text = reversed_trusts.decode('utf-8')
-        doc_id = '"id": "documents.DocumentPermission:document"'
-        other_id = '"id": "documents.OtherPermission:other"'
+        doc_id = 'id: "documents.DocumentPermission:document"'
+        other_id = 'id: "documents.OtherPermission:other"'
         self.assertLess(forward_text.index(doc_id), forward_text.index(other_id))
         self.assertLess(reversed_text.index(other_id), reversed_text.index(doc_id))
         filter_text = reversed_filters.decode('utf-8')
         self.assertLess(
-            forward_text.index('"code": "a_code"'),
-            forward_text.index('"code": "z_code"'),
+            forward_text.index('code: "a_code"'),
+            forward_text.index('code: "z_code"'),
         )
         self.assertLess(
-            filter_text.index('"code": "z_code"'),
-            filter_text.index('"code": "a_code"'),
+            filter_text.index('code: "z_code"'),
+            filter_text.index('code: "a_code"'),
         )
 
     def test_or_siblings_share_or_group_and_keep_separate_sql(self):
@@ -387,7 +392,9 @@ class PolicySqlGoldenTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        document = json.loads(render_policy_sql_bytes(handles=[handle]))
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
         trusts = document['backends'][0]['trusts']
         self.assertEqual(len(trusts), 2)
         self.assertEqual(trusts[0]['or_group'], 'documents.Document')
@@ -410,7 +417,9 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_empty_relationship_backend_is_still_emitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
         empty = _handle('zzz.backends.EmptyBackend')
-        document = json.loads(render_policy_sql_bytes(handles=[empty, populated]))
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[empty, populated]),
+        )
         paths = [row['path'] for row in document['backends']]
         self.assertEqual(paths, [
             'aaa.backends.DocumentBackend',
@@ -464,7 +473,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
 class PolicySqlCommandTest(SimpleTestCase):
     def test_lock_writes_the_same_bytes_as_stdout(self):
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / 'trusts-policy.lock.json'
+            target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
                 locked = StringIO()
                 call_command('trusts_policy_sql', lock=True, stdout=locked)
@@ -477,13 +486,13 @@ class PolicySqlCommandTest(SimpleTestCase):
 
     def test_database_override_is_not_stored_and_bad_alias_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / 'trusts-policy.lock.json'
+            target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
                 stdout = StringIO()
                 call_command(
                     'trusts_policy_sql', database='default', stdout=stdout,
                 )
-                document = json.loads(stdout.getvalue())
+                document = _load_policy_sql_document(stdout.getvalue())
                 self.assertEqual(list(document['database']), ['engine'])
                 self.assertEqual(
                     document['database']['engine'],
@@ -502,7 +511,7 @@ class PolicySqlCommandTest(SimpleTestCase):
     def test_lock_does_not_create_a_missing_parent(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp) / 'missing-parent'
-            target = parent / 'trusts-policy.lock.json'
+            target = parent / CONVENTIONAL_LOCKFILE_NAME
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
                 with self.assertRaises(CommandError):
                     call_command(
@@ -512,7 +521,7 @@ class PolicySqlCommandTest(SimpleTestCase):
 
     def test_render_failure_writes_no_file(self):
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / 'trusts-policy.lock.json'
+            target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
 
             def boom(*args, **kwargs):
                 del args, kwargs
@@ -548,7 +557,7 @@ class PolicySqlCheckTest(SimpleTestCase):
 
     def test_explicit_missing_file_is_e009(self):
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / 'trusts-policy.lock.json'
+            target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
             with override_settings(
                 TRUSTS_POLICY_LOCKFILE=str(target),
                 TRUSTS_POLICY_DATABASE=None,
@@ -559,7 +568,7 @@ class PolicySqlCheckTest(SimpleTestCase):
 
     def test_one_byte_edit_and_old_semantic_document_fail_e009(self):
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / 'trusts-policy.lock.json'
+            target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
             payload = render_policy_sql_bytes()
             target.write_bytes(payload)
             with override_settings(
@@ -599,7 +608,7 @@ class PolicySqlCheckTest(SimpleTestCase):
                 TRUSTS_POLICY_DATABASE='missing-alias',
             ):
                 self.assertEqual(_e009(), [])
-            target = Path(tmp) / 'trusts-policy.lock.json'
+            target = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
             target.write_bytes(b'{}\n')
             with override_settings(
                 BASE_DIR=tmp,
@@ -610,7 +619,7 @@ class PolicySqlCheckTest(SimpleTestCase):
         self.assertEqual(len(present), 1)
         self.assertIn('missing-alias', present[0].msg)
         with tempfile.TemporaryDirectory() as tmp:
-            explicit = Path(tmp) / 'trusts-policy.lock.json'
+            explicit = Path(tmp) / CONVENTIONAL_LOCKFILE_NAME
             with override_settings(
                 TRUSTS_POLICY_LOCKFILE=str(explicit),
                 TRUSTS_POLICY_DATABASE='missing-alias',
@@ -621,7 +630,7 @@ class PolicySqlCheckTest(SimpleTestCase):
 
     def test_relative_explicit_path_is_e009(self):
         with override_settings(
-            TRUSTS_POLICY_LOCKFILE='trusts-policy.lock.json',
+            TRUSTS_POLICY_LOCKFILE=CONVENTIONAL_LOCKFILE_NAME,
             TRUSTS_POLICY_DATABASE=None,
         ):
             errors = _e009()
@@ -647,7 +656,9 @@ class PolicySqlSentinelTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        actor_doc = json.loads(render_policy_sql_bytes(handles=[actor_handle]))
+        actor_doc = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[actor_handle]),
+        )
         actor_trust = actor_doc['backends'][0]['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
         self.assertEqual(actor_trust['params'], [
@@ -663,7 +674,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        account_doc = json.loads(
+        account_doc = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[account_handle]),
         )
         account_trust = account_doc['backends'][0]['trusts'][0]
@@ -683,7 +694,7 @@ class PolicySqlConstantTest(SimpleTestCase):
     def test_supported_constant_families_match_golden_and_round_trip(self):
         payload = render_policy_sql_bytes(handles=[_constant_family_handle()])
         self.assertEqual(payload, GOLDEN_CONSTANTS)
-        document = json.loads(payload.decode('utf-8'))
+        document = _load_policy_sql_document(payload)
         by_code = {
             row['code']: row['params']
             for row in document['backends'][0]['named_filters']

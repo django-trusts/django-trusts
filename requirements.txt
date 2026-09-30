@@ -1,2 +1,3 @@
 # Runtime requirements. pyproject.toml is authoritative.
 Django>=6.1,<6.2
+PyYAML==6.0.3
