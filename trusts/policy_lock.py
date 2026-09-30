@@ -2,9 +2,14 @@
 
 ``trusts_policy_sql`` renders schema version 1 as canonical YAML: one
 ``.authorized()`` statement per registered trust, standalone
-named-filter SQL, and ``or_group`` when two trusts on a backend share a
-content model. The alias is not stored. ``trusts.E009`` compares those
-bytes to the committed file. It is the only lockfile enforcement.
+named-filter SQL, ``or_group`` when two trusts on a backend share a
+content model, and a ``composition`` section for the composed
+statements those rows explain. A composition reference is emitted only
+when the fragment text and its parameters are an exact contiguous span
+of the compiled statement. Otherwise the operation stores that
+statement in full. The alias is not stored. ``trusts.E009`` compares
+the rendered bytes to the committed file and does not parse them. It
+is the only lockfile enforcement.
 """
 
 from __future__ import annotations
@@ -289,11 +294,20 @@ def _project_backend(handle, alias):
         row['sql'] = sql
         row['params'] = params
         trusts.append(row)
-    return {
+    named_filters = _project_named_filters(registry, alias)
+    from trusts.policy_composition import _build_backend_composition
+
+    composition = _build_backend_composition(
+        handle, alias, records, trusts, named_filters,
+    )
+    projected = {
         'path': path,
         'trusts': trusts,
-        'named_filters': _project_named_filters(registry, alias),
+        'named_filters': named_filters,
     }
+    if composition is not None:
+        projected['composition'] = composition
+    return projected
 
 
 def _relation(record, role):
@@ -519,10 +533,11 @@ def _fallback_sentinel(field, alias):
     )
 
 
-def _compile_queryset(queryset, alias, *, record, expr):
+def _compile_queryset(queryset, alias, *, record, expr, records=None):
     from django.db import connections
 
     _ctx.record = record
+    _ctx.composition_records = tuple(records) if records else None
     _ctx.filter_queues = None if expr is None else _filter_queues(expr)
     token = _export_scope.set(object())
     try:
@@ -533,6 +548,7 @@ def _compile_queryset(queryset, alias, *, record, expr):
     finally:
         _export_scope.reset(token)
         _ctx.record = None
+        _ctx.composition_records = None
         _ctx.filter_queues = None
     if not isinstance(sql, str):
         raise TrustsConfigurationError(
@@ -777,11 +793,28 @@ def _bind_name(node, record):
     if model is None:
         return None
     concrete = model._meta.concrete_model
-    if concrete is record.user_model._meta.concrete_model:
-        return 'user.%s' % record.user_target
-    if concrete is record.permission_model._meta.concrete_model:
-        return 'permission.%s' % record.permission_target
-    return None
+    candidates = []
+    if record is not None:
+        candidates.append(record)
+    extra = getattr(_ctx, 'composition_records', None)
+    if extra:
+        for item in extra:
+            if item is not record:
+                candidates.append(item)
+    labels = []
+    for candidate in candidates:
+        if concrete is candidate.user_model._meta.concrete_model:
+            labels.append('user.%s' % candidate.user_target)
+        elif concrete is candidate.permission_model._meta.concrete_model:
+            labels.append('permission.%s' % candidate.permission_target)
+    if not labels:
+        return None
+    if any(label != labels[0] for label in labels):
+        raise TrustsConfigurationError(
+            'Composition SQL cannot label a %s bind; trusts in this '
+            'group do not share a target.' % (concrete._meta.label,)
+        )
+    return labels[0]
 
 
 def _lookup_field_name(node):
