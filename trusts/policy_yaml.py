@@ -1,9 +1,11 @@
 """Canonical YAML for the schema-1 authorization policy document.
 
 One spelling, one byte profile. The dumper is a ``yaml.SafeDumper``
-subclass and the diagnostic loader is a ``yaml.SafeLoader`` subclass.
-Neither path uses ``CSafeDumper``, ``FullLoader``, ``UnsafeLoader``, or
-custom YAML tags. Anchors and aliases are rejected.
+subclass and the private diagnostic loader is a ``yaml.SafeLoader``
+subclass. The inverse helpers are coding aids. They are not a supported
+two-directional mapping. Neither path uses ``CSafeDumper``,
+``FullLoader``, ``UnsafeLoader``, or custom YAML tags. Anchors and
+aliases are rejected.
 
 PyYAML does not promise that ``yaml.dump`` bytes stay stable across
 versions, hash seeds, or the libyaml build. These representers and the
@@ -270,15 +272,16 @@ def dump_policy_yaml(document):
 
 
 class PolicyYamlLoader(yaml.SafeLoader):
-    """Safe loader used by :func:`load_policy_yaml`.
+    """Private safe loader used by :func:`_load_policy_yaml`.
 
     Implicit YAML 1.1 bool words (``yes``/``on``), timestamps, merge
     keys, sexagesimal numbers, and non-finite float tokens are not
     resolvers here. Explicit tags, anchors, and aliases fail closed.
-    Parsing is not acceptance: :func:`load_policy_yaml` re-dumps with
+    Parsing is not acceptance: :func:`_load_policy_yaml` re-dumps with
     :func:`dump_policy_yaml` and rejects the payload unless the bytes
     match. Flow collections and noncanonical block or chomping forms
-    fail that compare.
+    fail that compare. This class is a coding helper, not a public
+    contract.
     """
 
     yaml_implicit_resolvers = {}
@@ -386,8 +389,12 @@ PolicyYamlLoader.add_implicit_resolver(_TAG_INT, _INT_RE, list('-0123456789'))
 PolicyYamlLoader.add_implicit_resolver(_TAG_FLOAT, _FLOAT_RE, list('-0123456789'))
 
 
-def load_policy_yaml(payload):
-    """Load canonical policy YAML. This is not how E009 decides equality.
+def _load_policy_yaml(payload):
+    """Private diagnostic helper for canonical policy YAML.
+
+    Not a supported public API and not a two-directional mapping
+    contract. Tests use it for coding completeness. ``trusts.E009``
+    does not call it; equality is raw bytes.
 
     After a successful parse, the document is written again with
     :func:`dump_policy_yaml`. The payload is accepted only when those

@@ -29,14 +29,14 @@ from trusts.core import TrustsConfigurationError
 from trusts.policy_lock import (
     _const_from_json,
     _json_const,
-    load_policy_sql_document,
+    _load_policy_sql_document,
     render_policy_sql_bytes,
 )
 from trusts.policy_yaml import (
     PolicyYamlDumper,
     PolicyYamlError,
     dump_policy_yaml,
-    load_policy_yaml,
+    _load_policy_yaml,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -173,7 +173,7 @@ class PolicyYamlCodecTest(SimpleTestCase):
         self.assertIn('hex: "00ff"', text)
         self.assertNotIn('\n  - const: yes\n', text)
         self.assertNotIn('\n  - const: 2024-03-04\n', text)
-        loaded = load_policy_yaml(first)
+        loaded = _load_policy_yaml(first)
         self.assertEqual(dump_policy_yaml(loaded), first)
         for original, row in zip(values, loaded['params']):
             self.assertTrue(_same(original, _const_from_json(row['const'])))
@@ -198,19 +198,19 @@ class PolicyYamlCodecTest(SimpleTestCase):
         for sample in rejected:
             with self.subTest(sample=sample):
                 with self.assertRaises(PolicyYamlError):
-                    load_policy_yaml(sample)
-        self.assertEqual(load_policy_yaml(b'n: "1"\n'), {'n': '1'})
-        self.assertIs(load_policy_yaml(b'n: true\n')['n'], True)
-        self.assertIsNone(load_policy_yaml(b'n: null\n')['n'])
+                    _load_policy_yaml(sample)
+        self.assertEqual(_load_policy_yaml(b'n: "1"\n'), {'n': '1'})
+        self.assertIs(_load_policy_yaml(b'n: true\n')['n'], True)
+        self.assertIsNone(_load_policy_yaml(b'n: null\n')['n'])
 
     def test_loader_rejects_bytes_the_canonical_writer_does_not_emit(self):
         block_map = dump_policy_yaml({'a': {'b': 1}})
         block_seq = dump_policy_yaml({'items': [1, 2]})
         literal = dump_policy_yaml({'sql': 'SELECT 1'})
-        self.assertEqual(load_policy_yaml(block_map), {'a': {'b': 1}})
-        self.assertEqual(load_policy_yaml(block_map.decode('utf-8')), {'a': {'b': 1}})
-        self.assertEqual(load_policy_yaml(block_seq), {'items': [1, 2]})
-        self.assertEqual(load_policy_yaml(literal), {'sql': 'SELECT 1'})
+        self.assertEqual(_load_policy_yaml(block_map), {'a': {'b': 1}})
+        self.assertEqual(_load_policy_yaml(block_map.decode('utf-8')), {'a': {'b': 1}})
+        self.assertEqual(_load_policy_yaml(block_seq), {'items': [1, 2]})
+        self.assertEqual(_load_policy_yaml(literal), {'sql': 'SELECT 1'})
         self.assertIn(b'\n  b: 1\n', block_map)
         self.assertNotIn(b'{', block_map)
         self.assertIn(b'\n  - 1\n', block_seq)
@@ -233,11 +233,11 @@ class PolicyYamlCodecTest(SimpleTestCase):
         for sample in rejected:
             with self.subTest(sample=sample):
                 with self.assertRaises(PolicyYamlError):
-                    load_policy_yaml(sample)
+                    _load_policy_yaml(sample)
         with self.assertRaises(TrustsConfigurationError):
-            load_policy_sql_document(b'a: {b: 1}\n')
+            _load_policy_sql_document(b'a: {b: 1}\n')
         with self.assertRaises(TrustsConfigurationError):
-            load_policy_sql_document(b'items: [1, 2]\n')
+            _load_policy_sql_document(b'items: [1, 2]\n')
 
     def test_hash_seed_and_locale_do_not_change_bytes(self):
         env = os.environ.copy()
@@ -325,7 +325,7 @@ class PolicyCompositionEvidenceTest(SimpleTestCase):
         self.assertEqual(payload, render_composition_evidence_bytes(
             handles=self._handles(),
         ))
-        document = load_policy_yaml(payload)
+        document = _load_policy_yaml(payload)
         verify_composition_document(document)
         self.assertEqual(document['schema_version'], 1)
         self.assertIs(document['lockfile'], False)
@@ -387,7 +387,7 @@ class PolicyCompositionEvidenceTest(SimpleTestCase):
         self.assertNotIn('composition-evidence', text)
         self.assertNotIn('has_perm', text)
         self.assertNotIn('placeholder', text)
-        document = load_policy_sql_document(payload)
+        document = _load_policy_sql_document(payload)
         trust = document['backends'][0]['trusts'][0]
         self.assertNotIn('structured', trust)
         self.assertIn('sql', trust)
