@@ -104,6 +104,11 @@ aliases, comments, or YAML tags. Backend rows are ordered by path. Trust rows
 preserve ``register()`` order, named-filter rows preserve
 ``add_named_filter()`` order, and parameters preserve compiler order.
 
+The writer is pinned to ``PyYAML==6.0.3``. PyYAML does not promise stable
+emitter bytes across releases, so a later 6.0 patch is not a supported
+dependency. CI compares the committed goldens on Python 3.12, 3.13, and
+3.14.
+
 Constant spelling
 -----------------
 
@@ -139,23 +144,38 @@ ordinary mappings. The codec does not use custom YAML tags, ``yes``/``no``/
   ``model``, and ``pk`` encoded with these same rules, including a nested
   mapping.
 
-Composition is not a lockfile row
----------------------------------
+Diagnostic reader
+-----------------
+
+``load_policy_yaml`` and ``load_policy_sql_document`` are not used by
+``trusts.E009``. They accept a document only when its bytes are exactly
+what the canonical writer emits. The reader parses the input, writes it
+again with that writer, and rejects the payload unless the bytes match.
+Flow mappings (``a: {b: 1}``), flow sequences, folded blocks, keep or
+clip chomping, and any other spelling the writer does not emit are
+rejected. Hand-edited YAML should be regenerated with
+``trusts_policy_sql`` rather than normalized by this reader.
+
+Composition evidence stays in tests
+-----------------------------------
 
 Schema 1 records each trust's ``.authorized()`` statement and each named
 filter's statement. Instance ``has_perm``, permission-code ``has_perm``,
 filter-to-grant AND, multi-trust OR, and queryset ``all_match`` compile to
 different statements. ``trusts.E009`` does not compare those statements.
+The lockfile command does not emit them. There is no public composition
+API.
 
-A separate evidence document shows the expanded SQL and, where a lockfile
-fragment is an exact substring with a contiguous parameter span, a template
-that names that fragment. Permission-code ``has_perm`` is full SQL: the
-permission subquery already uses alias ``U0``, so the grant table is ``V0``
-and the permission predicate is not ``permission.id``. Instance ``has_perm``
-with a permission instance keeps the grant ``EXISTS`` text and adds a
-candidate primary-key predicate. It is not ``IN`` (the ``.authorized()``
-statement). Named-filter composition references the filter's ``WHERE``
-predicate, not the named-filter ``SELECT``. The evidence file is
+Tests under ``tests/core/test_issue147/`` compile those statements and,
+where a lockfile fragment is an exact substring with a contiguous
+parameter span, record a template that names the fragment. Permission-code
+``has_perm`` is full SQL: the permission subquery already uses alias
+``U0``, so the grant table is ``V0`` and the permission predicate is not
+``permission.id``. Instance ``has_perm`` with a permission instance keeps
+the grant ``EXISTS`` text and adds a candidate primary-key predicate. It
+is not ``IN`` (the ``.authorized()`` statement). Named-filter composition
+references the filter's ``WHERE`` predicate, not the named-filter
+``SELECT``. The evidence file is
 ``tests/core/test_issue147/golden_composition_sqlite.yaml``. It is not the
 lockfile.
 

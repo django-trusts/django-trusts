@@ -1,10 +1,10 @@
-"""Composition evidence for schema-1 policy SQL. Not the lockfile.
+"""Test-only composition evidence for schema-1 policy SQL.
 
-``render_policy_sql_bytes`` records each trust's ``.authorized()``
-statement and each named filter's statement. Runtime ``has_perm``,
-filter-to-grant AND, multi-trust OR, and queryset ``all_match`` are
-different statements. This module compiles those statements and writes
-a separate canonical YAML document that shows:
+Not a production module and not the lockfile. ``render_policy_sql_bytes``
+records each trust's ``.authorized()`` statement and each named filter's
+statement. Runtime ``has_perm``, filter-to-grant AND, multi-trust OR, and
+queryset ``all_match`` are different statements. This helper compiles
+those statements and writes a separate canonical YAML document that shows:
 
 * the expanded SQL the compiler actually produced;
 * a structured form when a lockfile fragment is an exact substring and
@@ -14,14 +14,12 @@ a separate canonical YAML document that shows:
 
 ``trusts.E009`` does not read this document. Named-filter rows stay
 full SELECTs; a composition reference points at the filter predicate,
-not at that SELECT.
+not at that SELECT. Nothing here is exported from ``trusts``.
 """
 
 from __future__ import annotations
 
 from django.contrib.auth.models import Permission
-from django.db.models import Count
-from django.db.models.sql.compiler import SQLCompiler
 
 from trusts.backends import _permission_binding
 from trusts.core import TrustsConfigurationError, _compile_granted
@@ -53,7 +51,10 @@ _RULES = (
 
 
 def render_composition_evidence_bytes(*, alias=None, handles=None):
-    """Return canonical YAML evidence bytes. Not lockfile bytes."""
+    """Return canonical YAML evidence bytes.
+
+    Test evidence only. Not lockfile bytes and not a public API.
+    """
     resolved = resolve_policy_database(alias)
     if handles is None:
         from trusts.apps import configured_implementation_handles
@@ -501,23 +502,52 @@ def _compile_exists(queryset, alias, record, expr):
 
 
 def _aggregate_query(queryset, granted_q):
-    """Return the ``all_match`` aggregate query without executing it."""
+    """Return the ``all_match`` aggregate query without executing it.
+
+    ``QuerySet.aggregate`` compiles through ``Query.get_aggregation`` and
+    then asks that compiler to execute. The capturing compiler is
+    installed only on this thread's connection for that call, then the
+    connection is restored. Django's compiler class is not modified, so
+    other threads keep the original execute method.
+    """
+    from django.db import connections
+    from django.db.models import Count
+
+    alias = queryset.db
+    real = connections[alias]
     captured = {}
 
-    def execute_sql(self, *args, **kwargs):
-        del args, kwargs
-        captured['query'] = self.query.clone()
-        return (0, 1)
+    class _CapturingOps(object):
+        def compiler(self, compiler_name):
+            base = real.ops.compiler(compiler_name)
 
-    original = SQLCompiler.execute_sql
-    SQLCompiler.execute_sql = execute_sql
+            class _CapturingCompiler(base):
+                def execute_sql(self, *args, **kwargs):
+                    del args, kwargs
+                    captured['query'] = self.query.clone()
+                    return (0, 1)
+
+            _CapturingCompiler.__name__ = 'Capturing%s' % base.__name__
+            return _CapturingCompiler
+
+        def __getattr__(self, name):
+            return getattr(real.ops, name)
+
+    class _CapturingConnection(object):
+        def __init__(self):
+            self.ops = _CapturingOps()
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    connections[alias] = _CapturingConnection()
     try:
         queryset.aggregate(
             total=Count('pk', distinct=True),
             lacking=Count('pk', distinct=True, filter=~granted_q),
         )
     finally:
-        SQLCompiler.execute_sql = original
+        connections[alias] = real
     if 'query' not in captured:
         raise TrustsConfigurationError(
             'Composition evidence did not capture queryset has_perm SQL.'
