@@ -57,6 +57,25 @@ _FORBIDDEN = (
 )
 
 
+class HiddenDocument(models.Model):
+    """Content model whose default manager is not named ``objects``."""
+
+    title = models.CharField(max_length=40)
+    entries = models.Manager()
+
+    class Meta:
+        app_label = 'documents'
+
+
+class HiddenGrant(models.Model):
+    document = models.ForeignKey(HiddenDocument, on_delete=models.CASCADE)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'documents'
+
+
 class Document(models.Model):
     title = models.CharField(max_length=200)
     confidential = models.BooleanField(default=False)

@@ -263,6 +263,7 @@ def _append_group(operations, fragments, order, group, filters, handle, alias):
         row for row in filters if row['model_cls'] is model
     ]
     instance = _content_sentinel(model, alias)
+    manager = _content_manager(model)
     granted = _compile_granted(
         (handle,), instance, user, permission, kind='complete',
     )
@@ -271,7 +272,7 @@ def _append_group(operations, fragments, order, group, filters, handle, alias):
             'Composition found no grant for %s.' % label
         )
     exists_sql, exists_params = _compile_exists(
-        model.objects.filter(pk=instance.pk).filter(granted),
+        manager.filter(pk=instance.pk).filter(granted),
         alias, records,
     )
     _append_operation(
@@ -292,7 +293,7 @@ def _append_group(operations, fragments, order, group, filters, handle, alias):
             'Composition found no permission-code grant for %s.' % label
         )
     code_sql, code_params = _compile_exists(
-        model.objects.filter(pk=instance.pk).filter(granted_code),
+        manager.filter(pk=instance.pk).filter(granted_code),
         alias, records,
     )
     _append_operation(
@@ -304,7 +305,7 @@ def _append_group(operations, fragments, order, group, filters, handle, alias):
         pieces,
     )
     for row in model_filters:
-        combined = model.objects.filter(granted & row['q']).distinct()
+        combined = manager.filter(granted & row['q']).distinct()
         sql, params = _compile(
             combined, alias, records, expr=row['expr'],
         )
@@ -322,7 +323,7 @@ def _append_group(operations, fragments, order, group, filters, handle, alias):
             and_pieces,
         )
     if len(group['items']) > 1:
-        listed = model.objects.all()
+        listed = manager.all()
         granted_all = _compile_granted(
             (handle,), listed, user, permission, kind='complete',
         )
@@ -341,7 +342,7 @@ def _append_group(operations, fragments, order, group, filters, handle, alias):
             params,
             pieces,
         )
-    listed = model.objects.all()
+    listed = manager.all()
     granted_list = _compile_granted(
         (handle,), listed, user, permission, kind='complete',
     )
@@ -438,8 +439,10 @@ def _remember_fragment(fragments, order, piece):
 def _factor(sql, params, pieces):
     """Return ``(template, owned_params, refs)`` or None.
 
-    ``None`` unless every piece is an exact text span and its parameters
-    are the contiguous slice at that span, in piece order.
+    ``None`` unless every piece occurs exactly once in the statement
+    still being scanned, and its parameters are the contiguous slice at
+    that span, in piece order. A second copy is left as raw SQL rather
+    than referenced, so the operation stays ``full_sql``.
     """
     if not pieces:
         return None
@@ -458,9 +461,9 @@ def _factor(sql, params, pieces):
         ):
             return None
         seen.add(piece['id'])
-        index = remaining_sql.find(frag_sql)
-        if index < 0:
+        if remaining_sql.count(frag_sql) != 1:
             return None
+        index = remaining_sql.find(frag_sql)
         before = remaining_sql[:index]
         count = before.count('%s')
         if count > len(remaining_params):
@@ -748,6 +751,15 @@ def _group_sentinel(records, role, label, alias):
                 % (label, role)
             )
     return _sentinel(model, target, alias=alias)
+
+
+def _content_manager(model):
+    """Default manager of the concrete model.
+
+    A model may rename or omit ``objects``. Instance checks use
+    ``concrete_model._default_manager``; composition querysets do too.
+    """
+    return model._meta.concrete_model._default_manager
 
 
 def _content_sentinel(model, alias):
