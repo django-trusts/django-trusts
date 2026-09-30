@@ -391,7 +391,7 @@ alias for one invocation with ``--database``:
 
    python manage.py trusts_policy_sql --database policy_inspection
 
-The command writes canonical YAML to stdout. It records the configured Trusts
+The command writes ordered JSON to stdout. It records the configured Trusts
 backend, each registered trust, its ``.authorized()`` SQL, symbolic parameter
 roles, and each named filter's SQL. The selected Django database backend and
 driver determine the SQL dialect. The alias itself is not stored.
@@ -405,41 +405,56 @@ that field.
 The ``DocumentPermission`` trust and ``non_confidential`` named filter in this
 guide produce the following SQLite document:
 
-.. code-block:: yaml
+.. code-block:: json
 
-   schema_version: 1
-   database:
-     engine: "django.db.backends.sqlite3"
-   backends:
-     - path: "documents.backends.DocumentBackend"
-       trusts:
-         - id: "documents.DocumentPermission:document"
-           root: "documents.DocumentPermission"
-           user:
-             path: "user"
-             model: "auth.User"
-             target: "id"
-           permission:
-             path: "permission"
-             model: "auth.Permission"
-             target: "id"
-           content:
-             path: "document"
-             model: "documents.Document"
-             target: "id"
-           sql: |-
-             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
-           params:
-             - const: 1
-             - bind: "permission.id"
-             - bind: "user.id"
-       named_filters:
-         - model: "documents.Document"
-           code: "non_confidential"
-           sql: |-
-             SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE ("documents_document"."confidential" IS NULL OR NOT ("documents_document"."confidential" = %s))
-           params:
-             - const: true
+   {
+     "schema_version": 1,
+     "database": {
+       "engine": "django.db.backends.sqlite3"
+     },
+     "backends": [
+       {
+         "path": "documents.backends.DocumentBackend",
+         "trusts": [
+           {
+             "id": "documents.DocumentPermission:document",
+             "root": "documents.DocumentPermission",
+             "user": {
+               "path": "user",
+               "model": "auth.User",
+               "target": "id"
+             },
+             "permission": {
+               "path": "permission",
+               "model": "auth.Permission",
+               "target": "id"
+             },
+             "content": {
+               "path": "document",
+               "model": "documents.Document",
+               "target": "id"
+             },
+             "sql": "SELECT DISTINCT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE EXISTS(SELECT %s AS \"a\" FROM \"documents_documentpermission\" \"U0\" WHERE (\"U0\".\"permission_id\" = %s AND \"U0\".\"user_id\" = %s AND \"U0\".\"document_id\" = (\"documents_document\".\"id\")) LIMIT 1)",
+             "params": [
+               {"const": 1},
+               {"bind": "permission.id"},
+               {"bind": "user.id"}
+             ]
+           }
+         ],
+         "named_filters": [
+           {
+             "model": "documents.Document",
+             "code": "non_confidential",
+             "sql": "SELECT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE (\"documents_document\".\"confidential\" IS NULL OR NOT (\"documents_document\".\"confidential\" = %s))",
+             "params": [
+               {"const": true}
+             ]
+           }
+         ]
+       }
+     ]
+   }
 
 The export records one ``.authorized()`` query per trust. Named filters are
 separate statements; their AND composition with grant queries remains covered
@@ -456,23 +471,18 @@ Write the same output as a lockfile after registration is complete:
    python manage.py trusts_policy_sql --lock
 
 ``TRUSTS_POLICY_LOCKFILE`` selects the path when configured. Otherwise,
-django-trusts uses ``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR``
+django-trusts uses ``BASE_DIR / "trusts-policy.lock.json"`` when ``BASE_DIR``
 is absolute. Commit the lockfile with the application code that declares the
 policy.
 
-Lockfile enforcement through the untagged system check ``trusts.E009``
-applies when the conventional file exists or ``TRUSTS_POLICY_LOCKFILE`` is
-configured. The check renders the live document using
-``TRUSTS_POLICY_DATABASE`` or ``default`` and compares the generated bytes
-directly with the committed file. Hand formatting, reordering, or a changed
-newline fails the comparison. A diagnostic reader accepts the file only when
-those bytes equal a fresh write from the same canonical writer. Flow
-collections and noncanonical block forms are rejected. The check itself does
-not parse the file. Regenerate the file instead of editing it by hand. The
-writer dependency is ``PyYAML==6.0.3``.
+When the conventional file exists, or an explicit path is configured,
+django-trusts registers the untagged system check ``trusts.E009``. It renders
+the live document using ``TRUSTS_POLICY_DATABASE`` or ``default`` and compares
+the generated bytes directly with the committed file. Hand formatting,
+reordering, or a changed newline fails the comparison. Regenerate the file
+instead of editing it by hand.
 
-When the conventional file is absent, the registered check returns no error
-and does not resolve the database alias or render SQL. A missing or
+A missing conventional file leaves the check unregistered. A missing or
 unreadable explicit file produces an error. The system check is the lockfile's
 enforcement point; it is not a request-time authorization gate.
 
