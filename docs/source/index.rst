@@ -295,7 +295,7 @@ Django group-permission enumeration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Django's ``user.get_group_permissions(obj)`` enumerates permissions obtained
-through groups. A Trusts registration participates in that enumeration only
+through groups. A ``django-trusts`` registration participates in that enumeration only
 when it explicitly uses ``group=``:
 
 .. code-block:: python
@@ -314,7 +314,7 @@ the path. ``group=`` and ``permission=`` cannot be supplied together.
 A registration using ``permission=`` keeps its existing meaning and is never
 inferred to be group-derived, even when its user path crosses a many-to-many
 membership. Use ``has_perm()``, ``get_all_permissions()``, or
-``QuerySet.authorized()`` for ordinary Trusts authorization through custom
+``QuerySet.authorized()`` for ordinary ``django-trusts`` authorization through custom
 teams, roles, rosters, and other membership models.
 
 Named filters
