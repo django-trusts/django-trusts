@@ -709,17 +709,17 @@ def _compile_queryset(queryset, alias, *, record, expr, records=None):
     return sql, _symbols_from_params(params)
 
 
-@django_checks.register()
+@django_checks.register(django_checks.Tags.models)
 def check_policy_sql_lockfile(app_configs, **kwargs):
     """Compare the rendered policy SQL document to the lockfile.
 
-    Untagged, so plain ``manage.py check`` runs it and tag-selected
-    runs that omit untagged checks do not. A missing conventional file
-    reports nothing, even when ``TRUSTS_POLICY_DATABASE`` is invalid:
-    the check does not apply until that file is present or an explicit
-    path is configured. When the check applies, a bad database alias,
-    an explicit missing or unreadable file, and a byte mismatch report
-    ``trusts.E009``. This is not a request-time authorization gate.
+    Registered as a model check, so plain ``manage.py check`` and
+    ``manage.py check --tag models`` run it. A missing conventional
+    file reports nothing, even when ``TRUSTS_POLICY_DATABASE`` is
+    invalid: the check does not apply until that file is present or an
+    explicit path is configured. When the check applies, a bad database
+    alias, an explicit missing or unreadable file, and a byte mismatch
+    report ``trusts.E009``. This is not a request-time authorization gate.
     """
     del app_configs, kwargs
     try:

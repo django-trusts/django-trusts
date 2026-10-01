@@ -409,10 +409,11 @@ paths are errors and are not resolved against ``BASE_DIR`` or the working
 directory. Otherwise django-trusts uses
 ``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR`` is absolute.
 
-The always-registered, untagged system check ``trusts.E009`` enforces an
-existing conventional file or configured explicit path by comparing raw YAML
-bytes. When the conventional file is absent, the check returns no error and
-does not resolve the renderer. A missing explicit file is an error.
+The Django model check ``trusts.E009`` enforces the lockfile when the
+conventional file exists or ``TRUSTS_POLICY_LOCKFILE`` is configured. When the
+conventional file does not exist and the setting is not configured, the check
+returns no error and does not resolve the renderer. A missing explicit file is
+an error.
 
 A lockfile belongs to one database renderer. Multi-engine CI may keep runtime
 databases different while pinning one ``TRUSTS_POLICY_DATABASE`` inspection
