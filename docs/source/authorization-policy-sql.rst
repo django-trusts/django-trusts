@@ -2,8 +2,8 @@ Authorization policy in SQL
 ===========================
 
 django-trusts can render its registered authorization policy as parameterized
-SQL for inspection. The same deterministic YAML can be committed as an
-authorization policy lockfile so policy and compiler changes appear in normal
+SQL for inspection. The same stable output can be committed as an authorization
+policy lockfile, making changes to the policy and its SQL visible during normal
 code review.
 
 Inspecting the generated SQL
@@ -23,9 +23,10 @@ alias for one invocation with ``--database``:
 
    python manage.py trusts_policy_sql --database policy_inspection
 
-The command writes deterministic YAML using the installed PyYAML writer. The selected Django database
-backend and driver determine SQL quoting, placeholders, operators, and dialect.
-The alias is not stored; ``database.engine`` records its configured engine.
+The command writes YAML using the installed PyYAML writer. The selected Django
+database backend and driver determine SQL quoting, placeholders, operators, and
+dialect. The alias is not stored; ``database.engine`` records its configured
+engine.
 
 Runtime user and permission roles remain symbolic ``bind`` parameters. For
 candidate-object checks, the exporter compiles a type-correct sentinel primary
@@ -37,12 +38,12 @@ authorization rows.
 Document shape
 --------------
 
-The document is organized by backend and protected content model:
+The document is organized by application meaning:
 
-* each configured relationship-family Trusts backend has one ``backends`` row,
+* each configured Trusts backend has one ``backends`` row,
   including ``contents: []`` when it has no declarations;
-* each backend groups its declarations under ``contents`` by protected model;
-* a content with trusts lists its registered relationships and SQL for
+* each backend lists its ``contents`` models;
+* a content with trusts lists them with their associated SQL for
   ``permitted``, ``has_perm``, and ``get_all_permissions``;
 * a content with named filters lists those queries; and
 * a filter-only content contains ``model`` and ``named_filters``.
