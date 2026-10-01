@@ -295,46 +295,73 @@ checks. Runtime denial should not fall back to a broader Trusts path.
 ## Authorization policy SQL and lockfile
 
 The user-facing [authorization policy SQL guide](docs/source/authorization-policy-sql.rst)
-describes the inspection, lockfile, and system-check workflow. This section
+describes the schema, command, lockfile, and system-check workflow. This section
 records the additional security boundaries.
 
-Rendering may open the database alias selected from Django settings for driver
-initialization, server-version discovery, or capability queries. The exported
-authorization statements are compiled without being executed, and rendering
-does not read application or authorization rows. Audit that alias's connection
-settings, installed-driver provenance, server capabilities, and account
-authority. A separate SQLite inspection alias limits production exposure, but
-the resulting artifact describes SQLite rather than production SQL.
+The canonical YAML is organized by backend and protected content model. Trust
+legs expose the declared relationships. Each content with trusts records the
+complete compiler SQL for `permitted`, `has_perm`, and `get_all_permissions`;
+named filters remain standalone content queries. `permitted` is only the
+artifact label for the current `.authorized()` list operation.
 
-The database alias is not stored. `database.engine` identifies the configured
-engine, while the SQL records the renderer's effective quoting, placeholders,
-operators, and dialect. Two aliases that render identical documents produce
-identical bytes. Lockfile equality therefore verifies rendered output rather
-than database identity.
+The artifact does not use public SQL fragments, references, reverse
+reconstruction, or a YAML-to-registration contract. It also does not record
+permission-code variants, QuerySet-valued `has_perm`, `get_group_permissions`,
+grant-plus-named-filter SQL, zero-SQL short circuits, or Django's OR across
+authentication backends. Those paths require separate tests and review.
+
+### Renderer and connection boundary
+
+A lockfile belongs to one selected Django database renderer. `database.engine`
+identifies the configured engine, while the SQL records effective quoting,
+placeholders, operators, and dialect. The database alias itself is not stored.
+Lockfile equality verifies rendered bytes, not database identity and not
+equivalence across engines.
+
+Rendering compiles the exported statements without executing them or reading
+application or authorization rows. A selected backend or driver may still open
+a connection for initialization, server-version discovery, or capability
+queries. Audit the selected alias's connection settings, driver provenance,
+server capabilities, and account authority.
+
+Multi-engine CI may pin `TRUSTS_POLICY_DATABASE` to one dedicated inspection
+alias for every E009 job while using different databases for runtime tests. A
+separate SQLite inspection alias limits production exposure, but the resulting
+artifact describes SQLite rather than production SQL.
+
+### Canonical bytes and dependency boundary
+
+The writer uses the exact supported `PyYAML==6.0.3` release. Strings, parameter
+flow sequences, SQL literal blocks, key order, line endings, and the trailing
+newline are part of the emitted byte profile. YAML tags, anchors, and aliases
+are rejected. Private loader and inverse helpers are test aids, not supported
+inputs or a reverse policy API.
+
+`trusts.E009` compares raw bytes and does not parse the committed document.
+Hand formatting, reordering, a dependency-induced spelling change, or a changed
+newline fails equality even if another YAML parser would construct similar
+data.
 
 ### Check lifecycle and enforcement
 
-The lockfile check uses the stable id `trusts.E009`. It is the only lockfile
-enforcement and is not a request-time authorization gate. Silencing it with
-`SILENCED_SYSTEM_CHECKS`, or running a tag-selected check set that omits
-untagged checks, removes that enforcement.
+The untagged Django system-check callback for `trusts.E009` is always
+registered. Enforcement applies when the conventional lockfile exists or an
+explicit `TRUSTS_POLICY_LOCKFILE` path is configured. Conventional absence
+returns no error before database-alias resolution or rendering. A missing,
+unreadable, noncanonical, or different explicit file fails.
 
-The check runs after application registration is complete. WSGI and ASGI
-startup do not prove that it ran.
+The system check is the only lockfile enforcement and is not a request-time
+authorization gate. Silencing it with `SILENCED_SYSTEM_CHECKS`, or running a
+tag-selected check set that omits untagged checks, removes that enforcement.
+WSGI and ASGI startup do not prove that the check ran.
 
 ### What equality does not prove
 
-Byte-for-byte equality proves only that the finalized declarations and the
-renderer selected in settings produce the reviewed artifact. The artifact
-records each trust's `.authorized()` SQL and each named filter's SQL. Trusts
-that authorize the same content model are marked with `or_group`, but their
-runtime OR assembly is covered by library tests. The artifact also leaves
-filter-to-grant AND composition, other authorization operations, zero-SQL
-short circuits, and combination across authentication backends to tests.
-
-Equality does not prove:
+Byte equality proves only that the finalized declarations and selected renderer
+produce the reviewed artifact. It does not prove:
 
 - compiler correctness;
+- the correctness of omitted runtime compositions or short circuits;
 - trustworthy database rows or grant workflows;
 - the absence of application bypasses;
 - the behavior of other Django authentication backends;
@@ -342,15 +369,13 @@ Equality does not prove:
 - the safety of a change that updates both code and lockfile.
 
 Django still grants when any configured authentication backend grants. An
-active superuser remains globally authorized in
-`PermissionsMixin.has_perm()` before backends run. A green lockfile check does
-not revoke those grants and does not make a combined code-and-lockfile change
-acceptable by itself.
+active superuser remains globally authorized in `PermissionsMixin.has_perm()`
+before backends run. A green lockfile check does not revoke those grants.
 
-Review backend paths, trust relationships, `or_group`, named filters,
-parameter roles, `sql`, and `database.engine` as changes to the authorization
-surface. Lockfile equality is a change-control mechanism, not a complete
-security proof.
+Review backend paths, content grouping, trust relationships, `or_group`,
+operation SQL, named filters, parameter roles, IDs, and `database.engine` as
+changes to the authorization surface. Lockfile equality is a change-control
+mechanism, not a complete security proof.
 
 ## Reference implementations
 
