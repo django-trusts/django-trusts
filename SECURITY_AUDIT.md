@@ -377,7 +377,7 @@ active superuser remains globally authorized in `PermissionsMixin.has_perm()`
 before backends run. A green lockfile check does not revoke those grants.
 
 Review backend paths, content grouping, trust relationships, `or_group`,
-operation SQL, named filters, parameter roles, IDs, and `database.engine` as
+permission-inquiry SQL, named filters, parameter roles, IDs, and `database.engine` as
 changes to the authorization surface. Lockfile equality is a change-control
 mechanism, not a complete security proof.
 
