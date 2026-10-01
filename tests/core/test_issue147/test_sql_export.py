@@ -34,6 +34,7 @@ from trusts.policy_lock import (
     _const_from_json,
     _json_const,
     _sentinel,
+    _assign_ids,
     _load_policy_sql_document,
     render_policy_sql_bytes,
 )
@@ -406,6 +407,70 @@ class PolicySqlGoldenTest(SimpleTestCase):
         z_code = 'id: "documents__Document__z_code"'
         self.assertLess(forward_text.index(a_code), forward_text.index(z_code))
         self.assertLess(filter_text.index(z_code), filter_text.index(a_code))
+
+    def test_named_filter_code_outside_id_alphabet_is_rejected(self):
+        handle = _handle('documents.backends.DocumentBackend')
+        handle.add_named_filter(Document, 'needs-review', _non_confidential)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            render_policy_sql_bytes(handles=[handle])
+        self.assertIn('needs-review', str(ctx.exception))
+        self.assertIn('non-portable', str(ctx.exception))
+
+        portable = _handle('documents.backends.DocumentBackend')
+        portable.add_named_filter(Document, 'needs_review', _non_confidential)
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[portable]),
+        )
+        self.assertEqual(
+            document['backends'][0]['contents'][0]['named_filters'][0]['id'],
+            'documents__Document__needs_review',
+        )
+
+    def test_condition_along_and_duplicate_suffixes_are_in_the_trust_id(self):
+        handle = _handle('documents.backends.DocumentBackend')
+        handle.register(
+            trust=DocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+            condition=lambda trust: trust.user == trust.user,
+        )
+        handle.register(
+            trust=DocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+            condition=lambda trust: trust.permission == trust.permission,
+        )
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        cond_ids = [
+            row['id']
+            for row in document['backends'][0]['contents'][0]['trusts']
+        ]
+        self.assertEqual(cond_ids, [
+            'documents__DocumentPermission__document__cond',
+            'documents__DocumentPermission__document__cond__2',
+        ])
+
+        # Along SQL uses GrantReach, which this export does not classify.
+        # The id is still minted from the registered walk before compile.
+        along = _handle('documents.backends.FolderBackend')
+        along.register(
+            trust=FolderGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 2),
+        )
+        along_ids = _assign_ids(tuple(along.registry.records))
+        self.assertEqual(along_ids, [
+            'documents__FolderGrant__folder__along_S_2',
+        ])
+        for trust_id in cond_ids + along_ids:
+            self.assertNotIn('.', trust_id)
+            self.assertNotIn('-', trust_id)
 
     def test_or_siblings_share_or_group_and_keep_separate_sql(self):
         handle = _handle('documents.backends.DocumentBackend')

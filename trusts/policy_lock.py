@@ -17,6 +17,7 @@ import datetime
 import errno
 import math
 import os
+import re
 import stat
 import tempfile
 import threading
@@ -38,6 +39,9 @@ from trusts.policy_yaml import (
 SCHEMA_VERSION = 1
 CHECK_ID_POLICY_LOCK = 'trusts.E009'
 CONVENTIONAL_LOCKFILE_NAME = 'trusts-policy.lock.yaml'
+# One id segment. Trust and named-filter ids are these segments joined
+# by ``__``. Export rejects any other named-filter code.
+_PORTABLE_ID_SEGMENT = re.compile(r'[A-Za-z0-9_]+')
 
 _INTEGER_SENTINEL_TYPES = frozenset((
     'AutoField',
@@ -517,12 +521,10 @@ def _project_named_filters(registry, alias):
         return rows
     for model, code, record in iterator():
         model_label = _model_label(model)
-        if not isinstance(code, str) or code == '':
-            raise TrustsConfigurationError(
-                'Named filter on %s has a non-portable code %r.'
-                % (model_label, code)
-            )
-        if any(mark in code for mark in ('.', ':', '#', '+', '{', '}')):
+        if (
+            not isinstance(code, str)
+            or _PORTABLE_ID_SEGMENT.fullmatch(code) is None
+        ):
             raise TrustsConfigurationError(
                 'Named filter on %s has a non-portable code %r.'
                 % (model_label, code)
