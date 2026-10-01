@@ -3,31 +3,28 @@ database:
   engine: "django.db.backends.sqlite3"
 backends:
   - path: "documents.backends.DocumentBackend"
-    trusts:
-      - id: "documents.DocumentPermission:document"
-        root: "documents.DocumentPermission"
-        user:
-          path: "user"
-          model: "auth.User"
-          target: "id"
-        permission:
-          path: "permission"
-          model: "auth.Permission"
-          target: "id"
-        content:
-          path: "document"
-          model: "documents.Document"
-          target: "id"
-        sql: |-
-          SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
-        params:
-          - const: 1
-          - bind: "permission.id"
-          - bind: "user.id"
-    named_filters:
+    contents:
       - model: "documents.Document"
-        code: "non_confidential"
-        sql: |-
-          SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE ("documents_document"."confidential" IS NULL OR NOT ("documents_document"."confidential" = %s))
-        params:
-          - const: true
+        trusts:
+          - id: "documents__DocumentPermission__document"
+            root: "documents.DocumentPermission"
+            user: {path: "user", model: "auth.User", target: "id"}
+            permission: {path: "permission", model: "auth.Permission", target: "id"}
+            content: {path: "document", model: "documents.Document", target: "id"}
+        permitted:
+          params: [{const: 1}, {bind: "permission.id"}, {bind: "user.id"}]
+          sql: |-
+            SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)
+        has_perm:
+          params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {bind: "user.id"}]
+          sql: |-
+            SELECT %s AS "a" FROM "documents_document" WHERE ("documents_document"."id" = %s AND EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = %s AND "U0"."user_id" = %s AND "U0"."document_id" = ("documents_document"."id")) LIMIT 1)) LIMIT 1
+        get_all_permissions:
+          params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {bind: "user.id"}]
+          sql: |-
+            SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model" FROM "auth_permission" INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id") WHERE (EXISTS(SELECT %s AS "a" FROM "documents_document" "U0" WHERE "U0"."id" = %s LIMIT 1) AND NOT (EXISTS(SELECT %s AS "a" FROM "documents_document" "V0" WHERE ("V0"."id" = %s AND NOT (EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."permission_id" = ("auth_permission"."id") AND "U0"."user_id" = %s AND "U0"."document_id" = ("V0"."id")) LIMIT 1))) LIMIT 1))) ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
+        named_filters:
+          - id: "documents__Document__non_confidential"
+            params: [{const: true}]
+            sql: |-
+              SELECT "documents_document"."id", "documents_document"."title", "documents_document"."confidential" FROM "documents_document" WHERE ("documents_document"."confidential" IS NULL OR NOT ("documents_document"."confidential" = %s))

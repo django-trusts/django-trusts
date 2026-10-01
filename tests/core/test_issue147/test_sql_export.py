@@ -34,6 +34,7 @@ from trusts.policy_lock import (
     _const_from_json,
     _json_const,
     _sentinel,
+    _assign_ids,
     _load_policy_sql_document,
     render_policy_sql_bytes,
 )
@@ -48,16 +49,32 @@ GOLDEN_CONSTANTS = (
 )
 
 _FORBIDDEN = (
-    'change_document',
     'fingerprint',
     'sha256',
     '\nexpr:',
     '\nhandles:',
-    '\nkind:',
     '\nfamily:',
     '\ncompiler:',
-    'codename',
 )
+
+
+class HiddenDocument(models.Model):
+    """Content model whose default manager is not named ``objects``."""
+
+    title = models.CharField(max_length=40)
+    entries = models.Manager()
+
+    class Meta:
+        app_label = 'documents'
+
+
+class HiddenGrant(models.Model):
+    document = models.ForeignKey(HiddenDocument, on_delete=models.CASCADE)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'documents'
 
 
 class Document(models.Model):
@@ -315,19 +332,36 @@ class PolicySqlGoldenTest(SimpleTestCase):
         text = payload.decode('utf-8')
         self.assertNotIn('\r', text)
         document = _load_policy_sql_document(payload)
-        trust = document['backends'][0]['trusts'][0]
+        content = document['backends'][0]['contents'][0]
+        trust = content['trusts'][0]
         self.assertNotIn('or_group', trust)
+        self.assertEqual(trust['content']['path'], 'document')
         self.assertEqual(list(document['database']), ['engine'])
-        self.assertEqual(trust['params'], [
+        self.assertEqual(list(content['permitted']), ['params', 'sql'])
+        self.assertEqual(content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
             {'bind': 'user.id'},
         ])
-        named = document['backends'][0]['named_filters'][0]
+        named = content['named_filters'][0]
+        self.assertEqual(list(named), ['id', 'params', 'sql'])
+        self.assertEqual(named['id'], 'documents__Document__non_confidential')
+        self.assertNotIn('.', named['id'])
+        self.assertNotIn('.', trust['id'])
         self.assertEqual(named['params'], [{'const': True}])
         self.assertNotIn('documents_documentpermission', named['sql'])
-        self.assertNotIn('confidential" IS NULL', trust['sql'])
-        self.assertNotIn('confidential" = %s', trust['sql'])
+        self.assertNotIn('confidential" IS NULL', content['permitted']['sql'])
+        self.assertNotIn('confidential" = %s', content['permitted']['sql'])
+        self.assertNotIn('sql', trust)
+        self.assertNotIn('kind', trust)
+        self.assertNotIn('kind', named)
+        self.assertIn('EXISTS(', content['has_perm']['sql'])
+        self.assertIn({'bind': 'permission.id'}, content['has_perm']['params'])
+        self.assertIn('auth_permission', content['get_all_permissions']['sql'])
+        for token in ('change_document', 'codename'):
+            self.assertNotIn(token, content['permitted']['sql'])
+            self.assertNotIn(token, named['sql'])
+            self.assertNotIn(token, content['has_perm']['sql'])
         for token in _FORBIDDEN:
             self.assertNotIn(token, text)
 
@@ -351,7 +385,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         )
         forward_filters = (
             (Document, 'a_code'),
-            (OtherDocument, 'z_code'),
+            (Document, 'z_code'),
         )
         forward = render(forward_trusts, forward_filters)
         reversed_trusts = render(
@@ -364,19 +398,79 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotEqual(forward, reversed_filters)
         forward_text = forward.decode('utf-8')
         reversed_text = reversed_trusts.decode('utf-8')
-        doc_id = 'id: "documents.DocumentPermission:document"'
-        other_id = 'id: "documents.OtherPermission:other"'
+        doc_id = 'id: "documents__DocumentPermission__document"'
+        other_id = 'id: "documents__OtherPermission__other"'
         self.assertLess(forward_text.index(doc_id), forward_text.index(other_id))
         self.assertLess(reversed_text.index(other_id), reversed_text.index(doc_id))
         filter_text = reversed_filters.decode('utf-8')
-        self.assertLess(
-            forward_text.index('code: "a_code"'),
-            forward_text.index('code: "z_code"'),
+        a_code = 'id: "documents__Document__a_code"'
+        z_code = 'id: "documents__Document__z_code"'
+        self.assertLess(forward_text.index(a_code), forward_text.index(z_code))
+        self.assertLess(filter_text.index(z_code), filter_text.index(a_code))
+
+    def test_named_filter_code_outside_id_alphabet_is_rejected(self):
+        handle = _handle('documents.backends.DocumentBackend')
+        handle.add_named_filter(Document, 'needs-review', _non_confidential)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            render_policy_sql_bytes(handles=[handle])
+        self.assertIn('needs-review', str(ctx.exception))
+        self.assertIn('non-portable', str(ctx.exception))
+
+        portable = _handle('documents.backends.DocumentBackend')
+        portable.add_named_filter(Document, 'needs_review', _non_confidential)
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[portable]),
         )
-        self.assertLess(
-            filter_text.index('code: "z_code"'),
-            filter_text.index('code: "a_code"'),
+        self.assertEqual(
+            document['backends'][0]['contents'][0]['named_filters'][0]['id'],
+            'documents__Document__needs_review',
         )
+
+    def test_condition_along_and_duplicate_suffixes_are_in_the_trust_id(self):
+        handle = _handle('documents.backends.DocumentBackend')
+        handle.register(
+            trust=DocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+            condition=lambda trust: trust.user == trust.user,
+        )
+        handle.register(
+            trust=DocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+            condition=lambda trust: trust.permission == trust.permission,
+        )
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        cond_ids = [
+            row['id']
+            for row in document['backends'][0]['contents'][0]['trusts']
+        ]
+        self.assertEqual(cond_ids, [
+            'documents__DocumentPermission__document__cond',
+            'documents__DocumentPermission__document__cond__2',
+        ])
+
+        # Along SQL uses GrantReach, which this export does not classify.
+        # The id is still minted from the registered walk before compile.
+        along = _handle('documents.backends.FolderBackend')
+        along.register(
+            trust=FolderGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 2),
+        )
+        along_ids = _assign_ids(tuple(along.registry.records))
+        self.assertEqual(along_ids, [
+            'documents__FolderGrant__folder__along_S_2',
+        ])
+        for trust_id in cond_ids + along_ids:
+            self.assertNotIn('.', trust_id)
+            self.assertNotIn('-', trust_id)
 
     def test_or_siblings_share_or_group_and_keep_separate_sql(self):
         handle = _handle('documents.backends.DocumentBackend')
@@ -395,24 +489,30 @@ class PolicySqlGoldenTest(SimpleTestCase):
         document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[handle]),
         )
-        trusts = document['backends'][0]['trusts']
+        content = document['backends'][0]['contents'][0]
+        trusts = content['trusts']
         self.assertEqual(len(trusts), 2)
-        self.assertEqual(trusts[0]['or_group'], 'documents.Document')
-        self.assertEqual(trusts[1]['or_group'], 'documents.Document')
-        self.assertIn('documents_documentpermission', trusts[0]['sql'])
-        self.assertNotIn('documents_team', trusts[0]['sql'])
-        self.assertIn('"documents_team"', trusts[1]['sql'])
-        self.assertIn('documents_team_members', trusts[1]['sql'])
-        self.assertNotIn(' OR ', trusts[0]['sql'])
-        self.assertNotIn(' OR ', trusts[1]['sql'])
+        self.assertIs(trusts[0]['or_group'], True)
+        self.assertIs(trusts[1]['or_group'], True)
+        self.assertNotIn('sql', trusts[0])
+        self.assertNotIn('sql', trusts[1])
+        self.assertEqual(
+            trusts[0]['id'], 'documents__DocumentPermission__document',
+        )
+        self.assertEqual(
+            trusts[1]['id'], 'documents__TeamDocumentPermission__document',
+        )
+        self.assertNotIn('.', trusts[0]['id'])
+        self.assertNotIn('.', trusts[1]['id'])
         self.assertEqual(trusts[0]['user']['path'], 'user')
         self.assertEqual(trusts[1]['user']['path'], 'team__members')
-        self.assertEqual(trusts[0]['params'], trusts[1]['params'])
-        self.assertEqual(trusts[0]['params'], [
-            {'const': 1},
-            {'bind': 'permission.id'},
-            {'bind': 'user.id'},
-        ])
+        self.assertEqual(trusts[0]['content']['target'], 'id')
+        permitted = content['permitted']
+        self.assertIn(' OR ', permitted['sql'])
+        self.assertIn('documents_documentpermission', permitted['sql'])
+        self.assertIn('"documents_team"', permitted['sql'])
+        self.assertNotIn('{{', permitted['sql'])
+        self.assertNotIn('composition', document['backends'][0])
 
     def test_empty_relationship_backend_is_still_emitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
@@ -425,8 +525,10 @@ class PolicySqlGoldenTest(SimpleTestCase):
             'aaa.backends.DocumentBackend',
             'zzz.backends.EmptyBackend',
         ])
-        self.assertEqual(document['backends'][1]['trusts'], [])
-        self.assertEqual(document['backends'][1]['named_filters'], [])
+        self.assertEqual(document['backends'][1]['contents'], [])
+        self.assertNotIn('composition', document['backends'][1])
+        self.assertNotIn('composition', document['backends'][0])
+        self.assertIn('contents', document['backends'][0])
 
     def test_unsupported_family_fails_closed(self):
         with patch(
@@ -659,9 +761,10 @@ class PolicySqlSentinelTest(SimpleTestCase):
         actor_doc = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[actor_handle]),
         )
-        actor_trust = actor_doc['backends'][0]['trusts'][0]
+        actor_content = actor_doc['backends'][0]['contents'][0]
+        actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
-        self.assertEqual(actor_trust['params'], [
+        self.assertEqual(actor_content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
             {'bind': 'user.id'},
@@ -677,13 +780,14 @@ class PolicySqlSentinelTest(SimpleTestCase):
         account_doc = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[account_handle]),
         )
-        account_trust = account_doc['backends'][0]['trusts'][0]
+        account_content = account_doc['backends'][0]['contents'][0]
+        account_trust = account_content['trusts'][0]
         self.assertEqual(account_trust['user'], {
             'path': 'user',
             'model': 'documents.PolicyAccount',
             'target': 'code',
         })
-        self.assertEqual(account_trust['params'], [
+        self.assertEqual(account_content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
             {'bind': 'user.code'},
@@ -695,13 +799,16 @@ class PolicySqlConstantTest(SimpleTestCase):
         payload = render_policy_sql_bytes(handles=[_constant_family_handle()])
         self.assertEqual(payload, GOLDEN_CONSTANTS)
         document = _load_policy_sql_document(payload)
-        by_code = {
-            row['code']: row['params']
-            for row in document['backends'][0]['named_filters']
-        }
+        filters = document['backends'][0]['contents'][0]['named_filters']
+        by_code = {row['id']: row['params'] for row in filters}
+        prefix = 'documents__ConstantDocument__'
+        for row in filters:
+            self.assertTrue(row['id'].startswith(prefix))
+            self.assertNotIn('.', row['id'])
+            self.assertEqual(list(row), ['id', 'params', 'sql'])
 
         def restored(code):
-            return _const_from_json(by_code[code][0]['const'])
+            return _const_from_json(by_code[prefix + code][0]['const'])
 
         self.assertEqual(restored('amount'), 1.5)
         self.assertEqual(restored('negzero'), 0.0)
