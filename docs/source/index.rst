@@ -285,9 +285,7 @@ a missing object produces 404 and an existing unauthorized object produces
 403.
 
 Object checks, permission enumeration, queryset filtering, and view protection
-consume the same normalized registrations. Membership paths and Django's
-``get_group_permissions()`` inquiry have distinct meanings; see
-:doc:`Membership and group permissions <group-permissions>`.
+consume the same normalized registrations.
 
 Named filters
 -------------
@@ -515,6 +513,5 @@ in the `support matrix
    :hidden:
 
    authorization-policy-sql
-   group-permissions
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.
