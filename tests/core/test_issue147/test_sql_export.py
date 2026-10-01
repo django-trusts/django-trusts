@@ -435,21 +435,16 @@ class PolicySqlGoldenTest(SimpleTestCase):
             {'bind': 'user.id'},
         ])
         composed = document['backends'][0]['composition']
+        self.assertEqual(list(composed), ['operations'])
         or_group = next(
             row for row in composed['operations']
             if row['id'].startswith('or_group_authorized:')
         )
-        self.assertIn(
-            '{{trust:documents.DocumentPermission:document}}',
-            or_group['sql'],
-        )
-        self.assertIn(
-            '{{trust:documents.TeamDocumentPermission:document}}',
-            or_group['sql'],
-        )
+        self.assertEqual(set(or_group), {'id', 'sql', 'params'})
         self.assertIn(' OR ', or_group['sql'])
-        self.assertNotIn('refs', or_group)
-        self.assertNotIn('expanded', or_group)
+        self.assertIn('documents_documentpermission', or_group['sql'])
+        self.assertIn('"documents_team"', or_group['sql'])
+        self.assertNotIn('{{', or_group['sql'])
 
     def test_empty_relationship_backend_is_still_emitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')

@@ -3,12 +3,9 @@
 ``trusts_policy_sql`` renders schema version 1 as canonical YAML: one
 ``.authorized()`` statement per registered trust, standalone
 named-filter SQL, ``or_group`` when two trusts on a backend share a
-content model, and a ``composition`` section for the composed
-statements those rows explain. An operation's ``sql`` names a fragment
-with ``{{fragment-id}}`` only when that fragment's text and parameters
-are an exact unique span of the compiled statement. Otherwise that
-``sql`` is the compiled statement. The writer checks the expansion and
-does not store it. The alias is not stored. ``trusts.E009`` compares
+content model, and a ``composition`` section that stores each
+composed operation's compiled SQL and parameters once. The alias is
+not stored. ``trusts.E009`` compares
 the rendered bytes to the committed file and does not parse them. It
 is the only lockfile enforcement.
 """
