@@ -386,16 +386,20 @@ containing parameterized compiler SQL:
 The command uses ``TRUSTS_POLICY_DATABASE``, or Django's ``default`` alias when
 unset. ``--database`` selects another configured alias for one invocation.
 
-The artifact is organized as backend, then protected content model. Each content
-row lists its trust legs and complete SQL for ``permitted``, ``has_perm``, and
-``get_all_permissions``. ``permitted`` is the artifact name for today's
-``.authorized()`` list query; the runtime API is unchanged. Named filters appear
-under the content they constrain with their standalone SQL.
+The artifact is organized as backend, then protected content model. A content
+with trusts lists its legs and complete SQL for ``permitted``, ``has_perm``, and
+``get_all_permissions``. A filter-only content instead contains its model and
+standalone ``named_filters``. Empty relationship backends remain visible as
+``contents: []``.
 
-Several trusts for the same content within one backend are OR alternatives.
-Their legs carry ``or_group: true``, and each operation contains Django's full
-combined SQL. Different backends remain separate. The artifact deliberately
-uses complete SQL rather than fragments or reconstruction rules.
+``permitted`` is the artifact name for one backend's list query; it matches
+``.authorized()`` when that backend is the only relationship-family
+contributor. Several trusts for the same content within one backend are OR
+alternatives. Their legs carry ``or_group: true``, and each operation contains
+Django's full combined SQL. Different backends remain separate. The combined
+relationship-family list query across multiple Trusts backends is not recorded.
+The artifact deliberately uses complete SQL rather than fragment
+reconstruction rules.
 
 Authorization policy lockfile
 -----------------------------
@@ -406,8 +410,10 @@ Write the same bytes to a lockfile after registration is complete:
 
    python manage.py trusts_policy_sql --lock
 
-``TRUSTS_POLICY_LOCKFILE`` selects an explicit path. Otherwise django-trusts
-uses ``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR`` is absolute.
+``TRUSTS_POLICY_LOCKFILE`` selects an explicit absolute path. Relative explicit
+paths are errors and are not resolved against ``BASE_DIR`` or the working
+directory. Otherwise django-trusts uses
+``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR`` is absolute.
 
 The always-registered, untagged system check ``trusts.E009`` enforces an
 existing conventional file or configured explicit path by comparing raw YAML
