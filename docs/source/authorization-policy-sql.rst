@@ -23,128 +23,154 @@ alias for one invocation with ``--database``:
 
    python manage.py trusts_policy_sql --database policy_inspection
 
-The command writes ordered JSON to stdout. The selected database backend and
-driver determine SQL quoting, placeholders, operators, and dialect. The alias
-is not stored in the document. ``database.engine`` records the configured
-engine, and two aliases that render the same document produce the same bytes.
+The command writes YAML using the installed PyYAML writer. The selected Django
+database backend and driver determine SQL quoting, placeholders, operators, and
+dialect. The alias is not stored; ``database.engine`` records its configured
+engine.
 
-Runtime values remain symbolic parameters. Rendering compiles the exported
-queries without executing them.
+Runtime user and permission roles remain symbolic ``bind`` parameters. For
+candidate-object checks, the exporter compiles a type-correct sentinel primary
+key and records it as ``const``. That value identifies the compiled comparison
+position; it is not a primary key read from application data. Rendering compiles
+the exported queries without executing them or reading application or
+authorization rows.
 
-What is recorded
-----------------
+Document shape
+--------------
 
-The first format records one ``.authorized()`` query for each registered trust.
-Each trust includes readable ``user``, ``permission``, and ``content``
-relationships. Their ``path`` values use Django's ``__`` spelling for multiple
-hops, while ``model`` and ``target`` identify the related model and comparison
-field.
+The document is organized by application meaning:
 
-When two or more trusts on the same backend authorize the same content model,
-django-trusts combines them with OR at runtime. Their rows share an
-``or_group`` value so reviewers can see the relationship while inspecting each
-trust's SQL separately. A trust that is the only path to its content model has
-no ``or_group`` field.
+* each configured Trusts backend has one ``backends`` row,
+  including ``contents: []`` when it has no declarations;
+* each backend lists its ``contents`` models;
+* a content with trusts lists them with their associated SQL for
+  ``permitted``, ``has_perm``, and ``get_all_permissions``;
+* a content with named filters lists those queries; and
+* a filter-only content contains ``model`` and ``named_filters``.
 
-Named filters are recorded separately, in ``add_named_filter()`` order, with
-their own SQL and parameters. The export does not combine a named filter with a
-grant query. That AND composition, other authorization operations, short
-circuits that issue no SQL, and combinations across authentication backends
-remain covered by library tests rather than lockfile rows.
+The following abridged example shows the schema:
 
-For the ``DocumentPermission`` registration and ``non_confidential`` named
-filter in the main guide, SQLite produces this document:
+.. code-block:: yaml
 
-.. code-block:: json
+   schema_version: 1
+   database:
+     engine: "django.db.backends.sqlite3"
+   backends:
+     - path: "documents.backends.DocumentBackend"
+       contents:
+         - model: "documents.Document"
+           trusts:
+             - id: "documents__DocumentPermission__document"
+               root: "documents.DocumentPermission"
+               user: {path: "user", model: "auth.User", target: "id"}
+               permission: {path: "permission", model: "auth.Permission", target: "id"}
+               content: {path: "document", model: "documents.Document", target: "id"}
+           permitted:
+             params: [{const: 1}, {bind: "permission.id"}, {bind: "user.id"}]
+             sql: |-
+               SELECT DISTINCT ...
+           has_perm:
+             params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {bind: "user.id"}]
+             sql: |-
+               SELECT ... WHERE candidate-primary-key AND grant-exists
+           get_all_permissions:
+             params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {bind: "user.id"}]
+             sql: |-
+               SELECT DISTINCT ... FROM auth_permission ...
+           named_filters:
+             - id: "documents__Document__non_confidential"
+               params: [{const: true}]
+               sql: |-
+                 SELECT ... WHERE non-confidential-predicate
 
-   {
-     "schema_version": 1,
-     "database": {
-       "engine": "django.db.backends.sqlite3"
-     },
-     "backends": [
-       {
-         "path": "documents.backends.DocumentBackend",
-         "trusts": [
-           {
-             "id": "documents.DocumentPermission:document",
-             "root": "documents.DocumentPermission",
-             "user": {
-               "path": "user",
-               "model": "auth.User",
-               "target": "id"
-             },
-             "permission": {
-               "path": "permission",
-               "model": "auth.Permission",
-               "target": "id"
-             },
-             "content": {
-               "path": "document",
-               "model": "documents.Document",
-               "target": "id"
-             },
-             "sql": "SELECT DISTINCT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE EXISTS(SELECT %s AS \"a\" FROM \"documents_documentpermission\" \"U0\" WHERE (\"U0\".\"permission_id\" = %s AND \"U0\".\"user_id\" = %s AND \"U0\".\"document_id\" = (\"documents_document\".\"id\")) LIMIT 1)",
-             "params": [
-               {"const": 1},
-               {"bind": "permission.id"},
-               {"bind": "user.id"}
-             ]
-           }
-         ],
-         "named_filters": [
-           {
-             "model": "documents.Document",
-             "code": "non_confidential",
-             "sql": "SELECT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE (\"documents_document\".\"confidential\" IS NULL OR NOT (\"documents_document\".\"confidential\" = %s))",
-             "params": [
-               {"const": true}
-             ]
-           }
-         ]
-       }
-     ]
-   }
+Trusts and OR composition
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``{"const": 1}`` is Django's ``EXISTS`` probe. ``{"const": true}``
-is the declared constant in ``o.confidential != True``. ``bind`` entries name
-runtime values without storing them.
+Each trust retains the registered root and the resolved ``user``,
+``permission``, and ``content`` relationships. Relationship ``path`` values
+use Django's ``__`` spelling for multiple hops; ``model`` and ``target``
+identify the related concrete model and comparison field.
 
-The document uses UTF-8 without a byte-order mark, LF line endings, two-space
-indentation, fixed key order, and one trailing newline. Backend rows are ordered
-by path. Trust rows preserve ``register()`` order, named-filter rows preserve
-``add_named_filter()`` order, and parameters preserve compiler order.
+A django-trusts backend issues one SQL statement for each permission inquiry.
+When more than one trust in that backend authorizes the same content model, the
+SQL combines those trusts with OR and each trust in the content row has
+``or_group: true``. A sole trust omits ``or_group``.
+
+Backends remain independent. When more than one Trusts backend targets the same
+content model, the document records each backend separately.
+
+Permission inquiries and named filters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Every permission inquiry row contains one SQL statement and its ordered
+parameters. Named filters are listed in ``add_named_filter()`` order.
+
+Identifiers and ordering
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Artifact IDs use portable ``_`` and ``__`` segments. A trust ID folds model-name
+dots to ``__`` and adds the content field, for example
+``documents__DocumentPermission__document``. Conditions append ``__cond``;
+``Along`` adds ``__along_{shape}_{bound}``. For repeated bases, the first ID
+keeps the unsuffixed base and the second and later IDs add ``__2``, ``__3``, and
+so on. Named-filter IDs combine the content-model label and filter code. Filter
+codes must match ``[A-Za-z0-9_]+`` or export fails.
+
+Backend rows are sorted by backend path, independent of
+``AUTHENTICATION_BACKENDS`` order. Content rows follow first-seen trust content,
+followed by filter-only contents. Trusts preserve ``register()`` order, named
+filters preserve ``add_named_filter()`` order, and parameters preserve compiler
+order.
+
+Constants and generated YAML
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``bind`` entries name runtime values without storing them. Constants are
+mapped between Python and SQL types so their values and type information are
+available for inspection. These mappings are data, not YAML object tags.
+
+The writer uses the installed supported ``PyYAML`` release. Output is UTF-8
+without a byte-order mark, uses LF endings, fixed key order, double-quoted
+string values, ``|-`` SQL blocks, does not emit YAML tags or aliases, and ends
+with one trailing newline. ``trusts.E009`` compares raw bytes; it does not
+parse the document.
 
 Creating the lockfile
 ---------------------
 
-After the application's Trusts registrations are complete, write the lockfile:
+After application registration is complete, write the lockfile:
 
 .. code-block:: console
 
    python manage.py trusts_policy_sql --lock
 
-The command writes the same bytes produced on stdout. ``TRUSTS_POLICY_LOCKFILE``
-selects the destination when configured. Otherwise, django-trusts uses
-``BASE_DIR / "trusts-policy.lock.json"`` when ``BASE_DIR`` is absolute. For an
-ad hoc destination, redirect stdout. Parent directories must already exist.
+The command writes the same bytes produced on stdout.
+``TRUSTS_POLICY_LOCKFILE`` selects the destination when configured and must be
+absolute. A relative explicit path is not joined to ``BASE_DIR`` or the process
+working directory and produces ``trusts.E009``. Otherwise, django-trusts uses
+``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR`` is absolute. If
+``BASE_DIR`` is missing or relative, ``--lock`` fails and the conventional-file
+check remains inactive. Parent directories must already exist.
 
 Commit the lockfile with the application code that declares the policy. When a
-policy change is intentional, regenerate it and review the application change
-and lockfile diff together.
+policy change is intentional, regenerate the file and review the declaration,
+permission-inquiry SQL, parameter roles, and lockfile diff together. A PyYAML or other
+dependency upgrade may change the generated bytes; rerun
+``python manage.py trusts_policy_sql --lock`` and review and commit any
+intentional lockfile diff with the dependency change.
 
 Checking the lockfile
 ---------------------
 
-When a conventional lockfile exists, or ``TRUSTS_POLICY_LOCKFILE`` is
-configured, django-trusts registers the untagged Django system check
-``trusts.E009``. The check uses ``TRUSTS_POLICY_DATABASE``, or ``default`` when
-that setting is unset, and compares the generated bytes directly with the
-committed file. It does not choose a connection from the document.
+The Django model check ``trusts.E009`` enforces the lockfile when the
+conventional file exists or ``TRUSTS_POLICY_LOCKFILE`` is configured. It renders
+with ``TRUSTS_POLICY_DATABASE``, or ``default`` when unset, and compares the
+generated bytes with the committed file.
 
-A missing conventional file means the check is not registered. A configured
-``TRUSTS_POLICY_LOCKFILE`` path is explicit: a missing or unreadable file
-produces an error.
+When the conventional file does not exist and ``TRUSTS_POLICY_LOCKFILE`` is not
+configured, the check returns no error without resolving the database alias or
+rendering SQL. A configured path is explicit: a missing, unreadable, or
+byte-different file produces an error.
 
 Run the check in CI and before deployment:
 
@@ -153,42 +179,51 @@ Run the check in CI and before deployment:
    python manage.py check
 
 ``trusts.E009`` is the lockfile's enforcement point. It is not a request-time
-authorization gate. Silencing the check with ``SILENCED_SYSTEM_CHECKS`` or
-running only tags that omit untagged checks also omits lockfile enforcement.
+authorization gate.
 
-Database access during rendering
---------------------------------
+One renderer per lockfile
+-------------------------
 
-django-trusts compiles the authorization statements in the export without
-executing them or reading application and authorization rows. A selected
-Django backend or driver may still connect for initialization, server-version
-discovery, or capability checks.
+A lockfile belongs to one selected Django database renderer. SQL emitted for
+SQLite and MySQL may differ even when the application declarations are
+identical. Schema version 1 exports only supported trust registrations. An unsupported
+registration shape makes rendering fail rather than emitting a partial row.
 
-Use a separate configured database alias when production connectivity is not
-appropriate for inspection or CI. The resulting lockfile describes that
-renderer. See the `security audit guide
-<../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
-connection and enforcement boundaries.
+CI that executes runtime tests against several engines may still review one
+lockfile. Configure a dedicated inspection alias, set
+``TRUSTS_POLICY_DATABASE`` to that alias in application settings, and keep the
+same value in every CI job that renders or runs E009. For example, a MySQL
+``default`` runtime database and a SQLite ``policy`` inspection alias can share
+one committed SQLite lockfile: E009 follows ``policy``, not ``default``.
+Repeated renders through the selected alias must match the committed bytes.
+The runtime test database and the lockfile renderer are separate choices. If
+an application intentionally reviews several deployment dialects, it may
+instead configure separate lockfile paths and renderer aliases per job.
+
+Rendering compiles statements without executing them, but a Django backend or
+driver may still connect for initialization, server-version discovery, or
+capability checks. A separate inspection alias can limit production exposure;
+the resulting artifact describes that alias's renderer, not production by
+implication.
 
 Reviewing changes
 -----------------
 
-Review a changed backend path, trust relationship, ``or_group``, named filter,
-parameter role, or SQL statement as a change to the authorization surface.
-Database-backend or driver changes can also change the generated SQL.
+Review changes to backend paths, content grouping, trust relationships,
+``or_group``, permission-inquiry SQL, named filters, parameter roles, identifiers, and
+``database.engine`` as changes to the authorization surface.
 
-Byte equality proves that the current declarations and selected renderer
-produce the reviewed artifact. It does not prove compiler correctness,
-filter-to-grant AND composition, other authorization operations, combination
-across authentication backends, trustworthy grant data, the absence of
-application bypasses, or the safety of a code and lockfile change merely
-because they match.
+Byte equality proves only that the current declarations and selected renderer
+produce the reviewed bytes. It does not prove compiler correctness, omitted
+runtime compositions, trustworthy grant data, the absence of application
+bypasses, the behavior of other authentication backends, or the safety of a
+code-and-lockfile change merely because they match.
 
 Recommended workflow
 --------------------
 
 #. Declare or change the application's authorization policy.
-#. Run ``python manage.py trusts_policy_sql`` and inspect the generated SQL.
+#. Run ``python manage.py trusts_policy_sql`` and inspect the SQL.
 #. Run ``python manage.py trusts_policy_sql --lock``.
 #. Review the application and lockfile changes together.
 #. Commit both.

@@ -376,119 +376,54 @@ An example Windows declaration lives in
 Authorization policy in SQL
 ---------------------------
 
-django-trusts can render the registered authorization policy as parameterized
-SQL for inspection:
+django-trusts can render the registered authorization policy as deterministic
+YAML containing parameterized compiler SQL:
 
 .. code-block:: console
 
    python manage.py trusts_policy_sql
 
-The command uses the database alias selected by ``TRUSTS_POLICY_DATABASE``, or
-Django's ``default`` alias when that setting is unset. Select another configured
-alias for one invocation with ``--database``:
+The command uses ``TRUSTS_POLICY_DATABASE``, or Django's ``default`` alias when
+unset. ``--database`` selects another configured alias for one invocation.
 
-.. code-block:: console
+The artifact is organized by backend and protected content model. A content
+with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
+and ``get_all_permissions``. A content with named filters lists those queries.
+Empty relationship backends remain visible as ``contents: []``.
 
-   python manage.py trusts_policy_sql --database policy_inspection
-
-The command writes ordered JSON to stdout. It records the configured Trusts
-backend, each registered trust, its ``.authorized()`` SQL, symbolic parameter
-roles, and each named filter's SQL. The selected Django database backend and
-driver determine the SQL dialect. The alias itself is not stored.
-
-The ``user``, ``permission``, and ``content`` objects keep each relationship
-readable as a Django path, model, and target field. Trusts registered for the
-same content model are OR alternatives at runtime. Their rows share an
-``or_group`` value while retaining separate SQL for review. A lone trust omits
-that field.
-
-The ``DocumentPermission`` trust and ``non_confidential`` named filter in this
-guide produce the following SQLite document:
-
-.. code-block:: json
-
-   {
-     "schema_version": 1,
-     "database": {
-       "engine": "django.db.backends.sqlite3"
-     },
-     "backends": [
-       {
-         "path": "documents.backends.DocumentBackend",
-         "trusts": [
-           {
-             "id": "documents.DocumentPermission:document",
-             "root": "documents.DocumentPermission",
-             "user": {
-               "path": "user",
-               "model": "auth.User",
-               "target": "id"
-             },
-             "permission": {
-               "path": "permission",
-               "model": "auth.Permission",
-               "target": "id"
-             },
-             "content": {
-               "path": "document",
-               "model": "documents.Document",
-               "target": "id"
-             },
-             "sql": "SELECT DISTINCT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE EXISTS(SELECT %s AS \"a\" FROM \"documents_documentpermission\" \"U0\" WHERE (\"U0\".\"permission_id\" = %s AND \"U0\".\"user_id\" = %s AND \"U0\".\"document_id\" = (\"documents_document\".\"id\")) LIMIT 1)",
-             "params": [
-               {"const": 1},
-               {"bind": "permission.id"},
-               {"bind": "user.id"}
-             ]
-           }
-         ],
-         "named_filters": [
-           {
-             "model": "documents.Document",
-             "code": "non_confidential",
-             "sql": "SELECT \"documents_document\".\"id\", \"documents_document\".\"title\", \"documents_document\".\"confidential\" FROM \"documents_document\" WHERE (\"documents_document\".\"confidential\" IS NULL OR NOT (\"documents_document\".\"confidential\" = %s))",
-             "params": [
-               {"const": true}
-             ]
-           }
-         ]
-       }
-     ]
-   }
-
-The export records one ``.authorized()`` query per trust. Named filters are
-separate statements; their AND composition with grant queries remains covered
-by library tests. Other authorization operations and paths that issue no SQL
-are also outside this first document format.
+Several trusts for the same content within one backend are OR alternatives.
+django-trusts issues one SQL statement for each permission inquiry and combines
+those trusts with OR. Different backends remain separate.
 
 Authorization policy lockfile
 -----------------------------
 
-Write the same output as a lockfile after registration is complete:
+Write the same bytes to a lockfile after registration is complete:
 
 .. code-block:: console
 
    python manage.py trusts_policy_sql --lock
 
-``TRUSTS_POLICY_LOCKFILE`` selects the path when configured. Otherwise,
-django-trusts uses ``BASE_DIR / "trusts-policy.lock.json"`` when ``BASE_DIR``
-is absolute. Commit the lockfile with the application code that declares the
-policy.
+``TRUSTS_POLICY_LOCKFILE`` selects an explicit absolute path. Relative explicit
+paths are errors and are not resolved against ``BASE_DIR`` or the working
+directory. Otherwise django-trusts uses
+``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR`` is absolute.
 
-When the conventional file exists, or an explicit path is configured,
-django-trusts registers the untagged system check ``trusts.E009``. It renders
-the live document using ``TRUSTS_POLICY_DATABASE`` or ``default`` and compares
-the generated bytes directly with the committed file. Hand formatting,
-reordering, or a changed newline fails the comparison. Regenerate the file
-instead of editing it by hand.
+The Django model check ``trusts.E009`` enforces the lockfile when the
+conventional file exists or ``TRUSTS_POLICY_LOCKFILE`` is configured. When the
+conventional file does not exist and the setting is not configured, the check
+returns no error and does not resolve the renderer. A missing explicit file is
+an error.
 
-A missing conventional file leaves the check unregistered. A missing or
-unreadable explicit file produces an error. The system check is the lockfile's
-enforcement point; it is not a request-time authorization gate.
+A lockfile belongs to one database renderer. Multi-engine CI may keep runtime
+databases different while pinning one ``TRUSTS_POLICY_DATABASE`` inspection
+alias consistently in settings and every render or E009 job. For example,
+MySQL ``default`` plus SQLite ``policy`` reviews one SQLite lockfile; E009
+follows ``policy``. Run ``python manage.py check`` in CI and before deployment.
 
-Run ``python manage.py check`` in CI and before deployment. See the
-:doc:`authorization policy SQL guide <authorization-policy-sql>` for the full
-path, renderer, and review workflow. See the `lockfile security audit guide
+See the :doc:`authorization policy SQL guide <authorization-policy-sql>` for
+the schema, identifiers, renderer selection, and review workflow. See the
+`lockfile security audit guide
 <../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
 connection and enforcement boundaries.
 

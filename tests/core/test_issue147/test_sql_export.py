@@ -36,6 +36,7 @@ from trusts.policy_lock import (
     _sentinel,
     _assign_ids,
     _load_policy_sql_document,
+    check_policy_sql_lockfile,
     render_policy_sql_bytes,
 )
 
@@ -648,6 +649,12 @@ class PolicySqlCommandTest(SimpleTestCase):
 
 
 class PolicySqlCheckTest(SimpleTestCase):
+    def test_e009_is_a_model_check(self):
+        self.assertEqual(
+            check_policy_sql_lockfile.tags,
+            (django_checks.Tags.models,),
+        )
+
     def test_missing_conventional_lockfile_emits_no_e009(self):
         with tempfile.TemporaryDirectory() as tmp:
             with override_settings(
