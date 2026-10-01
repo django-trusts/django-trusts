@@ -33,14 +33,18 @@ with the application.
 How permissions are represented
 --------------------------------
 
-A registered trust connects three paths:
+A registered trust connects a user, protected content, and a permission
+source:
 
 * **user** -- who is requesting access;
-* **permission** -- the operation being requested; and
+* **permission** -- a path that reaches Django permission objects directly; or
+* **group** -- a path that reaches Django ``auth.Group`` objects, whose
+  permissions are used indirectly; and
 * **content** -- the object being protected.
 
-All three paths begin from the same trust model. In the simplest case, that
-model has foreign keys to a user, a Django permission, and a protected object.
+``permission`` and ``group`` are mutually exclusive. All paths begin from the
+same trust model. In the simplest case, that model has foreign keys to a user,
+a Django permission, and a protected object.
 
 Multiple registered trusts may authorize the same kind of content. Each
 complete trust is an independent way to receive permission.
@@ -290,18 +294,31 @@ consume the same normalized registrations.
 Django group-permission enumeration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Django's ``user.get_group_permissions(obj)`` is the group-specific
-enumeration method in the permission-backend interface. Core
-``django-trusts`` uses it narrowly for object permissions obtained through
-Django's ``auth.Group``.
+Django's ``user.get_group_permissions(obj)`` enumerates permissions obtained
+through groups. A Trusts registration participates in that enumeration only
+when it explicitly uses ``group=``:
 
-For ordinary Trusts authorization, including custom team, role, roster, and
-other membership models, use ``has_perm()``, ``get_all_permissions()``, or
-``QuerySet.authorized()``. A relationship is not treated as a Django group
-permission merely because it is many-to-many or has a membership shape.
+.. code-block:: python
 
-``django-trusts-zero`` preserves its existing 0.x compatibility behavior until
-it moves onto Core's narrow ``auth.Group`` capability.
+   backend.register(
+       trust=GroupDocumentPermission,
+       user=lambda t: t.group.user_set,
+       group=lambda t: t.group,
+       content=lambda t: t.document,
+   )
+
+The ``group`` path must end at Django's ``auth.Group`` model. The compiler
+follows the group's permissions; applications do not append ``permissions`` to
+the path. ``group=`` and ``permission=`` cannot be supplied together.
+
+A registration using ``permission=`` keeps its existing meaning and is never
+inferred to be group-derived, even when its user path crosses a many-to-many
+membership. Use ``has_perm()``, ``get_all_permissions()``, or
+``QuerySet.authorized()`` for ordinary Trusts authorization through custom
+teams, roles, rosters, and other membership models.
+
+``django-trusts-zero`` continues to provide its existing 0.x group-permission
+behavior.
 
 Named filters
 -------------
