@@ -376,8 +376,8 @@ An example Windows declaration lives in
 Authorization policy in SQL
 ---------------------------
 
-django-trusts can render the registered authorization policy as canonical YAML
-containing parameterized compiler SQL:
+django-trusts can render the registered authorization policy as deterministic
+YAML containing parameterized compiler SQL:
 
 .. code-block:: console
 
