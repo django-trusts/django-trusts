@@ -234,11 +234,15 @@ relationship family; configuring a non-relationship family makes the complete
 render fail rather than emitting a partial row.
 
 CI that executes runtime tests against several engines may still review one
-lockfile. Configure a dedicated inspection alias and set
-``TRUSTS_POLICY_DATABASE`` to that same alias in every job that runs E009. The
-runtime test database and the lockfile renderer are separate choices. If an
-application intentionally reviews several deployment dialects, it may instead
-configure separate lockfile paths and renderer aliases per job.
+lockfile. Configure a dedicated inspection alias, set
+``TRUSTS_POLICY_DATABASE`` to that alias in application settings, and keep the
+same value in every CI job that renders or runs E009. For example, a MySQL
+``default`` runtime database and a SQLite ``policy`` inspection alias can share
+one committed SQLite lockfile: E009 follows ``policy``, not ``default``.
+Repeated renders through the selected alias must match the committed bytes.
+The runtime test database and the lockfile renderer are separate choices. If
+an application intentionally reviews several deployment dialects, it may
+instead configure separate lockfile paths and renderer aliases per job.
 
 Rendering compiles statements without executing them, but a Django backend or
 driver may still connect for initialization, server-version discovery, or
