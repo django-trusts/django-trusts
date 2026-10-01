@@ -420,10 +420,11 @@ existing conventional file or configured explicit path by comparing raw YAML
 bytes. When the conventional file is absent, the check returns no error and
 does not resolve the renderer. A missing explicit file is an error.
 
-A lockfile belongs to one database renderer. Multi-engine CI may pin
-``TRUSTS_POLICY_DATABASE`` to one inspection alias in every E009 job while
-running application tests against other databases. Run
-``python manage.py check`` in CI and before deployment.
+A lockfile belongs to one database renderer. Multi-engine CI may keep runtime
+databases different while pinning one ``TRUSTS_POLICY_DATABASE`` inspection
+alias consistently in settings and every render or E009 job. For example,
+MySQL ``default`` plus SQLite ``policy`` reviews one SQLite lockfile; E009
+follows ``policy``. Run ``python manage.py check`` in CI and before deployment.
 
 See the :doc:`authorization policy SQL guide <authorization-policy-sql>` for
 the schema, identifiers, renderer selection, and review workflow. See the
