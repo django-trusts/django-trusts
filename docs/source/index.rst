@@ -386,20 +386,14 @@ YAML containing parameterized compiler SQL:
 The command uses ``TRUSTS_POLICY_DATABASE``, or Django's ``default`` alias when
 unset. ``--database`` selects another configured alias for one invocation.
 
-The artifact is organized as backend, then protected content model. A content
-with trusts lists its legs and complete SQL for ``permitted``, ``has_perm``, and
-``get_all_permissions``. A filter-only content instead contains its model and
-standalone ``named_filters``. Empty relationship backends remain visible as
-``contents: []``.
+The artifact is organized by backend and protected content model. A content
+with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
+and ``get_all_permissions``. A content with named filters lists those queries.
+Empty relationship backends remain visible as ``contents: []``.
 
-``permitted`` is the artifact name for one backend's list query; it matches
-``.authorized()`` when that backend is the only relationship-family
-contributor. Several trusts for the same content within one backend are OR
-alternatives. Their legs carry ``or_group: true``, and each operation contains
-Django's full combined SQL. Different backends remain separate. The combined
-relationship-family list query across multiple Trusts backends is not recorded.
-The artifact deliberately uses complete SQL rather than fragment
-reconstruction rules.
+Several trusts for the same content within one backend are OR alternatives.
+django-trusts issues one SQL statement for each permission inquiry and combines
+those trusts with OR. Different backends remain separate.
 
 Authorization policy lockfile
 -----------------------------
