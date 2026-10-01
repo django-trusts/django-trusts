@@ -31,10 +31,9 @@ class PolicySqlCommand(BaseCommand):
     help = (
         'Print the canonical YAML authorization policy for the database '
         'alias selected by TRUSTS_POLICY_DATABASE, or Django\'s default '
-        'alias when that setting is unset. Composed operations use a '
-        'fragment reference only when that fragment expands to the '
-        'compiled SQL; otherwise the compiled statement is stored in '
-        'full. --database selects another configured alias for this '
+        'alias when that setting is unset. Each composed operation '
+        'stores the compiled statement once. --database selects another '
+        'configured alias for this '
         'process only. --lock writes the same bytes to the lockfile path.'
     )
     requires_system_checks = []
