@@ -348,11 +348,11 @@ intentional output changes with the dependency update.
 
 ### Check lifecycle and enforcement
 
-The untagged Django system-check callback for `trusts.E009` is always
-registered. Enforcement applies when the conventional lockfile exists or an
-explicit `TRUSTS_POLICY_LOCKFILE` path is configured. The explicit path must be
-absolute and is never resolved against `BASE_DIR` or the working directory.
-Conventional absence returns no error before database-alias resolution or
+The Django model check `trusts.E009` enforces the lockfile when the conventional
+file exists or an explicit `TRUSTS_POLICY_LOCKFILE` path is configured. The
+explicit path must be absolute and is never resolved against `BASE_DIR` or the
+working directory. When the conventional file does not exist and the setting is
+not configured, the check returns no error before database-alias resolution or
 rendering. A relative, missing, unreadable, or byte-different explicit file fails.
 
 The system check is the only lockfile enforcement and is not a request-time
@@ -424,4 +424,3 @@ answer:
    guide wrong, or has an explicit design decision changed the boundary?
 
 Discrepancies must be surfaced in the PR rather than resolved implicitly.
-
