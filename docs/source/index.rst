@@ -287,6 +287,22 @@ a missing object produces 404 and an existing unauthorized object produces
 Object checks, permission enumeration, queryset filtering, and view protection
 consume the same normalized registrations.
 
+Django group-permission enumeration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Django's ``user.get_group_permissions(obj)`` is the group-specific
+enumeration method in the permission-backend interface. Core
+``django-trusts`` uses it narrowly for object permissions obtained through
+Django's ``auth.Group``.
+
+For ordinary Trusts authorization, including custom team, role, roster, and
+other membership models, use ``has_perm()``, ``get_all_permissions()``, or
+``QuerySet.authorized()``. A relationship is not treated as a Django group
+permission merely because it is many-to-many or has a membership shape.
+
+``django-trusts-zero`` preserves its existing 0.x compatibility behavior until
+it moves onto Core's narrow ``auth.Group`` capability.
+
 Named filters
 -------------
 
