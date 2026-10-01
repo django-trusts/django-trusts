@@ -23,7 +23,7 @@ alias for one invocation with ``--database``:
 
    python manage.py trusts_policy_sql --database policy_inspection
 
-The command writes canonical YAML to stdout. The selected Django database
+The command writes deterministic YAML using the pinned writer. The selected Django database
 backend and driver determine SQL quoting, placeholders, operators, and dialect.
 The alias is not stored; ``database.engine`` records its configured engine.
 
@@ -153,7 +153,7 @@ followed by filter-only contents. Trusts preserve ``register()`` order, named
 filters preserve ``add_named_filter()`` order, and parameters preserve compiler
 order.
 
-Constants and canonical YAML
+Constants and generated YAML
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``bind`` entries name runtime values without storing them. JSON-compatible
@@ -175,7 +175,7 @@ construction.
 
 The writer uses the exact supported ``PyYAML==6.0.3`` release. Output is UTF-8
 without a byte-order mark, uses LF endings, fixed key order, double-quoted string
-values, one-line ``params``, ``|-`` SQL blocks, no YAML tags or aliases, and one
+values, one-line ``params``, ``|-`` SQL blocks, does not emit YAML tags or aliases, and ends with one
 trailing newline. ``trusts.E009`` compares raw bytes; it does not parse the
 document. Private loader and inverse helpers exist only for implementation tests
 and are not a supported YAML-to-registration API.
@@ -212,7 +212,7 @@ result with the committed file.
 
 When the conventional file is absent, the check returns no error and does not
 resolve the database alias or render SQL. A configured path is explicit intent:
-a missing, unreadable, noncanonical, or different file produces an error.
+a missing, unreadable, or byte-different file produces an error.
 
 Run the check in CI and before deployment:
 
