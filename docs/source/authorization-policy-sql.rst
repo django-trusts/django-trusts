@@ -186,9 +186,8 @@ One renderer per lockfile
 
 A lockfile belongs to one selected Django database renderer. SQL emitted for
 SQLite and MySQL may differ even when the application declarations are
-identical. Schema version 1 exports the
-relationship family; configuring a non-relationship family makes the
-render fail rather than emitting a partial row.
+identical. Schema version 1 exports only supported trust registrations. An unsupported
+registration shape makes rendering fail rather than emitting a partial row.
 
 CI that executes runtime tests against several engines may still review one
 lockfile. Configure a dedicated inspection alias, set
