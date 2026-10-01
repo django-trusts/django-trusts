@@ -6,11 +6,13 @@ rendered bytes. This module checks, before those bytes are returned,
 that every structured operation expands to the SQL the compiler
 produced.
 
-A fragment is closed SQL. An operation template may name a fragment
+A fragment is closed SQL. An operation's ``sql`` may name a fragment
 with ``{{fragment-id}}`` only when that fragment's text, aliases
 included, occurs exactly once in the complete compiled statement and
 that fragment's parameters occupy the same contiguous span. A second
 copy anywhere in that statement is stored as the full statement.
+Placeholders are the references. The writer expands them and keeps
+the result equal to the compiler SQL; that expansion is not stored.
 There is no placeholder whose expansion is guessed.
 
 The aggregate statement is captured by a compiler installed on this
@@ -90,25 +92,14 @@ def _verify_composition(composition):
                 'Composition operation id %r collides.' % (operation_id,)
             )
         seen_ops.add(operation_id)
-        representation = operation.get('representation')
-        if representation == 'full_sql':
-            _reject_placeholders(
-                operation.get('sql') or '',
-                'full SQL for %s' % operation_id,
+        sql = operation.get('sql')
+        if not isinstance(sql, str) or sql == '':
+            raise TrustsConfigurationError(
+                'Composition operation %s is missing SQL.' % operation_id
             )
+        if not _placeholder_ids(sql):
             continue
-        if representation != 'structured':
-            raise TrustsConfigurationError(
-                'Composition operation %s has representation %r.'
-                % (operation_id, representation)
-            )
-        expanded = operation.get('expanded') or {}
-        sql, params = _expand_structured(operation, fragments)
-        if sql != expanded.get('sql') or params != expanded.get('params'):
-            raise TrustsConfigurationError(
-                'Composition template for %s does not expand to the '
-                'compiled statement.' % operation_id
-            )
+        _expand_structured(operation, fragments)
 
 
 def _index_fragments(rows):
@@ -180,8 +171,8 @@ def _expand_structured(operation, fragments):
         raise TrustsConfigurationError(
             'Composition operation %s is missing SQL.' % operation.get('id')
         )
-    refs = operation.get('refs')
-    if not isinstance(refs, list) or not refs:
+    fragment_ids = _placeholder_ids(template)
+    if not fragment_ids:
         raise TrustsConfigurationError(
             'Composition operation %s is missing references.'
             % operation.get('id')
@@ -191,19 +182,11 @@ def _expand_structured(operation, fragments):
     parts = []
     built = []
     seen = set()
-    for ref in refs:
-        if not isinstance(ref, dict):
+    for fragment_id in fragment_ids:
+        placeholder = '{{%s}}' % fragment_id
+        if fragment_id in seen:
             raise TrustsConfigurationError(
-                'Composition reference on %s must be a mapping.'
-                % operation.get('id')
-            )
-        fragment_id = ref.get('fragment')
-        placeholder = ref.get('placeholder')
-        expected = '{{%s}}' % fragment_id
-        if placeholder != expected or fragment_id in seen:
-            raise TrustsConfigurationError(
-                'Composition placeholder %r is not an exact reference '
-                'to %r.' % (placeholder, fragment_id)
+                'Placeholder %s must occur once.' % placeholder
             )
         seen.add(fragment_id)
         fragment = fragments.get(fragment_id)
@@ -381,7 +364,7 @@ def _append_group(operations, fragments, order, group, filters, handle, alias):
 
 
 def _append_operation(
-    operations, fragments, order, operation_id, kind, sql, params, pieces,
+    operations, fragments, order, operation_id, _kind, sql, params, pieces,
 ):
     if any(row['id'] == operation_id for row in operations):
         raise TrustsConfigurationError(
@@ -396,27 +379,25 @@ def _append_operation(
     if factored is None:
         operations.append({
             'id': operation_id,
-            'kind': kind,
-            'representation': 'full_sql',
             'sql': sql,
             'params': params,
         })
         return
-    template, owned, refs = factored
+    template, owned = factored
     for piece in pieces:
         _remember_fragment(fragments, order, piece)
-    operations.append({
+    operation = {
         'id': operation_id,
-        'kind': kind,
-        'representation': 'structured',
         'sql': template,
         'params': owned,
-        'refs': refs,
-        'expanded': {
-            'sql': sql,
-            'params': params,
-        },
-    })
+    }
+    expanded_sql, expanded_params = _expand_structured(operation, fragments)
+    if expanded_sql != sql or expanded_params != list(params):
+        raise TrustsConfigurationError(
+            'Composition template for %s does not expand to the '
+            'compiled statement.' % operation_id
+        )
+    operations.append(operation)
 
 
 def _remember_fragment(fragments, order, piece):
@@ -437,13 +418,14 @@ def _remember_fragment(fragments, order, piece):
 
 
 def _factor(sql, params, pieces):
-    """Return ``(template, owned_params, refs)`` or None.
+    """Return ``(template, owned_params)`` or None.
 
     ``None`` unless every piece occurs exactly once in the complete
     compiled statement before any substitution, and its parameters are
     the contiguous slice at that span, in piece order. A second copy
     anywhere, including before the span that would be replaced, is a
-    partial reference, so the operation stays ``full_sql``.
+    partial reference, so the operation stores the compiled SQL with
+    no placeholders.
     """
     if not pieces:
         return None
@@ -498,7 +480,7 @@ def _factor(sql, params, pieces):
         return None
     owned.extend(remaining_params)
     parts.append(remaining_sql)
-    return ''.join(parts), owned, refs
+    return ''.join(parts), owned
 
 
 def _safe_placeholder(fragment_id, placeholder, frag_sql):
