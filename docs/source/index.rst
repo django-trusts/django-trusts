@@ -317,9 +317,6 @@ membership. Use ``has_perm()``, ``get_all_permissions()``, or
 ``QuerySet.authorized()`` for ordinary Trusts authorization through custom
 teams, roles, rosters, and other membership models.
 
-``django-trusts-zero`` continues to provide its existing 0.x group-permission
-behavior.
-
 Named filters
 -------------
 
