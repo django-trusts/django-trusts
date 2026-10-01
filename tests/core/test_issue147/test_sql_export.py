@@ -336,13 +336,17 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('or_group', trust)
         self.assertEqual(trust['content']['path'], 'document')
         self.assertEqual(list(document['database']), ['engine'])
+        self.assertEqual(list(content['permitted']), ['params', 'sql'])
         self.assertEqual(content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
             {'bind': 'user.id'},
         ])
         named = content['named_filters'][0]
-        self.assertEqual(named['id'], 'non_confidential')
+        self.assertEqual(list(named), ['id', 'params', 'sql'])
+        self.assertEqual(named['id'], 'documents__Document__non_confidential')
+        self.assertNotIn('.', named['id'])
+        self.assertNotIn('.', trust['id'])
         self.assertEqual(named['params'], [{'const': True}])
         self.assertNotIn('documents_documentpermission', named['sql'])
         self.assertNotIn('confidential" IS NULL', content['permitted']['sql'])
@@ -393,19 +397,15 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotEqual(forward, reversed_filters)
         forward_text = forward.decode('utf-8')
         reversed_text = reversed_trusts.decode('utf-8')
-        doc_id = 'id: "documents.DocumentPermission__document"'
-        other_id = 'id: "documents.OtherPermission__other"'
+        doc_id = 'id: "documents__DocumentPermission__document"'
+        other_id = 'id: "documents__OtherPermission__other"'
         self.assertLess(forward_text.index(doc_id), forward_text.index(other_id))
         self.assertLess(reversed_text.index(other_id), reversed_text.index(doc_id))
         filter_text = reversed_filters.decode('utf-8')
-        self.assertLess(
-            forward_text.index('id: "a_code"'),
-            forward_text.index('id: "z_code"'),
-        )
-        self.assertLess(
-            filter_text.index('id: "z_code"'),
-            filter_text.index('id: "a_code"'),
-        )
+        a_code = 'id: "documents__Document__a_code"'
+        z_code = 'id: "documents__Document__z_code"'
+        self.assertLess(forward_text.index(a_code), forward_text.index(z_code))
+        self.assertLess(filter_text.index(z_code), filter_text.index(a_code))
 
     def test_or_siblings_share_or_group_and_keep_separate_sql(self):
         handle = _handle('documents.backends.DocumentBackend')
@@ -431,6 +431,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertIs(trusts[1]['or_group'], True)
         self.assertNotIn('sql', trusts[0])
         self.assertNotIn('sql', trusts[1])
+        self.assertEqual(
+            trusts[0]['id'], 'documents__DocumentPermission__document',
+        )
+        self.assertEqual(
+            trusts[1]['id'], 'documents__TeamDocumentPermission__document',
+        )
+        self.assertNotIn('.', trusts[0]['id'])
+        self.assertNotIn('.', trusts[1]['id'])
         self.assertEqual(trusts[0]['user']['path'], 'user')
         self.assertEqual(trusts[1]['user']['path'], 'team__members')
         self.assertEqual(trusts[0]['content']['target'], 'id')
@@ -726,13 +734,16 @@ class PolicySqlConstantTest(SimpleTestCase):
         payload = render_policy_sql_bytes(handles=[_constant_family_handle()])
         self.assertEqual(payload, GOLDEN_CONSTANTS)
         document = _load_policy_sql_document(payload)
-        by_code = {
-            row['id']: row['params']
-            for row in document['backends'][0]['contents'][0]['named_filters']
-        }
+        filters = document['backends'][0]['contents'][0]['named_filters']
+        by_code = {row['id']: row['params'] for row in filters}
+        prefix = 'documents__ConstantDocument__'
+        for row in filters:
+            self.assertTrue(row['id'].startswith(prefix))
+            self.assertNotIn('.', row['id'])
+            self.assertEqual(list(row), ['id', 'params', 'sql'])
 
         def restored(code):
-            return _const_from_json(by_code[code][0]['const'])
+            return _const_from_json(by_code[prefix + code][0]['const'])
 
         self.assertEqual(restored('amount'), 1.5)
         self.assertEqual(restored('negzero'), 0.0)

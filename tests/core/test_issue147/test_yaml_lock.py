@@ -327,6 +327,15 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertEqual(document['schema_version'], 1)
         self.assertNotIn('lockfile', document)
         self.assertNotIn('role', document)
+        for backend in document['backends']:
+            for content in backend['contents']:
+                model_prefix = content['model'].replace('.', '__') + '__'
+                for trust_row in content.get('trusts', ()):
+                    self.assertNotIn('.', trust_row['id'])
+                for named_row in content.get('named_filters', ()):
+                    self.assertNotIn('.', named_row['id'])
+                    self.assertTrue(named_row['id'].startswith(model_prefix))
+                    self.assertEqual(list(named_row), ['id', 'params', 'sql'])
         guide = document['backends'][0]['contents'][0]
         trust = guide['trusts'][0]
         named = guide['named_filters'][0]
@@ -335,18 +344,19 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertNotIn('composition', document['backends'][0])
         self.assertNotIn('{{', payload.decode('utf-8'))
         self.assertNotIn('change_document', payload.decode('utf-8'))
-        self.assertEqual(set(guide['has_perm']), {'sql', 'params'})
+        self.assertEqual(list(guide['has_perm']), ['params', 'sql'])
         self.assertIn('EXISTS(', guide['has_perm']['sql'])
         self.assertIn('documents_documentpermission', guide['has_perm']['sql'])
         self.assertIn({'bind': 'permission.id'}, guide['has_perm']['params'])
         self.assertIn({'bind': 'user.id'}, guide['has_perm']['params'])
-        self.assertEqual(set(guide['permitted']), {'sql', 'params'})
+        self.assertEqual(list(guide['permitted']), ['params', 'sql'])
         self.assertIn('documents_documentpermission', guide['permitted']['sql'])
         self.assertNotIn('confidential" IS NULL', guide['permitted']['sql'])
         self.assertNotIn('confidential" = %s', guide['permitted']['sql'])
-        self.assertEqual(named['id'], 'non_confidential')
+        self.assertEqual(named['id'], 'documents__Document__non_confidential')
+        self.assertEqual(list(named), ['id', 'params', 'sql'])
         self.assertIn('confidential', named['sql'])
-        self.assertEqual(set(guide['get_all_permissions']), {'sql', 'params'})
+        self.assertEqual(list(guide['get_all_permissions']), ['params', 'sql'])
         self.assertIn('auth_permission', guide['get_all_permissions']['sql'])
         combined = document['backends'][1]['contents'][0]
         self.assertIs(combined['trusts'][0]['or_group'], True)
@@ -371,7 +381,7 @@ class PolicyCompositionTest(SimpleTestCase):
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
         self.assertEqual(
-            trust['id'], 'documents.DocumentPermission__document',
+            trust['id'], 'documents__DocumentPermission__document',
         )
         self.assertNotIn('sql', trust)
         self.assertIn('sql', content['permitted'])
@@ -397,7 +407,7 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertNotIn('sql', trust)
         self.assertIn('documents_hiddendocument', content['permitted']['sql'])
         self.assertIn('documents_hiddendocument', content['has_perm']['sql'])
-        self.assertEqual(set(content['has_perm']), {'sql', 'params'})
+        self.assertEqual(list(content['has_perm']), ['params', 'sql'])
 
     def test_mixed_user_models_fail_closed(self):
         handle = _handle('documents.backends.MixedBackend')
