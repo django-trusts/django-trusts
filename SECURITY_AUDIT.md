@@ -298,21 +298,15 @@ The user-facing [authorization policy SQL guide](docs/source/authorization-polic
 describes the schema, command, lockfile, and system-check workflow. This section
 records the additional security boundaries.
 
-The generated YAML is organized by backend and protected content model. Trust
-legs expose the declared relationships. Each content with trusts records the
-complete compiler SQL for `permitted`, `has_perm`, and `get_all_permissions`;
-filter-only contents carry only their model and standalone `named_filters`, and
-empty relationship backends remain visible as `contents: []`. `permitted` is
-the artifact label for one backend's list query and matches `.authorized()` only
-when that backend is the sole relationship-family contributor.
+The generated YAML is organized by backend and protected content model. Each
+trust exposes its declared relationships. Each content with trusts records SQL
+for `permitted`, `has_perm`, and `get_all_permissions`; filter-only
+contents carry their model and `named_filters`, and empty relationship
+backends remain visible as `contents: []`.
 
-The artifact does not use public SQL fragments, references, reverse
-reconstruction, or a YAML-to-registration contract. It also does not record
-permission-code variants, QuerySet-valued `has_perm`, `get_group_permissions`,
-grant-plus-named-filter SQL, zero-SQL short circuits, the relationship-family
-OR compiled by `.authorized()` across multiple Trusts backends, or Django's OR
-and set union across authentication backends. Those paths require separate
-tests and review.
+A django-trusts backend issues one SQL statement for each permission inquiry.
+When more than one trust in that backend authorizes the same content model, the
+SQL combines those trusts with OR. Different backends remain separate.
 
 ### Renderer and connection boundary
 
@@ -340,12 +334,10 @@ artifact describes SQLite rather than production SQL.
 The writer uses the installed supported `PyYAML` release. Strings, parameter
 flow sequences, SQL literal blocks, key order, line endings, and the trailing
 newline are part of the emitted byte profile. The writer does not emit YAML
-tags, anchors, or aliases. Runtime user and permission roles appear as `bind`; candidate
-primary keys used to compile object checks are typed sentinel values recorded
-as `const`, not application data. A repeated `const: 1` must therefore be
-reviewed by SQL position rather than assumed to be an `EXISTS` probe. Private
-loader and inverse helpers are test aids, not supported inputs or a reverse
-policy API.
+tags, anchors, or aliases. Runtime user and permission roles appear as `bind`; candidate primary keys
+used to compile object checks are typed sentinel values recorded as `const`,
+not application data. A repeated `const: 1` must therefore be reviewed by SQL
+position rather than assumed to be an `EXISTS` probe.
 
 `trusts.E009` compares raw bytes and does not parse the committed document.
 Hand formatting, reordering, a dependency-induced spelling change, or a changed
@@ -364,8 +356,7 @@ Conventional absence returns no error before database-alias resolution or
 rendering. A relative, missing, unreadable, or byte-different explicit file fails.
 
 The system check is the only lockfile enforcement and is not a request-time
-authorization gate. Silencing it with `SILENCED_SYSTEM_CHECKS`, or running a
-tag-selected check set that omits untagged checks, removes that enforcement.
+authorization gate. Run `python manage.py check` in CI and before deployment.
 WSGI and ASGI startup do not prove that the check ran.
 
 ### What equality does not prove
