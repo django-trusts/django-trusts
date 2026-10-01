@@ -360,14 +360,14 @@ def _project_content(handle, alias, group, filters):
 def _named_filter_row(row):
     return {
         'id': row['id'],
-        'sql': row['sql'],
         'params': row['params'],
+        'sql': row['sql'],
     }
 
 
 def _sql_row(compiled):
     sql, params = compiled
-    return {'sql': sql, 'params': params}
+    return {'params': params, 'sql': sql}
 
 
 def _require_shared_terminals(records, label):
@@ -482,12 +482,23 @@ def _assign_ids(records):
     return labels
 
 
-def _base_id(record):
-    """Stable leg id. ``__`` separates the root qname from the field path.
+def _dotless_id(*parts):
+    """Join id parts with ``__`` and fold qname dots into ``__``.
 
-    Dots stay inside Django labels. ``:``, ``+``, and ``#`` are not used.
+    Artifact ids use ``_`` and ``__`` only. Django paths keep their dots
+    on ``root``, relation ``model``, content ``model``, and backend path.
     """
-    label = '%s__%s' % (_model_label(record.root), record.content_field)
+    return '__'.join(parts).replace('.', '__')
+
+
+def _base_id(record):
+    """Stable leg id. The root qname's dots become ``__``.
+
+    ``documents.DocumentPermission`` plus content field ``document`` is
+    ``documents__DocumentPermission__document``. ``:``, ``+``, and ``#``
+    are not used.
+    """
+    label = _dotless_id(_model_label(record.root), record.content_field)
     if getattr(record, 'condition', None) is not None:
         label += '__cond'
     along = getattr(record, 'along', None)
@@ -496,7 +507,7 @@ def _base_id(record):
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
-    return label
+    return label.replace('.', '__')
 
 
 def _project_named_filters(registry, alias):
@@ -520,9 +531,9 @@ def _project_named_filters(registry, alias):
         sql, params = _compile_named_filter(model, expr, alias)
         rows.append({
             'model': model_label,
-            'id': code,
-            'sql': sql,
+            'id': _dotless_id(model_label, code),
             'params': params,
+            'sql': sql,
         })
     return rows
 
