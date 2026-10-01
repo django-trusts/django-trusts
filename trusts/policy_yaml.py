@@ -10,7 +10,7 @@ aliases are rejected.
 PyYAML does not promise that ``yaml.dump`` bytes stay stable across
 versions, hash seeds, or the libyaml build. These representers and the
 golden files are what pin the bytes. The byte profile is CI-validated
-with ``PyYAML==6.0.3``; supported installations may use later releases and
+with ``PyYAML>=6.0.3``; supported installations may use later releases and
 regenerate reviewed lockfiles when the emitted bytes change.
 """
 
