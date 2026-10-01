@@ -331,24 +331,32 @@ class PolicySqlGoldenTest(SimpleTestCase):
         text = payload.decode('utf-8')
         self.assertNotIn('\r', text)
         document = _load_policy_sql_document(payload)
-        trust = document['backends'][0]['trusts'][0]
+        content = document['backends'][0]['contents'][0]
+        trust = content['trusts'][0]
         self.assertNotIn('or_group', trust)
+        self.assertEqual(trust['content']['path'], 'document')
         self.assertEqual(list(document['database']), ['engine'])
-        self.assertEqual(trust['params'], [
+        self.assertEqual(content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
             {'bind': 'user.id'},
         ])
-        named = document['backends'][0]['named_filters'][0]
+        named = content['named_filters'][0]
+        self.assertEqual(named['id'], 'non_confidential')
         self.assertEqual(named['params'], [{'const': True}])
         self.assertNotIn('documents_documentpermission', named['sql'])
-        self.assertNotIn('confidential" IS NULL', trust['sql'])
-        self.assertNotIn('confidential" = %s', trust['sql'])
+        self.assertNotIn('confidential" IS NULL', content['permitted']['sql'])
+        self.assertNotIn('confidential" = %s', content['permitted']['sql'])
+        self.assertNotIn('sql', trust)
         self.assertNotIn('kind', trust)
         self.assertNotIn('kind', named)
+        self.assertIn('EXISTS(', content['has_perm']['sql'])
+        self.assertIn({'bind': 'permission.id'}, content['has_perm']['params'])
+        self.assertIn('auth_permission', content['get_all_permissions']['sql'])
         for token in ('change_document', 'codename'):
-            self.assertNotIn(token, trust['sql'])
+            self.assertNotIn(token, content['permitted']['sql'])
             self.assertNotIn(token, named['sql'])
+            self.assertNotIn(token, content['has_perm']['sql'])
         for token in _FORBIDDEN:
             self.assertNotIn(token, text)
 
@@ -372,7 +380,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         )
         forward_filters = (
             (Document, 'a_code'),
-            (OtherDocument, 'z_code'),
+            (Document, 'z_code'),
         )
         forward = render(forward_trusts, forward_filters)
         reversed_trusts = render(
@@ -385,18 +393,18 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotEqual(forward, reversed_filters)
         forward_text = forward.decode('utf-8')
         reversed_text = reversed_trusts.decode('utf-8')
-        doc_id = 'id: "documents.DocumentPermission:document"'
-        other_id = 'id: "documents.OtherPermission:other"'
+        doc_id = 'id: "documents.DocumentPermission__document"'
+        other_id = 'id: "documents.OtherPermission__other"'
         self.assertLess(forward_text.index(doc_id), forward_text.index(other_id))
         self.assertLess(reversed_text.index(other_id), reversed_text.index(doc_id))
         filter_text = reversed_filters.decode('utf-8')
         self.assertLess(
-            forward_text.index('code: "a_code"'),
-            forward_text.index('code: "z_code"'),
+            forward_text.index('id: "a_code"'),
+            forward_text.index('id: "z_code"'),
         )
         self.assertLess(
-            filter_text.index('code: "z_code"'),
-            filter_text.index('code: "a_code"'),
+            filter_text.index('id: "z_code"'),
+            filter_text.index('id: "a_code"'),
         )
 
     def test_or_siblings_share_or_group_and_keep_separate_sql(self):
@@ -416,35 +424,22 @@ class PolicySqlGoldenTest(SimpleTestCase):
         document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[handle]),
         )
-        trusts = document['backends'][0]['trusts']
+        content = document['backends'][0]['contents'][0]
+        trusts = content['trusts']
         self.assertEqual(len(trusts), 2)
-        self.assertEqual(trusts[0]['or_group'], 'documents.Document')
-        self.assertEqual(trusts[1]['or_group'], 'documents.Document')
-        self.assertIn('documents_documentpermission', trusts[0]['sql'])
-        self.assertNotIn('documents_team', trusts[0]['sql'])
-        self.assertIn('"documents_team"', trusts[1]['sql'])
-        self.assertIn('documents_team_members', trusts[1]['sql'])
-        self.assertNotIn(' OR ', trusts[0]['sql'])
-        self.assertNotIn(' OR ', trusts[1]['sql'])
+        self.assertIs(trusts[0]['or_group'], True)
+        self.assertIs(trusts[1]['or_group'], True)
+        self.assertNotIn('sql', trusts[0])
+        self.assertNotIn('sql', trusts[1])
         self.assertEqual(trusts[0]['user']['path'], 'user')
         self.assertEqual(trusts[1]['user']['path'], 'team__members')
-        self.assertEqual(trusts[0]['params'], trusts[1]['params'])
-        self.assertEqual(trusts[0]['params'], [
-            {'const': 1},
-            {'bind': 'permission.id'},
-            {'bind': 'user.id'},
-        ])
-        composed = document['backends'][0]['composition']
-        self.assertEqual(list(composed), ['operations'])
-        or_group = next(
-            row for row in composed['operations']
-            if row['id'].startswith('or_group_authorized:')
-        )
-        self.assertEqual(set(or_group), {'id', 'sql', 'params'})
-        self.assertIn(' OR ', or_group['sql'])
-        self.assertIn('documents_documentpermission', or_group['sql'])
-        self.assertIn('"documents_team"', or_group['sql'])
-        self.assertNotIn('{{', or_group['sql'])
+        self.assertEqual(trusts[0]['content']['target'], 'id')
+        permitted = content['permitted']
+        self.assertIn(' OR ', permitted['sql'])
+        self.assertIn('documents_documentpermission', permitted['sql'])
+        self.assertIn('"documents_team"', permitted['sql'])
+        self.assertNotIn('{{', permitted['sql'])
+        self.assertNotIn('composition', document['backends'][0])
 
     def test_empty_relationship_backend_is_still_emitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
@@ -457,10 +452,10 @@ class PolicySqlGoldenTest(SimpleTestCase):
             'aaa.backends.DocumentBackend',
             'zzz.backends.EmptyBackend',
         ])
-        self.assertEqual(document['backends'][1]['trusts'], [])
-        self.assertEqual(document['backends'][1]['named_filters'], [])
+        self.assertEqual(document['backends'][1]['contents'], [])
         self.assertNotIn('composition', document['backends'][1])
-        self.assertIn('composition', document['backends'][0])
+        self.assertNotIn('composition', document['backends'][0])
+        self.assertIn('contents', document['backends'][0])
 
     def test_unsupported_family_fails_closed(self):
         with patch(
@@ -693,9 +688,10 @@ class PolicySqlSentinelTest(SimpleTestCase):
         actor_doc = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[actor_handle]),
         )
-        actor_trust = actor_doc['backends'][0]['trusts'][0]
+        actor_content = actor_doc['backends'][0]['contents'][0]
+        actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
-        self.assertEqual(actor_trust['params'], [
+        self.assertEqual(actor_content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
             {'bind': 'user.id'},
@@ -711,13 +707,14 @@ class PolicySqlSentinelTest(SimpleTestCase):
         account_doc = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[account_handle]),
         )
-        account_trust = account_doc['backends'][0]['trusts'][0]
+        account_content = account_doc['backends'][0]['contents'][0]
+        account_trust = account_content['trusts'][0]
         self.assertEqual(account_trust['user'], {
             'path': 'user',
             'model': 'documents.PolicyAccount',
             'target': 'code',
         })
-        self.assertEqual(account_trust['params'], [
+        self.assertEqual(account_content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
             {'bind': 'user.code'},
@@ -730,8 +727,8 @@ class PolicySqlConstantTest(SimpleTestCase):
         self.assertEqual(payload, GOLDEN_CONSTANTS)
         document = _load_policy_sql_document(payload)
         by_code = {
-            row['code']: row['params']
-            for row in document['backends'][0]['named_filters']
+            row['id']: row['params']
+            for row in document['backends'][0]['contents'][0]['named_filters']
         }
 
         def restored(code):

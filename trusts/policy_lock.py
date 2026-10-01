@@ -1,13 +1,13 @@
 """SQL-first authorization policy export and lockfile check.
 
-``trusts_policy_sql`` renders schema version 1 as canonical YAML: one
-``.authorized()`` statement per registered trust, standalone
-named-filter SQL, ``or_group`` when two trusts on a backend share a
-content model, and a ``composition`` section that stores each
-composed operation's compiled SQL and parameters once. The alias is
-not stored. ``trusts.E009`` compares
-the rendered bytes to the committed file and does not parse them. It
-is the only lockfile enforcement.
+``trusts_policy_sql`` renders schema version 1 as canonical YAML.
+Each backend lists ``contents`` by model. A content owns its trust
+legs, the compiled SQL for ``permitted``, ``has_perm``, and
+``get_all_permissions`` when it has trusts, and its named filters.
+``permitted`` is the artifact name for today's ``.authorized()`` list
+query. The runtime API is not renamed. The alias is not stored.
+``trusts.E009`` compares the rendered bytes to the committed file and
+does not parse them. It is the only lockfile enforcement.
 """
 
 from __future__ import annotations
@@ -28,10 +28,7 @@ from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-from trusts.core import (
-    RelationPlan,
-    TrustsConfigurationError,
-)
+from trusts.core import TrustsConfigurationError
 from trusts.policy_yaml import (
     PolicyYamlError,
     dump_policy_yaml,
@@ -273,13 +270,65 @@ def _project_backend(handle, alias):
         )
     records = tuple(getattr(registry, 'records', ()) or ())
     ids = _assign_ids(records)
-    content_labels = [_model_label(record.content_model) for record in records]
-    grouped = {
-        label for label in content_labels if content_labels.count(label) > 1
+    named_filters = _project_named_filters(registry, alias)
+    return {
+        'path': path,
+        'contents': _project_contents(
+            handle, alias, records, ids, named_filters,
+        ),
     }
+
+
+def _project_contents(handle, alias, records, ids, named_filters):
+    groups = []
+    index = {}
+    for record, trust_id in zip(records, ids):
+        label = _model_label(record.content_model)
+        slot = index.get(label)
+        if slot is None:
+            index[label] = len(groups)
+            groups.append({
+                'label': label,
+                'model': record.content_model,
+                'legs': [],
+            })
+            slot = index[label]
+        groups[slot]['legs'].append((record, trust_id))
+    filters_by_model = {}
+    filter_order = []
+    for row in named_filters:
+        model = row['model']
+        bucket = filters_by_model.get(model)
+        if bucket is None:
+            filters_by_model[model] = bucket = []
+            filter_order.append(model)
+        bucket.append(row)
+    contents = []
+    seen = set()
+    for group in groups:
+        seen.add(group['label'])
+        contents.append(_project_content(
+            handle, alias, group, filters_by_model.get(group['label'], ()),
+        ))
+    for model in filter_order:
+        if model in seen:
+            continue
+        contents.append({
+            'model': model,
+            'named_filters': [
+                _named_filter_row(row) for row in filters_by_model[model]
+            ],
+        })
+    return contents
+
+
+def _project_content(handle, alias, group, filters):
+    legs = group['legs']
+    records = tuple(record for record, _trust_id in legs)
+    _require_shared_terminals(records, group['label'])
+    multi = len(legs) > 1
     trusts = []
-    for record, trust_id, content_label in zip(records, ids, content_labels):
-        sql, params = _compile_authorized(record, alias)
+    for record, trust_id in legs:
         row = {
             'id': trust_id,
             'root': _model_label(record.root),
@@ -287,25 +336,125 @@ def _project_backend(handle, alias):
             'permission': _relation(record, 'permission'),
             'content': _relation(record, 'content'),
         }
-        if content_label in grouped:
-            row['or_group'] = content_label
-        row['sql'] = sql
-        row['params'] = params
+        if multi:
+            row['or_group'] = True
         trusts.append(row)
-    named_filters = _project_named_filters(registry, alias)
-    from trusts.policy_composition import _build_backend_composition
-
-    composition = _build_backend_composition(
-        handle, alias, records, trusts, named_filters,
-    )
-    projected = {
-        'path': path,
+    content = {
+        'model': group['label'],
         'trusts': trusts,
-        'named_filters': named_filters,
+        'permitted': _sql_row(_compile_permitted(
+            handle, alias, records, group['model'],
+        )),
+        'has_perm': _sql_row(_compile_has_perm(
+            handle, alias, records, group['model'],
+        )),
+        'get_all_permissions': _sql_row(_compile_get_all_permissions(
+            handle, alias, records, group['model'],
+        )),
     }
-    if composition is not None:
-        projected['composition'] = composition
-    return projected
+    if filters:
+        content['named_filters'] = [_named_filter_row(row) for row in filters]
+    return content
+
+
+def _named_filter_row(row):
+    return {
+        'id': row['id'],
+        'sql': row['sql'],
+        'params': row['params'],
+    }
+
+
+def _sql_row(compiled):
+    sql, params = compiled
+    return {'sql': sql, 'params': params}
+
+
+def _require_shared_terminals(records, label):
+    first = records[0]
+    for role in ('user', 'permission'):
+        model = getattr(first, '%s_model' % role)._meta.concrete_model
+        target = getattr(first, '%s_target' % role)
+        for record in records[1:]:
+            other = getattr(record, '%s_model' % role)._meta.concrete_model
+            if (
+                other is not model
+                or getattr(record, '%s_target' % role) != target
+            ):
+                raise TrustsConfigurationError(
+                    'Policy SQL on %s requires one %s model and target.'
+                    % (label, role)
+                )
+
+
+def _content_manager(model):
+    return model._meta.concrete_model._default_manager
+
+
+def _content_sentinel(model, alias):
+    return _sentinel(model, model._meta.pk.attname, alias=alias)
+
+
+def _role_sentinel(record, role, alias):
+    return _sentinel(
+        getattr(record, '%s_model' % role),
+        getattr(record, '%s_target' % role),
+        alias=alias,
+    )
+
+
+def _compile_permitted(handle, alias, records, model):
+    user = _role_sentinel(records[0], 'user', alias)
+    permission = _role_sentinel(records[0], 'permission', alias)
+    queryset = handle.registry.filter_authorized(
+        _content_manager(model).all(), user, permission,
+    )
+    return _compile_queryset(
+        queryset, alias, record=records[0], expr=None, records=records,
+    )
+
+
+def _compile_has_perm(handle, alias, records, model):
+    from trusts.core import _compile_granted
+
+    user = _role_sentinel(records[0], 'user', alias)
+    permission = _role_sentinel(records[0], 'permission', alias)
+    instance = _content_sentinel(model, alias)
+    granted = _compile_granted(
+        (handle,), instance, user, permission, kind='complete',
+    )
+    if granted is None:
+        raise TrustsConfigurationError(
+            'Policy SQL found no grant for %s.' % _model_label(model)
+        )
+    exists = _content_manager(model).filter(pk=instance.pk).filter(granted)
+    return _compile_queryset(
+        _Query(exists.query.exists()),
+        alias, record=records[0], expr=None, records=records,
+    )
+
+
+def _compile_get_all_permissions(handle, alias, records, model):
+    from trusts.core import _compile_common_permissions
+
+    user = _role_sentinel(records[0], 'user', alias)
+    instance = _content_sentinel(model, alias)
+    queryset = _compile_common_permissions(
+        (handle,), instance, user, kind='complete',
+    )
+    if queryset is None:
+        raise TrustsConfigurationError(
+            'Policy SQL found no permissions query for %s.'
+            % _model_label(model)
+        )
+    return _compile_queryset(
+        queryset, alias, record=records[0], expr=None, records=records,
+    )
+
+
+class _Query(object):
+    def __init__(self, query):
+        self.query = query
 
 
 def _relation(record, role):
@@ -329,17 +478,21 @@ def _assign_ids(records):
         if totals[base] == 1 or number == 1:
             labels.append(base)
         else:
-            labels.append('%s#%s' % (base, number))
+            labels.append('%s__%s' % (base, number))
     return labels
 
 
 def _base_id(record):
-    label = '%s:%s' % (_model_label(record.root), record.content_field)
+    """Stable leg id. ``__`` separates the root qname from the field path.
+
+    Dots stay inside Django labels. ``:``, ``+``, and ``#`` are not used.
+    """
+    label = '%s__%s' % (_model_label(record.root), record.content_field)
     if getattr(record, 'condition', None) is not None:
-        label += '+cond'
+        label += '__cond'
     along = getattr(record, 'along', None)
     if along is not None:
-        label += '+along:%s:%s' % (
+        label += '__along_%s_%s' % (
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
@@ -358,32 +511,20 @@ def _project_named_filters(registry, alias):
                 'Named filter on %s has a non-portable code %r.'
                 % (model_label, code)
             )
+        if any(mark in code for mark in ('.', ':', '#', '+', '{', '}')):
+            raise TrustsConfigurationError(
+                'Named filter on %s has a non-portable code %r.'
+                % (model_label, code)
+            )
         expr = getattr(record, 'expr', None)
         sql, params = _compile_named_filter(model, expr, alias)
         rows.append({
             'model': model_label,
-            'code': code,
+            'id': code,
             'sql': sql,
             'params': params,
         })
     return rows
-
-
-def _compile_authorized(record, alias):
-    user = _sentinel(record.user_model, record.user_target, alias=alias)
-    permission = _sentinel(
-        record.permission_model, record.permission_target, alias=alias,
-    )
-    plan = RelationPlan(
-        records=(record,),
-        permission_model=record.permission_model,
-    )
-    queryset = plan.filter_content(
-        record.content_model._meta.concrete_model._default_manager.all(),
-        user,
-        permission,
-    )
-    return _compile_queryset(queryset, alias, record=record, expr=None)
 
 
 def _compile_named_filter(model, expr, alias):

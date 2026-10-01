@@ -274,15 +274,13 @@ class PolicyCompositionTest(SimpleTestCase):
     def test_renderer_does_not_replace_sqlcompiler_execute_sql(self):
         from django.db.models.sql.compiler import SQLCompiler
 
-        import trusts.policy_composition as policy_composition
+        import trusts.policy_lock as policy_lock
 
-        self.assertIsNotNone(
-            importlib.util.find_spec('trusts.policy_composition'),
-        )
+        self.assertIsNone(importlib.util.find_spec('trusts.policy_composition'))
         self.assertIsNone(importlib.util.find_spec(
             'tests.core.test_issue147.composition_evidence',
         ))
-        source = Path(policy_composition.__file__).read_text(encoding='utf-8')
+        source = Path(policy_lock.__file__).read_text(encoding='utf-8')
         self.assertNotIn('SQLCompiler.execute_sql', source)
         original = SQLCompiler.execute_sql
         samples = []
@@ -329,78 +327,54 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertEqual(document['schema_version'], 1)
         self.assertNotIn('lockfile', document)
         self.assertNotIn('role', document)
-        guide = document['backends'][0]
+        guide = document['backends'][0]['contents'][0]
         trust = guide['trusts'][0]
         named = guide['named_filters'][0]
-        self.assertNotIn('{{', trust['sql'])
+        self.assertNotIn('sql', trust)
         self.assertNotIn('documents_documentpermission', named['sql'])
-        composition = guide['composition']
-        self.assertEqual(list(composition), ['operations'])
+        self.assertNotIn('composition', document['backends'][0])
         self.assertNotIn('{{', payload.decode('utf-8'))
-        by_id = {row['id']: row for row in composition['operations']}
-        instance = by_id['has_perm_permission_instance:documents.Document']
-        self.assertEqual(set(instance), {'id', 'sql', 'params'})
-        self.assertIn('EXISTS(', instance['sql'])
-        self.assertIn('documents_documentpermission', instance['sql'])
-        self.assertNotIn(' IN ', instance['sql'])
-        self.assertIn({'bind': 'permission.id'}, instance['params'])
-        self.assertIn({'bind': 'user.id'}, instance['params'])
-        code = by_id['has_perm_permission_code:documents.Document']
-        self.assertEqual(set(code), {'id', 'sql', 'params'})
-        self.assertIn('"V0"', code['sql'])
-        self.assertIn('"codename"', code['sql'])
-        self.assertNotIn(
-            '"documents_documentpermission" "U0"',
-            code['sql'],
-        )
-        self.assertIn({'const': 'change_document'}, code['params'])
-        composed = by_id[
-            'authorized_and_named_filter:documents.Document:non_confidential'
-        ]
-        self.assertEqual(set(composed), {'id', 'sql', 'params'})
-        self.assertIn('documents_documentpermission', composed['sql'])
-        self.assertIn('confidential', composed['sql'])
-        self.assertIn({'bind': 'user.id'}, composed['params'])
-        self.assertIn({'const': True}, composed['params'])
-        queryset_code = by_id[
-            'queryset_has_perm_permission_code:documents.Document'
-        ]
-        self.assertIn('COUNT(DISTINCT', queryset_code['sql'])
-        self.assertIn('"V0"', queryset_code['sql'])
-        combined = document['backends'][1]['composition']
-        self.assertNotIn('fragments', combined)
-        or_group = next(
-            row for row in combined['operations']
-            if row['id'].startswith('or_group_authorized:')
-        )
-        self.assertIn(' OR ', or_group['sql'])
-        self.assertIn('documents_documentpermission', or_group['sql'])
-        self.assertIn('"documents_team"', or_group['sql'])
-        code_or = next(
-            row for row in combined['operations']
-            if row['id'].startswith('has_perm_permission_code:')
-        )
-        self.assertIn('"V0"', code_or['sql'])
-        self.assertIn('"V2"', code_or['sql'])
+        self.assertNotIn('change_document', payload.decode('utf-8'))
+        self.assertEqual(set(guide['has_perm']), {'sql', 'params'})
+        self.assertIn('EXISTS(', guide['has_perm']['sql'])
+        self.assertIn('documents_documentpermission', guide['has_perm']['sql'])
+        self.assertIn({'bind': 'permission.id'}, guide['has_perm']['params'])
+        self.assertIn({'bind': 'user.id'}, guide['has_perm']['params'])
+        self.assertEqual(set(guide['permitted']), {'sql', 'params'})
+        self.assertIn('documents_documentpermission', guide['permitted']['sql'])
+        self.assertNotIn('confidential" IS NULL', guide['permitted']['sql'])
+        self.assertNotIn('confidential" = %s', guide['permitted']['sql'])
+        self.assertEqual(named['id'], 'non_confidential')
+        self.assertIn('confidential', named['sql'])
+        self.assertEqual(set(guide['get_all_permissions']), {'sql', 'params'})
+        self.assertIn('auth_permission', guide['get_all_permissions']['sql'])
+        combined = document['backends'][1]['contents'][0]
+        self.assertIs(combined['trusts'][0]['or_group'], True)
+        self.assertIs(combined['trusts'][1]['or_group'], True)
+        self.assertIn(' OR ', combined['permitted']['sql'])
+        self.assertIn('documents_documentpermission', combined['permitted']['sql'])
+        self.assertIn('"documents_team"', combined['permitted']['sql'])
+        self.assertNotIn('named_filters', combined)
 
-    def test_document_lockfile_includes_composition(self):
+    def test_document_lockfile_includes_content_sql(self):
         payload = render_policy_sql_bytes(handles=[_document_handle()])
         self.assertEqual(payload, GOLDEN_DOCUMENT)
         text = payload.decode('utf-8')
         self.assertNotIn('composition-evidence', text)
-        self.assertIn('has_perm_permission_instance:', text)
+        self.assertNotIn('composition:', text)
         self.assertNotIn('fragments:', text)
         self.assertNotIn('{{', text)
-        self.assertNotIn('trust_exists', text)
-        self.assertNotIn('placeholder:', text)
-        self.assertNotIn('expanded:', text)
-        self.assertNotIn('representation:', text)
+        self.assertIn('\n        permitted:\n', text)
+        self.assertIn('\n        has_perm:\n', text)
+        self.assertIn('\n        get_all_permissions:\n', text)
         document = _load_policy_sql_document(payload)
-        trust = document['backends'][0]['trusts'][0]
-        self.assertNotIn('structured', trust)
-        self.assertIn('sql', trust)
-        composition = document['backends'][0]['composition']
-        self.assertEqual(list(composition), ['operations'])
+        content = document['backends'][0]['contents'][0]
+        trust = content['trusts'][0]
+        self.assertEqual(
+            trust['id'], 'documents.DocumentPermission__document',
+        )
+        self.assertNotIn('sql', trust)
+        self.assertIn('sql', content['permitted'])
 
     def test_model_without_objects_manager_still_composes(self):
         self.assertFalse(hasattr(HiddenDocument, 'objects'))
@@ -418,17 +392,12 @@ class PolicyCompositionTest(SimpleTestCase):
         document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[handle]),
         )
-        backend = document['backends'][0]
-        trust = backend['trusts'][0]
-        self.assertIn('documents_hiddendocument', trust['sql'])
-        composition = backend['composition']
-        self.assertNotIn('fragments', composition)
-        instance = next(
-            row for row in composition['operations']
-            if row['id'].startswith('has_perm_permission_instance:')
-        )
-        self.assertEqual(set(instance), {'id', 'sql', 'params'})
-        self.assertIn('documents_hiddendocument', instance['sql'])
+        content = document['backends'][0]['contents'][0]
+        trust = content['trusts'][0]
+        self.assertNotIn('sql', trust)
+        self.assertIn('documents_hiddendocument', content['permitted']['sql'])
+        self.assertIn('documents_hiddendocument', content['has_perm']['sql'])
+        self.assertEqual(set(content['has_perm']), {'sql', 'params'})
 
     def test_mixed_user_models_fail_closed(self):
         handle = _handle('documents.backends.MixedBackend')

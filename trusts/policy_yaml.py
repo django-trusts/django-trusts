@@ -46,6 +46,7 @@ _ALLOWED_TAGS = frozenset((
     _TAG_NULL, _TAG_BOOL, _TAG_INT, _TAG_FLOAT, _TAG_STR, _TAG_SEQ, _TAG_MAP,
 ))
 _LITERAL_KEYS = frozenset(('sql',))
+_FLOW_MAP_KEYS = frozenset(('user', 'permission', 'content'))
 
 
 class PolicyYamlError(ValueError):
@@ -199,6 +200,8 @@ def _prepare_value(key, value):
                 % (key, type(value).__name__)
             )
         return _FlowSeq(_flow_prepare(item) for item in value)
+    if key in _FLOW_MAP_KEYS and isinstance(value, dict):
+        return _flow_prepare(value)
     if key in _LITERAL_KEYS:
         if not isinstance(value, str):
             raise PolicyYamlError(
