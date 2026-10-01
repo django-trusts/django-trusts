@@ -27,7 +27,9 @@ from trusts.conditions._ir import ModelIdentity
 from trusts.core import TrustsConfigurationError
 from trusts.policy_composition import (
     _append_operation,
+    _expand_structured,
     _factor,
+    _placeholder_ids,
     _verify_composition,
 )
 from trusts.policy_lock import (
@@ -168,15 +170,17 @@ class PolicyYamlCodecTest(SimpleTestCase):
         self.assertNotIn(b'!!', first)
         self.assertNotIn(b'\n---', first)
         text = first.decode('utf-8')
-        self.assertIn('\n  - const: -0.0\n', text)
-        self.assertIn('\n  - const: 1.0\n', text)
-        self.assertIn('\n  - const: 1.0e+16\n', text)
+        self.assertTrue(text.startswith('params: [') and text.endswith(']\n'))
+        self.assertNotIn('\n', text[:-1])
+        self.assertIn('{const: -0.0}', text)
+        self.assertIn('{const: 1.0}', text)
+        self.assertIn('{const: 1.0e+16}', text)
         self.assertIn('value: "2024-03-04"', text)
         self.assertIn('value: "NaN"', text)
         self.assertIn('value: "12.50"', text)
         self.assertIn('hex: "00ff"', text)
-        self.assertNotIn('\n  - const: yes\n', text)
-        self.assertNotIn('\n  - const: 2024-03-04\n', text)
+        self.assertNotIn('const: yes', text)
+        self.assertNotIn('const: 2024-03-04', text)
         loaded = _load_policy_yaml(first)
         self.assertEqual(dump_policy_yaml(loaded), first)
         for original, row in zip(values, loaded['params']):
@@ -339,18 +343,27 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertNotIn('documents_documentpermission', named['sql'])
         composition = guide['composition']
         _verify_composition(composition)
+        fragments = {
+            row['id']: row for row in composition['fragments']
+        }
+        self.assertEqual(
+            fragments['trust:documents.DocumentPermission:document']['kind'],
+            'trust_exists',
+        )
         by_id = {row['id']: row for row in composition['operations']}
         instance = by_id['has_perm_permission_instance:documents.Document']
-        self.assertEqual(instance['representation'], 'structured')
+        self.assertEqual(set(instance), {'id', 'sql', 'params'})
         self.assertIn(
             '{{trust:documents.DocumentPermission:document}}',
             instance['sql'],
         )
-        self.assertNotIn(' IN ', instance['expanded']['sql'])
+        expanded_sql, _expanded_params = _expand_structured(instance, fragments)
+        self.assertNotIn(' IN ', expanded_sql)
+        self.assertNotIn('{{', expanded_sql)
         self.assertEqual(instance['params'], [{'const': 1}, {'const': 1}])
         code = by_id['has_perm_permission_code:documents.Document']
-        self.assertEqual(code['representation'], 'full_sql')
-        self.assertNotIn('expanded', code)
+        self.assertEqual(set(code), {'id', 'sql', 'params'})
+        self.assertNotIn('{{', code['sql'])
         self.assertIn('"V0"', code['sql'])
         self.assertIn('"codename"', code['sql'])
         self.assertNotIn(
@@ -361,10 +374,10 @@ class PolicyCompositionTest(SimpleTestCase):
         composed = by_id[
             'authorized_and_named_filter:documents.Document:non_confidential'
         ]
-        self.assertEqual(composed['representation'], 'structured')
+        self.assertEqual(set(composed), {'id', 'sql', 'params'})
         self.assertEqual(composed['params'], [])
         self.assertEqual(
-            [ref['fragment'] for ref in composed['refs']],
+            _placeholder_ids(composed['sql']),
             [
                 'trust:documents.DocumentPermission:document',
                 'predicate:documents.Document:non_confidential',
@@ -373,29 +386,35 @@ class PolicyCompositionTest(SimpleTestCase):
         queryset_code = by_id[
             'queryset_has_perm_permission_code:documents.Document'
         ]
-        self.assertEqual(queryset_code['representation'], 'full_sql')
+        self.assertNotIn('{{', queryset_code['sql'])
         self.assertIn('COUNT(DISTINCT', queryset_code['sql'])
         self.assertIn('"V0"', queryset_code['sql'])
-        combined = document['backends'][1]['composition']['operations']
+        combined_composition = document['backends'][1]['composition']
+        combined = combined_composition['operations']
         or_group = next(
-            row for row in combined if row['kind'] == 'or_group_authorized'
+            row for row in combined
+            if row['id'].startswith('or_group_authorized:')
         )
-        self.assertEqual(or_group['representation'], 'structured')
         self.assertEqual(
-            [ref['fragment'] for ref in or_group['refs']],
+            _placeholder_ids(or_group['sql']),
             [
                 'trust:documents.DocumentPermission:document',
                 'trust:documents.TeamDocumentPermission:document',
             ],
         )
+        or_sql, _or_params = _expand_structured(
+            or_group,
+            {row['id']: row for row in combined_composition['fragments']},
+        )
+        self.assertIn(' OR ', or_sql)
         code_or = next(
             row for row in combined
-            if row['kind'] == 'has_perm_permission_code'
+            if row['id'].startswith('has_perm_permission_code:')
         )
-        self.assertEqual(code_or['representation'], 'full_sql')
+        self.assertNotIn('{{', code_or['sql'])
         self.assertIn('"V0"', code_or['sql'])
         self.assertIn('"V2"', code_or['sql'])
-        _verify_composition(document['backends'][1]['composition'])
+        _verify_composition(combined_composition)
 
     def test_document_lockfile_includes_composition(self):
         payload = render_policy_sql_bytes(handles=[_document_handle()])
@@ -403,7 +422,11 @@ class PolicyCompositionTest(SimpleTestCase):
         text = payload.decode('utf-8')
         self.assertNotIn('composition-evidence', text)
         self.assertIn('has_perm_permission_instance:', text)
-        self.assertIn('placeholder:', text)
+        self.assertIn('{{trust:', text)
+        self.assertIn('kind: "trust_exists"', text)
+        self.assertNotIn('placeholder:', text)
+        self.assertNotIn('expanded:', text)
+        self.assertNotIn('representation:', text)
         document = _load_policy_sql_document(payload)
         trust = document['backends'][0]['trusts'][0]
         self.assertNotIn('structured', trust)
@@ -424,8 +447,6 @@ class PolicyCompositionTest(SimpleTestCase):
             '{{trust:documents.DocumentPermission:document}}',
             '{{trust:missing}}',
         )
-        operation['refs'][0]['fragment'] = 'trust:missing'
-        operation['refs'][0]['placeholder'] = '{{trust:missing}}'
         with self.assertRaises(TrustsConfigurationError) as ctx:
             _verify_composition(composition)
         self.assertIn('missing fragment', str(ctx.exception))
@@ -468,10 +489,16 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertIn('documents_hiddendocument', trust['sql'])
         composition = backend['composition']
         _verify_composition(composition)
-        by_kind = {row['kind']: row for row in composition['operations']}
-        instance = by_kind['has_perm_permission_instance']
-        self.assertEqual(instance['representation'], 'structured')
-        self.assertIn('documents_hiddendocument', instance['expanded']['sql'])
+        instance = next(
+            row for row in composition['operations']
+            if row['id'].startswith('has_perm_permission_instance:')
+        )
+        self.assertIn('{{', instance['sql'])
+        expanded_sql, _expanded_params = _expand_structured(
+            instance,
+            {row['id']: row for row in composition['fragments']},
+        )
+        self.assertIn('documents_hiddendocument', expanded_sql)
 
     def test_repeated_fragment_text_stays_full_sql(self):
         fragment = {
@@ -491,7 +518,7 @@ class PolicyCompositionTest(SimpleTestCase):
             [fragment],
         )
         self.assertEqual(len(operations), 1)
-        self.assertEqual(operations[0]['representation'], 'full_sql')
+        self.assertEqual(set(operations[0]), {'id', 'sql', 'params'})
         self.assertEqual(operations[0]['sql'], sql)
         self.assertNotIn('{{', operations[0]['sql'])
         self.assertEqual(fragments, {})
@@ -524,10 +551,9 @@ class PolicyCompositionTest(SimpleTestCase):
             [piece_a, piece_b],
         )
         self.assertEqual(len(operations), 1)
-        self.assertEqual(operations[0]['representation'], 'full_sql')
+        self.assertEqual(set(operations[0]), {'id', 'sql', 'params'})
         self.assertEqual(operations[0]['sql'], sql)
         self.assertNotIn('{{', operations[0]['sql'])
-        self.assertNotIn('refs', operations[0])
         self.assertEqual(fragments, {})
         self.assertEqual(order, [])
 

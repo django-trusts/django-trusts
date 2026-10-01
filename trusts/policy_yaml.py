@@ -64,6 +64,14 @@ class _SqlText(str):
     """SQL text. Emitted as a ``|-`` literal block, or the dump fails."""
 
 
+class _FlowSeq(list):
+    """Sequence emitted in flow style on one line. Used for ``params``."""
+
+
+class _FlowMap(dict):
+    """Mapping emitted in flow style. Used inside ``params``."""
+
+
 def canonical_float_scalar(value):
     """Return the only plain-float spelling this codec emits.
 
@@ -125,9 +133,8 @@ class PolicyYamlDumper(yaml.SafeDumper):
         return True
 
     def increase_indent(self, flow=False, indentless=False):
-        # ``indentless=False`` keeps block sequences nested under their key
-        # (``params:`` then ``  - const: 1``), which is the only sequence
-        # shape this codec uses.
+        # ``indentless=False`` keeps block sequences nested under their key.
+        # ``params`` is the exception: it is a one-line flow sequence.
         return super().increase_indent(flow, False)
 
 
@@ -174,7 +181,24 @@ def _represent_int(dumper, value):
     return dumper.represent_scalar(_TAG_INT, text, style='')
 
 
+def _flow_prepare(value):
+    if isinstance(value, dict):
+        return _FlowMap(
+            (key, _flow_prepare(item)) for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return _FlowSeq(_flow_prepare(item) for item in value)
+    return value
+
+
 def _prepare_value(key, value):
+    if key == 'params':
+        if not isinstance(value, list):
+            raise PolicyYamlError(
+                'Key %r must be a list, not %s.'
+                % (key, type(value).__name__)
+            )
+        return _FlowSeq(_flow_prepare(item) for item in value)
     if key in _LITERAL_KEYS:
         if not isinstance(value, str):
             raise PolicyYamlError(
@@ -185,6 +209,30 @@ def _prepare_value(key, value):
     if isinstance(value, str):
         return _Quoted(value)
     return value
+
+
+def _represent_flow_seq(dumper, value):
+    return dumper.represent_sequence(_TAG_SEQ, list(value), flow_style=True)
+
+
+def _represent_flow_map(dumper, mapping):
+    pairs = []
+    for key, value in mapping.items():
+        if not isinstance(key, str) or isinstance(key, bool):
+            raise PolicyYamlError(
+                'Policy YAML keys must be strings, not %s.'
+                % type(key).__name__
+            )
+        if not _KEY_RE.fullmatch(key) or key in _RESERVED_PLAIN:
+            raise PolicyYamlError(
+                'Policy YAML key %r is not a plain identifier.' % (key,)
+            )
+        if isinstance(value, (_FlowMap, _FlowSeq)):
+            prepared = value
+        else:
+            prepared = _prepare_value(key, value)
+        pairs.append((_PlainKey(key), prepared))
+    return dumper.represent_mapping(_TAG_MAP, pairs, flow_style=True)
 
 
 def _represent_dict(dumper, mapping):
@@ -215,6 +263,8 @@ for _cls, _fn in (
     (_PlainKey, _represent_plain_key),
     (_Quoted, _represent_quoted),
     (_SqlText, _represent_sql),
+    (_FlowSeq, _represent_flow_seq),
+    (_FlowMap, _represent_flow_map),
     (str, _represent_quoted),
     (float, _represent_float),
     (bool, _represent_bool),
@@ -242,6 +292,13 @@ def _assert_canonical_text(text):
         if stripped.startswith('sql:') and stripped != 'sql: |-':
             raise PolicyYamlError(
                 'SQL must be a strip literal (`sql: |-`), not %r.' % (stripped,)
+            )
+        if stripped.startswith('params:') and not (
+            stripped.startswith('params: [') and stripped.endswith(']')
+        ):
+            raise PolicyYamlError(
+                'params must be a one-line flow sequence, not %r.'
+                % (stripped,)
             )
         if re.match(r'^\s*&', line) or re.match(r'^\s*\*', line):
             raise PolicyYamlError('Policy YAML must not emit anchors or aliases.')
@@ -279,8 +336,9 @@ class PolicyYamlLoader(yaml.SafeLoader):
     resolvers here. Explicit tags, anchors, and aliases fail closed.
     Parsing is not acceptance: :func:`_load_policy_yaml` re-dumps with
     :func:`dump_policy_yaml` and rejects the payload unless the bytes
-    match. Flow collections and noncanonical block or chomping forms
-    fail that compare. This class is a coding helper, not a public
+    match. ``params`` is a one-line flow sequence. Other flow
+    collections and noncanonical block or chomping forms fail that
+    compare. This class is a coding helper, not a public
     contract.
     """
 
