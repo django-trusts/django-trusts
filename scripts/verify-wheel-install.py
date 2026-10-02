@@ -110,7 +110,7 @@ def main() -> int:
     signature = inspect.signature(BackendHandle.register)
     param_names = [name for name in signature.parameters if name != 'self']
     expected_params = [
-        'trust', 'user', 'content', 'permission', 'group', 'condition', 'along',
+        'trust', 'user', 'permission', 'content', 'group', 'condition', 'along',
     ]
     if param_names != expected_params:
         raise SystemExit(
