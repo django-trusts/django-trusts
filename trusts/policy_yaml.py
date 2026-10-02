@@ -47,7 +47,7 @@ _ALLOWED_TAGS = frozenset((
     _TAG_NULL, _TAG_BOOL, _TAG_INT, _TAG_FLOAT, _TAG_STR, _TAG_SEQ, _TAG_MAP,
 ))
 _LITERAL_KEYS = frozenset(('sql',))
-_FLOW_MAP_KEYS = frozenset(('user', 'permission', 'content'))
+_FLOW_MAP_KEYS = frozenset(('user', 'group', 'permission', 'content'))
 
 
 class PolicyYamlError(ValueError):

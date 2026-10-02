@@ -87,12 +87,13 @@ class QueryCompiler(object):
 
 
 class PlanQueryCompiler(object):
-    """Immutable mixin default: registered plan; group slice is membership hops.
+    """Immutable mixin default: registered plan; group slice is explicit.
 
-    ``complete_exists`` compiles relationship records only.
-    ``group_exists`` compiles only records whose user path ends in a
-    many-to-many membership hop. Direct FK / O2O / reverse user hops
-    stay out of the group slice.
+    ``complete_exists`` compiles every relationship record, including
+    explicit ``group=`` registrations. ``group_exists`` compiles only
+    those ``group=`` records. A many-to-many or membership-shaped user
+    path is not a Django group. ``permission=`` records stay out of
+    ``get_group_permissions``.
     """
 
     historical_fallback = False
@@ -107,14 +108,14 @@ class PlanQueryCompiler(object):
         return plan.content_exists(user, permission)
 
     def group_exists(self, plan, candidates, user, permission):
-        membership = tuple(
+        grouped = tuple(
             record for record in plan.records
-            if _user_path_is_membership(record)
+            if getattr(record, 'via_group', False)
         )
-        if not membership:
+        if not grouped:
             return None
         return RelationPlan(
-            records=membership,
+            records=grouped,
             permission_model=plan.permission_model,
         ).content_exists(user, permission)
 
@@ -323,7 +324,8 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
 
     Noun-blind: this builder does not import or name Zero schema models
     and does not use a compiler's historical group
-    OR. Group-as-trustee remains a later registered root.
+    OR. Explicit ``group=`` records participate through the same prefix
+    correlation. Membership shape is not a group.
     """
     if not isinstance(queryset, QuerySet):
         raise TrustsConfigurationError(
@@ -588,34 +590,122 @@ def _resolved_hop(field, role, path):
     return related._meta.concrete_model, attname
 
 
-def _user_path_is_membership(record):
-    """True when the user binding's last hop is a many-to-many membership.
+def _auth_group_and_permission():
+    """Django ``auth.Group`` and ``auth.Permission``. Metadata only."""
+    from django.contrib.auth.models import Group, Permission
+    return Group, Permission
 
-    Direct FK / O2O / reverse user hops are trustee bindings, not the
-    group slice. Intermediate hops must stay single-valued so the last
-    hop is the membership. Walk uses stored path names and ``_meta``
-    only (zero SQL).
+
+def _group_permissions_field():
+    """The ``auth.Group`` relation the compiler walks to ``Permission``."""
+    Group, _Permission = _auth_group_and_permission()
+    try:
+        field = Group._meta.get_field('permissions')
+    except FieldDoesNotExist:
+        raise TrustsConfigurationError(
+            'auth.Group has no permissions relation for the compiler '
+            'to follow.'
+        )
+    return field
+
+
+def _resolve_group_path(root, path):
+    """Forward single-valued hops that must end at ``auth.Group``.
+
+    Applications stop at the group. ``Group.permissions`` is not part
+    of this path; ``_append_group_permissions`` owns that hop. Zero SQL.
     """
-    path = getattr(record, 'user_path', None) or ()
+    Group, _Permission = _auth_group_and_permission()
     if not path:
-        return False
-    current = record.root
-    for name in path[:-1]:
+        raise TrustsConfigurationError(
+            'group must be a non-empty root-relative path from %s '
+            'ending at auth.Group.' % root._meta.label
+        )
+    permissions_field = _group_permissions_field()
+    current = root
+    related = None
+    target_attname = None
+    n = len(path)
+    for index, name in enumerate(path):
+        is_last = index == n - 1
         try:
             field = current._meta.get_field(name)
         except FieldDoesNotExist:
-            return False
-        if _classify_field(field) == 'm2m':
-            return False
-        try:
-            current, _attname = _resolved_hop(field, 'user', path)
-        except TrustsConfigurationError:
-            return False
-    try:
-        last = current._meta.get_field(path[-1])
-    except FieldDoesNotExist:
-        return False
-    return _classify_field(last) == 'm2m'
+            raise TrustsConfigurationError(
+                'group path %r refers to missing field %r on %s. '
+                'The path must end at auth.Group.'
+                % (_path_text(path), name, current._meta.label)
+            )
+        kind = _classify_field(field)
+        on_group = (
+            current._meta.concrete_model is Group._meta.concrete_model
+        )
+        if (
+            on_group
+            and name == permissions_field.name
+            and kind == 'm2m'
+        ):
+            raise TrustsConfigurationError(
+                'group path %r must end at auth.Group. The compiler '
+                'follows Group.permissions; do not append permissions.'
+                % (_path_text(path),)
+            )
+        if kind != 'single':
+            raise TrustsConfigurationError(
+                'group path %r must be forward single-valued hops '
+                'ending at auth.Group; %r on %s is not allowed.'
+                % (_path_text(path), name, current._meta.label)
+            )
+        related, target_attname = _resolved_hop(field, 'group', path)
+        if not is_last:
+            current = related
+    if related._meta.concrete_model is not Group._meta.concrete_model:
+        raise TrustsConfigurationError(
+            'group path %r must end at auth.Group; got %s.'
+            % (_path_text(path), related._meta.label)
+        )
+    return (
+        tuple(path),
+        related._meta.concrete_model,
+        _lookup_text(path),
+        target_attname,
+    )
+
+
+def _append_group_permissions(group_path, group_field):
+    """Compiler-owned ``Group.permissions`` hop onto ``auth.Permission``."""
+    _Group, Permission = _auth_group_and_permission()
+    field = _group_permissions_field()
+    if _classify_field(field) != 'm2m':
+        raise TrustsConfigurationError(
+            'auth.Group.permissions must be a many-to-many relation '
+            'to auth.Permission.'
+        )
+    hop = tuple(group_path) + (field.name,)
+    related, target = _resolve_m2m_terminal(field, 'group', hop)
+    if related._meta.concrete_model is not Permission._meta.concrete_model:
+        raise TrustsConfigurationError(
+            'auth.Group.permissions must terminate on auth.Permission; '
+            'got %s.' % related._meta.label
+        )
+    return (
+        hop,
+        Permission._meta.concrete_model,
+        '%s__%s' % (group_field, field.name),
+        target,
+    )
+
+
+def _require_one_permission_source(permission, group):
+    """``permission=`` and ``group=`` are mutually exclusive and required."""
+    if permission is not None and group is not None:
+        raise TrustsConfigurationError(
+            'register accepts permission= or group=, not both.'
+        )
+    if permission is None and group is None:
+        raise TrustsConfigurationError(
+            'register requires permission= or group=.'
+        )
 
 
 _SUFFIX_KINDS = frozenset(('single', 'reverse_o2o', 'reverse_o2m'))
@@ -2036,6 +2126,11 @@ class RegisteredRelation:
     permission_target: str
     condition: object | None = None
     along: AlongWalk | None = None
+    via_group: bool = False
+    group_path: tuple = ()
+    group_model: type | None = None
+    group_field: str = ''
+    group_target: str = ''
 
 
 _BINDING_FIELDS = {
@@ -2058,6 +2153,8 @@ def _same_terminal_bindings(existing, record):
         and existing.permission_model is record.permission_model
         and existing.permission_target == record.permission_target
         and existing.along == record.along
+        and existing.via_group == record.via_group
+        and existing.group_path == record.group_path
     )
 
 
@@ -2341,8 +2438,15 @@ class TrustsRegistry(object):
                 'No registration for %r.' % (getattr(root, '__name__', root),)
             )
 
-    def register(self, *, content, user, permission, condition=None, along=None):
+    def register(self, *, content, user, permission=None, group=None,
+                 condition=None, along=None):
         """Register one permission-bearing relation from root-relative refs.
+
+        ``permission`` and ``group`` are mutually exclusive. ``permission``
+        is a direct permission path. ``group`` is a forward single-valued
+        path that must end at ``auth.Group``; this method appends
+        ``Group.permissions`` and stores that as the permission terminal.
+        Supplying both, or neither, raises ``TrustsConfigurationError``.
 
         Exact duplicate normalized registration raises
         ``TrustsConfigurationError``. The same root plus the same content
@@ -2368,6 +2472,7 @@ class TrustsRegistry(object):
             raise TrustsConfigurationError(
                 'Cannot register on a frozen TrustsRegistry.'
             )
+        _require_one_permission_source(permission, group)
         if along is not None and not isinstance(along, Along):
             raise TrustsConfigurationError(
                 'along must be an Along instance or None, not %r.' % (along,)
@@ -2375,9 +2480,14 @@ class TrustsRegistry(object):
 
         content_ref = _require_ref(content, 'content')
         user_ref = _require_ref(user, 'user')
-        permission_ref = _require_ref(permission, 'permission')
-
-        roots = (content_ref._root, user_ref._root, permission_ref._root)
+        group_ref = None
+        permission_ref = None
+        if group is not None:
+            group_ref = _require_ref(group, 'group')
+            roots = (content_ref._root, user_ref._root, group_ref._root)
+        else:
+            permission_ref = _require_ref(permission, 'permission')
+            roots = (content_ref._root, user_ref._root, permission_ref._root)
         if len(set(roots)) != 1:
             raise TrustsConfigurationError(
                 'All refs in one registration must share the same root model; '
@@ -2391,9 +2501,21 @@ class TrustsRegistry(object):
         user_path, user_model, user_field, user_target = _resolve_path(
             root, user_ref._path, 'user', terminal_membership=True,
         )
-        permission_path, permission_model, permission_field, permission_target = (
-            _resolve_path(root, permission_ref._path, 'permission')
-        )
+        if group_ref is not None:
+            (
+                group_path, group_model, group_field, group_target,
+            ) = _resolve_group_path(root, group_ref._path)
+            (
+                permission_path, permission_model, permission_field,
+                permission_target,
+            ) = _append_group_permissions(group_path, group_field)
+            via_group = True
+        else:
+            permission_path, permission_model, permission_field, permission_target = (
+                _resolve_path(root, permission_ref._path, 'permission')
+            )
+            group_path, group_model, group_field, group_target = (), None, '', ''
+            via_group = False
         along_walk = None
         if along is not None:
             along_walk = _build_along_walk(
@@ -2420,6 +2542,11 @@ class TrustsRegistry(object):
             permission_target=permission_target,
             condition=condition,
             along=along_walk,
+            via_group=via_group,
+            group_path=group_path,
+            group_model=group_model,
+            group_field=group_field,
+            group_target=group_target,
         )
 
         existing_rows = self._by_root.get(root)
@@ -3069,33 +3196,50 @@ class BackendHandle:
         *,
         trust: type[T],
         user: str | Callable[[T], object],
-        permission: str | Callable[[T], object],
         content: str | Callable[[T], object],
+        permission: str | Callable[[T], object] | None = None,
+        group: str | Callable[[T], object] | None = None,
         condition: Callable[[T], object] | None = None,
         along=None,
     ) -> RegisteredRelation:
         """Donate one AnyPath permission relationship on this backend.
 
-        ``user`` / ``permission`` / ``content`` accept a Django ``__``
-        path string or a one-argument symbolic path builder. A builder
-        is called once during registration with a value typed as
-        ``trust``. Attribute access records a path; the callable is
+        ``user`` and ``content`` accept a Django ``__`` path string or a
+        one-argument symbolic path builder. ``permission`` and ``group``
+        are mutually exclusive sources. ``permission`` is unchanged: a
+        path that reaches permission rows directly. ``group`` is a
+        forward single-valued path that must end at Django's
+        ``auth.Group``. The compiler appends ``Group.permissions``;
+        applications do not put ``permissions`` on the group path.
+        Supplying both, or neither, raises ``TrustsConfigurationError``
+        before any path builder runs.
+
+        A builder is called once during registration with a value typed
+        as ``trust``. Attribute access records a path; the callable is
         discarded and never stored or run during authorization.
         ``condition`` is a one-argument trust-rooted symbolic callable
         using path ``==``, collection-rooted ``.contains(member)``, and
         ``&``. It is invoked once after the freeze check; the stored
         overlay is private ``Equal`` / ``PermissionIn`` / ``All`` and
-        contains no callable. Prebuilt ``All`` / ``Equal`` /
-        ``permission_in`` values are ``TypeError``. ``predicate`` is
+        contains no callable. For ``group=``, ``.contains`` member is
+        the compiler-owned permission path. Prebuilt ``All`` / ``Equal``
+        / ``permission_in`` values are ``TypeError``. ``predicate`` is
         reserved and unsupported. ``along`` is ``(path, bound)``.
         Passing a ``Ref`` is ``TypeError``. A frozen backend raises
         ``TrustsConfigurationError`` before path parsing or builder
         invocation.
+
+        Only an explicit ``group=`` record contributes to
+        ``get_group_permissions``. That same record also participates in
+        ordinary ``has_perm``, ``get_all_permissions``, and authorized
+        querysets. A ``permission=`` record is never treated as
+        group-derived because its user path is many-to-many.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(
                 'Cannot register on a frozen TrustsRegistry.'
             )
+        _require_one_permission_source(permission, group)
         if isinstance(trust, Ref):
             raise TypeError(
                 'register trust must be a Django model class, '
@@ -3108,11 +3252,31 @@ class BackendHandle:
             )
         token = object()
         user_path = _normalize_public_role(trust, user, 'user', token=token)
-        permission_path = _normalize_public_role(
-            trust, permission, 'permission', token=token,
-        )
         content_path = _normalize_public_role(
             trust, content, 'content', token=token,
+        )
+        if group is not None:
+            group_text = _normalize_public_role(
+                trust, group, 'group', token=token,
+            )
+            group_segments = _public_path_segments(group_text, 'group')
+            _group_path, _group_model, group_field, _group_target = (
+                _resolve_group_path(trust, group_segments)
+            )
+            _perm_path, _perm_model, permission_text, _perm_target = (
+                _append_group_permissions(group_segments, group_field)
+            )
+            return self.registry.register(
+                content=_public_ref(trust, content_path, 'content'),
+                user=_public_ref(trust, user_path, 'user'),
+                group=_public_ref(trust, group_text, 'group'),
+                condition=_normalize_public_condition(
+                    trust, condition, permission_text, token=token,
+                ),
+                along=_bind_public_along(trust, along),
+            )
+        permission_path = _normalize_public_role(
+            trust, permission, 'permission', token=token,
         )
         return self.registry.register(
             content=_public_ref(trust, content_path, 'content'),
