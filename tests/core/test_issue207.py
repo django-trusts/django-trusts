@@ -92,7 +92,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertEqual(len(type_args), 1)
         self.assertIsInstance(type_args[0], TypeVar)
         self.assertIs(type_args[0].__bound__, Model)
-        for role in ('user', 'permission', 'content'):
+        for role in ('user', 'permission', 'content', 'group'):
             origin = get_origin(hints[role])
             self.assertIn(origin, (types.UnionType, type(str | int)))
             parts = get_args(hints[role])

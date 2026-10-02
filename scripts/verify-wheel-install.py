@@ -110,7 +110,7 @@ def main() -> int:
     signature = inspect.signature(BackendHandle.register)
     param_names = [name for name in signature.parameters if name != 'self']
     expected_params = [
-        'trust', 'user', 'permission', 'content', 'condition', 'along',
+        'trust', 'user', 'content', 'permission', 'group', 'condition', 'along',
     ]
     if param_names != expected_params:
         raise SystemExit(
@@ -126,7 +126,7 @@ def main() -> int:
     trust_args = get_args(trust_hint)
     if len(trust_args) != 1 or not isinstance(trust_args[0], TypeVar):
         raise SystemExit('register trust is not type[TypeVar]: %r' % trust_hint)
-    for role in ('user', 'permission', 'content'):
+    for role in ('user', 'permission', 'content', 'group'):
         role_hint = hints.get(role)
         parts = get_args(role_hint)
         if str not in parts:
