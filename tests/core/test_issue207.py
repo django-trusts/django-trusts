@@ -148,7 +148,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         names = [name for name in signature.parameters if name != 'self']
         self.assertEqual(
             names,
-            ['trust', 'user', 'permission', 'content', 'condition', 'along'],
+            ['trust', 'user', 'content', 'permission', 'group', 'condition', 'along'],
         )
         for name in names:
             self.assertEqual(

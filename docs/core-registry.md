@@ -345,11 +345,14 @@ terminal, empty handles, or a scope model not on the path return
 handles only. Core does not import Zero schema models
 (`Trust`, `TrustUserPermission`, `TrustGroup`, …).
 
-`PlanQueryCompiler.group_exists` compiles the membership-hop subset of
-the same plan (user path ending in M2M) via `RelationPlan.content_exists`.
-Direct FK / O2O / reverse user hops stay out of the group slice.
-Core plans are relationship records only. Empty membership records
-make `group_exists` inapplicable (`None`).
+`PlanQueryCompiler.group_exists` compiles only records registered with
+explicit `group=` (a forward path ending at `auth.Group`; the compiler
+appends `Group.permissions`) via `RelationPlan.content_exists`.
+`permission=` records stay out of that slice, including when the user
+path ends in a many-to-many membership hop. Core plans are relationship
+records only. A plan with no explicit `group=` record makes
+`group_exists` inapplicable (`None`). `complete_exists` still includes
+both `permission=` and `group=` records.
 
 `ConditionLookup` (`record_for`, `compile_q`) is self-bound at
 `TrustsRegistry` construct. `set_condition_lookup` remains for tests

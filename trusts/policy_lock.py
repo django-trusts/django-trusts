@@ -3,7 +3,8 @@
 ``trusts_policy_sql`` renders schema version 1 as canonical YAML.
 Each backend lists ``contents`` by model. A content owns its trust
 legs, the compiled SQL for ``permitted``, ``has_perm``, and
-``get_all_permissions`` when it has trusts, and its named filters.
+``get_all_permissions`` when it has trusts, ``get_group_permissions``
+when a trust was registered with ``group=``, and its named filters.
 ``permitted`` is the artifact name for today's ``.authorized()`` list
 query. The runtime API is not renamed. The alias is not stored.
 ``trusts.E009`` compares the rendered bytes to the committed file and
@@ -337,9 +338,11 @@ def _project_content(handle, alias, group, filters):
             'id': trust_id,
             'root': _model_label(record.root),
             'user': _relation(record, 'user'),
-            'permission': _relation(record, 'permission'),
-            'content': _relation(record, 'content'),
         }
+        if getattr(record, 'via_group', False):
+            row['group'] = _relation(record, 'group')
+        row['permission'] = _relation(record, 'permission')
+        row['content'] = _relation(record, 'content')
         if multi:
             row['or_group'] = True
         trusts.append(row)
@@ -356,6 +359,12 @@ def _project_content(handle, alias, group, filters):
             handle, alias, records, group['model'],
         )),
     }
+    if any(getattr(record, 'via_group', False) for record in records):
+        content['get_group_permissions'] = _sql_row(
+            _compile_get_group_permissions(
+                handle, alias, records, group['model'],
+            )
+        )
     if filters:
         content['named_filters'] = [_named_filter_row(row) for row in filters]
     return content
@@ -449,6 +458,24 @@ def _compile_get_all_permissions(handle, alias, records, model):
     if queryset is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permissions query for %s.'
+            % _model_label(model)
+        )
+    return _compile_queryset(
+        queryset, alias, record=records[0], expr=None, records=records,
+    )
+
+
+def _compile_get_group_permissions(handle, alias, records, model):
+    from trusts.core import _compile_common_permissions
+
+    user = _role_sentinel(records[0], 'user', alias)
+    instance = _content_sentinel(model, alias)
+    queryset = _compile_common_permissions(
+        (handle,), instance, user, kind='group',
+    )
+    if queryset is None:
+        raise TrustsConfigurationError(
+            'Policy SQL found no group-permissions query for %s.'
             % _model_label(model)
         )
     return _compile_queryset(
