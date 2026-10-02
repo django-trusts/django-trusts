@@ -302,7 +302,7 @@ when it explicitly uses ``group=``:
 
    backend.register(
        trust=GroupDocumentPermission,
-       user=lambda t: t.group.user_set,
+       user=lambda t: t.group.user,
        group=lambda t: t.group,
        content=lambda t: t.document,
    )
