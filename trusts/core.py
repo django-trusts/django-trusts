@@ -352,8 +352,11 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
                 record, scope_model,
             ):
                 inner = _bind_record_qs(
-                    record, user=user, permission=permission,
-                ).filter(**{lookup: OuterRef(target_attname)})
+                    record,
+                    user=user,
+                    permission=permission,
+                    correlation=Q(**{lookup: OuterRef(target_attname)}),
+                )
                 parts.append(Exists(inner))
     if not parts:
         return queryset.none()
@@ -1268,22 +1271,31 @@ def _compile_predicate(node, record):
     )
 
 
-def _apply_condition(record, queryset):
-    compiled = _compile_predicate(record.condition, record)
-    if compiled is None:
-        return queryset
-    return queryset.filter(compiled)
+def _record_predicate(record, correlation=None, **bindings):
+    """Bindings, condition, and correlation as one ``Q``.
 
-
-def _bind_record_qs(record, **bindings):
-    """Root rows bound to terminals, with the registered condition AND overlay."""
+    Separate ``filter()`` calls give a repeated many-to-many hop its own
+    alias. ``Group.permissions`` has to stay one join so the local
+    ceiling and the requested permission are the same row.
+    """
     filters = {}
     for role, value in bindings.items():
         filters[getattr(record, _BINDING_FIELDS[role])] = _bind_terminal(
             value, role,
         )
-    return _apply_condition(
-        record, record.root._default_manager.filter(**filters),
+    combined = Q(**filters)
+    compiled = _compile_predicate(record.condition, record)
+    if compiled is not None:
+        combined &= compiled
+    if correlation is not None:
+        combined &= correlation
+    return combined
+
+
+def _bind_record_qs(record, correlation=None, **bindings):
+    """Root rows for one record. One ``filter()`` for every predicate."""
+    return record.root._default_manager.filter(
+        _record_predicate(record, correlation=correlation, **bindings),
     )
 
 
@@ -2023,9 +2035,10 @@ class GrantReach(Expression):
         self.content = content
         walk = record.along
         seed = _bind_record_qs(
-            record, user=user, permission=permission,
-        ).filter(
-            **{'%s__isnull' % walk.walk_field: False}
+            record,
+            user=user,
+            permission=permission,
+            correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -2230,8 +2243,10 @@ class RelationPlan:
                 continue
             terminal = getattr(record, terminal_field_attr)
             target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
-            inner = self._bound_root_qs(record, **bindings).filter(
-                **{terminal: OuterRef(target)}
+            inner = self._bound_root_qs(
+                record,
+                correlation=Q(**{terminal: OuterRef(target)}),
+                **bindings,
             )
             parts.append(Exists(inner))
         if not parts:
