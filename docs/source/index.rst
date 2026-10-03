@@ -284,6 +284,10 @@ enumeration, and queryset filtering as a ``permission=`` registration. Its
 explicit group classification also lets ``get_group_permissions()`` select the
 group-derived subset.
 
+A ``permission=`` registration is not treated as group-derived merely because its
+``user=`` path crosses ``auth.Group``; only explicit ``group=`` registrations
+contribute to ``get_group_permissions()``.
+
 Filter a queryset to the objects authorized for a particular permission:
 
 .. code-block:: python
