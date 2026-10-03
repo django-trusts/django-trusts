@@ -15,58 +15,6 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
-## Explicit `auth.Group` registration (#246)
-
-| | Old | New |
-| --- | --- | --- |
-| `get_group_permissions(obj)` | Core treated a `permission=` trust as group-derived when its user path ended in a many-to-many membership hop | Only an explicit `register(..., group=...)` contributes. Membership shape is not a Django group |
-| `register(..., permission=...)` | Direct permission path; ordinary authorization | Unchanged. Still authorizes through `has_perm`, `get_all_permissions`, `.authorized`, and fixed queries. Does not feed `get_group_permissions` |
-| `register(..., group=...)` | Not available | Forward single-valued path that must end at `auth.Group`. The compiler appends `Group.permissions`. Participates in ordinary authorization and in `get_group_permissions(obj)` |
-| Both keywords | n/a | `TrustsConfigurationError`: `permission=` and `group=` are mutually exclusive |
-| Neither keyword | `permission=` was required | `TrustsConfigurationError`: one of `permission=` or `group=` is required |
-
-```python
-# Old: a membership-shaped permission= path was inferred into
-# get_group_permissions. That inference is gone.
-backend.register(
-    trust=DeskPaperGrant,
-    user="desk__holders",
-    permission="permission",
-    content="paper",
-)
-
-# New: Django auth.Group must be declared. Stop at the group.
-# The reverse membership hop is the related query name ``user``,
-# not the Python accessor ``user_set`` (``_meta.get_field`` does not
-# see ``user_set``).
-backend.register(
-    trust=GroupPaperGrant,
-    user=lambda t: t.group.user,
-    group=lambda t: t.group,
-    content=lambda t: t.paper,
-)
-```
-
-Application impact: trusts that only used `permission=` keep ordinary
-authorization and disappear from `get_group_permissions(obj)`, even when
-the user path is many-to-many. To put real Django group permissions in
-that inquiry, register `group=` on a path that ends at `auth.Group` and
-do not append `.permissions`. `group=` grants also show up in `has_perm`,
-`get_all_permissions`, `.authorized`, and the fixed policy queries.
-
-django-trusts-zero is out of scope. Zero stays on its current
-`permission=` registration (`trustgroup__group__user` plus a permissions
-ceiling) until a later baton. This change does not migrate Zero.
-
-Migration-bot checklist:
-
-- `group=`
-- `permission=` and `group=` on the same `register(`
-- `get_group_permissions`
-- `user_set` used as a group membership hop (the registration hop is `user`)
-- a `group=` path that appends `permissions`
-- many-to-many user paths previously treated as Django groups
-
 ## Unused `get_short_model_name` helper (#217)
 
 | | Old | New |
