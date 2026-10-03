@@ -879,3 +879,395 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
             with self.subTest(key=key):
                 self.assertEqual(len(aliases), 1, sql)
                 self.assertEqual(len(set(aliases)), 1, sql)
+
+
+def _matrix_models():
+    class Paper(models.Model):
+        title = models.CharField(max_length=40)
+
+        objects = AuthorizedManager()
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class LocalGrant(models.Model):
+        group = models.ForeignKey(Group, on_delete=models.CASCADE)
+        paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+        grants = models.ManyToManyField(Permission, related_name='+', blank=True)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class OtherGrant(models.Model):
+        group = models.ForeignKey(Group, on_delete=models.CASCADE)
+        paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+        stamps = models.ManyToManyField(Permission, related_name='+', blank=True)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Role(models.Model):
+        permissions = models.ManyToManyField(
+            Permission, related_name='+', blank=True,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class RoleLink(models.Model):
+        role = models.ForeignKey(Role, on_delete=models.CASCADE)
+        group = models.ForeignKey(Group, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class TrustGroupPermission(models.Model):
+        link = models.ForeignKey(RoleLink, on_delete=models.CASCADE)
+        permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+        paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    return (
+        Paper, LocalGrant, OtherGrant, Role, RoleLink, TrustGroupPermission,
+    )
+
+
+def _contribute_m2m(field, model):
+    if not hasattr(field, 'm2m_field_name'):
+        field.contribute_to_related_class(model, field.remote_field)
+
+
+def _codes(perms):
+    return {_code(perm) for perm in perms}
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class OverUnderGrantCeilingTest(TransactionTestCase):
+    """Crossed ceilings must not leak a permission or drop a real grant.
+
+    Each case names the failure it locks. Granted and denied permissions
+    are both asserted on ``has_perm``, ``get_group_permissions``,
+    ``get_all_permissions``, and ``.authorized()``.
+    """
+
+    def setUp(self):
+        (
+            self.Paper, self.LocalGrant, self.OtherGrant, self.Role,
+            self.RoleLink, self.TrustGroupPermission,
+        ) = _matrix_models()
+        self._register_handles()
+        self._table_cm = _tables(
+            self.Paper, self.LocalGrant, self.OtherGrant, self.Role,
+            self.RoleLink, self.TrustGroupPermission,
+        )
+        self._table_cm.__enter__()
+        try:
+            _contribute_m2m(self.LocalGrant._meta.get_field('grants'), Permission)
+            _contribute_m2m(self.OtherGrant._meta.get_field('stamps'), Permission)
+            _contribute_m2m(self.Role._meta.get_field('permissions'), Permission)
+            self._create_people()
+        except Exception:
+            self._table_cm.__exit__(None, None, None)
+            raise
+
+    def _register_handles(self):
+        self.local = _handle(
+            TrustsRegistry(), path='tests.core.issue246-matrix-local',
+        )
+        self.local.register(
+            trust=self.LocalGrant,
+            user=lambda t: t.group.user,
+            group=lambda t: t.group,
+            content=lambda t: t.paper,
+            condition=lambda t: t.grants.contains(t.group.permissions),
+        )
+        self.roots = _handle(
+            TrustsRegistry(), path='tests.core.issue246-matrix-roots',
+        )
+        self.roots.register(
+            trust=self.LocalGrant,
+            user=lambda t: t.group.user,
+            group=lambda t: t.group,
+            content=lambda t: t.paper,
+            condition=lambda t: t.grants.contains(t.group.permissions),
+        )
+        self.roots.register(
+            trust=self.OtherGrant,
+            user=lambda t: t.group.user,
+            group=lambda t: t.group,
+            content=lambda t: t.paper,
+            condition=lambda t: t.stamps.contains(t.group.permissions),
+        )
+        self.role = _handle(
+            TrustsRegistry(), path='tests.core.issue246-matrix-role',
+        )
+        self.role_record = self.role.register(
+            trust=self.TrustGroupPermission,
+            user=lambda t: t.link.group.user,
+            permission=lambda t: t.permission,
+            content=lambda t: t.paper,
+            condition=lambda t: t.link.role.permissions.contains(t.permission),
+        )
+
+    def _create_people(self):
+        User = get_user_model()
+        self.alice = User.objects.create_user('alice-matrix', password='x')
+        self.bob = User.objects.create_user('bob-matrix', password='x')
+        self.read = _perm(self.Paper, 'read_paper')
+        self.change = _perm(self.Paper, 'change_paper')
+        self.add = _perm(self.Paper, 'add_paper')
+        self.delete = _perm(self.Paper, 'delete_paper')
+
+    def tearDown(self):
+        self._table_cm.__exit__(None, None, None)
+
+    def _paper(self, title):
+        return self.Paper.objects.create(title=title)
+
+    def _group(self, name, perms, members):
+        group = Group.objects.create(name=name)
+        if perms:
+            group.permissions.add(*perms)
+        if members:
+            group.user_set.add(*members)
+        return group
+
+    def _local_grant(self, group, paper, perms):
+        row = self.LocalGrant.objects.create(group=group, paper=paper)
+        if perms:
+            row.grants.add(*perms)
+        return row
+
+    def _stamp_grant(self, group, paper, perms):
+        row = self.OtherGrant.objects.create(group=group, paper=paper)
+        if perms:
+            row.stamps.add(*perms)
+        return row
+
+    def _surfaces(self, handle, user, paper, granted, denied, group_codes):
+        backend = _ProbeBackend()
+        granted_codes = _codes(granted)
+        one = self.Paper.objects.filter(pk=paper.pk)
+        with patch.object(backend, '_own_handle', return_value=handle):
+            for perm in granted:
+                code = _code(perm)
+                for label, target in (('instance', paper), ('queryset', one)):
+                    with self.subTest(
+                        user=user.username, paper=paper.title, code=code,
+                        has_perm=label, granted=True,
+                    ):
+                        self.assertIs(
+                            backend.has_perm(user, code, target), True,
+                        )
+            for perm in denied:
+                code = _code(perm)
+                for label, target in (('instance', paper), ('queryset', one)):
+                    with self.subTest(
+                        user=user.username, paper=paper.title, code=code,
+                        has_perm=label, granted=False,
+                    ):
+                        self.assertIs(
+                            backend.has_perm(user, code, target), False,
+                        )
+            for label, target in (('instance', paper), ('queryset', one)):
+                with self.subTest(
+                    user=user.username, paper=paper.title,
+                    enumeration=label, kind='get_all_permissions',
+                ):
+                    self.assertEqual(
+                        backend.get_all_permissions(user, target),
+                        granted_codes,
+                    )
+                with self.subTest(
+                    user=user.username, paper=paper.title,
+                    enumeration=label, kind='get_group_permissions',
+                ):
+                    self.assertEqual(
+                        backend.get_group_permissions(user, target),
+                        set(group_codes),
+                    )
+
+    def _authorized(self, handle, expectations):
+        with patch(
+            'trusts.apps._relationship_implementation_handles',
+            return_value=(handle,),
+        ):
+            for user, perm, expected in expectations:
+                with self.subTest(
+                    user=user.username, perm=perm.codename, authorized=True,
+                ):
+                    rows = self.Paper.objects.authorized(user, perm)
+                    self.assertEqual(
+                        sorted(row.pk for row in rows),
+                        sorted(paper.pk for paper in expected),
+                    )
+
+    def test_over_grant_two_groups_do_not_cross(self):
+        """Read stays on group A and change stays on group B.
+
+        Both groups also hold ``delete``, and neither local set does.
+        A split ``Group.permissions`` join would let A's local read
+        satisfy delete. A's read must not come from B, and B's change
+        must not come from A.
+        """
+        User = get_user_model()
+        only_a = User.objects.create_user('only-a-matrix', password='x')
+        only_b = User.objects.create_user('only-b-matrix', password='x')
+        paper = self._paper('crossed')
+        group_a = self._group(
+            'matrix-a', (self.read, self.delete), (self.alice, only_a),
+        )
+        group_b = self._group(
+            'matrix-b', (self.change, self.delete), (self.alice, only_b),
+        )
+        self._local_grant(group_a, paper, (self.read,))
+        self._local_grant(group_b, paper, (self.change,))
+        both = (self.read, self.change)
+        self._surfaces(
+            self.local, self.alice, paper, both, (self.delete,), _codes(both),
+        )
+        self._surfaces(
+            self.local, only_a, paper,
+            (self.read,), (self.change, self.delete), _codes((self.read,)),
+        )
+        self._surfaces(
+            self.local, only_b, paper,
+            (self.change,), (self.read, self.delete), _codes((self.change,)),
+        )
+        self._authorized(self.local, (
+            (self.alice, self.read, [paper]),
+            (self.alice, self.change, [paper]),
+            (self.alice, self.delete, []),
+            (only_a, self.read, [paper]),
+            (only_a, self.change, []),
+            (only_a, self.delete, []),
+            (only_b, self.change, [paper]),
+            (only_b, self.read, []),
+            (only_b, self.delete, []),
+        ))
+
+    def test_over_grant_and_under_grant_across_two_contents(self):
+        """Local read on paper 1 must not land on paper 2, and must remain on paper 1."""
+        paper_1 = self._paper('one')
+        paper_2 = self._paper('two')
+        group = self._group(
+            'matrix-contents', (self.read, self.change), (self.alice,),
+        )
+        self._local_grant(group, paper_1, (self.read,))
+        self._surfaces(
+            self.local, self.alice, paper_1,
+            (self.read,), (self.change,), _codes((self.read,)),
+        )
+        self._surfaces(
+            self.local, self.alice, paper_2,
+            (), (self.read, self.change), set(),
+        )
+        self._authorized(self.local, (
+            (self.alice, self.read, [paper_1]),
+            (self.alice, self.change, []),
+        ))
+
+    def test_over_grant_change_without_local_and_under_grant_add_without_group(self):
+        """Group ``change`` without a local grant stays denied.
+
+        Local ``add`` that the group does not hold stays denied too.
+        ``read`` is in both sets and must still be granted.
+        """
+        paper = self._paper('ceiling')
+        group = self._group(
+            'matrix-ceiling', (self.read, self.change), (self.alice,),
+        )
+        self._local_grant(group, paper, (self.read, self.add))
+        self._surfaces(
+            self.local, self.alice, paper,
+            (self.read,), (self.change, self.add), _codes((self.read,)),
+        )
+        self._authorized(self.local, (
+            (self.alice, self.read, [paper]),
+            (self.alice, self.change, []),
+            (self.alice, self.add, []),
+        ))
+
+    def test_over_grant_non_member_receives_nothing(self):
+        """A matching local grant and group permission still skip a non-member.
+
+        The member still receives ``read``, so an empty non-member result
+        is not an under-grant of a broken fixture.
+        """
+        paper = self._paper('members')
+        group = self._group(
+            'matrix-members', (self.read, self.change), (self.alice,),
+        )
+        self._local_grant(group, paper, (self.read,))
+        self._surfaces(
+            self.local, self.bob, paper,
+            (), (self.read, self.change), set(),
+        )
+        self._surfaces(
+            self.local, self.alice, paper,
+            (self.read,), (self.change,), _codes((self.read,)),
+        )
+        self._authorized(self.local, (
+            (self.bob, self.read, []),
+            (self.bob, self.change, []),
+            (self.alice, self.read, [paper]),
+            (self.alice, self.change, []),
+        ))
+
+    def test_over_grant_role_ceiling_not_in_group_permissions(self):
+        """A ``permission=`` role ceiling is ordinary auth, not a group permission.
+
+        ``read`` in ``get_group_permissions`` is an over-grant. Missing
+        ``read`` from ``has_perm`` or ``get_all_permissions`` is an
+        under-grant. The role does not hold ``change``, so the change
+        row stays denied.
+        """
+        self.assertFalse(self.role_record.via_group)
+        group = self._group('matrix-role', (), (self.alice,))
+        role = self.Role.objects.create()
+        role.permissions.add(self.read)
+        link = self.RoleLink.objects.create(role=role, group=group)
+        paper = self._paper('role')
+        self.TrustGroupPermission.objects.create(
+            link=link, paper=paper, permission=self.read,
+        )
+        self.TrustGroupPermission.objects.create(
+            link=link, paper=paper, permission=self.change,
+        )
+        self._surfaces(
+            self.role, self.alice, paper,
+            (self.read,), (self.change,), set(),
+        )
+        self._authorized(self.role, (
+            (self.alice, self.read, [paper]),
+            (self.alice, self.change, []),
+        ))
+
+    def test_over_grant_two_roots_do_not_satisfy_each_other(self):
+        """A ``grants`` row must not satisfy the ``stamps`` root, or the reverse.
+
+        Root A locally grants read on paper A. Root B locally grants
+        change on paper B. The group holds both. Each paper keeps its
+        own permission and does not pick up the other root's.
+        """
+        paper_a = self._paper('root-a')
+        paper_b = self._paper('root-b')
+        group = self._group(
+            'matrix-roots', (self.read, self.change), (self.alice,),
+        )
+        self._local_grant(group, paper_a, (self.read,))
+        self._stamp_grant(group, paper_b, (self.change,))
+        self._surfaces(
+            self.roots, self.alice, paper_a,
+            (self.read,), (self.change,), _codes((self.read,)),
+        )
+        self._surfaces(
+            self.roots, self.alice, paper_b,
+            (self.change,), (self.read,), _codes((self.change,)),
+        )
+        self._authorized(self.roots, (
+            (self.alice, self.read, [paper_a]),
+            (self.alice, self.change, [paper_b]),
+        ))
