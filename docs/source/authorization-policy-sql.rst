@@ -44,8 +44,9 @@ The document is organized by application meaning:
   including ``contents: []`` when it has no declarations;
 * each backend lists its ``contents`` models;
 * a content with trusts lists them with their associated SQL for
-  ``permitted``, ``has_perm``, and ``get_all_permissions``, plus
-  ``get_group_permissions`` when a trust uses ``group=``;
+  ``permitted``, ``has_perm``, ``get_all_permissions``, and
+  ``get_permitted_users``, plus ``get_group_permissions`` when a trust
+  uses ``group=``;
 * a content with named filters lists those queries; and
 * a filter-only content contains ``model`` and ``named_filters``.
 
@@ -97,6 +98,17 @@ path, which ends at ``auth.Group``. Its ``permission`` relation is the
 compiler-owned hop from that group to ``auth.Permission``. That content
 includes ``get_group_permissions`` next to the other permission inquiries.
 A ``permission=`` registration does not add either field.
+
+``get_permitted_users`` is the reverse of ``permitted``: one saved content
+object and one permission, compiled to the users that backend can grant.
+The locked statement is that backend branch only. It carries the backend's
+eligibility predicate and the complete-grant ``EXISTS``. It does not include
+Django's outer active-superuser rule, and it does not OR other
+authentication backends. The content primary key is a ``content.<target>``
+bind. The permission row is a ``permission.<target>`` bind. The candidate
+user is the outer row. An ``Along`` registration has no exact reverse
+predicate, so rendering raises ``TrustsConfigurationError`` before a
+partial document is returned.
 
 A django-trusts backend issues one SQL statement for each permission inquiry.
 When more than one trust in that backend authorizes the same content model, the

@@ -1,8 +1,9 @@
 # Reverse permission inquiry: content to users
 
-Status: Phase A design contract for
+Status: implemented for
 [django-trusts#255](https://github.com/django-trusts/django-trusts/issues/255).
-This document does not claim that the API is implemented.
+The scalar contract in this document is unchanged. Phase B records the
+protected backend hooks and the `Along` failure boundary below.
 
 ## Decision
 
@@ -18,8 +19,8 @@ internal reverse-query compiler, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
 
-The universally available adapter is supplied by a future
-`PermittedUsersMixin` on a protected content model:
+The universally available adapter is `PermittedUsersMixin` on a protected
+content model:
 
 ```python
 from django.db import models
@@ -30,9 +31,8 @@ class Document(PermittedUsersMixin, models.Model):
     ...
 ```
 
-The optional ergonomic adapter is supplied by a future
-`PermittedUsersManagerMixin` composed with the application's existing user
-manager:
+The optional ergonomic adapter is `PermittedUsersManagerMixin` composed
+with the application's existing user manager:
 
 ```python
 from trusts.query import PermittedUsersManagerMixin
@@ -345,6 +345,32 @@ Phase B1 ships no public application method. Phase B2 exposes both
 `get_permitted_users()` adapters only after the full agreement contract and
 their result equivalence are proven. Each implementation slice must be
 re-sized from the accepted previous head.
+
+## Phase B compiler boundary
+
+`TrustModelBackendMixin.permitted_users_predicate(content, perm)` returns
+the backend branch as a `Q`, or `None` when that path does not apply.
+`singular_permission_accepted(perm)` is how a backend declares that
+singular object `has_perm` accepts a non-string permission instance. The
+mixin default accepts `django.contrib.auth.models.Permission` only.
+
+`trusts_object_permissions = False` marks an authentication-only backend
+as a known non-contributor. The exact classes `ModelBackend`,
+`AllowAllUsersModelBackend`, `RemoteUserBackend`, and
+`AllowAllUsersRemoteUserBackend` are object-blind. A subclass is not
+inferred from that ancestry. Any other object-capable `has_perm` without
+`permitted_users_predicate` raises `TrustsConfigurationError` before SQL.
+
+An `Along` registration grants through a user-seeded walk. That walk has
+no exact reverse predicate. `get_permitted_users` and the policy-lock
+render raise `TrustsConfigurationError` before SQL. The path is not
+dropped and is not widened to every user.
+
+The content adapter's candidate model is `settings.AUTH_USER_MODEL`. A
+registration whose user terminal is a different model fails that adapter
+before SQL. The optional manager adapter uses the queryset of the manager
+it was mixed into, so a custom user model can be queried from the manager
+that owns it.
 
 ## Related work
 

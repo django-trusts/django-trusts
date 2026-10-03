@@ -2274,6 +2274,34 @@ class RelationPlan:
             'content_field', user=user, permission=permission,
         )
 
+    def user_exists(self, content, permission):
+        """Candidate-user ``EXISTS`` correlating the user through this plan.
+
+        Inverse of ``content_exists``: content and permission are bound,
+        and the user terminal is ``OuterRef`` of the resolved user target.
+        Complete records OR together. An ``Along`` record has no exact
+        reverse of its user-seeded walk and raises before SQL.
+        """
+        content = _require_instance(content, 'content')
+        if content.pk is None:
+            raise TrustsConfigurationError(
+                'content must be a saved %s instance.'
+                % content._meta.label
+            )
+        permission = _bind_terminal(permission, 'permission')
+        if not self.records:
+            return None
+        for record in self.records:
+            if record.along is not None:
+                raise TrustsConfigurationError(
+                    'Reverse permission inquiry cannot compile an exact '
+                    'user predicate for Along registration on %s.'
+                    % record.root._meta.label
+                )
+        return self._correlated_exists(
+            'user_field', content=content, permission=permission,
+        )
+
     def common_permissions(self, user, content):
         """Trustee permissions held on every candidate through this plan.
 

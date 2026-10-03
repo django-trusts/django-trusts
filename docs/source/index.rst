@@ -123,6 +123,15 @@ manager without replacing its other behavior. The concrete
 not need a custom manager. Plain ``user.has_perm(permission, document)``
 object checks do not require either one.
 
+``PermittedUsersMixin`` adds the reverse inquiry
+``document.get_permitted_users(permission)`` on the content model. It
+returns a lazy queryset of users and is not a method of
+``Document.objects``. An application that already owns its user manager
+may mix ``PermittedUsersManagerMixin`` into that manager and call
+``User.objects.get_permitted_users(document, permission)``. Stock
+``auth.User`` does not gain that manager method. Both spellings take one
+saved content object and one permission.
+
 Granting and revoking permission are ordinary changes to persisted application
 data:
 
@@ -432,7 +441,10 @@ unset. ``--database`` selects another configured alias for one invocation.
 
 The artifact is organized by backend and protected content model. A content
 with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
-and ``get_all_permissions``. A content with named filters lists those queries.
+``get_all_permissions``, and ``get_permitted_users``. The locked
+``get_permitted_users`` statement is that backend's reverse predicate
+(eligibility and complete grants), not Django's outer superuser rule and
+not other backends. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
 Several trusts for the same content within one backend are OR alternatives.

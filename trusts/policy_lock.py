@@ -2,9 +2,12 @@
 
 ``trusts_policy_sql`` renders schema version 1 as canonical YAML.
 Each backend lists ``contents`` by model. A content owns its trust
-legs, the compiled SQL for ``permitted``, ``has_perm``, and
-``get_all_permissions`` when it has trusts, ``get_group_permissions``
-when a trust was registered with ``group=``, and its named filters.
+legs, the compiled SQL for ``permitted``, ``has_perm``,
+``get_all_permissions``, and ``get_permitted_users`` when it has trusts,
+``get_group_permissions`` when a trust was registered with ``group=``,
+and its named filters. ``get_permitted_users`` is the reverse
+content-and-permission-to-users predicate for that backend, not
+Django's outer superuser rule and not other backends.
 ``permitted`` is the artifact name for today's ``.authorized()`` list
 query. The runtime API is not renamed. The alias is not stored.
 ``trusts.E009`` compares the rendered bytes to the committed file and
@@ -365,6 +368,9 @@ def _project_content(handle, alias, group, filters):
                 handle, alias, records, group['model'],
             )
         )
+    content['get_permitted_users'] = _sql_row(_compile_get_permitted_users(
+        handle, alias, records, group['model'],
+    ))
     if filters:
         content['named_filters'] = [_named_filter_row(row) for row in filters]
     return content
@@ -462,6 +468,18 @@ def _compile_get_all_permissions(handle, alias, records, model):
         )
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
+    )
+
+
+def _compile_get_permitted_users(handle, alias, records, model):
+    from trusts.reverse import lock_permitted_users_queryset
+
+    content = _content_sentinel(model, alias)
+    permission = _role_sentinel(records[0], 'permission', alias)
+    queryset = lock_permitted_users_queryset(handle, content, permission)
+    return _compile_queryset(
+        queryset, alias, record=records[0], expr=None, records=records,
+        reverse_users=True,
     )
 
 
@@ -712,12 +730,15 @@ def _fallback_sentinel(field, alias):
     )
 
 
-def _compile_queryset(queryset, alias, *, record, expr, records=None):
+def _compile_queryset(
+    queryset, alias, *, record, expr, records=None, reverse_users=False,
+):
     from django.db import connections
 
     _ctx.record = record
     _ctx.composition_records = tuple(records) if records else None
     _ctx.filter_queues = None if expr is None else _filter_queues(expr)
+    _ctx.reverse_users = reverse_users
     token = _export_scope.set(object())
     try:
         compiler = queryset.query.get_compiler(
@@ -729,6 +750,7 @@ def _compile_queryset(queryset, alias, *, record, expr, records=None):
         _ctx.record = None
         _ctx.composition_records = None
         _ctx.filter_queues = None
+        _ctx.reverse_users = False
     if not isinstance(sql, str):
         raise TrustsConfigurationError(
             'Policy SQL render produced a non-text statement.'
@@ -986,6 +1008,11 @@ def _bind_name(node, record):
             labels.append('user.%s' % candidate.user_target)
         elif concrete is candidate.permission_model._meta.concrete_model:
             labels.append('permission.%s' % candidate.permission_target)
+        elif (
+            getattr(_ctx, 'reverse_users', False)
+            and concrete is candidate.content_model._meta.concrete_model
+        ):
+            labels.append('content.%s' % candidate.content_target)
     if not labels:
         return None
     if any(label != labels[0] for label in labels):

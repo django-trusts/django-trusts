@@ -107,6 +107,20 @@ Migration-bot checklist:
 - custom manager definitions
 - application-owned `authorized(` methods
 
+## Reverse permission inquiry (#255)
+
+| | Old | New |
+| --- | --- | --- |
+| Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.get_permitted_users(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
+
+No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion. An `Along` registration cannot be reversed exactly and raises `TrustsConfigurationError` before SQL, including when rendering the policy lock.
+
+Migration-bot checklist:
+
+- `PermittedUsersMixin`
+- `PermittedUsersManagerMixin`
+- `get_permitted_users(`
+
 ## Archaeology
 
 The pre-1.0 development migration record is preserved for historical reference
