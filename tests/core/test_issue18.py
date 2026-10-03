@@ -821,36 +821,33 @@ class MembershipGroupExistsTest(TransactionTestCase):
             compiler=self.compiler,
         )
 
-    def test_membership_user_hop_is_group_slice(self):
+    def test_membership_user_hop_is_not_a_group_slice(self):
         handle = self._handle(self.membership)
         plan = self.membership.plan_for(
             self.folder, user=self.member, permission=self.read,
         )
         self.assertEqual(plan.records[0].user_path, ('desk', 'holders'))
+        self.assertFalse(plan.records[0].via_group)
         with self.assertNumQueries(0):
-            pred = self.compiler.group_exists(
+            self.assertIsNone(self.compiler.group_exists(
                 plan, self.folder, self.member, self.read,
-            )
-        self.assertIsNotNone(pred)
-        with self.assertNumQueries(1):
-            self.assertIs(all_match(
+            ))
+            self.assertIsNone(all_match(
                 (handle,), self.folder, self.member, self.read, kind='group',
-            ), True)
+            ))
+            self.assertIsNone(all_match(
+                (handle,), self.folder, self.stranger, self.read, kind='group',
+            ))
+            self.assertEqual(
+                list(common_permissions(
+                    (handle,), self.folder, self.member, kind='group',
+                )),
+                [],
+            )
         with self.assertNumQueries(1):
             self.assertIs(all_match(
                 (handle,), self.folder, self.member, self.read,
             ), True)
-        with self.assertNumQueries(1):
-            self.assertIs(all_match(
-                (handle,), self.folder, self.stranger, self.read, kind='group',
-            ), False)
-        with self.assertNumQueries(1):
-            self.assertEqual(
-                _pks(common_permissions(
-                    (handle,), self.folder, self.member, kind='group',
-                )),
-                {self.read.pk},
-            )
 
     def test_fk_user_hop_is_not_group_slice(self):
         handle = self._handle(self.trustee)
@@ -876,27 +873,29 @@ class MembershipGroupExistsTest(TransactionTestCase):
                 [],
             )
 
-    def test_mixed_plan_group_slice_omits_fk_records(self):
+    def test_mixed_plan_group_slice_omits_permission_records(self):
         handle = self._handle(self.mixed)
-        with self.assertNumQueries(1):
-            self.assertIs(all_match(
+        with self.assertNumQueries(0):
+            self.assertIsNone(all_match(
                 (handle,), self.folder, self.member, self.read, kind='group',
-            ), True)
-        with self.assertNumQueries(1):
-            self.assertIs(all_match(
+            ))
+            self.assertIsNone(all_match(
                 (handle,), self.folder, self.owner, self.read, kind='group',
-            ), False)
+            ))
+            self.assertIsNone(instance_match(
+                handle, self.folder, self.member, self.read, kind='group',
+            ))
         with self.assertNumQueries(1):
             self.assertIs(all_match(
                 (handle,), self.folder, self.owner, self.read,
             ), True)
         with self.assertNumQueries(1):
-            self.assertIs(instance_match(
-                handle, self.folder, self.member, self.read, kind='group',
+            self.assertIs(all_match(
+                (handle,), self.folder, self.member, self.read,
             ), True)
         with self.assertNumQueries(1):
             self.assertIs(instance_match(
-                handle, self.other, self.member, self.read, kind='group',
+                handle, self.other, self.member, self.read,
             ), False)
 
     def test_empty_records_have_no_group_slice(self):
@@ -916,7 +915,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
                 strategy=object(),
             )
         with self.assertNumQueries(0):
-            self.assertIsNotNone(self.compiler.group_exists(
+            self.assertIsNone(self.compiler.group_exists(
                 plan, self.folder, self.member, self.read,
             ))
             self.assertIsNone(self.compiler.group_exists(

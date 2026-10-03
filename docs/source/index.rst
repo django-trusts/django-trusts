@@ -33,14 +33,18 @@ with the application.
 How permissions are represented
 --------------------------------
 
-A registered trust connects three paths:
+A registered trust connects a user, protected content, and a permission
+source:
 
 * **user** -- who is requesting access;
-* **permission** -- the operation being requested; and
+* **permission** -- a path that reaches Django permission objects directly; or
+* **group** -- a path that reaches Django ``auth.Group`` objects, whose
+  permissions are used indirectly; and
 * **content** -- the object being protected.
 
-All three paths begin from the same trust model. In the simplest case, that
-model has foreign keys to a user, a Django permission, and a protected object.
+``permission`` and ``group`` are mutually exclusive. All paths begin from the
+same trust model. In the simplest cases, that model connects the protected
+object to either a user and Django permission or a Django group.
 
 Multiple registered trusts may authorize the same kind of content. Each
 complete trust is an independent way to receive permission.
@@ -65,7 +69,7 @@ The application owns its protected content and trust models.
    # documents/models.py
 
    from django.conf import settings
-   from django.contrib.auth.models import Permission
+   from django.contrib.auth.models import Group, Permission
    from django.db import models
 
    from trusts.query import AuthorizedManagerMixin
@@ -97,8 +101,20 @@ The application owns its protected content and trust models.
            on_delete=models.CASCADE,
        )
 
-``DocumentPermission`` is the trust model. Each trust record connects one
-user and one permission to one document.
+
+   class GroupDocumentPermission(models.Model):
+       group = models.ForeignKey(
+           Group,
+           on_delete=models.CASCADE,
+       )
+       document = models.ForeignKey(
+           Document,
+           on_delete=models.CASCADE,
+       )
+
+``DocumentPermission`` connects one user and one permission to one document.
+``GroupDocumentPermission`` connects a Django group to one document; users
+receive the group's permissions through group membership.
 
 ``AuthorizedManagerMixin`` adds
 ``Document.objects.authorized(user, permission)`` to the application's own
@@ -167,7 +183,11 @@ Register the model paths when the application starts:
        def ready(self):
            super().ready()
 
-           from .models import Document, DocumentPermission
+           from .models import (
+               Document,
+               DocumentPermission,
+               GroupDocumentPermission,
+           )
 
            backend = self.configured_backend()
            backend.register(
@@ -176,19 +196,27 @@ Register the model paths when the application starts:
                permission=lambda t: t.permission,
                content=lambda t: t.document,
            )
+           backend.register(
+               trust=GroupDocumentPermission,
+               user=lambda t: t.group.user,
+               group=lambda t: t.group,
+               content=lambda t: t.document,
+           )
            backend.add_named_filter(
                Document,
                "non_confidential",
                predicate=lambda u, p, o: o.confidential != True,
            )
 
-``DocumentPermission`` is the trust model. The three paths identify the user,
-permission, and protected content associated with each trust record.
+The first registration reaches permission objects directly. The second reaches
+Django ``auth.Group`` objects; ``django-trusts`` follows each group's
+permissions. Applications do not append ``permissions`` to the ``group`` path.
+Each registration supplies either ``permission=`` or ``group=``, never both.
 
-``user``, ``permission``, and ``content`` each accept either a one-argument
-path lambda (the form in ``ready()`` above) or a Django ``__``
+``user``, ``permission``, ``group``, and ``content`` each accept either a
+one-argument path lambda (the form in ``ready()`` above) or a Django ``__``
 path string. Both forms of the same registration are valid; the string
-equivalent is:
+equivalent of the first registration is:
 
 .. code-block:: python
 
@@ -243,6 +271,22 @@ List the user's permissions on an object:
 
    user.get_all_permissions(document)
    # {"documents.change_document"}
+
+List only the permissions obtained through registered Django groups:
+
+.. code-block:: python
+
+   user.get_group_permissions(document)
+   # {"documents.change_document"}
+
+A ``group=`` registration participates in the same object checks, permission
+enumeration, and queryset filtering as a ``permission=`` registration. Its
+explicit group classification also lets ``get_group_permissions()`` select the
+group-derived subset.
+
+A ``permission=`` registration is not treated as group-derived merely because its
+``user=`` path crosses ``auth.Group``; only explicit ``group=`` registrations
+contribute to ``get_group_permissions()``.
 
 Filter a queryset to the objects authorized for a particular permission:
 

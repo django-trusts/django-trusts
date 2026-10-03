@@ -44,7 +44,8 @@ The document is organized by application meaning:
   including ``contents: []`` when it has no declarations;
 * each backend lists its ``contents`` models;
 * a content with trusts lists them with their associated SQL for
-  ``permitted``, ``has_perm``, and ``get_all_permissions``;
+  ``permitted``, ``has_perm``, and ``get_all_permissions``, plus
+  ``get_group_permissions`` when a trust uses ``group=``;
 * a content with named filters lists those queries; and
 * a filter-only content contains ``model`` and ``named_filters``.
 
@@ -90,6 +91,12 @@ Each trust retains the registered root and the resolved ``user``,
 ``permission``, and ``content`` relationships. Relationship ``path`` values
 use Django's ``__`` spelling for multiple hops; ``model`` and ``target``
 identify the related concrete model and comparison field.
+
+An explicit ``group=`` registration also records ``group``: the declared
+path, which ends at ``auth.Group``. Its ``permission`` relation is the
+compiler-owned hop from that group to ``auth.Permission``. That content
+includes ``get_group_permissions`` next to the other permission inquiries.
+A ``permission=`` registration does not add either field.
 
 A django-trusts backend issues one SQL statement for each permission inquiry.
 When more than one trust in that backend authorizes the same content model, the
