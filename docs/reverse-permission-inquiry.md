@@ -6,14 +6,20 @@ This document does not claim that the API is implemented.
 
 ## Decision
 
-The public API lives on the protected content instance:
+Core exposes two public adapters for the same reverse inquiry:
 
 ```python
 users = document.get_permitted_users(perm)
+users = User.objects.get_permitted_users(document, perm)
 ```
 
-An application opts in by mixing a future `PermittedUsersMixin` into each
-protected model that should expose the inquiry:
+Both accept exactly one saved content object and one permission, call one
+internal reverse-query compiler, and return a lazy queryset of
+`settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
+permission, they must return identical rows.
+
+The universally available adapter is supplied by a future
+`PermittedUsersMixin` on a protected content model:
 
 ```python
 from django.db import models
@@ -24,28 +30,38 @@ class Document(PermittedUsersMixin, models.Model):
     ...
 ```
 
-The result is a lazy queryset of `settings.AUTH_USER_MODEL`.
-
-The rejected public spelling is:
+The optional ergonomic adapter is supplied by a future
+`PermittedUsersManagerMixin` composed with the application's existing user
+manager:
 
 ```python
-User.objects.get_permitted_users(content, perm)
+from trusts.query import PermittedUsersManagerMixin
+
+
+class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
+    ...
 ```
 
-It is not shipped as a second public API. A private implementation helper may
-accept a user queryset, but applications must not acquire a new public user
-manager method.
+The mixin does not replace the application's manager, user model, or queryset
+class. Applications using stock `auth.User` or a concrete third-party user
+model may be unable to install it without changing `AUTH_USER_MODEL`; they use
+the content adapter instead. Zero's migration-identity technique does not make
+such a user-model substitution migration-free.
 
-The content-side method is the smaller integration boundary. Applications
-already own the protected models that carry Trusts registrations. Many
-applications use Django's stock `User` model and cannot replace its manager
-without replacing the user model. The content method can begin with the
-configured user model's existing default manager, preserve its queryset class
-and filters, and still return the rows the caller wants.
+The user-manager spelling is natural because the result rows are users. The
+content spelling is the compatibility path because protected content models
+are already application-owned Trusts participants. Neither spelling is
+semantically stronger.
+
+There is no `ContentManagerMixin.get_permitted_users()`. A content manager
+normally returns content rows; making it return users would switch result
+models and require passing a content instance already in hand. The content
+instance method still returns a normal user queryset, so downstream
+`.filter()`, `.exclude()`, `.annotate()`, and ordering remain available.
 
 ## The inquiry
 
-The method answers one question:
+Both adapters answer one question:
 
 > Which users may perform this permission on this content object?
 
@@ -59,8 +75,15 @@ It is also different from Zero's `.permitted(perm, user)`, which is a
 string-friendly user-to-content projection. Neither existing method is renamed
 or wrapped by this API.
 
-The method accepts exactly one persisted content instance. It does not accept a
-content queryset. An unsaved content instance returns an empty user queryset.
+Each adapter accepts exactly one saved content instance and exactly one
+permission. Neither argument accepts a queryset. Passing an unsaved content
+instance is invalid and fails before SQL rather than silently returning an
+empty or partial result.
+
+Queryset-valued content or permission inputs are deliberately deferred. They
+would require explicit ANY/ALL quantifiers, including separate quantifiers when
+both axes are querysets, defined empty-set behavior, and additional
+authorization-policy lockfile rules.
 
 ## Permission input
 
@@ -89,13 +112,14 @@ not invented by Core.
 ## Agreement invariant
 
 For every user row in the configured user model's candidate queryset and every
-accepted `perm` / persisted `content` pair:
+accepted `perm` / saved `content` pair:
 
 ```python
 user in content.get_permitted_users(perm)
+user in User.objects.get_permitted_users(content, perm)
 ```
 
-must equal:
+must both equal:
 
 ```python
 user.has_perm(perm, content)
@@ -110,22 +134,27 @@ complete.
 
 ### Django outer rules
 
-The queryset applies Django's outer principal rules before backend
-contributions:
+The reverse query reproduces Django's outer principal rules and each supported
+backend's own eligibility rules:
 
 - an active superuser is included for every accepted permission/content pair;
-- an inactive user, including an inactive superuser, is excluded;
+- an inactive superuser does not receive Django's outer superuser shortcut;
+- an inactive ordinary user is included only if a configured supported backend
+  would grant that same singular object permission;
 - an anonymous principal is not a persisted user row and cannot appear.
 
-The implementation must prove that the configured user model exposes
-SQL-queryable superuser and active state compatible with its singular
-`has_perm` behavior. If a custom user model implements either state only as
-arbitrary Python behavior, exact SQL reversal is unsupported and fails loudly.
+Core must not impose a blanket `is_active` exclusion that disagrees with a
+custom backend. Each reverse-query contributor reproduces the active-state
+behavior of its singular `has_perm` path. The implementation must prove that
+the configured user model exposes every required principal condition as SQL.
+Arbitrary Python-only state is unsupported and fails loudly.
 
 The invariant is over candidate rows supplied by the application's existing
 default user manager. A custom default manager may intentionally exclude rows.
-The mixin preserves that manager's queryset type and filters; it does not
-replace them with an unfiltered Core manager.
+The content adapter preserves that manager's queryset type and filters. The
+optional user-manager adapter uses the application manager on which the mixin
+is installed; installing it on the default manager gives both adapters the
+same candidate universe.
 
 ## Backend completeness
 
@@ -194,8 +223,10 @@ represented in the generated authorization-policy SQL. It is not the existing
 
 ## Database routing
 
-The returned queryset begins with
-`get_user_model()._default_manager.get_queryset()`.
+The content adapter begins with
+`get_user_model()._default_manager.get_queryset()`. The optional user-manager
+adapter begins with that manager instance's existing queryset and adds the same
+reverse predicate.
 
 A saved content instance supplies its database alias when available. Otherwise
 Django's router selects the read database. All correlated Trusts and permission
@@ -214,12 +245,12 @@ For ordinary users, the result is empty when:
 - the permission is well formed but unknown;
 - a required membership, attachment, ceiling, alignment, or other registered
   condition is absent;
-- the content instance is unsaved;
 - the grant has been revoked.
 
-Malformed declarations, incompatible user/permission/content models,
-unsupported databases, and incomplete backend coverage raise the corresponding
-configuration error. They do not fall back to a broader query.
+Unsaved content, malformed declarations, incompatible
+user/permission/content models, unsupported databases, and incomplete backend
+coverage raise the corresponding input or configuration error before SQL. They
+do not fall back to an empty, partial, or broader query.
 
 ## Required Phase B proof
 
@@ -242,7 +273,8 @@ Implementation must cover:
 - database routing and cross-database rejection;
 - zero-SQL construction and one-query evaluation;
 - authorization-policy SQL and lockfile output;
-- absence of the rejected user-manager public spelling;
+- identical content-adapter and default-user-manager-adapter results;
+- preservation of an application's existing user manager and queryset class;
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
 The result set must be compared row-for-row with singular
@@ -253,6 +285,8 @@ fixture.
 
 This issue does not add:
 
+- content-queryset or permission-queryset arguments;
+- implicit ANY/ALL quantification across contents or permissions;
 - users having any permission on the content;
 - grant inventory without a resolved user;
 - a public API returning groups;
@@ -274,14 +308,15 @@ estimate.
 - Phase A, this design contract: **3**
 - Phase B1, private reverse relationship compiler and agreement fixtures:
   **8**
-- Phase B2, public content mixin, permission-string/named-filter codec,
-  backend-completeness preflight, principal rules, routing, lockfile, and
-  migration record: **8**
+- Phase B2, public content and optional user-manager adapters,
+  permission-string/named-filter codec, backend-completeness preflight,
+  principal rules, routing, lockfile, and migration record: **8**
 - GH adoption: separate consumer issue, not included
 
-Phase B1 ships no public application method. Phase B2 exposes
-`get_permitted_users()` only after the full agreement contract is proven.
-Each implementation slice must be re-sized from the accepted previous head.
+Phase B1 ships no public application method. Phase B2 exposes both
+`get_permitted_users()` adapters only after the full agreement contract and
+their result equivalence are proven. Each implementation slice must be
+re-sized from the accepted previous head.
 
 ## Related work
 
