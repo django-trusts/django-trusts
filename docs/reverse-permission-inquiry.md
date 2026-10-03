@@ -89,25 +89,27 @@ authorization-policy lockfile rules.
 
 `perm` accepts:
 
-- a model instance that is the permission terminal of the applicable
-  registration; for the standard Django path this is
-  `django.contrib.auth.models.Permission`; or
 - a supported Django permission string such as
   `"documents.change_document"`, including the existing
-  `:named_filter` suffix where the selected backend supports it.
+  `:named_filter` suffix where the selected backend supports it;
+- a `django.contrib.auth.models.Permission` instance, normalized before
+  compilation with `Permission.user_perm_str(instance)`; or
+- an instance of another registered permission-terminal model only when the
+  selected Trusts backend explicitly declares that its singular object
+  `has_perm` path accepts that instance type as the same permission identity.
 
-A permission instance follows the same instance binding used by
-`.authorized()`. A string follows the same parsing, permission identity, and
-named-filter behavior as `user.has_perm(perm, content)`.
+A string follows the same parsing, permission identity, and named-filter
+behavior as `user.has_perm(perm, content)`. A Django `auth.Permission`
+instance uses its canonical `"app_label.codename"` string for both reverse
+compilation and the singular comparison. A supported application-specific
+permission instance remains that instance for both paths. Core does not invent
+a string codec for an application-specific permission model.
 
-Malformed strings raise the same public configuration/permission-code error
-selected for the singular object check. A well-formed but unknown permission
-does not authorize an ordinary user. Active superusers remain governed by
-Django's outer superuser rule.
-
-Companion implementations with a non-Django permission model can use the
-instance form. A string codec for an application-specific permission model is
-not invented by Core.
+An instance type without an explicit matching singular-backend capability is
+unsupported and raises before SQL. Malformed strings raise the same public
+configuration/permission-code error selected for the singular object check. A
+well-formed but unknown permission does not authorize an ordinary user. Active
+superusers remain governed by Django's outer superuser rule.
 
 ## Agreement invariant
 
@@ -119,13 +121,18 @@ user in content.get_permitted_users(perm)
 user in User.objects.get_permitted_users(content, perm)
 ```
 
-must both equal:
+must both equal the singular check for the normalized permission identity:
 
 ```python
-user.has_perm(perm, content)
+normalized_perm = normalize_permission_for_singular_check(perm)
+user.has_perm(normalized_perm, content)
 ```
 
-The comparison uses the same configured Django authentication backends.
+`normalize_permission_for_singular_check()` is explanatory notation, not a
+second public API. It leaves supported strings and explicitly supported custom
+permission instances unchanged, and converts a Django `auth.Permission`
+instance with `Permission.user_perm_str()`. The comparison uses the same
+configured Django authentication backends.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not
@@ -204,11 +211,23 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    (user.is_active AND user.is_superuser)
-    OR EXISTS (complete direct grant correlated to user and content)
-    OR EXISTS (complete membership grant correlated to user and content)
+    django_outer_superuser_predicate(user)
+    OR (
+        backend_1_eligibility_predicate(user)
+        AND backend_1_complete_grant_predicate(user, permission, content)
+    )
+    OR (
+        backend_2_eligibility_predicate(user)
+        AND backend_2_complete_grant_predicate(user, permission, content)
+    )
     OR ...
 ```
+
+The named predicates are conceptual SQL placeholders, not Python callbacks.
+Django's outer superuser contributor includes its active-state rule. Each
+backend branch includes that backend's own eligibility behavior, including any
+active-state rule it applies in the singular check. Core adds no global
+`is_active` exclusion across all branches.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain
@@ -267,7 +286,8 @@ Implementation must cover:
 - active, inactive, and superuser behavior;
 - a custom user model with a custom default manager/queryset;
 - non-integer user and content primary keys;
-- permission-instance and permission-string forms;
+- permission-string form, normalized Django `auth.Permission` instances, and
+  explicitly supported custom permission-instance identities;
 - an authentication-only backend declaration;
 - an unsupported object-permission backend failing before SQL;
 - database routing and cross-database rejection;
@@ -278,8 +298,8 @@ Implementation must cover:
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
 The result set must be compared row-for-row with singular
-`user.has_perm(perm, content)` across the candidate users in every behavioral
-fixture.
+`user.has_perm(normalized_perm, content)` across the candidate users in every
+behavioral fixture, using the normalization rule above.
 
 ## Non-goals
 
@@ -329,6 +349,7 @@ choices, hostile POSTs, actions, and deletion. This API does not replace or
 materially shrink that boundary.
 
 After Core lands, the GH example may adopt
-`repository.get_permitted_users(operation)` in a separate exact-pairing PR.
-That consumer work must not be folded into the Core implementation or the
-active GH admin PR.
+`repository.get_permitted_users(operation)` in a separate exact-pairing PR
+only after its backend explicitly declares the same `Operation` instance
+identity for the singular and reverse paths. That consumer work must not be
+folded into the Core implementation or the active GH admin PR.
