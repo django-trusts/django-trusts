@@ -89,27 +89,33 @@ authorization-policy lockfile rules.
 
 `perm` accepts:
 
+- a `django.contrib.auth.models.Permission` instance;
 - a supported Django permission string such as
   `"documents.change_document"`, including the existing
-  `:named_filter` suffix where the selected backend supports it;
-- a `django.contrib.auth.models.Permission` instance, normalized before
-  compilation with `Permission.user_perm_str(instance)`; or
+  `:named_filter` suffix where the selected backend supports it; or
 - an instance of another registered permission-terminal model only when the
   selected Trusts backend explicitly declares that its singular object
   `has_perm` path accepts that instance type as the same permission identity.
 
-A string follows the same parsing, permission identity, and named-filter
-behavior as `user.has_perm(perm, content)`. A Django `auth.Permission`
-instance uses its canonical `"app_label.codename"` string for both reverse
-compilation and the singular comparison. A supported application-specific
-permission instance remains that instance for both paths. Core does not invent
-a string codec for an application-specific permission model.
+The registered permission row is the canonical reverse-query identity. A
+Django `auth.Permission` instance is validated and used directly. A string is
+a Django-facing alias: Core parses it with the same rules as
+`user.has_perm(perm, content)` and binds it to the permission row applicable
+to the supplied content and registration. The row lookup remains inside the
+eventual SQL query; accepting a string does not add a construction-time query.
+
+For the singular agreement check, a Django `auth.Permission` instance is
+represented by its Django 6.1 `instance.user_perm_str` property,
+`"app_label.codename"`. A supported application-specific permission instance
+remains that instance for both paths. Core does not invent a string codec for
+an application-specific permission model.
 
 An instance type without an explicit matching singular-backend capability is
 unsupported and raises before SQL. Malformed strings raise the same public
 configuration/permission-code error selected for the singular object check. A
-well-formed but unknown permission does not authorize an ordinary user. Active
-superusers remain governed by Django's outer superuser rule.
+well-formed string that identifies no permission row applicable to the supplied
+content does not authorize an ordinary user. Active superusers remain governed
+by Django's outer superuser rule.
 
 ## Agreement invariant
 
@@ -130,9 +136,11 @@ user.has_perm(normalized_perm, content)
 
 `normalize_permission_for_singular_check()` is explanatory notation, not a
 second public API. It leaves supported strings and explicitly supported custom
-permission instances unchanged, and converts a Django `auth.Permission`
-instance with `Permission.user_perm_str()`. The comparison uses the same
-configured Django authentication backends.
+permission instances unchanged, and reads
+`django_permission_instance.user_perm_str` for a Django
+`auth.Permission` instance. Reverse compilation still uses the canonical
+permission row. The comparison uses the same configured Django authentication
+backends.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not
