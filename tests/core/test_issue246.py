@@ -7,6 +7,7 @@ exclusive with ``group=``. Only explicit ``group=`` records feed
 authorization. Membership shape is not a group.
 """
 
+import re
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -680,3 +681,201 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         self.assertIn('deskpapergrant', all_sql)
         self.assertIn('directpapergrant', all_sql)
         self.assertIn('auth_group_permissions', all_sql)
+
+
+_GROUP_PERMISSION_ALIAS = re.compile(
+    r'JOIN\s+"auth_group_permissions"\s+"([A-Za-z_][A-Za-z0-9_]*)"',
+)
+
+
+def _group_permission_aliases(sql):
+    """Aliases Django assigned to ``auth.Group.permissions`` in ``sql``."""
+    return _GROUP_PERMISSION_ALIAS.findall(sql)
+
+
+def _ceiling_models():
+    class CeilingFolder(models.Model):
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Paper(models.Model):
+        title = models.CharField(max_length=40)
+        folder = models.ForeignKey(
+            CeilingFolder, related_name='papers', on_delete=models.CASCADE,
+        )
+
+        objects = AuthorizedManager()
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class CeilingGrant(models.Model):
+        group = models.ForeignKey(Group, on_delete=models.CASCADE)
+        folder = models.ForeignKey(CeilingFolder, on_delete=models.CASCADE)
+        grants = models.ManyToManyField(Permission, related_name='+', blank=True)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    return CeilingFolder, Paper, CeilingGrant
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class GroupPermissionCeilingJoinTest(TransactionTestCase):
+    """Local ``.contains`` on ``Group.permissions`` must not over-grant.
+
+    One Django group holds ``read`` and ``change``. The trust's local
+    permission set contains only ``read``. Condition and correlation have
+    to share one ``Group.permissions`` row, so ``change`` stays denied.
+    """
+
+    def setUp(self):
+        self.Folder, self.Paper, self.Grant = _ceiling_models()
+        self._table_cm = _tables(self.Folder, self.Paper, self.Grant)
+        self._table_cm.__enter__()
+        grants = self.Grant._meta.get_field('grants')
+        if not hasattr(grants, 'm2m_field_name'):
+            grants.contribute_to_related_class(Permission, grants.remote_field)
+        User = get_user_model()
+        self.alice = User.objects.create_user('alice-ceiling', password='x')
+        self.read = _perm(self.Paper, 'read_paper')
+        self.change = _perm(self.Paper, 'change_paper')
+        self.read_code = _code(self.read)
+        self.change_code = _code(self.change)
+        self.editors = Group.objects.create(name='editors-ceiling')
+        self.editors.permissions.add(self.read, self.change)
+        self.editors.user_set.add(self.alice)
+        self.folder = self.Folder.objects.create(title='capped')
+        self.paper = self.Paper.objects.create(title='capped', folder=self.folder)
+        self.other = self.Paper.objects.create(
+            title='other', folder=self.Folder.objects.create(title='other'),
+        )
+        grant = self.Grant.objects.create(group=self.editors, folder=self.folder)
+        grant.grants.add(self.read)
+        self.registry = TrustsRegistry()
+        self.handle = _handle(self.registry, path='tests.core.issue246-ceiling')
+        self.handle.register(
+            trust=self.Grant,
+            user=lambda t: t.group.user,
+            group=lambda t: t.group,
+            content=lambda t: t.folder.papers,
+            condition=lambda t: t.grants.contains(t.group.permissions),
+        )
+        self.backend = _ProbeBackend()
+        self.one = self.Paper.objects.filter(pk=self.paper.pk)
+
+    def tearDown(self):
+        self._table_cm.__exit__(None, None, None)
+
+    def _backend(self):
+        return patch.object(
+            self.backend, '_own_handle', return_value=self.handle,
+        )
+
+    def _handles(self):
+        return patch(
+            'trusts.apps._relationship_implementation_handles',
+            return_value=(self.handle,),
+        )
+
+    def _permission_codes(self, rows):
+        return {_code(row) for row in rows}
+
+    def test_has_perm_denies_change_for_instance_and_queryset(self):
+        with self._backend():
+            checks = (
+                ('instance read', True, self.read_code, self.paper),
+                ('instance change', False, self.change_code, self.paper),
+                ('queryset read', True, self.read_code, self.one),
+                ('queryset change', False, self.change_code, self.one),
+            )
+            for label, expected, code, target in checks:
+                with self.subTest(label):
+                    self.assertIs(
+                        self.backend.has_perm(self.alice, code, target),
+                        expected,
+                    )
+
+    def test_enumerations_omit_change_for_instance_and_queryset(self):
+        with self._backend():
+            checks = (
+                ('all instance', self.backend.get_all_permissions, self.paper),
+                ('group instance', self.backend.get_group_permissions, self.paper),
+                ('all queryset', self.backend.get_all_permissions, self.one),
+                ('group queryset', self.backend.get_group_permissions, self.one),
+            )
+            for label, method, target in checks:
+                with self.subTest(label):
+                    self.assertEqual(
+                        method(self.alice, target),
+                        {self.read_code},
+                    )
+
+    def test_authorized_queryset_and_scopes_omit_change(self):
+        with self._handles():
+            read_rows = self.Paper.objects.authorized(self.alice, self.read)
+            change_rows = self.Paper.objects.authorized(self.alice, self.change)
+            with self.subTest('authorized read'):
+                self.assertEqual(list(read_rows), [self.paper])
+            with self.subTest('authorized change'):
+                self.assertEqual(list(change_rows), [])
+            for label, rows in (('read', read_rows), ('change', change_rows)):
+                sql = str(rows.query)
+                with self.subTest(authorized_sql=label):
+                    self.assertEqual(
+                        len(_group_permission_aliases(sql)), 1, sql,
+                    )
+        read_folders = filter_authorized_scopes(
+            self.Folder.objects.order_by('pk'),
+            self.alice,
+            self.read,
+            content=self.Paper,
+            handles=(self.handle,),
+        )
+        change_folders = filter_authorized_scopes(
+            self.Folder.objects.order_by('pk'),
+            self.alice,
+            self.change,
+            content=self.Paper,
+            handles=(self.handle,),
+        )
+        with self.subTest('scope read'):
+            self.assertEqual(list(read_folders), [self.folder])
+        with self.subTest('scope change'):
+            self.assertEqual(list(change_folders), [])
+        for label, scoped in (
+            ('read', read_folders),
+            ('change', change_folders),
+        ):
+            sql = str(scoped.query)
+            with self.subTest(scope_sql=label):
+                self.assertEqual(
+                    len(_group_permission_aliases(sql)), 1, sql,
+                )
+
+    def test_common_permissions_omit_change(self):
+        plan = self.registry.plan_for(self.paper, user=self.alice)
+        for label, target in (('instance', self.paper), ('queryset', self.one)):
+            with self.subTest(label):
+                self.assertEqual(
+                    self._permission_codes(
+                        plan.common_permissions(self.alice, target),
+                    ),
+                    {self.read_code},
+                )
+
+    def test_policy_sql_shares_one_group_permissions_alias(self):
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[self.handle]),
+        )
+        content = document['backends'][0]['contents'][0]
+        for key in (
+            'permitted', 'has_perm', 'get_all_permissions', 'get_group_permissions',
+        ):
+            sql = content[key]['sql']
+            aliases = _group_permission_aliases(sql)
+            with self.subTest(key=key):
+                self.assertEqual(len(aliases), 1, sql)
+                self.assertEqual(len(set(aliases)), 1, sql)
