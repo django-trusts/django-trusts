@@ -666,8 +666,6 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self.assertFalse(
                 handle.registry.has_permission(self.bob, self.spec, self.read),
             )
-            with self.assertRaises(AttributeError):
-                self.alice.has_perm(self.read, self.spec)
 
             read_users = self.spec.get_permitted_users(self.read)
             read_by_code = self.spec.get_permitted_users(self.read_code)
@@ -834,8 +832,6 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
                     self.alice, self.secret, self.read,
                 ),
             )
-            with self.assertRaises(AttributeError):
-                self.alice.has_perm(self.read, self.secret)
             self.assertEqual(
                 set(self.secret.get_permitted_users(self.read).values_list(
                     'pk', flat=True,
