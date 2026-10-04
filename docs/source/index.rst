@@ -489,6 +489,17 @@ with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
 not other backends. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
+Both public ``get_permitted_users`` spellings call the same compiler, so the
+artifact contains one reverse-user query rather than duplicate entries. For
+the direct ``DocumentPermission`` example on SQLite, that entry is:
+
+.. code-block:: yaml
+
+   get_permitted_users:
+     params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}]
+     sql: |-
+       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined" FROM "auth_user" WHERE ("auth_user"."is_active" = %s AND EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."document_id" = %s AND "U0"."permission_id" = %s AND "U0"."user_id" = ("auth_user"."id")) LIMIT 1))
+
 Several trusts for the same content within one backend are OR alternatives.
 django-trusts issues one SQL statement for each permission inquiry and combines
 those trusts with OR. Different backends remain separate.
