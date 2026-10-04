@@ -79,6 +79,10 @@ The following abridged example shows the schema:
              params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {bind: "user.id"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
+           get_permitted_users:
+             params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}]
+             sql: |-
+               SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
              - id: "documents__Document__non_confidential"
                params: [{const: true}]
@@ -106,8 +110,10 @@ eligibility predicate and the complete-grant ``EXISTS``. It does not include
 Django's outer active-superuser rule, and it does not OR other
 authentication backends. The content primary key is a ``content.<target>``
 bind. The permission row is a ``permission.<target>`` bind. The candidate
-user is the outer row. An ``Along`` registration has no exact reverse
-predicate, so rendering raises ``TrustsConfigurationError`` before a
+user is the outer row. The content method and optional user-manager method
+share this one policy entry because they use the same reverse compiler; the
+document does not duplicate their SQL. An ``Along`` registration has no exact
+reverse predicate, so rendering raises ``TrustsConfigurationError`` before a
 partial document is returned.
 
 A django-trusts backend issues one SQL statement for each permission inquiry.
