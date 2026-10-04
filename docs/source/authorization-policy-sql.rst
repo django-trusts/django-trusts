@@ -116,7 +116,9 @@ Permission inquiries and named filters
 
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. ``get_permitted_users`` records the reverse query over candidate
-user rows for one content object and one permission. Named filters are listed
+user rows for one content object and one permission. The content method and
+optional user-manager method share this one entry because they use the same
+compiler; the document does not duplicate their SQL. Named filters are listed
 in ``add_named_filter()`` order.
 
 Identifiers and ordering
