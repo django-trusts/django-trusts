@@ -72,14 +72,14 @@ The application owns its protected content and trust models.
    from django.contrib.auth.models import Group, Permission
    from django.db import models
 
-   from trusts.query import AuthorizedManagerMixin
+   from trusts.query import AuthorizedManagerMixin, PermittedUsersMixin
 
 
    class DocumentManager(AuthorizedManagerMixin, models.Manager):
        pass
 
 
-   class Document(models.Model):
+   class Document(PermittedUsersMixin, models.Model):
        title = models.CharField(max_length=200)
        confidential = models.BooleanField(default=False)
 
@@ -123,14 +123,10 @@ manager without replacing its other behavior. The concrete
 not need a custom manager. Plain ``user.has_perm(permission, document)``
 object checks do not require either one.
 
-``PermittedUsersMixin`` adds the reverse inquiry
-``document.get_permitted_users(permission)`` on the content model. It
-returns a lazy queryset of users and is not a method of
-``Document.objects``. An application that already owns its user manager
-may mix ``PermittedUsersManagerMixin`` into that manager and call
-``User.objects.get_permitted_users(document, permission)``. Stock
-``auth.User`` does not gain that manager method. Both spellings take one
-saved content object and one permission.
+``PermittedUsersMixin`` adds
+``document.get_permitted_users(permission)``, the reverse inquiry that
+returns the users permitted on one saved document. It does not replace or
+change ``Document.objects``.
 
 Granting and revoking permission are ordinary changes to persisted application
 data:
@@ -310,6 +306,52 @@ Filter a queryset to the objects authorized for a particular permission:
        user,
        change_document,
    )
+
+List the users who may perform one permission on one saved object:
+
+.. code-block:: python
+
+   permitted_users = document.get_permitted_users(change_document)
+
+The permission may also use Django's string form:
+
+.. code-block:: python
+
+   permitted_users = document.get_permitted_users(
+       "documents.change_document",
+   )
+
+The result is a lazy queryset of the configured user model. Normal queryset
+operations remain available, for example
+``document.get_permitted_users(change_document).filter(is_active=True)``.
+
+Applications that own their user model may expose the same inquiry on their
+existing user manager:
+
+.. code-block:: python
+
+   from trusts.query import PermittedUsersManagerMixin
+
+
+   class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
+       pass
+
+After installing that manager on the application's user model, the equivalent
+user-side spelling is:
+
+.. code-block:: python
+
+   from django.contrib.auth import get_user_model
+
+
+   User = get_user_model()
+   permitted_users = User.objects.get_permitted_users(
+       document,
+       change_document,
+   )
+
+Both spellings return the same rows. The user-manager mixin is optional; an
+application that cannot change its user manager uses the content method.
 
 Protect a view with the Trusts-only primary-key guard:
 
