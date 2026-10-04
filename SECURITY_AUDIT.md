@@ -217,7 +217,7 @@ The supported projections consume the same normalized registration:
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
 | Authorized objects | `Model.objects.authorized(user, permission)` | Relationship-family SQL before pagination; not Django backend OR |
-| Permitted users | `content.get_permitted_users(perm)` | One user query OR-ing complete grants and Django's active-superuser rule; no Core `is_active` blanket |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; no Core `is_active` blanket |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coerces it

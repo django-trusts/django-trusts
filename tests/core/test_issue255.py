@@ -247,7 +247,9 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
 
     def test_direct_grant_instance_and_string_agree_and_are_one_query(self):
         self.assertFalse(hasattr(Document.objects, 'get_permitted_users'))
-        self.assertFalse(hasattr(get_user_model().objects, 'get_permitted_users'))
+        self.assertFalse(hasattr(get_user_model().objects, 'permitted'))
+        self.assertFalse(hasattr(PlainUserManager, 'get_permitted_users'))
+        self.assertTrue(callable(PlainUserManager.permitted))
         self.assertTrue(callable(self.document.get_permitted_users))
 
         with self.assertNumQueries(0):
@@ -281,7 +283,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         manager.model = get_user_model()
         manager.name = 'objects'
         self.assertEqual(
-            _pks(manager.get_permitted_users(self.document, self.change)),
+            _pks(manager.permitted(self.document, self.change)),
             found,
         )
 
@@ -334,7 +336,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             with self.assertRaises(TrustsConfigurationError):
                 self.document.get_permitted_users(Document.objects.all())
             with self.assertRaises(TrustsConfigurationError):
-                PlainUserManager.get_permitted_users(
+                PlainUserManager.permitted(
                     PlainUserManager(), Document.objects.all(), self.change,
                 )
             with self.assertRaises(ValueError):
@@ -365,7 +367,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         manager.model = get_user_model()
         manager.name = 'marked'
         with self.assertNumQueries(0):
-            chosen = manager.get_permitted_users(self.document, self.change)
+            chosen = manager.permitted(self.document, self.change)
         self.assertIsInstance(chosen, MarkedQuerySet)
         self.assertEqual(chosen.marker, 'issue255')
         self.assertIn('m255-', str(chosen.query))
@@ -789,7 +791,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         uuid_manager.model = self.UuidUser
         uuid_manager.name = 'objects'
         with self.assertNumQueries(0):
-            chosen = uuid_manager.get_permitted_users(paper, permission)
+            chosen = uuid_manager.permitted(paper, permission)
         self.assertIs(chosen.model, self.UuidUser)
         with self.assertNumQueries(1):
             found = _pks(chosen)

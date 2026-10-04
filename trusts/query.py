@@ -80,12 +80,16 @@ class PermittedUsersMixin:
 class PermittedUsersManagerMixin:
     """Optional adapter on an application's existing user manager.
 
-    Does not replace that manager or its queryset class. Stock
+    ``User.objects.permitted(content, perm)`` returns a lazy user
+    queryset. The name is ``permitted`` because the manager already
+    identifies the user model, and Django's ``get`` convention implies
+    one row. Does not replace that manager or its queryset class. Stock
     ``auth.User`` does not acquire this method. The content adapter
-    remains the path that does not require a user-manager change.
+    ``get_permitted_users`` remains the path that does not require a
+    user-manager change.
     """
 
-    def get_permitted_users(self, content, perm):
+    def permitted(self, content, perm):
         from trusts.reverse import compile_permitted_users
 
         return compile_permitted_users(

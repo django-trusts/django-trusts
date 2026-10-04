@@ -345,13 +345,14 @@ user-side spelling is:
 
 
    User = get_user_model()
-   permitted_users = User.objects.get_permitted_users(
-       document,
-       change_document,
-   )
+   permitted_users = User.objects.permitted(document, change_document)
 
-Both spellings return the same rows. The user-manager mixin is optional; an
-application that cannot change its user manager uses the content method.
+The manager method is spelled ``permitted`` because the manager already
+identifies the user model, and Django's ``get`` convention implies one row.
+This method returns a lazy queryset. Both spellings return the same rows.
+The user-manager mixin is optional; an application that cannot change its
+user manager uses ``content.get_permitted_users(perm)``. Stock ``auth.User``
+does not grow ``permitted``.
 
 Protect a view with the Trusts-only primary-key guard:
 
@@ -489,9 +490,11 @@ with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
 not other backends. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
-Both public ``get_permitted_users`` spellings call the same compiler, so the
-artifact contains one reverse-user query rather than duplicate entries. For
-the direct ``DocumentPermission`` example on SQLite, that entry is:
+``content.get_permitted_users(perm)`` and
+``User.objects.permitted(content, perm)`` call the same compiler, so the
+artifact contains one reverse-user query rather than duplicate entries. The
+lockfile key remains ``get_permitted_users``. For the direct
+``DocumentPermission`` example on SQLite, that entry is:
 
 .. code-block:: yaml
 

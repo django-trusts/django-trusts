@@ -11,7 +11,7 @@ Core exposes two public adapters for the same reverse inquiry:
 
 ```python
 users = document.get_permitted_users(perm)
-users = User.objects.get_permitted_users(document, perm)
+users = User.objects.permitted(document, perm)
 ```
 
 Both accept exactly one saved content object and one permission, call one
@@ -48,10 +48,13 @@ model may be unable to install it without changing `AUTH_USER_MODEL`; they use
 the content adapter instead. Zero's migration-identity technique does not make
 such a user-model substitution migration-free.
 
-The user-manager spelling is natural because the result rows are users. The
-content spelling is the compatibility path because protected content models
-are already application-owned Trusts participants. Neither spelling is
-semantically stronger.
+The user-manager method is `permitted(content, perm)`. The manager already
+identifies the returned user model, and Django's `get` convention implies
+one row, while this method returns a lazy queryset. The mixin name stays
+`PermittedUsersManagerMixin`. The content spelling
+`get_permitted_users(perm)` is the compatibility path because protected
+content models are already application-owned Trusts participants. Neither
+spelling is semantically stronger.
 
 There is no `ContentManagerMixin.get_permitted_users()`. A content manager
 normally returns content rows; making it return users would switch result
@@ -71,9 +74,10 @@ It is the reverse of the existing user-to-content projection:
 Document.objects.authorized(user, permission)
 ```
 
-It is also different from Zero's `.permitted(perm, user)`, which is a
-string-friendly user-to-content projection. Neither existing method is renamed
-or wrapped by this API.
+It is also different from Zero's content-queryset `.permitted(perm, user)`,
+which is a string-friendly user-to-content projection. The optional
+user-manager method `User.objects.permitted(content, perm)` is not that
+method and does not wrap it. Neither existing method is renamed by this API.
 
 Each adapter accepts exactly one saved content instance and exactly one
 permission. Neither argument accepts a queryset. Passing an unsaved content
@@ -124,7 +128,7 @@ accepted `perm` / saved `content` pair:
 
 ```python
 user in content.get_permitted_users(perm)
-user in User.objects.get_permitted_users(content, perm)
+user in User.objects.permitted(content, perm)
 ```
 
 must both equal the singular check for the normalized permission identity:
@@ -245,8 +249,9 @@ duplicate users collapse with `DISTINCT`.
 The new query is a policy-lock operation. Phase B adds a
 `get_permitted_users` statement for each applicable backend/content pair,
 with candidate-user, permission, content, and named-filter parameter roles
-represented in the generated authorization-policy SQL. It is not the existing
-`permitted` operation, which means user-to-content.
+represented in the generated authorization-policy SQL. That lockfile key is
+not the optional manager method `User.objects.permitted(content, perm)`, and
+it is not the existing `permitted` operation, which means user-to-content.
 
 ## Database routing
 
@@ -341,10 +346,11 @@ estimate.
   principal rules, routing, lockfile, and migration record: **8**
 - GH adoption: separate consumer issue, not included
 
-Phase B1 ships no public application method. Phase B2 exposes both
-`get_permitted_users()` adapters only after the full agreement contract and
-their result equivalence are proven. Each implementation slice must be
-re-sized from the accepted previous head.
+Phase B1 ships no public application method. Phase B2 exposes
+`content.get_permitted_users(perm)` and optional
+`User.objects.permitted(content, perm)` only after the full agreement
+contract and their result equivalence are proven. Each implementation slice
+must be re-sized from the accepted previous head.
 
 ## Phase B compiler boundary
 
@@ -383,7 +389,9 @@ choices, hostile POSTs, actions, and deletion. This API does not replace or
 materially shrink that boundary.
 
 After Core lands, the GH example may adopt
-`repository.get_permitted_users(operation)` in a separate exact-pairing PR
-only after its backend explicitly declares the same `Operation` instance
-identity for the singular and reverse paths. That consumer work must not be
+`User.objects.permitted(content, operation)` where it lists users allowed
+one operation on one content object, in a separate exact-pairing PR only
+after its backend explicitly declares the same `Operation` instance
+identity for the singular and reverse paths. The content method remains
+`content.get_permitted_users(perm)`. That consumer work must not be
 folded into the Core implementation or the active GH admin PR.

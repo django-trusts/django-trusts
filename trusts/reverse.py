@@ -1,7 +1,7 @@
 """Reverse permission inquiry: one content object and one permission to users.
 
 Private compiler for ``content.get_permitted_users(perm)`` and
-``User.objects.get_permitted_users(content, perm)``. Both adapters call
+``User.objects.permitted(content, perm)``. Both adapters call
 ``compile_permitted_users``. The permission row is canonical. A string is
 resolved inside the eventual SQL. Construction does not query.
 """

@@ -110,9 +110,10 @@ eligibility predicate and the complete-grant ``EXISTS``. It does not include
 Django's outer active-superuser rule, and it does not OR other
 authentication backends. The content primary key is a ``content.<target>``
 bind. The permission row is a ``permission.<target>`` bind. The candidate
-user is the outer row. The content method and optional user-manager method
-share this one policy entry because they use the same reverse compiler; the
-document does not duplicate their SQL. An ``Along`` registration has no exact
+user is the outer row. ``content.get_permitted_users(perm)`` and optional
+``User.objects.permitted(content, perm)`` share this one policy entry
+because they use the same reverse compiler; the document does not duplicate
+their SQL. The lockfile key stays ``get_permitted_users``. An ``Along`` registration has no exact
 reverse predicate, so rendering raises ``TrustsConfigurationError`` before a
 partial document is returned.
 
