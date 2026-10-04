@@ -70,8 +70,10 @@ schema change and no consumer migration, and this expansion is not a
 `migrates.md` entry.
 
 An intermediate many-to-many and a reverse many-to-many still fail
-closed at registration. A `permission=` collection does not contribute
-to `get_group_permissions()`. The grammar is in
+closed at registration. A direct to-one permission relation is
+unchanged, including one that names a custom permission model. A
+`permission=` collection does not contribute to
+`get_group_permissions()`. The grammar is in
 [docs/core-registry.md](docs/core-registry.md).
 
 ## Change sizing and surface discovery
