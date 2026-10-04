@@ -807,11 +807,124 @@ def _resolve_permission_in_m2m(field, role, path, *, require_pk=False):
     return related, attname
 
 
+def _resolve_permission_path(root, path):
+    """Validate a ``permission=`` path and return lookup metadata.
+
+    The direct shape is unchanged: exactly one forward single-valued
+    hop, to whatever model that hop names. The collection shape is zero
+    or more forward single-valued hops followed by exactly one forward
+    many-to-many to ``auth.Permission``. The comparison field is that
+    relation's primary key; a non-PK ``to_field`` on the through table
+    fails closed. A collection that terminates on another model fails
+    closed so a permission string cannot match a colliding primary key.
+    A reverse many-to-many, a generic foreign key, a non-PK through
+    target, a terminal other than ``auth.Permission``, and a multi-hop
+    all-forward path fail closed. An intermediate many-to-many also
+    fails closed; that shape is deferred, not rejected as a design
+    direction. Zero SQL.
+    """
+    role = 'permission'
+    if not path:
+        raise TrustsConfigurationError(
+            '%s must be a non-empty root-relative path from %s.'
+            % (role, root._meta.label)
+        )
+    current = root
+    n = len(path)
+    for index, name in enumerate(path):
+        is_last = index == n - 1
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist:
+            raise TrustsConfigurationError(
+                '%s path %r refers to missing field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        kind = _classify_field(field)
+        if kind == 'scalar':
+            raise TrustsConfigurationError(
+                '%s path %r traverses scalar field %r on %s; only '
+                'single-valued relations are supported.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind == 'gfk':
+            raise TrustsConfigurationError(
+                '%s path %r uses a generic foreign key %r on %s; generic '
+                'foreign keys are not supported.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind == 'm2m':
+            if getattr(field, 'auto_created', False):
+                raise TrustsConfigurationError(
+                    '%s path %r uses reverse relation %r on %s; '
+                    'multi-valued and reverse traversals are not supported.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            if not is_last:
+                raise TrustsConfigurationError(
+                    '%s path %r uses intermediate multi-valued field %r '
+                    'on %s; an intermediate many-to-many is not accepted '
+                    'on this permission path.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            return _permission_m2m_result(field, path)
+        if kind in ('reverse_o2o', 'reverse_o2m', 'reverse'):
+            if kind == 'reverse_o2o':
+                raise TrustsConfigurationError(
+                    '%s path %r uses reverse one-to-one relation %r on %s; '
+                    'reverse one-to-one traversals are not supported.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            if not is_last:
+                raise TrustsConfigurationError(
+                    '%s path %r uses reverse relation %r on %s before '
+                    'the final hop; reverse relations are only '
+                    'supported as the final content hop.'
+                    % (role, _path_text(path), name, current._meta.label)
+                )
+            raise TrustsConfigurationError(
+                '%s path %r uses reverse relation %r on %s; multi-valued '
+                'and reverse traversals are not supported.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        if kind != 'single':
+            raise TrustsConfigurationError(
+                '%s path %r uses unsupported field %r on %s.'
+                % (role, _path_text(path), name, current._meta.label)
+            )
+        related, _target_attname = _resolved_hop(field, role, path)
+        if is_last:
+            if index != 0:
+                raise TrustsConfigurationError(
+                    '%s path %r is not a direct single-valued relation; '
+                    'only direct paths are supported.'
+                    % (role, _path_text(path))
+                )
+            return tuple(path), related, _lookup_text(path), _target_attname
+        current = related
+
+
+def _permission_m2m_result(field, path):
+    """Terminal forward M2M lookup: path, ``auth.Permission``, lookup, PK."""
+    related, target_attname = _resolve_permission_in_m2m(
+        field, 'permission', path, require_pk=True,
+    )
+    _group, permission_model = _auth_group_and_permission()
+    if related._meta.concrete_model is not permission_model._meta.concrete_model:
+        raise TrustsConfigurationError(
+            'permission path %r terminates on %s, not auth.Permission.'
+            % (_path_text(path), related._meta.label)
+        )
+    return tuple(path), related, _lookup_text(path), target_attname
+
+
 def _resolve_path(root, path, role, *, trailing_reverse=False,
                   terminal_membership=False):
     """Validate a root-relative path and return lookup metadata.
 
-    Permission paths remain one direct single-valued hop. A user path
+    Permission paths are resolved by ``_resolve_permission_path``: one
+    direct single-valued hop, or zero or more forward single-valued hops
+    followed by exactly one terminal forward many-to-many. A user path
     may be that same direct hop, or zero or more forward single-valued
     hops followed by exactly one terminal M2M membership hop. Reverse
     one-to-many requester paths stay rejected. A content path may be a
@@ -2486,9 +2599,12 @@ class TrustsRegistry(object):
         """Register one permission-bearing relation from root-relative refs.
 
         ``permission`` and ``group`` are mutually exclusive. ``permission``
-        is a direct permission path. ``group`` is a forward single-valued
+        is one direct single-valued hop, or zero or more forward
+        single-valued hops followed by exactly one terminal many-to-many
+        to ``auth.Permission``. ``group`` is a forward single-valued
         path that must end at ``auth.Group``; this method appends
         ``Group.permissions`` and stores that as the permission terminal.
+        A ``permission=`` record stays ``via_group`` false.
         Supplying both, or neither, raises ``TrustsConfigurationError``.
 
         Exact duplicate normalized registration raises
@@ -2555,7 +2671,7 @@ class TrustsRegistry(object):
             via_group = True
         else:
             permission_path, permission_model, permission_field, permission_target = (
-                _resolve_path(root, permission_ref._path, 'permission')
+                _resolve_permission_path(root, permission_ref._path)
             )
             group_path, group_model, group_field, group_target = (), None, '', ''
             via_group = False
@@ -3249,13 +3365,16 @@ class BackendHandle:
 
         ``user`` and ``content`` accept a Django ``__`` path string or a
         one-argument symbolic path builder. ``permission`` and ``group``
-        are mutually exclusive sources. ``permission`` is unchanged: a
-        path that reaches permission rows directly. ``group`` is a
-        forward single-valued path that must end at Django's
-        ``auth.Group``. The compiler appends ``Group.permissions``;
-        applications do not put ``permissions`` on the group path.
-        Supplying both, or neither, raises ``TrustsConfigurationError``
-        before any path builder runs.
+        are mutually exclusive sources. ``permission`` is one direct
+        single-valued hop, or zero or more forward single-valued hops
+        followed by exactly one forward many-to-many to
+        ``auth.Permission``. ``group`` is a forward single-valued path that
+        must end at Django's ``auth.Group``. The compiler appends
+        ``Group.permissions``; applications do not put ``permissions``
+        on the group path. Supplying both, or neither, raises
+        ``TrustsConfigurationError`` before any path builder runs. A
+        ``permission=`` registration does not contribute to
+        ``get_group_permissions``.
 
         A builder is called once during registration with a value typed
         as ``trust``. Attribute access records a path; the callable is

@@ -41,28 +41,52 @@ bindings is an explicit conflict. The same bindings with a different
 closed condition is an allowed alternative; the plan ORs complete
 records. Different roots remain supported.
 
-Permission refs remain one direct single-valued hop. A user path may be
-that same direct hop, or zero or more forward single-valued hops followed
-by exactly one terminal many-to-many membership hop (the accepted GH
-`t.team.members` mapping). Reverse one-to-many requester paths stay
-rejected so existing direct-user fail-closed tests remain. A content
-path may be a direct hop, or one or more forward single-valued hops,
-then a reverse one-to-many gateway, then zero to two suffix hops. A
-suffix hop is a forward single-valued, reverse one-to-one, or reverse
-one-to-many relation.
+A permission path is one direct single-valued hop, or zero or more
+forward single-valued hops followed by exactly one forward many-to-many
+to `auth.Permission` (`permissions`, `team__permissions`). The direct
+hop is unchanged and may still name whatever model that relation
+points at. The collection hop's comparison field is the permission
+primary key. A user path may be that same direct hop, or zero or more
+forward single-valued hops followed by exactly one terminal
+many-to-many membership hop (the accepted GH `t.team.members`
+mapping). Reverse one-to-many requester paths stay rejected so existing
+direct-user fail-closed tests remain. A content path may be a direct
+hop, or one or more forward single-valued hops, then a reverse
+one-to-many gateway, then zero to two suffix hops. A suffix hop is a
+forward single-valued, reverse one-to-one, or reverse one-to-many
+relation.
 
 ```text
+permission := one forward single-valued
+            | (forward single-valued)*  forward M2M to auth.Permission
 user := one forward single-valued
       | (forward single-valued)*  M2M
 content := (forward single-valued)+  reverse O2M  suffix{0..2}
 suffix hop := forward single-valued | reverse O2O | reverse O2M
 ```
 
+A `permission=` collection is not a `group=` registration. `via_group`
+stays false, and the record does not contribute to
+`get_group_permissions()`.
+
+An intermediate many-to-many on `permission=` is still rejected at
+registration. That keeps the current fail-closed rule. Supporting an
+intermediate collection is deferred to a later change; this grammar
+does not reject that shape as a design direction.
+
 These shapes raise `TrustsConfigurationError` during `register`:
 
 - reverse relations before the gateway, or a reverse as the only hop
 - reverse one-to-one as the gateway
-- many-to-many except as the terminal user membership hop
+- many-to-many except as the terminal user membership hop or the
+  terminal `permission=` collection (an intermediate permission
+  collection is still rejected here, and that rejection is deferred
+  rather than permanent)
+- a permission collection that is a reverse many-to-many or that does
+  not terminate on `auth.Permission`
+- a permission collection whose through-table target is not the
+  permission primary key
+- multi-hop all-forward permission without a terminal collection
 - extra or intermediate multi-valued walks on user, content, or
   predicate paths
 - generic foreign keys/relations
