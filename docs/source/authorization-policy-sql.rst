@@ -94,14 +94,18 @@ Trusts and OR composition
 
 Each trust retains the registered root and the resolved ``user``,
 ``permission``, and ``content`` relationships. Relationship ``path`` values
-use Django's ``__`` spelling for multiple hops; ``model`` and ``target``
+use Django's ``__`` spelling for multiple steps; ``model`` and ``target``
 identify the related concrete model and comparison field.
 
 An explicit ``group=`` registration also records ``group``: the declared
 path, which ends at ``auth.Group``. Its ``permission`` relation is the
-compiler-owned hop from that group to ``auth.Permission``. That content
+compiler-owned step from that group to ``auth.Permission``. That content
 includes ``get_group_permissions`` next to the other permission inquiries.
-A ``permission=`` registration does not add either field.
+A ``permission=`` registration does not add either field. When
+``permission=`` ends on a forward many-to-many collection, ``permission``
+records that path (for example ``permissions`` or ``team__permissions``),
+``auth.Permission``, and the permission primary key. The lock still omits
+``group`` and ``get_group_permissions`` for that registration.
 
 ``get_permitted_users`` is the reverse of ``permitted``: one saved content
 object and one permission, compiled to the users that backend can grant.
