@@ -41,11 +41,14 @@ bindings is an explicit conflict. The same bindings with a different
 closed condition is an allowed alternative; the plan ORs complete
 records. Different roots remain supported.
 
-A permission path is one direct single-valued step, or zero or more
-forward single-valued steps followed by exactly one forward many-to-many
-to `auth.Permission` (`permissions`, `team__permissions`). The direct
-step is unchanged and may still name whatever model that relation
-points at. The collection step's comparison field is the permission
+A permission path ends on one forward to-one step, or on one forward
+to-many step to `auth.Permission`. To-one means a foreign key or
+one-to-one. To-many means a many-to-many. Those words name the relation
+shape, not how many permission rows the terminal holds. Zero or more
+forward to-one steps may precede the to-many terminal (`permissions`,
+`team__permissions`). The direct to-one step is unchanged and may still
+name whatever model that relation points at, including a custom
+permission model. The to-many step's comparison field is the permission
 primary key. A user path may be that same direct step, or zero or more
 forward single-valued steps followed by exactly one terminal
 many-to-many membership step (the accepted GH `t.team.members`
@@ -57,21 +60,21 @@ forward single-valued, reverse one-to-one, or reverse one-to-many
 relation.
 
 ```text
-permission := direct single-valued terminal
-            | (forward single-valued step)*  forward M2M terminal
-direct single-valued terminal := exactly one forward single-valued step
-forward M2M terminal := one forward many-to-many step to auth.Permission
+permission := direct to-one terminal
+            | (forward to-one step)*  forward to-many terminal
+direct to-one terminal := exactly one forward to-one step
+forward to-many terminal := one forward many-to-many step to auth.Permission
 user := one forward single-valued
       | (forward single-valued)*  M2M
 content := (forward single-valued)+  reverse O2M  suffix{0..2}
 suffix step := forward single-valued | reverse O2O | reverse O2M
 ```
 
-`single-valued` says where a step may sit. It does not mean a permission
-is only one row. Prefix and intermediate steps stay single-valued. The
-terminal is either that one direct single-valued relation or one forward
-many-to-many to `auth.Permission`. A many-to-many before the terminal
-still fails closed.
+Prefix steps, when there are any, are to-one. Only the terminal may be
+to-many, and a to-many terminal must be `auth.Permission`. A to-many
+step before the terminal still fails closed. A reverse to-many
+permission collection still fails closed. A direct to-one permission
+target, including a custom permission model, is unchanged.
 
 A `permission=` collection is not a `group=` registration. `via_group`
 stays false, and the record does not contribute to

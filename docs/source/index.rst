@@ -218,13 +218,15 @@ Django ``auth.Group`` objects; ``django-trusts`` follows each group's
 permissions. Applications do not append ``permissions`` to the ``group`` path.
 Each registration supplies either ``permission=`` or ``group=``, never both.
 
-A ``permission=`` path may also end on one forward many-to-many collection of
-``auth.Permission``. Zero or more forward single-valued steps may precede that
-terminal step (``permissions`` or ``team__permissions``). A reverse
-many-to-many, or a collection that does not end on ``auth.Permission``, is
-rejected when the relationship is registered. An intermediate many-to-many
-is still rejected at registration; support for that shape is deferred and
-is not a design rejection. The collection still does not contribute to
+A ``permission=`` path may also end on one forward to-many collection of
+``auth.Permission``. Zero or more forward to-one steps may precede that
+terminal step (``permissions`` or ``team__permissions``). To-one means a
+foreign key or one-to-one; to-many means a many-to-many. That is the
+relation shape, not a count of permission rows. A reverse many-to-many, or
+a collection that does not end on ``auth.Permission``, is rejected when the
+relationship is registered. An intermediate many-to-many is still rejected
+at registration; support for that shape is deferred and is not a design
+rejection. The collection still does not contribute to
 ``get_group_permissions()``; only an explicit ``group=`` registration does.
 
 ``user``, ``permission``, ``group``, and ``content`` each accept either a

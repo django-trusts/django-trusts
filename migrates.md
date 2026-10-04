@@ -126,9 +126,9 @@ Migration-bot checklist:
 
 | | Old | New |
 | --- | --- | --- |
-| `permission=` | One direct single-valued relation | That direct relation, and additionally zero or more forward single-valued steps ending in one forward many-to-many to `auth.Permission` |
+| `permission=` | One direct to-one relation (a foreign key or one-to-one) | That direct to-one relation, and additionally zero or more forward to-one steps ending in one forward to-many step to `auth.Permission` |
 
-No schema change and no mandatory consumer migration. A direct single-valued `permission=` relation is unchanged, including one that names a custom permission model. An intermediate many-to-many and a reverse many-to-many still fail closed at registration. This does not add `get_group_permissions()` behavior; only an explicit `group=` registration contributes to that inquiry.
+No schema change and no mandatory consumer migration. To-one and to-many name the relation shape, not how many permission rows are stored. A direct to-one `permission=` relation is unchanged, including one that names a custom permission model. An intermediate many-to-many and a reverse many-to-many still fail closed at registration. This does not add `get_group_permissions()` behavior; only an explicit `group=` registration contributes to that inquiry.
 
 A registration that existed only to work around the old limit can be simplified. That includes one through row per permission, rooted at the through model so `permission=` could be a direct foreign key, and a dedicated `auth.Group` whose only role was to let `group=` follow `Group.permissions`. The collection can be registered on the owning row instead (`permission="permissions"`, `permission="team__permissions"`).
 
