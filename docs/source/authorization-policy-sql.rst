@@ -44,9 +44,8 @@ The document is organized by application meaning:
   including ``contents: []`` when it has no declarations;
 * each backend lists its ``contents`` models;
 * a content with trusts lists them with their associated SQL for
-  ``permitted``, ``has_perm``, ``get_all_permissions``, and
-  ``get_permitted_users``, plus ``get_group_permissions`` when a trust
-  uses ``group=``;
+  ``permitted``, ``has_perm``, and ``get_all_permissions``, plus
+  ``get_group_permissions`` when a trust uses ``group=``;
 * a content with named filters lists those queries; and
 * a filter-only content contains ``model`` and ``named_filters``.
 
@@ -79,10 +78,6 @@ The following abridged example shows the schema:
              params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {bind: "user.id"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
-           get_permitted_users:
-             params: [{const: 1}, {bind: "permission.id"}, {bind: "content.id"}]
-             sql: |-
-               SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
              - id: "documents__Document__non_confidential"
                params: [{const: true}]
@@ -115,11 +110,7 @@ Permission inquiries and named filters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Every permission inquiry row contains one SQL statement and its ordered
-parameters. ``get_permitted_users`` records the reverse query over candidate
-user rows for one content object and one permission. The content method and
-optional user-manager method share this one entry because they use the same
-compiler; the document does not duplicate their SQL. Named filters are listed
-in ``add_named_filter()`` order.
+parameters. Named filters are listed in ``add_named_filter()`` order.
 
 Identifiers and ordering
 ~~~~~~~~~~~~~~~~~~~~~~~~
