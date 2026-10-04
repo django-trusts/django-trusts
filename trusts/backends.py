@@ -234,3 +234,24 @@ class TrustModelBackendMixin(object):
         if record is None or extra_q is not None:
             return True
         return self.permission_condition_met(record, user_obj, perm, obj)
+
+    def singular_permission_accepted(self, perm):
+        """True when object ``has_perm`` treats ``perm`` as one permission row.
+
+        The mixin default accepts ``auth.Permission`` only. Agreement
+        with ``user.has_perm`` uses ``permission.user_perm_str``. Another
+        permission-terminal model is accepted only when a backend
+        overrides this and ``permitted_users_predicate``.
+        """
+        return isinstance(perm, Permission)
+
+    def permitted_users_predicate(self, content, perm):
+        """``Q`` over candidate users, or ``None`` when this path does not apply.
+
+        ``None`` contributes no grant. It is not an empty-queryset
+        fallback for a path that cannot be reversed: ``Along`` and other
+        inexact shapes raise ``TrustsConfigurationError`` before SQL.
+        """
+        from trusts.reverse import trusts_mixin_predicate
+
+        return trusts_mixin_predicate(self, content, perm)

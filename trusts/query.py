@@ -63,4 +63,38 @@ class AuthorizedManagerMixin:
         )
 
 
+class PermittedUsersMixin:
+    """Content-instance adapter for the reverse permission inquiry.
+
+    ``content.get_permitted_users(perm)`` is the path that exists on
+    every protected model that mixes this in. It is not a content-manager
+    method: ``Content.objects`` keeps returning content rows.
+    """
+
+    def get_permitted_users(self, perm):
+        from trusts.reverse import compile_permitted_users
+
+        return compile_permitted_users(self, perm)
+
+
+class PermittedUsersManagerMixin:
+    """Optional adapter on an application's existing user manager.
+
+    ``User.objects.permitted(content, perm)`` returns a lazy user
+    queryset. The name is ``permitted`` because the manager already
+    identifies the user model, and Django's ``get`` convention implies
+    one row. Does not replace that manager or its queryset class. Stock
+    ``auth.User`` does not acquire this method. The content adapter
+    ``get_permitted_users`` remains the path that does not require a
+    user-manager change.
+    """
+
+    def permitted(self, content, perm):
+        from trusts.reverse import compile_permitted_users
+
+        return compile_permitted_users(
+            content, perm, user_queryset=self.get_queryset(),
+        )
+
+
 AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)
