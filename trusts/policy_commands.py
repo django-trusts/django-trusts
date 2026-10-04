@@ -32,8 +32,8 @@ class PolicySqlCommand(BaseCommand):
         'Print the canonical YAML authorization policy for the database '
         'alias selected by TRUSTS_POLICY_DATABASE, or Django\'s default '
         'alias when that setting is unset. Each content lists its trust '
-        'legs and the compiled SQL for permitted, has_perm, and '
-        'get_all_permissions. --database selects another configured alias for this '
+        'legs and the compiled SQL for permitted, has_perm, '
+        'get_all_permissions, and get_permitted_users. --database selects another configured alias for this '
         'process only. --lock writes the same bytes to the lockfile path.'
     )
     requires_system_checks = []

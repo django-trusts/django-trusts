@@ -543,17 +543,27 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_sqlite_export_does_not_execute_authorization_sql(self):
         # Django's sqlite backend ignores close() for an in-memory database.
         # Drop the DB-API handle directly so an earlier test cannot hide a
-        # connect that this render performs.
+        # connect that this render performs. The pair job's test database is
+        # ``file:memorydb_default?mode=memory&cache=shared``: when the last
+        # connection closes, SQLite deletes every migrated table, including
+        # ``auth_user``. Hold the handle and put it back so a later
+        # collection cannot do that. The assertion still requires this
+        # render not to open a connection.
+        preserved = connection.connection
         connection.connection = None
-        with override_settings(DEBUG=True):
-            connection.queries_log.clear()
-            with patch('trusts.core.probe_along_capabilities') as probe:
-                payload = render_policy_sql_bytes(handles=[_document_handle()])
-            probe.assert_not_called()
-            recorded = ' '.join(item['sql'] for item in connection.queries)
-        self.assertIsNone(connection.connection)
-        self.assertNotIn('documents_documentpermission', recorded)
-        self.assertIn(b'documents_documentpermission', payload)
+        try:
+            with override_settings(DEBUG=True):
+                connection.queries_log.clear()
+                with patch('trusts.core.probe_along_capabilities') as probe:
+                    payload = render_policy_sql_bytes(handles=[_document_handle()])
+                probe.assert_not_called()
+                recorded = ' '.join(item['sql'] for item in connection.queries)
+            self.assertIsNone(connection.connection)
+            self.assertNotIn('documents_documentpermission', recorded)
+            self.assertIn(b'documents_documentpermission', payload)
+        finally:
+            if connection.connection is None:
+                connection.connection = preserved
 
     def test_along_failure_does_not_return_a_partial_document(self):
         handle = _handle('documents.backends.FolderBackend')

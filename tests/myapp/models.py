@@ -1,10 +1,10 @@
 from django.contrib.auth.models import Permission
 from django.db import models
 
-from trusts.query import AuthorizedManager
+from trusts.query import AuthorizedManager, PermittedUsersMixin
 
 
-class Document(models.Model):
+class Document(PermittedUsersMixin, models.Model):
     title = models.CharField(max_length=200)
     confidential = models.BooleanField(default=False)
     objects = AuthorizedManager()

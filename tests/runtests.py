@@ -57,6 +57,7 @@ KERNEL_SUITE = [
     'tests.core.test_issue207',
     'tests.core.test_issue210',
     'tests.core.test_issue246',
+    'tests.core.test_issue255',
 ]
 
 # Kernel modules that remain valid against an installed Zero owner.
@@ -102,6 +103,7 @@ PAIR_KERNEL_SUITE = [
     'tests.core.test_issue207',
     'tests.core.test_issue210',
     'tests.core.test_issue246',
+    'tests.core.test_issue255',
 ]
 
 
