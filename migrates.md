@@ -122,6 +122,25 @@ Migration-bot checklist:
 - `get_permitted_users(`
 - `User.objects.permitted(`
 
+## Terminal permission collections (#263)
+
+| | Old | New |
+| --- | --- | --- |
+| `permission=` | One direct single-valued relation | That direct relation, and additionally zero or more forward single-valued hops ending in one forward many-to-many to `auth.Permission` |
+
+No schema change and no mandatory consumer migration. A direct single-valued `permission=` relation is unchanged, including one that names a custom permission model. An intermediate many-to-many and a reverse many-to-many still fail closed at registration. This does not add `get_group_permissions()` behavior; only an explicit `group=` registration contributes to that inquiry.
+
+A registration that existed only to work around the old limit can be simplified. That includes one through row per permission, rooted at the through model so `permission=` could be a direct foreign key, and a dedicated `auth.Group` whose only role was to let `group=` follow `Group.permissions`. The collection can be registered on the owning row instead (`permission="permissions"`, `permission="team__permissions"`).
+
+Migration-bot checklist:
+
+- `register(`
+- `permission=`
+- `permission="permissions"`
+- `permission="team__permissions"`
+- through-model `register(` whose `permission=` is a direct foreign key standing in for a collection
+- `group=` used only so the path can reach `Group.permissions`
+
 ## Archaeology
 
 The pre-1.0 development migration record is preserved for historical reference
