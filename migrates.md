@@ -126,7 +126,7 @@ Migration-bot checklist:
 
 | | Old | New |
 | --- | --- | --- |
-| `permission=` | One direct single-valued relation | That direct relation, and additionally zero or more forward single-valued hops ending in one forward many-to-many to `auth.Permission` |
+| `permission=` | One direct single-valued relation | That direct relation, and additionally zero or more forward single-valued steps ending in one forward many-to-many to `auth.Permission` |
 
 No schema change and no mandatory consumer migration. A direct single-valued `permission=` relation is unchanged, including one that names a custom permission model. An intermediate many-to-many and a reverse many-to-many still fail closed at registration. This does not add `get_group_permissions()` behavior; only an explicit `group=` registration contributes to that inquiry.
 

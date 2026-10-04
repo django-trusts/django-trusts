@@ -7,7 +7,7 @@ This slice does **not** re-export a process-global registry from `trusts`.
 `TrustsRegistry` is instantiable and isolated. `Ref(Model)` names a
 permission-bearing relation root; attribute access builds a root-relative
 path, including ordinary field names such as `root` and `path`. `register`
-accepts those refs, validates them through Django `_meta` and each hop's
+accepts those refs, validates them through Django `_meta` and each step's
 `get_path_info()` (zero SQL), and stores an immutable `RegisteredRelation`.
 Inspect the inferred root, full path, lookup, and target field on that
 record, not on `Ref`.
@@ -41,29 +41,37 @@ bindings is an explicit conflict. The same bindings with a different
 closed condition is an allowed alternative; the plan ORs complete
 records. Different roots remain supported.
 
-A permission path is one direct single-valued hop, or zero or more
-forward single-valued hops followed by exactly one forward many-to-many
+A permission path is one direct single-valued step, or zero or more
+forward single-valued steps followed by exactly one forward many-to-many
 to `auth.Permission` (`permissions`, `team__permissions`). The direct
-hop is unchanged and may still name whatever model that relation
-points at. The collection hop's comparison field is the permission
-primary key. A user path may be that same direct hop, or zero or more
-forward single-valued hops followed by exactly one terminal
-many-to-many membership hop (the accepted GH `t.team.members`
+step is unchanged and may still name whatever model that relation
+points at. The collection step's comparison field is the permission
+primary key. A user path may be that same direct step, or zero or more
+forward single-valued steps followed by exactly one terminal
+many-to-many membership step (the accepted GH `t.team.members`
 mapping). Reverse one-to-many requester paths stay rejected so existing
 direct-user fail-closed tests remain. A content path may be a direct
-hop, or one or more forward single-valued hops, then a reverse
-one-to-many gateway, then zero to two suffix hops. A suffix hop is a
+step, or one or more forward single-valued steps, then a reverse
+one-to-many gateway, then zero to two suffix steps. A suffix step is a
 forward single-valued, reverse one-to-one, or reverse one-to-many
 relation.
 
 ```text
-permission := one forward single-valued
-            | (forward single-valued)*  forward M2M to auth.Permission
+permission := direct single-valued terminal
+            | (forward single-valued step)*  forward M2M terminal
+direct single-valued terminal := exactly one forward single-valued step
+forward M2M terminal := one forward many-to-many step to auth.Permission
 user := one forward single-valued
       | (forward single-valued)*  M2M
 content := (forward single-valued)+  reverse O2M  suffix{0..2}
-suffix hop := forward single-valued | reverse O2O | reverse O2M
+suffix step := forward single-valued | reverse O2O | reverse O2M
 ```
+
+`single-valued` says where a step may sit. It does not mean a permission
+is only one row. Prefix and intermediate steps stay single-valued. The
+terminal is either that one direct single-valued relation or one forward
+many-to-many to `auth.Permission`. A many-to-many before the terminal
+still fails closed.
 
 A `permission=` collection is not a `group=` registration. `via_group`
 stays false, and the record does not contribute to
@@ -76,9 +84,9 @@ does not reject that shape as a design direction.
 
 These shapes raise `TrustsConfigurationError` during `register`:
 
-- reverse relations before the gateway, or a reverse as the only hop
+- reverse relations before the gateway, or a reverse as the only step
 - reverse one-to-one as the gateway
-- many-to-many except as the terminal user membership hop or the
+- many-to-many except as the terminal user membership step or the
   terminal `permission=` collection (an intermediate permission
   collection is still rejected here, and that rejection is deferred
   rather than permanent)
@@ -86,13 +94,13 @@ These shapes raise `TrustsConfigurationError` during `register`:
   not terminate on `auth.Permission`
 - a permission collection whose through-table target is not the
   permission primary key
-- multi-hop all-forward permission without a terminal collection
+- multi-step all-forward permission without a terminal collection
 - extra or intermediate multi-valued walks on user, content, or
   predicate paths
 - generic foreign keys/relations
-- more than two hops after the gateway
-- multi-hop all-forward content (no gateway reverse)
-- multi-hop all-forward user without a terminal membership hop
+- more than two steps after the gateway
+- multi-step all-forward content (no gateway reverse)
+- multi-step all-forward user without a terminal membership step
 - arbitrary multi-valued chains
 - composite / multi-column correlation (`get_path_info()` must yield
   exactly one `PathInfo` with exactly one target field)
@@ -132,7 +140,7 @@ registry.register(
   forward singles, then either at most one intermediate reverse O2M
   and a terminal M2M or reverse O2M on the registered permission
   model, or exactly one intermediate M2M and a terminal M2M on that
-  permission model (`….clusters.tokens`). Extra multi-hops, M2M then
+  permission model (`….clusters.tokens`). Extra multi-steps, M2M then
   single, wrong terminals, GFK, and non-PK `to_field` membership
   targets fail closed at zero SQL. The compiler emits the whole
   accepted path.
@@ -147,20 +155,20 @@ Optional `Along(ref, bound)` replaces equality at one walk-site with bounded
 grant-anchored reachability. Pass `along=` to `register()`. Validation uses
 `_meta` only (zero SQL) and runs after the frozen check. `bound` is an
 integer in `1..64` (`bool` is rejected). The walk-site is the longest common
-prefix of `along.ref.path` and the content path; remaining Along hops are
-the directed edge; remaining content hops are the suffix.
+prefix of `along.ref.path` and the content path; remaining Along steps are
+the directed edge; remaining content steps are the suffix.
 
-Edge hops are one of:
+Edge steps are one of:
 
 ```text
-S := one forward single-valued self-hop on the walk-site   (Along(j.node.parent))
-C := one reverse O2M self-hop on the walk-site             (Along(j.node.children))
+S := one forward single-valued self-step on the walk-site   (Along(j.node.parent))
+C := one reverse O2M self-step on the walk-site             (Along(j.node.children))
 E := reverse O2M onto an edge model, then one forward
-     single-valued hop back to the walk-site               (Along(j.node.parent_links.parent))
+     single-valued step back to the walk-site               (Along(j.node.parent_links.parent))
 ```
 
 The same resolved identity field (`get_path_info()[0].target_fields[0]`,
-including non-PK `to_field`) must appear on the grant walk hop and both
+including non-PK `to_field`) must appear on the grant walk step and both
 Along edge ends. V1 then admits only one JSON identity family per record:
 
 | Family | `get_internal_type()` |
@@ -182,13 +190,13 @@ with candidate rows: one `IN (WITH RECURSIVE …)` per recursive record,
 generation-level `frontier`/`seen`, identity-level cycle suppression, and a
 final join of JSON values back to the typed walk-model identity column.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
-NULL and dangling hops deny. Direct and recursive registrations `OR`.
+NULL and dangling steps deny. Direct and recursive registrations `OR`.
 
 A non-empty content suffix compiles a walk-model-rooted `EXISTS` from the
 stored path names (`items__image`, `rows__content`, …). Every S5 suffix
 already accepted by ordinary `register()` is supported; there is no quieter
 Along subset and no reverse-name guessing. When the suffix is exactly one
-reverse O2M/O2O hop whose FK lives on the candidate and targets
+reverse O2M/O2O step whose FK lives on the candidate and targets
 `walk_ident`, the compiler may rewrite to `candidate.<fk> IN W`.
 
 Conditions remain an AND overlay on a complete proof and never run on
@@ -207,7 +215,7 @@ opens no connections, executes no SQL, and is not an all-clear. Isolated
 `TrustsRegistry()` instances are not scanned. Silencing `trusts.E005`
 hides only the diagnostic.
 
-Each hop's terminal model, complete root-relative lookup
+Each step's terminal model, complete root-relative lookup
 (`'__'.join(path)`, for example `folder__rows__content`), and outer comparison
 field come from resolved path metadata. Correlation does not assume `pk`,
 does not assume the terminal field lives on the root, and does not
@@ -219,7 +227,7 @@ hand-code forward versus reverse identity. A non-primary
 `plan_for` selects applicable records by content/user/permission terminal
 and compiles them into one `RelationPlan`. Root selection, field
 correlation, and `EXISTS` assembly live in that plan. Bindings and
-`EXISTS` use the complete stored lookup. `OuterRef` uses the last hop's
+`EXISTS` use the complete stored lookup. `OuterRef` uses the last step's
 single target `attname`. The three development projections only change
 the terminal:
 
@@ -358,11 +366,11 @@ only; it is not Django's object-level authentication-backend OR.
 in `trusts.core` filters rows of an intermediate scope model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. It compiles `EXISTS` of root rows
-correlated to `OuterRef` of that hop's resolved target field (the
+correlated to `OuterRef` of that step's resolved target field (the
 related `attname` from `get_path_info()`, including non-PK
 `ForeignKey(..., to_field=...)`) at that node, binds user +
 permission, and ORs applicable records. `queryset.model` equal to the
-content terminal is allowed when a proper prefix hop of that same model
+content terminal is allowed when a proper prefix step of that same model
 exists (self-referential trees). A terminal-only path, an unknown
 terminal, empty handles, or a scope model not on the path return
 `none()`. Default and explicit handle lists include relationship-family
@@ -373,7 +381,7 @@ handles only. Core does not import Zero schema models
 explicit `group=` (a forward path ending at `auth.Group`; the compiler
 appends `Group.permissions`) via `RelationPlan.content_exists`.
 `permission=` records stay out of that slice, including when the user
-path ends in a many-to-many membership hop. Core plans are relationship
+path ends in a many-to-many membership step. Core plans are relationship
 records only. A plan with no explicit `group=` record makes
 `group_exists` inapplicable (`None`). `complete_exists` still includes
 both `permission=` and `group=` records.

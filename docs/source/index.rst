@@ -219,8 +219,8 @@ permissions. Applications do not append ``permissions`` to the ``group`` path.
 Each registration supplies either ``permission=`` or ``group=``, never both.
 
 A ``permission=`` path may also end on one forward many-to-many collection of
-``auth.Permission``. Zero or more forward single-valued hops may precede that
-terminal hop (``permissions`` or ``team__permissions``). A reverse
+``auth.Permission``. Zero or more forward single-valued steps may precede that
+terminal step (``permissions`` or ``team__permissions``). A reverse
 many-to-many, or a collection that does not end on ``auth.Permission``, is
 rejected when the relationship is registered. An intermediate many-to-many
 is still rejected at registration; support for that shape is deferred and
