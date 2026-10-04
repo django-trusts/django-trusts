@@ -60,6 +60,20 @@ AUTHENTICATION_BACKENDS = (
 
 API and compatibility notes are in [migrates.md](migrates.md).
 
+## Terminal permission collections (#263)
+
+`permission=` may end on a forward to-many step to `auth.Permission`
+after zero or more forward to-one prefix steps (`permissions`,
+`team__permissions`). Registration previously failed closed for that
+shape, so no existing registration could have used it. There is no
+schema change and no consumer migration, and this expansion is not a
+`migrates.md` entry.
+
+An intermediate many-to-many and a reverse many-to-many still fail
+closed at registration. A `permission=` collection does not contribute
+to `get_group_permissions()`. The grammar is in
+[docs/core-registry.md](docs/core-registry.md).
+
 ## Change sizing and surface discovery
 
 Design tasks must estimate the complete implementation and review surface before
