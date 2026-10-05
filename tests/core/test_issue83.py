@@ -304,10 +304,15 @@ def _tables(*model_classes):
                 editor.delete_model(model)
 
 
-def _perm(codename):
-    ct, _created = ContentType.objects.get_or_create(
-        app_label='trusts_tests', model='payload',
-    )
+def _perm(codename, model=None):
+    if model is None:
+        ct, _created = ContentType.objects.get_or_create(
+            app_label='trusts_tests', model='payload',
+        )
+    else:
+        ct = ContentType.objects.get_for_model(
+            model, for_concrete_model=False,
+        )
     permission, _created = Permission.objects.get_or_create(
         content_type=ct,
         codename=codename,
@@ -699,7 +704,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 class _TerminalProjectionMixin(object):
     """Shared object / queryset / enumeration / all-match assertions."""
 
-    def _users(self, suffix):
+    def _users(self, suffix, content_model=None):
         User = get_user_model()
         self.alice = User.objects.create_user(
             username='alice-%s' % suffix, password='x',
@@ -707,8 +712,8 @@ class _TerminalProjectionMixin(object):
         self.bob = User.objects.create_user(
             username='bob-%s' % suffix, password='x',
         )
-        self.read = _perm('read_%s' % suffix)
-        self.write = _perm('write_%s' % suffix)
+        self.read = _perm('read_%s' % suffix, content_model)
+        self.write = _perm('write_%s' % suffix, content_model)
 
     def _assert_terminal(self, registry, Model, granted, sibling, other):
         handle = _direct_handle(registry)
@@ -878,7 +883,7 @@ class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
             self.Holder, owner, _tag, self.Item, self.Image, self.Grant,
         )
         self._table_cm.__enter__()
-        self._users('d1')
+        self._users('d1', self.Image)
         self.owner = owner.objects.create(name='o')
         self.h_a = self.Holder.objects.create(title='A')
         self.h_b = self.Holder.objects.create(title='B')
@@ -942,7 +947,7 @@ class TrustsRegistryD1oProjectionTest(_TerminalProjectionMixin, TransactionTestC
             self.Holder, owner, _tag, self.Item, self.Image, self.Grant,
         )
         self._table_cm.__enter__()
-        self._users('d1o')
+        self._users('d1o', self.Image)
         self.owner = owner.objects.create(name='o')
         self.h_a = self.Holder.objects.create(title='A')
         self.h_b = self.Holder.objects.create(title='B')
@@ -997,7 +1002,7 @@ def _seed_depth2(self, factory, suffix, reverse_meta=True):
     ]
     self._table_cm = _tables(*table_models)
     self._table_cm.__enter__()
-    self._users(suffix)
+    self._users(suffix, self.ImageMeta)
     self.h_a = self.Holder.objects.create(title='A')
     self.h_b = self.Holder.objects.create(title='B')
     if reverse_meta:
@@ -1288,8 +1293,8 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
 
             alice = User.objects.create_user(username='alice-tf83', password='x')
             bob = User.objects.create_user(username='bob-tf83', password='x')
-            read = _perm('read_coded83')
-            write = _perm('write_coded83')
+            read = _perm('read_coded83', CodedImage)
+            write = _perm('write_coded83', CodedImage)
             holder_a = CodedHolder.objects.create(code='alpha', title='A')
             holder_b = CodedHolder.objects.create(code='beta', title='B')
             self.assertNotEqual(holder_a.pk, 'alpha')

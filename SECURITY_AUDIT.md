@@ -284,7 +284,8 @@ cannot be safely authorized not to become grants silently. This includes:
 - missing or unknown registrations;
 - malformed paths or unsupported relationship shapes;
 - conflicting registrations;
-- wrong user, permission, or protected models;
+- wrong user, permission terminal, or protected model;
+- a permission whose `content_type` is not the protected object's content type;
 - incompatible `to_field` identities;
 - unknown named filters;
 - unsupported predicate expressions;
@@ -294,6 +295,29 @@ cannot be safely authorized not to become grants silently. This includes:
 
 This list is not exhaustive. A newly discovered path that can fail open is
 treated as a defect and should be closed.
+
+### Permission content type
+
+`auth.Permission.content_type` is the permission row's model identity. When
+the permission terminal has a concrete `content_type` foreign key to
+`ContentType` — `auth.Permission` does — every shared grant requires that
+foreign key to identify the protected object. The identity is the object's
+own content type, including a proxy model's own type, written into the grant
+as `app_label` and `model` constants. There is no second query to load a
+`ContentType` row, and the codename is not parsed to guess the model.
+
+A mismatch is ordinary authorization input, not a configuration error.
+`has_perm` is `False`. `get_all_permissions` omits the codename.
+`.authorized()` and `get_permitted_users` / `User.objects.permitted` are
+empty for that pair. `authorization_required` denies an ordinary principal.
+The generated policy SQL carries the same predicate. A permission terminal
+with no such foreign key stays primary-key identity.
+
+Django's active-superuser rule runs before authentication backends, so
+`user.has_perm` can return `True` for a mismatched pair when the user is an
+active superuser. Enumeration, `.authorized()`, the reverse inquiry, and the
+lockfile do not copy that shortcut. `authorization_required` still has its
+own active-superuser existence shortcut after configuration preflight.
 
 Where practical, configuration failures should surface during startup or system
 checks. Runtime denial should not fall back to a broader Trusts path.

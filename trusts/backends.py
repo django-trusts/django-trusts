@@ -205,6 +205,14 @@ class TrustModelBackendMixin(object):
         return matched
 
     def has_perm(self, user_obj, permext, obj=None):
+        """Object check for one permission string or ``auth.Permission`` row.
+
+        A string still uses the historical codename split to choose the
+        row. An ``auth.Permission`` instance is that row and is not
+        parsed. Either way, a content-type mismatch with ``obj`` is
+        ``False``, not an exception. Terminals that do not store a
+        Django content type stay primary-key identity inside the plan.
+        """
         if obj is None or not is_active_principal(user_obj):
             return False
 
@@ -213,6 +221,11 @@ class TrustModelBackendMixin(object):
 
         if not self._own_plan_applies(obj, user_obj):
             return False
+
+        if isinstance(permext, Permission):
+            if isinstance(obj, QuerySet):
+                return self._collection_has_perm(user_obj, permext, obj)
+            return self._instance_has_perm(user_obj, permext, obj)
 
         record, extra_q = self._condition_overlay(permext, obj, user_obj)
         applabel, modelname, action, _cond = utils.parse_perm_code(permext)

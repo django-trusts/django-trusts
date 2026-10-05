@@ -15,6 +15,32 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## Permission content type must match the object (#267)
+
+| | Old | New |
+| --- | --- | --- |
+| Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, `.authorized()`, reverse users, and lockfile SQL that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
+| `authorization_required` for that pair | Already `PermissionDenied` for an ordinary principal | Same denial |
+| Same-model grant, including a custom codename that does not end with the model name | Grant on instance projections | Unchanged grant |
+| Permission terminal with no `content_type` foreign key to `ContentType` | Primary-key identity | Unchanged |
+| `user.has_perm(permission_instance, obj)` when a plan applies | `AttributeError` | `True` or `False` by the same predicate. A string still uses the existing codename split to choose the row |
+| Active superuser `user.has_perm` | Django returns `True` before backends | Unchanged. Queryset and enumeration projections do not copy that shortcut |
+
+No schema migration. Existing crossed positives become denials. Regenerate
+`trusts-policy.lock.yaml`; `auth.Permission` grants gain `const` parameters
+for the protected model's content identity.
+
+Migration-bot checklist:
+
+- `has_perm(`
+- `get_all_permissions(`
+- `.authorized(`
+- `get_permitted_users(`
+- `.permitted(`
+- `authorization_required(`
+- `trusts_policy_sql`
+- `content_type`
+
 ## Unused `get_short_model_name` helper (#217)
 
 | | Old | New |

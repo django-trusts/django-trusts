@@ -260,6 +260,13 @@ rows do not duplicate permission or content results. An unregistered
 content model fails closed: empty enumeration, `False`, and
 `queryset.none()`.
 
+When the permission terminal has a concrete `content_type` foreign key to
+`ContentType`, the same `EXISTS` requires that foreign key to be the
+protected object's content identity (`app_label` and `model_name`, proxy
+models included). A mismatch is an empty predicate on every projection.
+The codename is not consulted. A terminal without that foreign key keeps
+primary-key identity, including a custom permission model.
+
 Callers pass model instances for `user`, `content`, and `permission`.
 This slice does not accept codename strings or dotted permission syntax.
 

@@ -107,6 +107,10 @@ a Django-facing alias: Core parses it with the same rules as
 `user.has_perm(perm, content)` and binds it to the permission row applicable
 to the supplied content and registration. The row lookup remains inside the
 eventual SQL query; accepting a string does not add a construction-time query.
+When that row's model has a concrete `content_type` foreign key to
+`ContentType`, the grant also requires the protected object's content
+identity. A proxy keeps its own. A mismatch returns no ordinary users. A
+permission terminal without that foreign key stays primary-key identity.
 
 For the singular agreement check, a Django `auth.Permission` instance is
 represented by its Django 6.1 `instance.user_perm_str` property,
