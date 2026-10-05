@@ -29,12 +29,13 @@ construction, registration, and PostgreSQL remaining-bits rendering
 live in ``django-trusts-ordered-fold``. Core does not import, depend
 on, auto-discover, or fallback-import that package.
 
-When the permission terminal has a concrete ``content_type`` foreign
-key to Django's ``ContentType`` — ``auth.Permission`` does — the shared
-grant requires that row's content type to be the protected object's
-content identity. Proxy models keep their own. A mismatch is an empty
-predicate, not an error. Terminals without that field stay primary-key
-identity. The codename is not parsed to guess the model.
+When the permission terminal's concrete model is Django's
+``auth.Permission``, the shared grant requires that row's content type
+to be the protected object's content identity. Proxy models keep their
+own. A mismatch is an empty predicate, not an error. Any other
+terminal, including a custom model that has a ``content_type`` foreign
+key, stays primary-key identity. The codename is not parsed to guess
+the model.
 
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
@@ -1393,37 +1394,21 @@ def _compile_predicate(node, record):
     )
 
 
-def _django_content_type_field(permission_model):
-    """Concrete ``content_type`` FK to ``ContentType``, or ``None``.
+def _permission_terminal_is_auth_permission(permission_model):
+    """True when the terminal's concrete model is ``auth.Permission``.
 
-    This is the OrderedFold mask-join shape: a permission terminal that
-    stores Django content-type identity participates in the typed
-    predicate. A terminal with no such field, or with a ``content_type``
-    that is not that foreign key, keeps primary-key identity. Metadata
-    only (zero SQL). The compiler does not import ``auth.Permission``
-    to decide this.
+    Typed content identity applies only to that model, on a direct
+    foreign key or a terminal many-to-many. Any other terminal,
+    including one that happens to have a ``content_type`` foreign key,
+    stays primary-key identity. Metadata only (zero SQL). This is an
+    exact model-identity check, not a field-name scan and not a
+    codename parse.
     """
-    try:
-        field = permission_model._meta.get_field('content_type')
-    except FieldDoesNotExist:
-        return None
-    if _classify_field(field) != 'single':
-        return None
-    if not getattr(field, 'concrete', False) or not getattr(field, 'column', None):
-        return None
-    try:
-        related, target = _resolved_hop(field, 'content_type', ('content_type',))
-    except TrustsConfigurationError:
-        return None
-    from django.contrib.contenttypes.models import ContentType
-
-    content_type = ContentType._meta.concrete_model
-    if (
-        related is not content_type
-        or target != content_type._meta.pk.attname
-    ):
-        return None
-    return field
+    _group, permission = _auth_group_and_permission()
+    return (
+        permission_model._meta.concrete_model
+        is permission._meta.concrete_model
+    )
 
 
 def _content_type_identity(model):
@@ -1443,7 +1428,7 @@ def _permission_content_type_filters(record, content_identity):
     A second many-to-many alias would let one group row satisfy the
     permission id and a different row satisfy the content type.
     """
-    if _django_content_type_field(record.permission_model) is None:
+    if not _permission_terminal_is_auth_permission(record.permission_model):
         return {}
     model = content_identity if content_identity is not None else record.content_model
     app_label, model_name = _content_type_identity(model)
@@ -2429,8 +2414,9 @@ class RelationPlan:
     field, which need not live on the root and is not assumed to be ``pk``.
 
     ``content_identity`` is the protected object's class, proxy included.
-    When the permission terminal stores a Django ``content_type``, the
-    grant requires that identity. It is not inferred from a codename.
+    When the permission terminal is ``auth.Permission``, the grant
+    requires that identity. It is not inferred from a codename. Another
+    terminal stays a primary-key comparison.
     """
 
     records: tuple

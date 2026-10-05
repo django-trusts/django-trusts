@@ -3,9 +3,12 @@
 A group that contains both an organization permission and a repository
 permission must not grant the repository permission on the organization,
 or the organization permission on the repository. The shared grant
-compares ``Permission.content_type`` to the protected object's content
-identity. It does not read the codename. A permission terminal with no
-``content_type`` foreign key keeps primary-key identity.
+compares ``auth.Permission.content_type`` to the protected object's
+content identity. It does not read the codename. Any other permission
+terminal, including a custom model with a ``content_type`` foreign key,
+keeps primary-key identity. ``user.has_perm`` is tested with permission
+strings. Permission instances are tested on the registry, ``.authorized()``,
+and reverse inquiries.
 """
 
 from contextlib import contextmanager
@@ -281,10 +284,6 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                     queries = 0 if obj in (self.team, self.widget) else 1
                     with self.assertNumQueries(queries):
                         self.assertIs(self.owner.has_perm(code, obj), expected)
-                    with self.assertNumQueries(queries):
-                        self.assertIs(
-                            self.owner.has_perm(permission, obj), expected,
-                        )
                     self.assertIs(
                         self.handle.registry.has_permission(
                             self.owner, obj, permission,
@@ -391,10 +390,14 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
     def test_custom_codename_stays_a_same_model_instance_grant(self):
         with _installed(self.handle):
             self.assertTrue(
-                self.owner.has_perm(self.publish, self.specs),
+                self.handle.registry.has_permission(
+                    self.owner, self.specs, self.publish,
+                ),
             )
             self.assertFalse(
-                self.owner.has_perm(self.publish, self.acme),
+                self.handle.registry.has_permission(
+                    self.owner, self.acme, self.publish,
+                ),
             )
             self.assertIn(
                 self.publish_code, self.owner.get_all_permissions(self.specs),
@@ -443,9 +446,21 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
     def test_proxy_uses_its_own_content_type(self):
         proxy = self.OrganizationProxy.objects.get(pk=self.acme.pk)
         with _installed(self.handle):
-            self.assertTrue(self.owner.has_perm(self.operate, proxy))
-            self.assertFalse(self.owner.has_perm(self.manage, proxy))
-            self.assertFalse(self.owner.has_perm(self.operate, self.acme))
+            self.assertTrue(
+                self.handle.registry.has_permission(
+                    self.owner, proxy, self.operate,
+                ),
+            )
+            self.assertFalse(
+                self.handle.registry.has_permission(
+                    self.owner, proxy, self.manage,
+                ),
+            )
+            self.assertFalse(
+                self.handle.registry.has_permission(
+                    self.owner, self.acme, self.operate,
+                ),
+            )
             self.assertFalse(
                 self.owner.has_perm(self.manage_code, proxy),
             )
@@ -702,7 +717,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
-    def test_terminal_with_content_type_denies_the_crossed_row(self):
+    def test_custom_content_type_fk_keeps_primary_key_identity(self):
         org_ct = ContentType.objects.get_for_model(self.Organization)
         repo_ct = ContentType.objects.get_for_model(self.Repository)
         org_permit = self.TypedPermit.objects.create(
@@ -737,12 +752,22 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         )
         self.assertTrue(registry.has_permission(self.owner, self.org, org_permit))
         self.assertTrue(registry.has_permission(self.owner, self.repo, repo_permit))
-        self.assertFalse(
+        self.assertTrue(
             registry.has_permission(self.owner, self.org, repo_permit),
         )
-        self.assertFalse(
+        self.assertTrue(
             registry.has_permission(self.owner, self.repo, org_permit),
         )
+        handle = BackendHandle(
+            path='tests.core.issue267-typed',
+            registry=registry,
+            compiler=PlanQueryCompiler(),
+        )
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        for content in document['backends'][0]['contents']:
+            self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
     def test_direct_permission_fk_denies_a_different_content_type(self):
         manage = _perm(self.Organization, 'manage_organization')

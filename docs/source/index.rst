@@ -281,16 +281,17 @@ Use Django's familiar object-permission API:
        document,
    )
 
-A Django permission matches an object only when ``Permission.content_type``
+An ``auth.Permission`` matches an object only when ``Permission.content_type``
 is that object's content type. Asking a repository permission about an
 organization is a denial (``False``, and the codename is absent from
 ``get_all_permissions`` and ``.authorized()``), including when one group
 holds both permissions and a registration reaches both models. A proxy
-model keeps its own content type. A permission terminal with no
-``content_type`` foreign key is still matched by primary key. Django's
-active-superuser shortcut can still make ``user.has_perm`` return ``True``
-before this check runs. ``.authorized()``, enumeration, and the reverse
-user inquiry do not copy that shortcut.
+model keeps its own content type. Any other permission terminal, including
+a custom model with a ``content_type`` foreign key, is still matched by
+primary key. Django's active-superuser shortcut can still make
+``user.has_perm`` return ``True`` before this check runs.
+``.authorized()``, enumeration, and the reverse user inquiry do not copy
+that shortcut.
 
 List the user's permissions on an object:
 

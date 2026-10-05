@@ -107,16 +107,15 @@ records that path (for example ``permissions`` or ``team__permissions``),
 ``auth.Permission``, and the permission primary key. The lock still omits
 ``group`` and ``get_group_permissions`` for that registration.
 
-When the permission terminal has a concrete ``content_type`` foreign key
-to Django's ``ContentType`` (``auth.Permission`` does), each inquiry's
-grant also requires that row's ``app_label`` and ``model`` to be the
-protected model's content identity. Those two values are ``const``
-parameters in the same statement. A proxy model would use its own
-identity. A permission terminal without that foreign key does not gain
-the predicate and stays a primary-key comparison. The codename is not
-parsed to choose the model. Regenerating the lockfile after this
-predicate is present changes the SQL bytes for every ``auth.Permission``
-grant.
+When the permission terminal's concrete model is ``auth.Permission``,
+each inquiry's grant also requires that row's ``app_label`` and ``model``
+to be the protected model's content identity. Those two values are
+``const`` parameters in the same statement. A proxy model would use its
+own identity. Any other permission terminal, including a custom model
+with a ``content_type`` foreign key, does not gain the predicate and
+stays a primary-key comparison. The codename is not parsed to choose the
+model. Regenerating the lockfile after this predicate is present changes
+the SQL bytes for every ``auth.Permission`` grant.
 
 ``get_permitted_users`` is the reverse of ``permitted``: one saved content
 object and one permission, compiled to the users that backend can grant.
