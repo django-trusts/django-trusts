@@ -26,6 +26,25 @@ should follow the
 | `user.has_perm(permission_instance, obj)` when a plan applies | `AttributeError` | `True` or `False` by the same predicate. A string still uses the existing codename split to choose the row |
 | Active superuser `user.has_perm` | Django returns `True` before backends | Unchanged. Queryset and enumeration projections do not copy that shortcut |
 
+For an ordinary owner of one organization, the shared owner group used to
+grant both content types on both objects. Enumeration, `.authorized()`,
+reverse users, and lockfile SQL follow the same split: the crossed
+permission drops out, and the same-model permission stays.
+
+```python
+# Old (crossed group permissions matched by permission_id only)
+owner.has_perm("gh_permissions.read_repository", organization)  # True
+owner.has_perm("gh_permissions.manage_organization", repository)  # True
+
+# New (Permission.content_type must match the object)
+owner.has_perm("gh_permissions.read_repository", organization)  # False
+owner.has_perm("gh_permissions.manage_organization", repository)  # False
+
+# Same-model cases unchanged
+owner.has_perm("gh_permissions.manage_organization", organization)  # True
+owner.has_perm("gh_permissions.read_repository", repository)  # True
+```
+
 No schema migration. Existing crossed positives become denials. Regenerate
 `trusts-policy.lock.yaml`; `auth.Permission` grants gain `const` parameters
 for the protected model's content identity.
