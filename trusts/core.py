@@ -29,6 +29,14 @@ construction, registration, and PostgreSQL remaining-bits rendering
 live in ``django-trusts-ordered-fold``. Core does not import, depend
 on, auto-discover, or fallback-import that package.
 
+When the permission terminal's concrete model is Django's
+``auth.Permission``, the shared grant requires that row's content type
+to be the protected object's content identity. Proxy models keep their
+own. A mismatch is an empty predicate, not an error. Any other
+terminal, including a custom model that has a ``content_type`` foreign
+key, stays primary-key identity. The codename is not parsed to guess
+the model.
+
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
 compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
@@ -117,6 +125,7 @@ class PlanQueryCompiler(object):
         return RelationPlan(
             records=grouped,
             permission_model=plan.permission_model,
+            content_identity=getattr(plan, 'content_identity', None),
         ).content_exists(user, permission)
 
 
@@ -356,6 +365,7 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
                     user=user,
                     permission=permission,
                     correlation=Q(**{lookup: OuterRef(target_attname)}),
+                    content_identity=getattr(plan, 'content_identity', None),
                 )
                 parts.append(Exists(inner))
     if not parts:
@@ -1384,18 +1394,65 @@ def _compile_predicate(node, record):
     )
 
 
-def _record_predicate(record, correlation=None, **bindings):
+def _permission_terminal_is_auth_permission(permission_model):
+    """True when the terminal's concrete model is ``auth.Permission``.
+
+    Typed content identity applies only to that model, on a direct
+    foreign key or a terminal many-to-many. Any other terminal,
+    including one that happens to have a ``content_type`` foreign key,
+    stays primary-key identity. Metadata only (zero SQL). This is an
+    exact model-identity check, not a field-name scan and not a
+    codename parse.
+    """
+    _group, permission = _auth_group_and_permission()
+    return (
+        permission_model._meta.concrete_model
+        is permission._meta.concrete_model
+    )
+
+
+def _content_type_identity(model):
+    """``(app_label, model_name)`` for ``for_concrete_model=False``.
+
+    ``ContentType.get_for_model(model, for_concrete_model=False)`` uses
+    the model's own ``app_label`` and ``model_name``. A real proxy keeps
+    its own pair. No content-type row is loaded.
+    """
+    return model._meta.app_label.lower(), model._meta.model_name
+
+
+def _permission_content_type_filters(record, content_identity):
+    """Lookup kwargs that pin the permission row to one content type.
+
+    The lookups extend ``permission_field`` so they share that join.
+    A second many-to-many alias would let one group row satisfy the
+    permission id and a different row satisfy the content type.
+    """
+    if not _permission_terminal_is_auth_permission(record.permission_model):
+        return {}
+    model = content_identity if content_identity is not None else record.content_model
+    app_label, model_name = _content_type_identity(model)
+    field = record.permission_field
+    return {
+        '%s__content_type__app_label' % field: app_label,
+        '%s__content_type__model' % field: model_name,
+    }
+
+
+def _record_predicate(record, correlation=None, *, content_identity=None, **bindings):
     """Bindings, condition, and correlation as one ``Q``.
 
     Separate ``filter()`` calls give a repeated many-to-many hop its own
     alias. ``Group.permissions`` has to stay one join so the local
-    ceiling and the requested permission are the same row.
+    ceiling and the requested permission are the same row. Content-type
+    identity is part of that same ``Q`` for the same reason.
     """
     filters = {}
     for role, value in bindings.items():
         filters[getattr(record, _BINDING_FIELDS[role])] = _bind_terminal(
             value, role,
         )
+    filters.update(_permission_content_type_filters(record, content_identity))
     combined = Q(**filters)
     compiled = _compile_predicate(record.condition, record)
     if compiled is not None:
@@ -1405,10 +1462,15 @@ def _record_predicate(record, correlation=None, **bindings):
     return combined
 
 
-def _bind_record_qs(record, correlation=None, **bindings):
+def _bind_record_qs(record, correlation=None, *, content_identity=None, **bindings):
     """Root rows for one record. One ``filter()`` for every predicate."""
     return record.root._default_manager.filter(
-        _record_predicate(record, correlation=correlation, **bindings),
+        _record_predicate(
+            record,
+            correlation=correlation,
+            content_identity=content_identity,
+            **bindings,
+        ),
     )
 
 
@@ -2142,7 +2204,7 @@ class GrantReach(Expression):
     filterable = True
     subquery = True
 
-    def __init__(self, record, user, permission, content=None):
+    def __init__(self, record, user, permission, content=None, *, content_identity=None):
         super().__init__(output_field=BooleanField())
         self.record = record
         self.content = content
@@ -2152,6 +2214,7 @@ class GrantReach(Expression):
             user=user,
             permission=permission,
             correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
+            content_identity=content_identity,
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -2321,6 +2384,25 @@ def _content_model(content):
     )
 
 
+def _candidate_model(content):
+    """Class of the protected object, including a proxy.
+
+    Record selection uses :func:`_content_model` (the concrete model).
+    Permission content-type identity uses this class so a proxy is not
+    collapsed onto its concrete parent.
+    """
+    if isinstance(content, QuerySet):
+        return content.model
+    if _is_model_class(content):
+        return content
+    if isinstance(content, Model):
+        return content.__class__
+    raise TrustsConfigurationError(
+        'content must be a model class, instance, or QuerySet, not %r.'
+        % (content,)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RelationPlan:
     """One correlated plan compiled from applicable ``RegisteredRelation`` rows.
@@ -2330,13 +2412,23 @@ class RelationPlan:
     Bindings and correlation use the complete stored lookup, not only the
     last path segment. ``OuterRef`` uses the last hop's resolved target
     field, which need not live on the root and is not assumed to be ``pk``.
+
+    ``content_identity`` is the protected object's class, proxy included.
+    When the permission terminal is ``auth.Permission``, the grant
+    requires that identity. It is not inferred from a codename. Another
+    terminal stays a primary-key comparison.
     """
 
     records: tuple
     permission_model: type | None = None
+    content_identity: type | None = None
 
     def _bound_root_qs(self, record, **bindings):
-        return _bind_record_qs(record, **bindings)
+        return _bind_record_qs(
+            record,
+            content_identity=self.content_identity,
+            **bindings,
+        )
 
     def _correlated_exists(self, terminal_field_attr, **bindings):
         parts = []
@@ -2346,12 +2438,14 @@ class RelationPlan:
                 if terminal_field_attr == 'content_field':
                     parts.append(GrantReach(
                         record, user, bindings['permission'],
+                        content_identity=self.content_identity,
                     ))
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
                     parts.append(GrantReach(
                         record, user, OuterRef(target),
                         content=bindings['content'],
+                        content_identity=self.content_identity,
                     ))
                 continue
             terminal = getattr(record, terminal_field_attr)
@@ -2783,6 +2877,7 @@ class TrustsRegistry(object):
         return RelationPlan(
             records=records,
             permission_model=plan_permission,
+            content_identity=_candidate_model(content),
         )
 
     def permissions_for(self, user, content):

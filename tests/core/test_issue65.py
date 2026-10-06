@@ -93,10 +93,15 @@ def _tables(*model_classes):
                 editor.delete_model(model)
 
 
-def _perm(codename):
-    ct, _created = ContentType.objects.get_or_create(
-        app_label='trusts_tests', model='document',
-    )
+def _perm(codename, model=None):
+    if model is None:
+        ct, _created = ContentType.objects.get_or_create(
+            app_label='trusts_tests', model='document',
+        )
+    else:
+        ct = ContentType.objects.get_for_model(
+            model, for_concrete_model=False,
+        )
     permission, _created = Permission.objects.get_or_create(
         content_type=ct,
         codename=codename,
@@ -437,6 +442,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         self.bob = User.objects.create_user(username='bob', password='x')
         self.read = _perm('read_document')
         self.write = _perm('write_document')
+        self.folder_read = _perm('read_folder', self.Folder)
         self.folder_a = self.Folder.objects.create(title='A')
         self.folder_b = self.Folder.objects.create(title='B')
         self.doc_a1 = self.Document.objects.create(
@@ -461,12 +467,15 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             folder=self.folder_a, user=self.alice, permission=self.read,
         )
         self.FolderGrant.objects.create(
+            folder=self.folder_a, user=self.alice, permission=self.folder_read,
+        )
+        self.FolderGrant.objects.create(
             folder=self.folder_b, user=self.bob, permission=self.write,
         )
 
         self.assertEqual(
             _pks(self.registry.permissions_for(self.alice, self.folder_a)),
-            {self.read.pk},
+            {self.folder_read.pk},
         )
         self.assertEqual(
             _pks(self.registry.permissions_for(self.alice, self.doc_a1)),
@@ -485,6 +494,9 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             [],
         )
         self.assertTrue(
+            self.registry.has_permission(self.alice, self.folder_a, self.folder_read),
+        )
+        self.assertFalse(
             self.registry.has_permission(self.alice, self.folder_a, self.read),
         )
         self.assertTrue(
@@ -514,19 +526,24 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             folder=self.folder_a, user=self.alice, permission=self.read,
         )
         self.FolderGrant.objects.create(
+            folder=self.folder_a, user=self.alice, permission=self.folder_read,
+        )
+        self.FolderGrant.objects.create(
             folder=self.folder_b, user=self.alice, permission=self.write,
         )
 
         expected_folders = [
             folder for folder in self.Folder.objects.order_by('pk')
-            if self.registry.has_permission(self.alice, folder, self.read)
+            if self.registry.has_permission(
+                self.alice, folder, self.folder_read,
+            )
         ]
         expected_docs = [
             document for document in self.Document.objects.order_by('pk')
             if self.registry.has_permission(self.alice, document, self.read)
         ]
         folder_qs = self.registry.filter_authorized(
-            self.Folder.objects.order_by('pk'), self.alice, self.read,
+            self.Folder.objects.order_by('pk'), self.alice, self.folder_read,
         )
         document_qs = self.registry.filter_authorized(
             self.Document.objects.order_by('pk'), self.alice, self.read,
@@ -539,7 +556,10 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             self.assertEqual(list(document_qs), expected_docs)
         self.assertEqual(
             _pks(self.registry.permissions_for(self.alice, self.folder_a)),
-            {self.read.pk},
+            {self.folder_read.pk},
+        )
+        self.assertFalse(
+            self.registry.has_permission(self.alice, self.doc_a1, self.folder_read),
         )
         self.assertEqual(
             _pks(self.registry.permissions_for(self.alice, self.doc_a1)),
@@ -750,8 +770,9 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
 
             alice = User.objects.create_user(username='alice-tf', password='x')
             bob = User.objects.create_user(username='bob-tf', password='x')
-            read = _perm('read_coded')
-            write = _perm('write_coded')
+            read_folder = _perm('read_coded_folder', CodedFolder)
+            read = _perm('read_coded_document', CodedDocument)
+            write = _perm('write_coded_document', CodedDocument)
             folder_alpha = CodedFolder.objects.create(code='alpha', title='A')
             folder_beta = CodedFolder.objects.create(code='beta', title='B')
             self.assertNotEqual(folder_alpha.pk, 'alpha')
@@ -759,19 +780,29 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
             doc_a2 = CodedDocument.objects.create(folder=folder_alpha, title='A2')
             doc_b1 = CodedDocument.objects.create(folder=folder_beta, title='B1')
             CodedGrant.objects.create(
+                folder=folder_alpha, user=alice, permission=read_folder,
+            )
+            CodedGrant.objects.create(
                 folder=folder_alpha, user=alice, permission=read,
             )
 
             self.assertEqual(
                 _pks(registry.permissions_for(alice, folder_alpha)),
-                {read.pk},
+                {read_folder.pk},
             )
             self.assertEqual(
                 list(registry.permissions_for(alice, folder_beta)),
                 [],
             )
-            self.assertTrue(registry.has_permission(alice, folder_alpha, read))
-            self.assertFalse(registry.has_permission(alice, folder_beta, read))
+            self.assertTrue(
+                registry.has_permission(alice, folder_alpha, read_folder),
+            )
+            self.assertFalse(
+                registry.has_permission(alice, folder_alpha, read),
+            )
+            self.assertFalse(
+                registry.has_permission(alice, folder_beta, read_folder),
+            )
             self.assertTrue(registry.has_permission(alice, doc_a1, read))
             self.assertTrue(registry.has_permission(alice, doc_a2, read))
             self.assertFalse(registry.has_permission(alice, doc_b1, read))
@@ -779,7 +810,7 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
             self.assertFalse(registry.has_permission(alice, doc_a1, write))
 
             folder_sql = str(registry.filter_authorized(
-                CodedFolder.objects.order_by('pk'), alice, read,
+                CodedFolder.objects.order_by('pk'), alice, read_folder,
             ).query).lower()
             self.assertIn('exists', folder_sql)
             self.assertIn('code', folder_sql)
@@ -792,7 +823,7 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
             with self.assertNumQueries(1):
                 self.assertEqual(
                     list(registry.filter_authorized(
-                        CodedFolder.objects.order_by('pk'), alice, read,
+                        CodedFolder.objects.order_by('pk'), alice, read_folder,
                     )),
                     [folder_alpha],
                 )

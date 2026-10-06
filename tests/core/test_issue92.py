@@ -51,10 +51,15 @@ def _tables(*model_classes):
                 editor.delete_model(model)
 
 
-def _perm(codename):
-    ct, _created = ContentType.objects.get_or_create(
-        app_label='trusts_tests', model='node',
-    )
+def _perm(codename, model=None):
+    if model is None:
+        ct, _created = ContentType.objects.get_or_create(
+            app_label='trusts_tests', model='node',
+        )
+    else:
+        ct = ContentType.objects.get_for_model(
+            model, for_concrete_model=False,
+        )
     permission, _created = Permission.objects.get_or_create(
         content_type=ct,
         codename=codename,
@@ -737,7 +742,17 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Row.objects.create(node=folder_b, content=pay_b)
         self.Row.objects.create(node=child_a, content=pay_shared)
         self.Row.objects.create(node=folder_b, content=pay_shared)
-        self.Grant.objects.create(node=folder_a, user=self.alice, permission=self.read)
+        read_image = _perm('read_suffix_image', self.Image)
+        write_image = _perm('write_suffix_image', self.Image)
+        read_meta = _perm('read_suffix_meta', self.ImageMeta)
+        read_port = _perm('read_suffix_portrait', self.Portrait)
+        read_pay = _perm('read_suffix_payload', self.Payload)
+        write_pay = _perm('write_suffix_payload', self.Payload)
+        read_item = _perm('read_suffix_item', self.Item)
+        for permission in (read_image, read_meta, read_port, read_pay, read_item):
+            self.Grant.objects.create(
+                node=folder_a, user=self.alice, permission=permission,
+            )
 
         j = Ref(self.Grant)
         d1 = TrustsRegistry()
@@ -745,6 +760,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             content=j.node.items.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        self.read, self.write = read_image, write_image
         self._assert_projections(d1, self.Image, [img_a], [img_b])
 
         d2 = TrustsRegistry()
@@ -752,34 +768,34 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             content=j.node.items.image.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
-        self.assertTrue(d2.has_permission(self.alice, meta_a, self.read))
-        self.assertFalse(d2.has_permission(self.alice, meta_b, self.read))
+        self.assertTrue(d2.has_permission(self.alice, meta_a, read_meta))
+        self.assertFalse(d2.has_permission(self.alice, meta_b, read_meta))
 
         o2o = TrustsRegistry()
         o2o.register(
             content=j.node.items.portrait, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
-        self.assertTrue(o2o.has_permission(self.alice, port_a, self.read))
-        self.assertFalse(o2o.has_permission(self.alice, port_b, self.read))
+        self.assertTrue(o2o.has_permission(self.alice, port_a, read_port))
+        self.assertFalse(o2o.has_permission(self.alice, port_b, read_port))
 
         j1 = TrustsRegistry()
         j1.register(
             content=j.node.rows.content, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
-        self.assertTrue(j1.has_permission(self.alice, pay_a, self.read))
-        self.assertTrue(j1.has_permission(self.alice, pay_shared, self.read))
-        self.assertFalse(j1.has_permission(self.alice, pay_b, self.read))
-        self.assertFalse(j1.has_permission(self.alice, pay_a, self.write))
+        self.assertTrue(j1.has_permission(self.alice, pay_a, read_pay))
+        self.assertTrue(j1.has_permission(self.alice, pay_shared, read_pay))
+        self.assertFalse(j1.has_permission(self.alice, pay_b, read_pay))
+        self.assertFalse(j1.has_permission(self.alice, pay_a, write_pay))
 
         rev = TrustsRegistry()
         rev.register(
             content=j.node.items, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
-        self.assertTrue(rev.has_permission(self.alice, item_a, self.read))
-        self.assertFalse(rev.has_permission(self.alice, item_b, self.read))
+        self.assertTrue(rev.has_permission(self.alice, item_a, read_item))
+        self.assertFalse(rev.has_permission(self.alice, item_b, read_item))
 
     def test_direct_recursive_or_and_multiple_handles(self):
         granted_node = self.Node.objects.create(title='g')
@@ -911,13 +927,16 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
 
         with _tables(CodedNode, CodedItem, CodedGrant, UuidNode, UuidGrant):
             alice = User.objects.create_user(username='alice-id', password='x')
-            read = _perm('read_id92')
+            read = _perm('read_id92', CodedNode)
+            read_item = _perm('read_id92_item', CodedItem)
+            read_uuid = _perm('read_id92_uuid', UuidNode)
             a = CodedNode.objects.create(code='alpha')
             b = CodedNode.objects.create(code='beta', parent=a)
             other = CodedNode.objects.create(code='omega')
             item_a = CodedItem.objects.create(node=b, title='ia')
             item_o = CodedItem.objects.create(node=other, title='io')
             CodedGrant.objects.create(node=a, user=alice, permission=read)
+            CodedGrant.objects.create(node=a, user=alice, permission=read_item)
             registry = TrustsRegistry()
             j = Ref(CodedGrant)
             rec = registry.register(
@@ -935,13 +954,14 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 along=Along(j.node.parent, bound=8),
             )
             self.assertEqual(suf_rec.content_target, CodedItem._meta.pk.attname)
-            self.assertTrue(suf.has_permission(alice, item_a, read))
-            self.assertFalse(suf.has_permission(alice, item_o, read))
+            self.assertTrue(suf.has_permission(alice, item_a, read_item))
+            self.assertFalse(suf.has_permission(alice, item_a, read))
+            self.assertFalse(suf.has_permission(alice, item_o, read_item))
 
             ua = UuidNode.objects.create(ident=uuid4())
             ub = UuidNode.objects.create(ident=uuid4(), parent=ua)
             uo = UuidNode.objects.create(ident=uuid4())
-            UuidGrant.objects.create(node=ua, user=alice, permission=read)
+            UuidGrant.objects.create(node=ua, user=alice, permission=read_uuid)
             ureg = TrustsRegistry()
             uj = Ref(UuidGrant)
             urec = ureg.register(
@@ -949,9 +969,9 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 along=Along(uj.node.parent, bound=8),
             )
             self.assertEqual(urec.along.ident_family, 'uuid')
-            self.assertTrue(ureg.has_permission(alice, ua, read))
-            self.assertTrue(ureg.has_permission(alice, ub, read))
-            self.assertFalse(ureg.has_permission(alice, uo, read))
+            self.assertTrue(ureg.has_permission(alice, ua, read_uuid))
+            self.assertTrue(ureg.has_permission(alice, ub, read_uuid))
+            self.assertFalse(ureg.has_permission(alice, uo, read_uuid))
 
     def test_shape_c_non_pk_to_field(self):
         User = get_user_model()
@@ -978,7 +998,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
 
         with _tables(CodedNode, CodedGrant):
             alice = User.objects.create_user(username='alice-c92', password='x')
-            read = _perm('read_c92')
+            read = _perm('read_c92', CodedNode)
             root = CodedNode.objects.create(code='root')
             mid = CodedNode.objects.create(code='mid', parent=root)
             leaf = CodedNode.objects.create(code='leaf', parent=mid)

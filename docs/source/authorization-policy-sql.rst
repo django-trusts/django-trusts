@@ -68,19 +68,19 @@ The following abridged example shows the schema:
                permission: {path: "permission", model: "auth.Permission", target: "id"}
                content: {path: "document", model: "documents.Document", target: "id"}
            permitted:
-             params: [{const: 1}, {bind: "permission.id"}, {bind: "user.id"}]
+             params: [{const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
              sql: |-
                SELECT DISTINCT ...
            has_perm:
-             params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {bind: "user.id"}]
+             params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
              sql: |-
                SELECT ... WHERE candidate-primary-key AND grant-exists
            get_all_permissions:
-             params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {bind: "user.id"}]
+             params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
-             params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}]
+             params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
@@ -106,6 +106,16 @@ A ``permission=`` registration does not add either field. When
 records that path (for example ``permissions`` or ``team__permissions``),
 ``auth.Permission``, and the permission primary key. The lock still omits
 ``group`` and ``get_group_permissions`` for that registration.
+
+When the permission terminal's concrete model is ``auth.Permission``,
+each inquiry's grant also requires that row's ``app_label`` and ``model``
+to be the protected model's content identity. Those two values are
+``const`` parameters in the same statement. A proxy model would use its
+own identity. Any other permission terminal, including a custom model
+with a ``content_type`` foreign key, does not gain the predicate and
+stays a primary-key comparison. The codename is not parsed to choose the
+model. Regenerating the lockfile after this predicate is present changes
+the SQL bytes for every ``auth.Permission`` grant.
 
 ``get_permitted_users`` is the reverse of ``permitted``: one saved content
 object and one permission, compiled to the users that backend can grant.

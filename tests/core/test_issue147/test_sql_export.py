@@ -342,6 +342,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'document'},
             {'bind': 'user.id'},
         ])
         named = content['named_filters'][0]
@@ -784,6 +786,8 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertEqual(actor_content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'document'},
             {'bind': 'user.id'},
         ])
 
@@ -807,6 +811,8 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertEqual(account_content['permitted']['params'], [
             {'const': 1},
             {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'document'},
             {'bind': 'user.code'},
         ])
 

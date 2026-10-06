@@ -281,6 +281,18 @@ Use Django's familiar object-permission API:
        document,
    )
 
+An ``auth.Permission`` matches an object only when ``Permission.content_type``
+is that object's content type. Asking a repository permission about an
+organization is a denial (``False``, and the codename is absent from
+``get_all_permissions`` and ``.authorized()``), including when one group
+holds both permissions and a registration reaches both models. A proxy
+model keeps its own content type. Any other permission terminal, including
+a custom model with a ``content_type`` foreign key, is still matched by
+primary key. Django's active-superuser shortcut can still make
+``user.has_perm`` return ``True`` before this check runs.
+``.authorized()``, enumeration, and the reverse user inquiry do not copy
+that shortcut.
+
 List the user's permissions on an object:
 
 .. code-block:: python
@@ -510,9 +522,9 @@ lockfile key remains ``get_permitted_users``. For the direct
 .. code-block:: yaml
 
    get_permitted_users:
-     params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}]
+     params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
      sql: |-
-       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined" FROM "auth_user" WHERE ("auth_user"."is_active" = %s AND EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" WHERE ("U0"."document_id" = %s AND "U0"."permission_id" = %s AND "U0"."user_id" = ("auth_user"."id")) LIMIT 1))
+       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined" FROM "auth_user" WHERE ("auth_user"."is_active" = %s AND EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id") INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id") WHERE ("U0"."document_id" = %s AND "U0"."permission_id" = %s AND "U3"."app_label" = %s AND "U3"."model" = %s AND "U0"."user_id" = ("auth_user"."id")) LIMIT 1))
 
 Several trusts for the same content within one backend are OR alternatives.
 django-trusts issues one SQL statement for each permission inquiry and combines

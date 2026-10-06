@@ -15,6 +15,53 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## Permission content type must match the object (#267)
+
+`1.0.0 → 1.1.0`. Crossed `auth.Permission.content_type` positives are
+1.0.0 behavior. Denial is 1.1.0 behavior.
+
+| | 1.0.0 | 1.1.0 |
+| --- | --- | --- |
+| Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, `.authorized()`, reverse users, and lockfile SQL that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
+| `authorization_required` for that pair | Already `PermissionDenied` for an ordinary principal | Same denial |
+| Same-model grant, including a custom codename that does not end with the model name | Grant on instance projections | Unchanged grant |
+| Permission terminal that is not `auth.Permission`, including a custom model with a `content_type` foreign key | Primary-key identity | Unchanged |
+| Active superuser `user.has_perm` | Django returns `True` before backends | Unchanged. Queryset and enumeration projections do not copy that shortcut |
+
+For an ordinary owner of one organization, the shared owner group used to
+grant both content types on both objects. Enumeration, `.authorized()`,
+reverse users, and lockfile SQL follow the same split: the crossed
+permission drops out, and the same-model permission stays.
+
+```python
+# Old (crossed group permissions matched by permission_id only)
+owner.has_perm("gh_permissions.read_repository", organization)  # True
+owner.has_perm("gh_permissions.manage_organization", repository)  # True
+
+# New (Permission.content_type must match the object)
+owner.has_perm("gh_permissions.read_repository", organization)  # False
+owner.has_perm("gh_permissions.manage_organization", repository)  # False
+
+# Same-model cases unchanged
+owner.has_perm("gh_permissions.manage_organization", organization)  # True
+owner.has_perm("gh_permissions.read_repository", repository)  # True
+```
+
+No schema migration. Existing crossed positives become denials. Regenerate
+`trusts-policy.lock.yaml`; `auth.Permission` grants gain `const` parameters
+for the protected model's content identity.
+
+Migration-bot checklist:
+
+- `has_perm(`
+- `get_all_permissions(`
+- `.authorized(`
+- `get_permitted_users(`
+- `.permitted(`
+- `authorization_required(`
+- `trusts_policy_sql`
+- `content_type`
+
 ## Unused `get_short_model_name` helper (#217)
 
 | | Old | New |

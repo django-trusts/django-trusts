@@ -205,6 +205,13 @@ class TrustModelBackendMixin(object):
         return matched
 
     def has_perm(self, user_obj, permext, obj=None):
+        """Object check for one permission string.
+
+        The string uses the historical codename split to choose the row.
+        When that row is an ``auth.Permission``, a content-type mismatch
+        with ``obj`` is ``False``. Another permission terminal stays
+        primary-key identity inside the plan.
+        """
         if obj is None or not is_active_principal(user_obj):
             return False
 
