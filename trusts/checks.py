@@ -415,10 +415,8 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     grant.
     """
     from django.apps import apps as django_apps
-    from trusts.decorators import (
-        _authorization_preflight_state,
-        _declared_authorization_guards,
-    )
+    from trusts._permitted import _authorization_preflight_state
+    from trusts.decorators import _declared_authorization_guards
 
     handles = _authorization_check_handles()
     messages = []

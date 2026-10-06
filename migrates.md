@@ -62,6 +62,50 @@ Migration-bot checklist:
 - `trusts_policy_sql`
 - `content_type`
 
+## Permitted content queryset (#270)
+
+`1.0.0 → 1.1.0`. No public content-list `.permitted()` is 1.0.0 behavior.
+`queryset.permitted(permission, user, conditions=())` is 1.1.0 behavior.
+
+| | 1.0.0 | 1.1.0 |
+| --- | --- | --- |
+| Content rows one user may access for one permission | Resolve an `auth.Permission` row, then `.authorized(user, permission)` | `queryset.permitted(permission, user, conditions=())` |
+| Chained queryset | The list method is not on `QuerySet` | `Repository.objects.filter(...).permitted(...)` when the queryset mixes in `PermittedQuerySetMixin` and is supplied with `as_manager()` or `from_queryset` |
+| Attachment names | `AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager` | Those names stay. Add `PermittedQuerySetMixin`, `PermittedQuerySet`, and `PermittedManager` |
+| `.authorized(user, permission, extra_q=None)` | Instance projection, no principal check, any registered terminal | Unchanged. Not routed through `.permitted` validation |
+| Anonymous or inactive principal | `.authorized()` can still return granted rows | `.permitted()` returns an empty queryset. `.authorized()` does not |
+| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous principal |
+| Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
+
+No mandatory consumer change. Existing `.authorized()` callers keep their
+results, including an inactive principal who holds a grant. New code should
+use `.permitted()`. Zero's `ContentQuerySet.permitted(perm, user)` is
+unchanged.
+
+```python
+# Old
+change = Permission.objects.get(
+    content_type__app_label="documents",
+    content_type__model="document",
+    codename="change_document",
+)
+Document.objects.authorized(user, change)
+
+# New
+Document.objects.permitted("documents.change_document", user)
+```
+
+Migration-bot checklist:
+
+- `PermittedQuerySetMixin`
+- `PermittedQuerySet`
+- `PermittedManager`
+- `.permitted(`
+- `conditions=`
+- `.authorized(`
+- `from_queryset`
+- `as_manager()`
+
 ## Unused `get_short_model_name` helper (#217)
 
 | | Old | New |

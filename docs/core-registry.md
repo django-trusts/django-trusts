@@ -369,7 +369,10 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `:condition`, does not call `is_active_principal`, and does not call
 `get_permission`. `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
-this class. Core `.authorized` includes relationship-family handles
+this class. The public content-list inquiry is
+`PermittedQuerySet.permitted(permission, user, conditions=())`.
+`.authorized` does not call it and does not apply its principal check.
+Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
 `filter_authorized_scopes(queryset, user, permission, *, content, handles=None)`

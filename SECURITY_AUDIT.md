@@ -9,7 +9,7 @@ substitute for reviewing the application, its data, or its deployment.
 django-trusts answers object-permission questions from explicitly registered
 paths over persisted relational facts. Registration uses a small set of closed,
 typed declarations that are normalized and validated during application setup.
-The same normalized policy supports object checks, authorized querysets,
+The same normalized policy supports object checks, permitted querysets,
 permission enumeration, and view guards.
 
 This makes the supported policy surface inspectable; it does not make an
@@ -216,8 +216,15 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Authorized objects | `Model.objects.authorized(user, permission)` | Relationship-family SQL before pagination; not Django backend OR |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; anonymous and inactive principals are an empty queryset; not Django backend OR or a superuser shortcut |
 | Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; no Core `is_active` blanket |
+
+`.permitted(permission, user)` is the public content-list inquiry. Anonymous
+and inactive principals receive an empty queryset, and configuration errors
+raise before that shortcut. `.authorized(user, permission, extra_q=None)` is
+the lower-level instance projection: it does not apply that principal check,
+does not accept permission strings, and does not select named conditions.
+Do not treat the two as the same filter.
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
@@ -309,15 +316,23 @@ as `app_label` and `model` constants. There is no second query to load a
 
 A mismatch is ordinary authorization input, not a configuration error.
 `has_perm` for a permission string is `False`. `get_all_permissions` omits
-the codename. `.authorized()` and `get_permitted_users` /
+the codename. `.permitted()` and `get_permitted_users` /
 `User.objects.permitted` are empty for that pair. `authorization_required`
 denies an ordinary principal. The generated policy SQL carries the same
 predicate. Any other permission terminal stays primary-key identity,
 including a custom model that has a `content_type` foreign key.
 
+String `has_perm` still infers the model from the codename suffix. That
+codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
+`.permitted()` and `authorization_required` bind the exact codename to the
+protected model's content type instead. `trusts.E008` covers declared
+`authorization_required` guards only. A runtime `.permitted()` call uses
+the same ownership rule and raises, but it is not registered with that
+check.
+
 Django's active-superuser rule runs before authentication backends, so
 `user.has_perm` can return `True` for a mismatched pair when the user is an
-active superuser. Enumeration, `.authorized()`, the reverse inquiry, and the
+active superuser. Enumeration, `.permitted()`, the reverse inquiry, and the
 lockfile do not copy that shortcut. `authorization_required` still has its
 own active-superuser existence shortcut after configuration preflight.
 

@@ -24,7 +24,7 @@ model, or another relational structure owned by the application.
 ``django-trusts`` compiles these declarations into database queries via
 QuerySet, keeping permission decisions based on persisted truth. The same
 declarations support
-object checks, authorized querysets, permission enumeration, and decorators
+object checks, permitted querysets, permission enumeration, and decorators
 for protecting views. The separate `security audit guide
 <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
 defines the boundary these APIs enforce and the responsibilities that remain
@@ -72,10 +72,10 @@ The application owns its protected content and trust models.
    from django.contrib.auth.models import Group, Permission
    from django.db import models
 
-   from trusts.query import AuthorizedManagerMixin, PermittedUsersMixin
+   from trusts.query import PermittedQuerySetMixin, PermittedUsersMixin
 
 
-   class DocumentManager(AuthorizedManagerMixin, models.Manager):
+   class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
        pass
 
 
@@ -83,8 +83,8 @@ The application owns its protected content and trust models.
        title = models.CharField(max_length=200)
        confidential = models.BooleanField(default=False)
 
-       # Adds Document.objects.authorized(user, permission).
-       objects = DocumentManager()
+       # Document.objects.filter(...).permitted(permission, user) chains.
+       objects = DocumentQuerySet.as_manager()
 
 
    class DocumentPermission(models.Model):
@@ -116,12 +116,34 @@ The application owns its protected content and trust models.
 ``GroupDocumentPermission`` connects a Django group to one document; users
 receive the group's permissions through group membership.
 
-``AuthorizedManagerMixin`` adds
-``Document.objects.authorized(user, permission)`` to the application's own
-manager without replacing its other behavior. The concrete
-``AuthorizedManager`` remains available as a convenience for models that do
-not need a custom manager. Plain ``user.has_perm(permission, document)``
-object checks do not require either one.
+``PermittedQuerySetMixin`` adds
+``permitted(permission, user, conditions=())`` to the application's
+queryset. ``as_manager()`` is enough when the application does not need
+its own manager class. An application that already owns a manager supplies
+the same queryset with ``from_queryset``:
+
+.. code-block:: python
+
+   class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
+       def published(self):
+           return self.filter(confidential=False)
+
+
+   class DocumentManager(models.Manager.from_queryset(DocumentQuerySet)):
+       pass
+
+
+   class Document(models.Model):
+       objects = DocumentManager()
+
+``PermittedQuerySet`` and
+``PermittedManager = Manager.from_queryset(PermittedQuerySet)`` are the
+concrete forms when no custom queryset is required. Plain
+``user.has_perm(permission, document)`` object checks do not require
+either one. ``.authorized()`` remains the lower-level instance
+projection. The `permitted queryset inquiry contract
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/permitted-queryset-inquiry.md>`_
+records that split.
 
 ``PermittedUsersMixin`` adds
 ``document.get_permitted_users(permission)``, the reverse inquiry that
@@ -284,13 +306,13 @@ Use Django's familiar object-permission API:
 An ``auth.Permission`` matches an object only when ``Permission.content_type``
 is that object's content type. Asking a repository permission about an
 organization is a denial (``False``, and the codename is absent from
-``get_all_permissions`` and ``.authorized()``), including when one group
+``get_all_permissions`` and ``.permitted()``), including when one group
 holds both permissions and a registration reaches both models. A proxy
 model keeps its own content type. Any other permission terminal, including
 a custom model with a ``content_type`` foreign key, is still matched by
 primary key. Django's active-superuser shortcut can still make
 ``user.has_perm`` return ``True`` before this check runs.
-``.authorized()``, enumeration, and the reverse user inquiry do not copy
+``.permitted()``, enumeration, and the reverse user inquiry do not copy
 that shortcut.
 
 List the user's permissions on an object:
@@ -316,18 +338,43 @@ A ``permission=`` registration is not treated as group-derived merely because it
 ``user=`` path crosses ``auth.Group``; only explicit ``group=`` registrations
 contribute to ``get_group_permissions()``.
 
-Filter a queryset to the objects authorized for a particular permission:
+Filter a queryset to the objects permitted for a particular permission:
 
 .. code-block:: python
 
-   change_document = Permission.objects.get(
-       content_type__app_label="documents",
-       codename="change_document",
+   documents = Document.objects.permitted(
+       "documents.change_document",
+       user,
    )
 
-   documents = Document.objects.authorized(
+The permission may instead be the corresponding saved ``auth.Permission``
+instance. The queryset supplies the protected content model. A string is
+the exact ``app_label.codename`` bound to that model's content type; the
+codename is not parsed to guess a model. This is the same kind of question
+as ``user.has_perm(permission, document)``, not the same string codec.
+``has_perm`` still infers a model from the codename suffix
+(`issue #268 <https://github.com/django-trusts/django-trusts/issues/268>`_).
+
+A relationship-family backend participates only when it has an applicable
+``auth.Permission`` plan for the queryset model and owns every selected
+name as a queryable condition. Other backends contribute nothing. If none
+own the full set, the call raises ``TrustsConfigurationError`` before SQL.
+``trusts.E008`` reports that configuration for ``authorization_required``
+declarations only. A runtime ``.permitted()`` call is not one of those
+declarations; it still validates and raises on first use.
+
+Malformed permissions and conditions raise before SQL, including when the
+principal is anonymous. Anonymous and inactive principals, and a
+well-formed permission for another content type, produce an empty
+queryset. There is no active-superuser shortcut. Named conditions remain
+explicit:
+
+.. code-block:: python
+
+   documents = Document.objects.permitted(
+       "documents.change_document",
        user,
-       change_document,
+       conditions=("non_confidential",),
    )
 
 List the users who may perform one permission on one saved object:
