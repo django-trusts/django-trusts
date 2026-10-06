@@ -28,11 +28,12 @@ class AuthorizedQuerySet(QuerySet):
     method does not parse ``:condition``, does not call
     ``is_active_principal``, and does not call ``get_permission``.
 
-    Callers that need Django inactivity checks or string permissions wrap
-    this; they do not belong on this class. There is no ``.permitted`` and
-    no ``.get_permission``. Core ``.authorized`` includes
-    relationship-family handles only; it is not Django's object-level
-    backend OR.
+    The public content-list inquiry is
+    ``PermittedQuerySet.permitted(permission, user, conditions=())``.
+    ``.authorized`` stays this lower-level projection: it does not use
+    that principal check or that input validation. Core ``.authorized``
+    includes relationship-family handles only; it is not Django's
+    object-level backend OR.
     """
 
     def authorized(self, user, permission, extra_q=None):
@@ -61,6 +62,50 @@ class AuthorizedManagerMixin:
         return AuthorizedQuerySet.authorized(
             self.get_queryset(), user, permission, extra_q=extra_q,
         )
+
+
+class PermittedQuerySetMixin:
+    """Add ``permitted()`` to an application queryset.
+
+    Mix this into the queryset, then expose that queryset with
+    ``as_manager()`` or ``Manager.from_queryset``. A manager-only mixin
+    cannot serve ``filter(...).permitted(...)``.
+    """
+
+    def permitted(self, permission, user, conditions=()):
+        """Rows in this queryset ``user`` may access for ``permission``.
+
+        ``permission`` is one full ``app_label.codename`` string or one
+        saved ``auth.Permission`` instance. The protected model is
+        ``self.model``. The codename is not parsed to guess a model.
+        ``conditions`` is an exact tuple of queryable names, ANDed.
+        Anonymous and inactive principals receive an empty queryset.
+        Malformed input and incomplete configuration raise before that
+        shortcut and before SQL.
+
+        A relationship-family backend participates only when it has an
+        applicable ``auth.Permission`` plan and owns every selected
+        name. This is the same semantic inquiry as object ``has_perm``,
+        not that method's current string codec. There is no
+        active-superuser shortcut.
+        """
+        from trusts._permitted import permitted_queryset
+        from trusts.apps import _relationship_implementation_handles
+
+        return permitted_queryset(
+            self,
+            permission,
+            user,
+            conditions,
+            handles=_relationship_implementation_handles(),
+        )
+
+
+class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
+    """Concrete queryset for ``permitted(permission, user, conditions=())``."""
+
+
+PermittedManager = Manager.from_queryset(PermittedQuerySet)
 
 
 class PermittedUsersMixin:

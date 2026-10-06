@@ -72,10 +72,10 @@ The application owns its protected content and trust models.
    from django.contrib.auth.models import Group, Permission
    from django.db import models
 
-   from trusts.query import PermittedManagerMixin, PermittedUsersMixin
+   from trusts.query import PermittedQuerySetMixin, PermittedUsersMixin
 
 
-   class DocumentManager(PermittedManagerMixin, models.Manager):
+   class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
        pass
 
 
@@ -83,8 +83,8 @@ The application owns its protected content and trust models.
        title = models.CharField(max_length=200)
        confidential = models.BooleanField(default=False)
 
-       # Adds Document.objects.permitted(permission, user).
-       objects = DocumentManager()
+       # Document.objects.filter(...).permitted(permission, user) chains.
+       objects = DocumentQuerySet.as_manager()
 
 
    class DocumentPermission(models.Model):
@@ -116,15 +116,34 @@ The application owns its protected content and trust models.
 ``GroupDocumentPermission`` connects a Django group to one document; users
 receive the group's permissions through group membership.
 
-``PermittedManagerMixin`` adds
-``Document.objects.permitted(permission, user)`` to the application's own
-manager without replacing its other behavior. The concrete
-``PermittedManager`` remains available as a convenience for models that do
-not need a custom manager. Plain ``user.has_perm(permission, document)``
-object checks do not require either one. The docs-first `permitted queryset
-inquiry contract
+``PermittedQuerySetMixin`` adds
+``permitted(permission, user, conditions=())`` to the application's
+queryset. ``as_manager()`` is enough when the application does not need
+its own manager class. An application that already owns a manager supplies
+the same queryset with ``from_queryset``:
+
+.. code-block:: python
+
+   class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet):
+       def published(self):
+           return self.filter(confidential=False)
+
+
+   class DocumentManager(models.Manager.from_queryset(DocumentQuerySet)):
+       pass
+
+
+   class Document(models.Model):
+       objects = DocumentManager()
+
+``PermittedQuerySet`` and
+``PermittedManager = Manager.from_queryset(PermittedQuerySet)`` are the
+concrete forms when no custom queryset is required. Plain
+``user.has_perm(permission, document)`` object checks do not require
+either one. ``.authorized()`` remains the lower-level instance
+projection. The `permitted queryset inquiry contract
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/permitted-queryset-inquiry.md>`_
-records compatibility with the existing ``authorized`` names.
+records that split.
 
 ``PermittedUsersMixin`` adds
 ``document.get_permitted_users(permission)``, the reverse inquiry that
@@ -328,9 +347,27 @@ Filter a queryset to the objects permitted for a particular permission:
        user,
    )
 
-The permission may instead be the corresponding ``auth.Permission`` instance.
-The queryset supplies the protected content model, so string resolution also
-checks the permission's content type. Named conditions remain explicit:
+The permission may instead be the corresponding saved ``auth.Permission``
+instance. The queryset supplies the protected content model. A string is
+the exact ``app_label.codename`` bound to that model's content type; the
+codename is not parsed to guess a model. This is the same kind of question
+as ``user.has_perm(permission, document)``, not the same string codec.
+``has_perm`` still infers a model from the codename suffix
+(`issue #268 <https://github.com/django-trusts/django-trusts/issues/268>`_).
+
+A relationship-family backend participates only when it has an applicable
+``auth.Permission`` plan for the queryset model and owns every selected
+name as a queryable condition. Other backends contribute nothing. If none
+own the full set, the call raises ``TrustsConfigurationError`` before SQL.
+``trusts.E008`` reports that configuration for ``authorization_required``
+declarations only. A runtime ``.permitted()`` call is not one of those
+declarations; it still validates and raises on first use.
+
+Malformed permissions and conditions raise before SQL, including when the
+principal is anonymous. Anonymous and inactive principals, and a
+well-formed permission for another content type, produce an empty
+queryset. There is no active-superuser shortcut. Named conditions remain
+explicit:
 
 .. code-block:: python
 

@@ -31,6 +31,9 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('TrustModelBackendMixin', rst)
         self.assertIn('class DocumentPermission(models.Model)', rst)
         self.assertIn('Document.objects.permitted(', rst)
+        self.assertIn('PermittedQuerySetMixin', rst)
+        self.assertIn('from_queryset', rst)
+        self.assertNotIn('PermittedManagerMixin', rst)
         self.assertIn('user.get_all_permissions(document)', rst)
         self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertNotIn('from trusts.decorators import permission_required', rst)
@@ -85,6 +88,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'one-argument symbolic predicate',
             'collection-rooted `.contains(member)`',
             'Discrepancies must be surfaced in the PR',
+            'does not apply that principal check',
+            'issue #268',
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, guide)
@@ -133,6 +138,8 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('# Migrating to django-trusts 1.0', text[:80])
         self.assertIn('does not provide a direct migration', text)
         self.assertIn('## Relationship condition language (#210)', text)
+        self.assertIn('## Permitted content queryset (#270)', text)
+        self.assertIn('`1.0.0 → 1.1.0`', text)
         self.assertIn(
             '| Membership | `permission_in("team__allowed_operations")` |',
             text,

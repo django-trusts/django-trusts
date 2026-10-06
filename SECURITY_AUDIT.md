@@ -216,8 +216,15 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; not Django backend OR or a superuser shortcut |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; anonymous and inactive principals are an empty queryset; not Django backend OR or a superuser shortcut |
 | Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; no Core `is_active` blanket |
+
+`.permitted(permission, user)` is the public content-list inquiry. Anonymous
+and inactive principals receive an empty queryset, and configuration errors
+raise before that shortcut. `.authorized(user, permission, extra_q=None)` is
+the lower-level instance projection: it does not apply that principal check,
+does not accept permission strings, and does not select named conditions.
+Do not treat the two as the same filter.
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
@@ -314,6 +321,14 @@ the codename. `.permitted()` and `get_permitted_users` /
 denies an ordinary principal. The generated policy SQL carries the same
 predicate. Any other permission terminal stays primary-key identity,
 including a custom model that has a `content_type` foreign key.
+
+String `has_perm` still infers the model from the codename suffix. That
+codec gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/268).
+`.permitted()` and `authorization_required` bind the exact codename to the
+protected model's content type instead. `trusts.E008` covers declared
+`authorization_required` guards only. A runtime `.permitted()` call uses
+the same ownership rule and raises, but it is not registered with that
+check.
 
 Django's active-superuser rule runs before authentication backends, so
 `user.has_perm` can return `True` for a mismatched pair when the user is an
