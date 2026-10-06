@@ -261,7 +261,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn('django-trusts-ordered-fold', rst)
         self.assertIn('django-trusts-windows-acl', rst)
         self.assertIn('backend.add_named_filter(', rst)
-        self.assertIn('Document.objects.authorized(', rst)
+        self.assertIn('Document.objects.permitted(', rst)
         self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertNotIn('RegistryConditionLookup', rst)
         self.assertNotIn('trusts.conditions._ir', rst)

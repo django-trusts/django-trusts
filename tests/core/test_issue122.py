@@ -30,7 +30,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('TrustsImplementationConfig', rst)
         self.assertIn('TrustModelBackendMixin', rst)
         self.assertIn('class DocumentPermission(models.Model)', rst)
-        self.assertIn('Document.objects.authorized(', rst)
+        self.assertIn('Document.objects.permitted(', rst)
         self.assertIn('user.get_all_permissions(document)', rst)
         self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertNotIn('from trusts.decorators import permission_required', rst)
