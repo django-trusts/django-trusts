@@ -17,7 +17,10 @@ should follow the
 
 ## Permission content type must match the object (#267)
 
-| | Old | New |
+`1.0.0 → 1.1.0`. Crossed `auth.Permission.content_type` positives are
+1.0.0 behavior. Denial is 1.1.0 behavior.
+
+| | 1.0.0 | 1.1.0 |
 | --- | --- | --- |
 | Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, `.authorized()`, reverse users, and lockfile SQL that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
 | `authorization_required` for that pair | Already `PermissionDenied` for an ordinary principal | Same denial |
