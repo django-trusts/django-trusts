@@ -162,6 +162,11 @@ Live authority ceiling
 
 The actor loses delegated access when the sponsor loses the last applicable ordinary path. The system does not depend on a cleanup job rewriting copied grants.
 
+Principal state and shortcut isolation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The acting principal must pass the same active-principal check before either the direct or delegated branch can authorize. A sponsor contributes authority only while that sponsor is also active. The sponsor-side ordinary union contains registered ordinary relationship paths; it does not inherit Django's outer active-superuser shortcut. An active superuser may therefore remain directly permitted by the outer authorization API without automatically sponsoring every operation selected by a delegation relationship. A product that wants superuser sponsorship should make that authority source explicitly delegable.
+
 Exact relationship correlation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -536,10 +541,9 @@ That algebra is small:
 
 .. math::
 
-   O(actor, content, operation)
-   \lor \exists relationship\;
-   \bigl(D(actor, sponsor, content, operation)
-   \land O(sponsor, content, operation)\bigr)
+   O(u,c,p)
+   \lor \exists r,s\;
+   \bigl(D(r,u,s,c,p) \land O(s,c,p)\bigr)
 
 Most of the engineering follows from refusing to lose the variables inside it.
 
