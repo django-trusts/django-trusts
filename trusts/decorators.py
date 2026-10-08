@@ -132,9 +132,10 @@ def authorization_required(model, permission, conditions=()):
     ``model._meta.pk``. Structural configuration is checked with zero
     SQL before any candidate query: at least one applicable
     ``auth.Permission`` plan is required, and selected names must be
-    owned together by one participating backend. Active superusers
-    then take one existence query and bypass grants and conditions;
-    invalid configuration never reaches that shortcut. Only applicable
+    owned together by one participating backend. Under the accepted #273
+    contract, active superusers require the same complete grant and selected
+    conditions as another principal. The current implementation still has an
+    existence-only shortcut until the follow-up runtime PR. Only applicable
     plans whose permission terminal is
     ``django.contrib.auth.models.Permission`` participate. Each of
     those backends composes its own grant with its own selected names

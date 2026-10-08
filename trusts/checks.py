@@ -410,9 +410,9 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     not enough. Guards whose model app is not installed are skipped
     so a host that does not load that app (pair Zero, isolated Apps)
     is not failed by imported fixtures. Silencing ``trusts.E008``
-    hides only the diagnostic; first use still fails closed before
-    the superuser shortcut and never falls back to an unconditioned
-    grant.
+    hides only the diagnostic; first use still fails closed before the current
+    pending-removal superuser shortcut and never falls back to an
+    unconditioned grant. Issue #273 removes that shortcut in its runtime PR.
     """
     from django.apps import apps as django_apps
     from trusts._permitted import _authorization_preflight_state
