@@ -33,6 +33,7 @@ conditions, as another principal. Django's own
 | Custom user model without a concrete `is_superuser` field | Reverse inquiry rejects the model because Core needs the field for its outer predicate | Accepted when the model otherwise satisfies persisted-principal and registered-path requirements |
 | `user.has_perm(code, obj)` on an active `PermissionsMixin` superuser | Django returns `True` before consulting backends | Unchanged Django behavior |
 | Direct Trusts backend check, Trusts enumeration, `.authorized()`, `.permitted()`, and policy-lock SQL | Registered-path-only | Unchanged |
+| Policy-lock disclosure | Silent about Django's outer superuser behavior | Schema version 2 adds informational `django_outer_rules` derived from the configured user model and authentication backends; it grants nothing through Trusts |
 | Delegated actor or sponsor | No runtime delegation compiler yet; the accepted design already excludes implicit superuser authority | Direct and delegated branches both require registered paths |
 
 This intentionally removes the old reverse-inquiry equality with
@@ -40,8 +41,11 @@ This intentionally removes the old reverse-inquiry equality with
 the OR of supported backend contributions without Django's outer
 `PermissionsMixin` shortcut.
 
-No schema migration is required. Backend-local policy-lock bytes do not change
-solely because the outer runtime shortcuts are removed.
+No database schema migration is required. Regenerate and review the policy
+lockfile: schema version 2 adds `django_outer_rules`, so the bytes change even
+though backend-local registered-path SQL gains no superuser branch. Later
+changes to the relevant user-model methods or `AUTHENTICATION_BACKENDS` also
+change the bytes and trip `trusts.E009`.
 
 Downstream applications should review Trusts-owned list, view-guard, and
 reverse-inquiry expectations. An application-owned `is_superuser` bypass is not
@@ -68,6 +72,10 @@ Migration-bot checklist:
 - `has_perm(`
 - `create_superuser(`
 - `include_superusers`
+- `django_outer_rules`
+- `AUTH_USER_MODEL`
+- `AUTHENTICATION_BACKENDS`
+- `django.contrib.auth.backends.ModelBackend`
 - custom user models without `is_superuser`
 - delegated actor and sponsor paths
 - `trusts_policy_sql`
