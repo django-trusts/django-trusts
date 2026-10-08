@@ -200,10 +200,12 @@ own their application labels, migrations, tables, and registration calls.
 Django treats an active superuser as globally authorized in
 `PermissionsMixin.has_perm()` before consulting authentication backends.
 Treat `is_superuser` as an unrestricted root override only at that Django
-boundary. Trusts-owned inquiries do not manufacture authority from the field;
-they require a complete registered path and every selected condition. Use
-staff/non-superuser accounts when a Django-facing `user.has_perm()` call must
-remain subject to tenant, parent, object, or named-filter restrictions.
+boundary, not as a django-trusts capability. Trusts-owned inquiries do not
+manufacture authority from the field; they require a complete registered path
+and every selected condition. Django admin may retain Django's native behavior,
+but that is not precedent for a general Trusts shortcut. Use staff/non-superuser
+accounts when a Django-facing `user.has_perm()` call must remain subject to
+tenant, parent, object, or named-filter restrictions.
 
 For ordinary users, Django grants when any configured authentication backend
 grants. Trusts cannot revoke authorization supplied by another backend. Audit

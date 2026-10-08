@@ -44,17 +44,12 @@ No schema migration is required. Backend-local policy-lock bytes do not change
 solely because the outer runtime shortcuts are removed.
 
 Downstream applications should review Trusts-owned list, view-guard, and
-reverse-inquiry expectations. Application code that intentionally applies
-Django's outer superuser policy remains application-owned. In particular, the
-GitHub reference application's `_inquiry_bypassed` service rule is not changed
-by Core #273; its reverse tests and README must adopt the new Core contract when
-the application repins Core.
-
-The ordered-fold extension's `trusts_ordered_fold/decorators.py` currently
-copies the Core decorator's superuser shortcut and must remove that copy when it
-adopts this contract. django-trusts-zero should also correct the
-`trusts/zero/query.py` docstring that attributes Django's outer shortcut to
-`ModelBackend` when it coordinates or repins its documentation.
+reverse-inquiry expectations. An application-owned `is_superuser` bypass is not
+mechanically changed by Core, but the Trusts contract does not approve it or
+make it a general compatibility rule. In particular, the GitHub reference
+application's `_inquiry_bypassed` service rule requires independent application
+review; Core #273 changes its reverse expectations and README when the
+application repins Core.
 
 Migration-bot checklist:
 
@@ -65,8 +60,6 @@ Migration-bot checklist:
 - `.permitted(`
 - `.authorized(`
 - `has_perm(`
-- `create_superuser(`
-- `include_superusers`
 - custom user models without `is_superuser`
 - delegated actor and sponsor paths
 - `trusts_policy_sql`
