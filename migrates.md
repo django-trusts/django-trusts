@@ -50,6 +50,12 @@ GitHub reference application's `_inquiry_bypassed` service rule is not changed
 by Core #273; its reverse tests and README must adopt the new Core contract when
 the application repins Core.
 
+The ordered-fold extension's `trusts_ordered_fold/decorators.py` currently
+copies the Core decorator's superuser shortcut and must remove that copy when it
+adopts this contract. django-trusts-zero should also correct the
+`trusts/zero/query.py` docstring that attributes Django's outer shortcut to
+`ModelBackend` when it coordinates or repins its documentation.
+
 Migration-bot checklist:
 
 - `is_superuser`
@@ -59,6 +65,8 @@ Migration-bot checklist:
 - `.permitted(`
 - `.authorized(`
 - `has_perm(`
+- `create_superuser(`
+- `include_superusers`
 - custom user models without `is_superuser`
 - delegated actor and sponsor paths
 - `trusts_policy_sql`
