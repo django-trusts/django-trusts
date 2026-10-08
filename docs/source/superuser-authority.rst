@@ -152,19 +152,28 @@ Implementation acceptance
 The implementation following this contract must demonstrate all of the
 following:
 
-1. An active superuser without a matching registered grant is denied by the
-   view guard and omitted from the reverse inquiry.
+1. An active superuser without a matching registered grant is denied or
+   absent on every Trusts-owned surface in the matrix: the direct backend
+   object check, permission enumeration, ``.authorized()``, ``.permitted()``,
+   the view guard, and the reverse inquiry.
 2. A matching registered grant authorizes a superuser under the same
    conditions as another active principal.
 3. Selected conditions can deny a superuser.
 4. Direct and delegated branches both use registered-path-only authority.
 5. Removing a sponsor's last applicable ordinary path removes the delegated
    result even when that sponsor is a superuser.
-6. A custom user model without a concrete ``is_superuser`` field can use the
+6. An inactive superuser with a registered grant is denied by the view guard
+   and ``.permitted()``. The reverse inquiry includes that principal only
+   when a supported backend's own eligibility rule would include the same
+   inactive user.
+7. An inactive sponsor contributes no delegated authority.
+8. A custom user model without a concrete ``is_superuser`` field can use the
    reverse inquiry when its registered paths are otherwise supported.
-7. ``PermissionsMixin.has_perm()`` retains Django's active-superuser result.
-8. Backend-local policy-lock bytes do not change solely because Core removes
-   its outer runtime shortcut.
+9. ``PermissionsMixin.has_perm()`` retains Django's active-superuser result,
+   and the stock Django admin index and changelist still return HTTP 200 for
+   an active superuser without application-specific admin changes.
+10. Backend-local policy-lock bytes do not change solely because Core removes
+    its outer runtime shortcut.
 
 Downstream applications must update expectations for Trusts-owned reverse
 queries when they repin Core. An application-owned ``is_superuser`` bypass is
