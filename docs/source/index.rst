@@ -189,6 +189,8 @@ The application provides a Django authentication backend using
    class DocumentBackend(TrustModelBackendMixin, ModelBackend):
        pass
 
+.. _register-the-trust:
+
 Register the trust
 ------------------
 
@@ -656,6 +658,12 @@ ordinary permission on the same content and operation. The design requirements,
 failure modes, and proposed correlated compiler model are developed in
 :doc:`permission-delegation`.
 
+What's new
+----------
+
+The concise release and milestone index is :doc:`whats-new`. Migration steps
+for existing applications remain in ``migrates.md``.
+
 Migrating from django-trusts 0.x
 --------------------------------
 
@@ -704,5 +712,6 @@ in the `support matrix
 
    authorization-policy-sql
    permission-delegation
+   whats-new
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.
