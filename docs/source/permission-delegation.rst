@@ -165,7 +165,7 @@ The actor loses delegated access when the sponsor loses the last applicable ordi
 Principal state and shortcut isolation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The acting principal must pass the same active-principal check before either the direct or delegated branch can authorize. A sponsor contributes authority only while that sponsor is also active. django-trusts does not treat ``is_superuser`` as implicit authority in either branch. A superuser is an ordinary principal unless the application registers a trust path that grants authority. Django admin may continue to apply Django's own superuser behavior through its authentication and permission stack; that application-level choice does not enter the django-trusts policy or the sponsor-side ordinary union.
+The acting principal must pass the same active-principal check before either the direct or delegated branch can authorize. A sponsor contributes authority only while that sponsor is also active. django-trusts does not treat ``is_superuser`` as implicit authority in either branch. A superuser is an ordinary principal unless the application registers a trust path that grants authority. Django admin may continue to apply Django's own superuser behavior through its authentication and permission stack; that application-level choice does not enter the django-trusts policy or the sponsor-side ordinary union. The cross-surface boundary and #273 implementation status are specified in :doc:`superuser-authority`.
 
 Exact relationship correlation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
