@@ -207,12 +207,11 @@ but that is not precedent for a general Trusts shortcut. Use staff/non-superuser
 accounts when a Django-facing `user.has_perm()` call must remain subject to
 tenant, parent, object, or named-filter restrictions.
 
-The policy lock's top-level `django_outer_rules` section records whether the
-configured user model retains Django's `PermissionsMixin` active-superuser
-methods and whether stock `ModelBackend` behavior is configured. Treat it as
-an informational audit disclosure, not a Trusts grant. A relevant settings
-change alters the locked bytes and trips `trusts.E009`. Rendering this section
-is pending issue #273.
+Every policy-lock query entry carries the fixed
+`django_outer_superuser_rule` note that `PermissionsMixin` and `ModelBackend`
+may grant outside the displayed SQL and that Trusts cannot disable those outer
+rules. Treat it as an informational audit disclosure, not a Trusts grant. The
+schema-version-2 note is pending issue #273.
 
 For ordinary users, Django grants when any configured authentication backend
 grants. Trusts cannot revoke authorization supplied by another backend. Audit
@@ -345,8 +344,9 @@ Django's active-superuser rule runs before authentication backends, so
 `user.has_perm` can return `True` for a mismatched pair when the user is an
 active superuser. Trusts enumeration, `.authorized()`, `.permitted()`, the
 view guard, reverse inquiry, and backend-local policy SQL do not copy that
-shortcut. The lockfile's informational `django_outer_rules` section records
-the external Django boundary but does not apply it.
+shortcut. Every lockfile query entry's informational
+`django_outer_superuser_rule` note records the external Django boundary but
+does not apply it.
 The view guard and reverse inquiry are known `dev` implementation mismatches
 until issue #273 lands; the accepted contract is registered-path-only.
 
@@ -362,13 +362,14 @@ records the additional security boundaries.
 The generated YAML is organized by backend and protected content model. Each
 trust exposes its declared relationships. Each content with trusts records SQL
 for `permitted`, `has_perm`, `get_all_permissions`, and
-`get_permitted_users`. The locked reverse statement is that backend's
-branch, not Django's outer superuser rule. The top-level
-`django_outer_rules` section separately records known `PermissionsMixin` and
-stock `ModelBackend` superuser behavior derived from settings. It is
-informational and grants nothing through Trusts. Filter-only
-contents carry their model and `named_filters`, and empty relationship
-backends remain visible as `contents: []`.
+`get_permitted_users`. The locked reverse statement is that backend's branch,
+not Django's outer superuser rule. Each generated query entry carries the same
+fixed `django_outer_superuser_rule` note that `PermissionsMixin` and
+`ModelBackend` may grant outside the displayed SQL and that Trusts cannot
+disable them. It is informational, is not derived from settings, and grants
+nothing through Trusts. Filter-only contents carry their model and
+`named_filters`, and empty relationship backends remain visible as
+`contents: []`.
 
 A django-trusts backend issues one SQL statement for each permission inquiry.
 When more than one trust in that backend authorizes the same content model, the
@@ -440,15 +441,16 @@ produce the reviewed artifact. It does not prove:
 
 Django still grants when any configured authentication backend grants. An
 active superuser remains globally authorized in `PermissionsMixin.has_perm()`
-before backends run. `django_outer_rules` makes the known stock boundary
-visible, but it does not prove arbitrary custom-backend behavior or revoke any
-grant. A green lockfile check does not revoke those grants.
+before backends run. The fixed `django_outer_superuser_rule` note on every
+query entry makes the known stock boundary visible, but it does not prove
+arbitrary custom-backend behavior or revoke any grant. A green lockfile check
+does not revoke those grants.
 
 Review backend paths, content grouping, trust relationships, `or_group`,
-permission-inquiry SQL, named filters, parameter roles, IDs,
-`database.engine`, and `django_outer_rules` as changes to the authorization
-surface or its Django boundary. Lockfile equality is a change-control
-mechanism, not a complete security proof.
+permission-inquiry SQL, named filters, parameter roles, IDs, and
+`database.engine` as changes to the authorization surface. Every query entry
+must retain the fixed `django_outer_superuser_rule` note. Lockfile equality is
+a change-control mechanism, not a complete security proof.
 
 ## Reference implementations
 

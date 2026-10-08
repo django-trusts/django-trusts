@@ -40,9 +40,9 @@ Document shape
 
 The document is organized by application meaning:
 
-* the top-level ``django_outer_rules`` section records known Django
-  superuser behavior derived from the configured user model and
-  authentication backends without applying it to Trusts SQL;
+* every generated query entry carries the fixed
+  ``django_outer_superuser_rule`` audit note without applying that rule to
+  Trusts SQL;
 * each configured Trusts backend has one ``backends`` row,
   including ``contents: []`` when it has no declarations;
 * each backend lists its ``contents`` models;
@@ -60,17 +60,6 @@ The following abridged example shows the schema:
    schema_version: 2
    database:
      engine: "django.db.backends.sqlite3"
-   django_outer_rules:
-     auth_user_model: "auth.User"
-     permissions_mixin_active_superuser:
-       has_perm: true
-       has_perms: true
-       has_module_perms: true
-       object_checks: true
-     model_backend:
-       configured: true
-       global_get_all_permissions: true
-       with_perm_include_superusers: true
    backends:
      - path: "documents.backends.DocumentBackend"
        contents:
@@ -82,53 +71,58 @@ The following abridged example shows the schema:
                permission: {path: "permission", model: "auth.Permission", target: "id"}
                content: {path: "document", model: "documents.Document", target: "id"}
            permitted:
+             django_outer_superuser_rule: "Django PermissionsMixin and ModelBackend may grant outside this SQL; Trusts cannot disable them."
              params: [{const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
              sql: |-
                SELECT DISTINCT ...
            has_perm:
+             django_outer_superuser_rule: "Django PermissionsMixin and ModelBackend may grant outside this SQL; Trusts cannot disable them."
              params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
              sql: |-
                SELECT ... WHERE candidate-primary-key AND grant-exists
            get_all_permissions:
+             django_outer_superuser_rule: "Django PermissionsMixin and ModelBackend may grant outside this SQL; Trusts cannot disable them."
              params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
+             django_outer_superuser_rule: "Django PermissionsMixin and ModelBackend may grant outside this SQL; Trusts cannot disable them."
              params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
              - id: "documents__Document__non_confidential"
+               django_outer_superuser_rule: "Django PermissionsMixin and ModelBackend may grant outside this SQL; Trusts cannot disable them."
                params: [{const: true}]
                sql: |-
                  SELECT ... WHERE non-confidential-predicate
 
-Django outer rules
-~~~~~~~~~~~~~~~~~~
+Django outer rule note
+~~~~~~~~~~~~~~~~~~~~~~
 
-Schema version 2 adds the informational ``django_outer_rules`` section. This
-addition is the accepted target for issue #273 and is not present in the
-current schema-version-1 renderer until that runtime work lands.
+Schema version 2 adds ``django_outer_superuser_rule`` to every generated
+permission-inquiry and named-filter query entry, including
+``get_group_permissions`` when present. This addition is the accepted target
+for issue #273 and is not present in the current schema-version-1 renderer
+until that runtime work lands.
 
-``auth_user_model`` is the configured model label. The
-``permissions_mixin_active_superuser`` booleans report whether the effective
-``has_perm()``, ``has_perms()``, and ``has_module_perms()`` paths retain
-Django's active-superuser shortcut. ``object_checks`` records that the first
-two methods apply the shortcut when an object is supplied as well as when it
-is absent.
+The value is one fixed sentence:
 
-``model_backend.configured`` reports whether the stock
-``django.contrib.auth.backends.ModelBackend`` is present in
-``AUTHENTICATION_BACKENDS``. When true,
-``global_get_all_permissions`` records its global active-superuser expansion,
-and ``with_perm_include_superusers`` records the effect of
-``with_perm(..., include_superusers=True)``. Custom backend behavior is not
-inferred from a similarly named class and remains an independent audit item.
+.. code-block:: text
 
-These rows describe Django's boundary; they do not participate in any Trusts
-query. A relevant user-model method or authentication-backend change alters
-the generated bytes and therefore fails ``trusts.E009`` until the lockfile is
-regenerated and reviewed.
+   Django PermissionsMixin and ModelBackend may grant outside this SQL; Trusts cannot disable them.
+
+The note does not inspect or summarize ``AUTH_USER_MODEL`` or
+``AUTHENTICATION_BACKENDS``. It records the durable boundary that Django code
+may grant before or beside a Trusts query and that a Trusts denial cannot
+revoke such a grant. The note itself does not participate in SQL and grants
+nothing.
+
+If a future, separately reviewed direct-path superuser override is ever added,
+it must run only after all ordinary preflight checks, fail closed, compile into
+the affected query's SQL, and never apply to a delegated sponsor. Enabling it
+would therefore alter the SQL and fail ``trusts.E009`` until reviewed; it would
+not alter the fixed Django-boundary note. Core has no such feature today.
 
 Trusts and OR composition
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -267,8 +261,8 @@ One renderer per lockfile
 
 A lockfile belongs to one selected Django database renderer. SQL emitted for
 SQLite and MySQL may differ even when the application declarations are
-identical. Schema version 2 also exports the informational Django outer rules;
-it still exports only supported trust registrations. An unsupported
+identical. Schema version 2 also exports the fixed Django outer-rule note on
+every query entry; it still exports only supported trust registrations. An unsupported
 registration shape makes rendering fail rather than emitting a partial row.
 
 CI that executes runtime tests against several engines may still review one
@@ -293,9 +287,9 @@ Reviewing changes
 
 Review changes to backend paths, content grouping, trust relationships,
 ``or_group``, permission-inquiry SQL, named filters, parameter roles, identifiers, and
-``database.engine`` as changes to the authorization surface. Review
-``django_outer_rules`` changes as Django-boundary changes even though those
-rows do not grant through Trusts.
+``database.engine`` as changes to the authorization surface. Every query entry
+must retain the fixed ``django_outer_superuser_rule`` note. Its presence does
+not grant through Trusts.
 
 Byte equality proves only that the current declarations and selected renderer
 produce the reviewed bytes. It does not prove compiler correctness, omitted
