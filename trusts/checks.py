@@ -411,8 +411,8 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     so a host that does not load that app (pair Zero, isolated Apps)
     is not failed by imported fixtures. Silencing ``trusts.E008``
     hides only the diagnostic; first use still fails closed before
-    the superuser shortcut and never falls back to an unconditioned
-    grant.
+    any candidate query and never falls back to an unconditioned
+    grant. ``is_superuser`` is not a grant on this surface.
     """
     from django.apps import apps as django_apps
     from trusts._permitted import _authorization_preflight_state

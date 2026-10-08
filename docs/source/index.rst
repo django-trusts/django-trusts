@@ -312,8 +312,9 @@ model keeps its own content type. Any other permission terminal, including
 a custom model with a ``content_type`` foreign key, is still matched by
 primary key. Django's active-superuser shortcut can still make
 ``user.has_perm`` return ``True`` before this check runs.
-``.permitted()``, enumeration, and the reverse user inquiry do not copy
-that shortcut.
+Trusts permission enumeration, ``.authorized()``, ``.permitted()``,
+``authorization_required()``, the reverse user inquiry, and policy SQL
+require complete registered paths and do not copy that shortcut.
 
 List the user's permissions on an object:
 

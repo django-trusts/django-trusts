@@ -22,9 +22,11 @@ def compile_permitted_users(content, perm, *, user_queryset=None):
 
     The candidate rows are ``user_queryset`` when given (the optional
     manager adapter) and otherwise ``AUTH_USER_MODEL``'s default manager.
-    Django's active-superuser rule is OR-ed with each configured backend
-    that can contribute an exact reverse predicate. An unsupported
-    object-permission backend raises before SQL.
+    Each configured backend that can contribute an exact reverse
+    predicate is OR-ed. Core adds no outer active-superuser branch.
+    ``is_superuser`` is not required on the user model. An unsupported
+    object-permission backend raises before SQL. When no backend
+    contributes, the result is empty.
     """
     from django.contrib.auth import get_backends, get_user_model
 
@@ -39,9 +41,8 @@ def compile_permitted_users(content, perm, *, user_queryset=None):
     backends = tuple(get_backends())
     _reject_unaccepted_permission_instance(perm, backends)
     user_model = user_queryset.model
-    _assert_superuser_fields(user_model)
     _assert_persisted_principal(user_model)
-    parts = [_superuser_q(user_model)]
+    parts = []
     involved = [user_model, content.__class__]
     if isinstance(perm, (str, Permission)):
         involved.append(Permission)
@@ -61,6 +62,8 @@ def compile_permitted_users(content, perm, *, user_queryset=None):
     _assert_same_database(alias, involved)
     if user_queryset.db != alias:
         user_queryset = user_queryset.using(alias)
+    if not parts:
+        return user_queryset.none()
     combined = parts[0]
     for part in parts[1:]:
         combined |= part
@@ -488,29 +491,9 @@ def _concrete_field(model, name):
     return field
 
 
-def _require_boolean(model, name, role):
-    field = _concrete_field(model, name)
-    if field is None or field.get_internal_type() != 'BooleanField':
-        raise TrustsConfigurationError(
-            'Reverse permission inquiry needs %s.%s as a concrete '
-            'BooleanField to compile the %s in SQL.'
-            % (model._meta.label, name, role)
-        )
-
-
-def _assert_superuser_fields(model):
-    _require_boolean(model, 'is_active', 'active-superuser rule')
-    _require_boolean(model, 'is_superuser', 'active-superuser rule')
-
-
 def _assert_persisted_principal(model):
     for name in ('is_anonymous', 'is_authenticated', 'is_active'):
         _principal_presence(model, name)
-
-
-def _superuser_q(model):
-    """Django's outer rule: active superusers, not a global is_active filter."""
-    return Q(is_active=True, is_superuser=True)
 
 
 def _principal_presence(model, name):

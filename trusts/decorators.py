@@ -78,13 +78,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
         raise Http404
     pk = _coerce_pk(model, raw_pk)
 
-    is_superuser = bool(
-        user is not None
-        and getattr(user, 'is_active', False)
-        and getattr(user, 'is_superuser', False)
-        and not getattr(user, 'is_anonymous', False)
-    )
-    if not is_superuser and not is_active_principal(user):
+    if not is_active_principal(user):
         raise PermissionDenied
 
     if not django_apps.ready:
@@ -97,11 +91,6 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
     )
 
     candidates = model._default_manager.filter(pk=pk)
-    if is_superuser:
-        if not candidates.exists():
-            raise Http404
-        return
-
     app_label, codename = permission.split('.', 1)
     binding = _permission_binding(model, app_label, codename)
     granted_q = _authorization_grant_q(
@@ -132,10 +121,11 @@ def authorization_required(model, permission, conditions=()):
     ``model._meta.pk``. Structural configuration is checked with zero
     SQL before any candidate query: at least one applicable
     ``auth.Permission`` plan is required, and selected names must be
-    owned together by one participating backend. Active superusers
-    then take one existence query and bypass grants and conditions;
-    invalid configuration never reaches that shortcut. Only applicable
-    plans whose permission terminal is
+    owned together by one participating backend. Every principal,
+    including an active superuser, then needs a complete registered
+    grant and the selected conditions. Invalid configuration fails
+    closed before any candidate query. Only applicable plans whose
+    permission terminal is
     ``django.contrib.auth.models.Permission`` participate. Each of
     those backends composes its own grant with its own selected names
     before the backends are OR'd; backend order does not change the
@@ -143,10 +133,12 @@ def authorization_required(model, permission, conditions=()):
     Does not use Django backend OR, ``user.has_perm``, or the
     legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
     surface. Django's object-level ``user.has_perm`` OR across
-    authentication backends is a different layer.
+    authentication backends is a different layer. ``is_superuser`` is
+    not a grant.
 
     ``PermittedQuerySet.permitted`` is the queryset form of this
-    permission codec and condition rule. It has no HTTP status and no
+    permission codec and condition rule. It has no HTTP status.
+    Neither surface copies Django's ``PermissionsMixin``
     active-superuser shortcut.
     """
     model = _guard_model(model)

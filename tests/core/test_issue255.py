@@ -1,9 +1,11 @@
 """Reverse permission inquiry (#255).
 
 One saved content object and one permission. The private compiler and
-both public adapters return the same rows as ``user.has_perm`` for the
-candidate user queryset. Construction is zero SQL. Evaluation is one
-statement. Core does not add a blanket ``is_active`` exclusion.
+both public adapters return the same rows as Django's backend OR
+(``_user_has_perm``) for the candidate user queryset. That oracle does
+not include ``PermissionsMixin.has_perm``'s active-superuser shortcut.
+Construction is zero SQL. Evaluation is one statement. Core does not
+add a blanket ``is_active`` exclusion or an outer superuser branch.
 """
 
 import uuid
@@ -13,7 +15,12 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.base_user import AbstractBaseUser
-from django.contrib.auth.models import AnonymousUser, Group, Permission
+from django.contrib.auth.models import (
+    AnonymousUser,
+    Group,
+    Permission,
+    _user_has_perm,
+)
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
@@ -136,12 +143,16 @@ def _normalized(perm):
     return perm
 
 
+def _backend_grants(user, perm, content):
+    """Backend OR without ``PermissionsMixin``'s superuser shortcut."""
+    return _user_has_perm(user, _normalized(perm), content)
+
+
 def _assert_agrees(test, content, perm, candidates):
     found = _pks(content.get_permitted_users(perm))
-    code = _normalized(perm)
     expected = set()
     for user in candidates:
-        if user.has_perm(code, content):
+        if _backend_grants(user, perm, content):
             expected.add(user.pk)
     test.assertEqual(found, expected)
     return found
@@ -272,7 +283,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         )
         _assert_agrees(self, self.document, PERM, self.candidates)
         self.assertIn(self.alice.pk, found)
-        self.assertIn(self.superuser.pk, found)
+        self.assertNotIn(self.superuser.pk, found)
         self.assertIn(self.marked.pk, found)
         self.assertNotIn(self.bob.pk, found)
         self.assertNotIn(self.inactive.pk, found)
@@ -287,11 +298,11 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             found,
         )
 
-    def test_unrelated_permission_matches_has_perm_including_superuser(self):
+    def test_unrelated_permission_matches_backend_or_without_superuser(self):
         found = _assert_agrees(
             self, self.document, self.other, self.candidates,
         )
-        self.assertIn(self.superuser.pk, found)
+        self.assertNotIn(self.superuser.pk, found)
         self.assertNotIn(self.alice.pk, found)
         self.assertNotIn(self.bob.pk, found)
 
@@ -307,7 +318,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             self, self.document, self.change, self.candidates,
         )
         self.assertNotIn(self.alice.pk, found)
-        self.assertIn(self.superuser.pk, found)
+        self.assertNotIn(self.superuser.pk, found)
 
     def test_named_filter_and_unknown_code_follow_the_singular_check(self):
         open_code = PERM + ':non_confidential'
@@ -324,7 +335,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         unknown = PERM + ':missing_filter'
         found = _assert_agrees(self, self.document, unknown, self.candidates)
         self.assertNotIn(self.alice.pk, found)
-        self.assertIn(self.superuser.pk, found)
+        self.assertNotIn(self.superuser.pk, found)
 
     def test_queryset_arguments_and_unsaved_content_fail_before_sql(self):
         unsaved = Document(title='unsaved-255')
@@ -356,11 +367,11 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             both_pks = _pks(both)
         with self.assertNumQueries(1):
             either_pks = _pks(either)
-        self.assertIn(self.superuser.pk, both_pks)
+        self.assertNotIn(self.superuser.pk, both_pks)
         self.assertIn(self.alice.pk, both_pks)
         self.assertNotIn(self.marked.pk, both_pks)
         self.assertIn(self.alice.pk, either_pks)
-        self.assertIn(self.superuser.pk, either_pks)
+        self.assertNotIn(self.superuser.pk, either_pks)
 
     def test_custom_manager_preserves_queryset_class_and_filters(self):
         manager = MarkedUserManager()
@@ -374,7 +385,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         found = _pks(chosen)
         expected = set()
         for user in manager.get_queryset():
-            if user.has_perm(PERM, self.document):
+            if _backend_grants(user, PERM, self.document):
                 expected.add(user.pk)
         self.assertEqual(found, expected)
         self.assertIn(self.marked.pk, found)
@@ -438,7 +449,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             candidates = get_user_model()._default_manager.get_queryset()
             expected = {
                 user.pk for user in candidates
-                if user.has_perm(PERM, self.document)
+                if _backend_grants(user, PERM, self.document)
             }
         self.assertEqual(found, expected)
         self.assertIn(granted.pk, found)
@@ -687,7 +698,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
             found,
             {
                 user.pk for user in candidates
-                if user.has_perm(self.code, self.paper)
+                if _backend_grants(user, self.code, self.paper)
             },
         )
         self.assertIn(self.alice.pk, found)
@@ -763,7 +774,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
             found = _pks(paper.get_permitted_users(permission))
         expected = {
             user.pk for user in self.User._default_manager.get_queryset()
-            if user.has_perm(code, paper)
+            if _backend_grants(user, code, paper)
         }
         self.assertEqual(found, expected)
         self.assertIn(self.alice.pk, found)
@@ -799,7 +810,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         self.assertIsInstance(person.pk, uuid.UUID)
         expected = {
             row.pk for row in self.UuidUser.objects.all()
-            if row.has_perm(code, paper)
+            if _backend_grants(row, code, paper)
         }
         self.assertEqual(found, expected)
         with self.assertNumQueries(0):
