@@ -648,6 +648,14 @@ while
 retaining the same Django-facing permission APIs. It is not intended to
 reproduce every feature or security behavior of Windows ACLs.
 
+Permission delegation
+---------------------
+
+Delegated authority combines relationship-owned scope with a sponsor's live
+ordinary permission on the same content and operation. The design requirements,
+failure modes, and proposed correlated compiler model are developed in
+:doc:`permission-delegation`.
+
 Migrating from django-trusts 0.x
 --------------------------------
 
@@ -695,5 +703,6 @@ in the `support matrix
    :hidden:
 
    authorization-policy-sql
+   permission-delegation
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.
