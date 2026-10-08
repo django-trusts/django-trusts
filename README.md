@@ -37,7 +37,7 @@ named filters, object and queryset authorization, and inherited relationships.
 
 ## Other documents
 
-- [What's new](docs/source/whats-new.rst)
+- [What's new](https://django-trusts.readthedocs.io/en/dev/whats-new.html)
 - [Security audit guide](SECURITY_AUDIT.md)
 - [Migration boundary](migrates.md)
 - [Supported Python, Django, and database combinations](docs/support-matrix.md)
