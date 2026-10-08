@@ -199,9 +199,11 @@ own their application labels, migrations, tables, and registration calls.
 
 Django treats an active superuser as globally authorized in
 `PermissionsMixin.has_perm()` before consulting authentication backends.
-Treat `is_superuser` as an unrestricted root override. Use
-staff/non-superuser accounts for administrators who must remain subject to
-tenant, parent, object, or named-filter restrictions.
+Treat `is_superuser` as an unrestricted root override only at that Django
+boundary. Trusts-owned inquiries do not manufacture authority from the field;
+they require a complete registered path and every selected condition. Use
+staff/non-superuser accounts when a Django-facing `user.has_perm()` call must
+remain subject to tenant, parent, object, or named-filter restrictions.
 
 For ordinary users, Django grants when any configured authentication backend
 grants. Trusts cannot revoke authorization supplied by another backend. Audit
@@ -217,7 +219,7 @@ The supported projections consume the same normalized registration:
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
 | Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; anonymous and inactive principals are an empty queryset; not Django backend OR or a superuser shortcut |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; no Core `is_active` blanket |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing supported backend contributions; each contribution contains its complete grant and eligibility predicates; no Core active-superuser branch or `is_active` blanket |
 
 `.permitted(permission, user)` is the public content-list inquiry. Anonymous
 and inactive principals receive an empty queryset, and configuration errors
@@ -243,9 +245,9 @@ def edit_document(request, pk):
 
 The guard performs structural preflight before candidate lookup. An absent
 candidate produces 404; an existing but unauthorized candidate produces 403.
-Its selected named filters are AND restrictions. Active superusers bypass
-grants and filters only after configuration preflight and still require the
-candidate to exist.
+Its selected named filters are AND restrictions. Every principal, including an
+active superuser, requires a complete registered grant with those restrictions.
+Issue #273 tracks the runtime removal of the older superuser bypass.
 
 
 Fixed-query behavior is intentional: registration-time structure and
@@ -332,9 +334,10 @@ check.
 
 Django's active-superuser rule runs before authentication backends, so
 `user.has_perm` can return `True` for a mismatched pair when the user is an
-active superuser. Enumeration, `.permitted()`, the reverse inquiry, and the
-lockfile do not copy that shortcut. `authorization_required` still has its
-own active-superuser existence shortcut after configuration preflight.
+active superuser. Trusts enumeration, `.authorized()`, `.permitted()`, the
+view guard, the reverse inquiry, and the lockfile do not copy that shortcut.
+The view guard and reverse inquiry are known `dev` implementation mismatches
+until issue #273 lands; the accepted contract is registered-path-only.
 
 Where practical, configuration failures should surface during startup or system
 checks. Runtime denial should not fall back to a broader Trusts path.
