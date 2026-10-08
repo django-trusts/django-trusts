@@ -48,9 +48,17 @@ boundaries:
    )
    # Trusts-owned question. Requires a complete registered path.
 
-Applications may intentionally use Django's outer rule for Django admin or
-another application-owned policy. That choice does not enter a Trusts query,
-a delegated sponsor's ordinary-authority union, or policy-lock SQL.
+django-trusts does not adopt that shortcut as a compatibility rule. Django
+admin may continue to receive Django's native superuser behavior because it
+uses Django's authentication and permission stack, but admin is not precedent
+for a general authorization framework. Code outside Trusts that chooses an
+``is_superuser`` bypass owns and must justify that separate policy. It does not
+enter a Trusts query, a delegated sponsor's ordinary-authority union, or
+policy-lock SQL.
+
+A future use case may justify a new explicit policy surface. Until such a case
+is specified and reviewed, the default remains registered-path-only rather
+than an implicit framework-wide exception.
 
 Surface matrix
 --------------
@@ -144,30 +152,21 @@ Implementation acceptance
 The implementation following this contract must demonstrate all of the
 following:
 
-1. An active superuser without a matching registered grant is denied or
-   absent on every Trusts-owned surface in the matrix: the direct backend
-   object check, permission enumeration, ``.authorized()``, ``.permitted()``,
-   the view guard, and the reverse inquiry.
+1. An active superuser without a matching registered grant is denied by the
+   view guard and omitted from the reverse inquiry.
 2. A matching registered grant authorizes a superuser under the same
    conditions as another active principal.
 3. Selected conditions can deny a superuser.
 4. Direct and delegated branches both use registered-path-only authority.
 5. Removing a sponsor's last applicable ordinary path removes the delegated
    result even when that sponsor is a superuser.
-6. An inactive superuser with a registered grant is denied by the view guard
-   and ``.permitted()``. The reverse inquiry includes that principal only
-   when a supported backend's own eligibility rule would include the same
-   inactive user.
-7. An inactive sponsor contributes no delegated authority.
-8. A custom user model without a concrete ``is_superuser`` field can use the
+6. A custom user model without a concrete ``is_superuser`` field can use the
    reverse inquiry when its registered paths are otherwise supported.
-9. ``PermissionsMixin.has_perm()`` retains Django's active-superuser result,
-   and the stock Django admin index and changelist still return HTTP 200 for
-   an active superuser without application-specific admin changes.
-10. Backend-local policy-lock bytes do not change solely because Core removes
-    its outer runtime shortcut.
+7. ``PermissionsMixin.has_perm()`` retains Django's active-superuser result.
+8. Backend-local policy-lock bytes do not change solely because Core removes
+   its outer runtime shortcut.
 
 Downstream applications must update expectations for Trusts-owned reverse
-queries when they repin Core. Application code that intentionally implements
-Django's outer superuser policy remains application-owned and is not rewritten
-as part of #273.
+queries when they repin Core. An application-owned ``is_superuser`` bypass is
+not mechanically rewritten by #273, but this contract does not approve or
+generalize that bypass. It requires separate application review.
