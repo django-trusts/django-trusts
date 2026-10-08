@@ -200,6 +200,9 @@ Migration-bot checklist:
 
 ## Reverse permission inquiry (#255)
 
+`1.0.0 → 1.1.0`. No public reverse permission inquiry is 1.0.0 behavior.
+The content and optional user-manager adapters are 1.1.0 behavior.
+
 | | Old | New |
 | --- | --- | --- |
 | Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
