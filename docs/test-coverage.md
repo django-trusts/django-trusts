@@ -37,7 +37,7 @@ joined model. That is historical, not a new denial-widening.
 | Area | Why it is a gap |
 | --- | --- |
 | Anonymous request users | Settlor-anonymous is rejected; object-level anonymous grants are not specified. |
-| Superuser short-circuit | Django's `ModelBackend` still treats superusers as having all perms; no extra Trusts test. |
+| Superuser boundary | Django's `PermissionsMixin.has_perm()` returns true for an active superuser before consulting backends. Trusts-owned inquiries require registered paths under the #273 contract; runtime coverage for the view guard and reverse inquiry lands with that implementation. |
 | Nested / inherited trusts | `Trust.trust` is a parent pointer with a readonly check; no recursive ACL evaluation (out of scope). |
 | `has_perm` without `obj` | Trusts contributes false/empty; ModelBackend listed separately restores globals (issue #77). |
 | `get_group_permissions` content path | Declared terminals return the group-only common string set (issue #77). |
