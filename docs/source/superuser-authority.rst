@@ -56,9 +56,12 @@ for a general authorization framework. Code outside Trusts that chooses an
 enter a Trusts query, a delegated sponsor's ordinary-authority union, or
 policy-lock SQL.
 
-A future use case may justify a new explicit policy surface. Until such a case
-is specified and reviewed, the default remains registered-path-only rather
-than an implicit framework-wide exception.
+No superuser convenience API is part of this contract. It does not add
+``register_superuser(content=...)``, a wildcard ``content="*"`` form, or an
+equivalent compiler shortcut. If a concrete use case later justifies one, it
+requires a separate proposal defining its scope and audit behavior. Until
+then, applications use ordinary registered paths and Core has no superuser
+feature.
 
 Surface matrix
 --------------
