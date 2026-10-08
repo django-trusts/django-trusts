@@ -175,17 +175,25 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(self.inactive), pk=self.open_doc.pk)
 
-    def test_superuser_exists_in_one_existence_query(self):
-        with self.assertNumQueries(1):
-            self.assertEqual(_edit(_request(self.superuser), pk=self.open_doc.pk), 'ok')
-        with self.assertNumQueries(1):
-            self.assertEqual(
-                _edit_non_confidential(_request(self.superuser), pk=self.secret.pk),
-                'ok',
-            )
-        with self.assertNumQueries(1):
+    def test_superuser_requires_a_registered_grant(self):
+        with self.assertNumQueries(2):
+            with self.assertRaises(PermissionDenied):
+                _edit(_request(self.superuser), pk=self.open_doc.pk)
+        with self.assertNumQueries(2):
+            with self.assertRaises(PermissionDenied):
+                _edit_non_confidential(
+                    _request(self.superuser), pk=self.secret.pk,
+                )
+        with self.assertNumQueries(2):
             with self.assertRaises(Http404):
                 _edit(_request(self.superuser), pk=self.open_doc.pk + 1000)
+        DocumentGrant.objects.create(
+            document=self.open_doc, user=self.superuser, permission=self.change,
+        )
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                _edit(_request(self.superuser), pk=self.open_doc.pk), 'ok',
+            )
 
     def test_named_condition_is_and_overlay_not_a_grant(self):
         self.assertEqual(

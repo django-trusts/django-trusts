@@ -8,9 +8,9 @@ from trusts._bind_once import bind_once
 def is_active_principal(user, *, allow_inactive=False):
     """Match ``User.has_perm``: anonymous and inactive users are denied.
 
-    Superuser short-circuit on ``has_perm`` is a Django ``ModelBackend``
-    behavior and is not duplicated in SQL list filters. ``allow_inactive``
-    skips only the built-in ``is_active`` check.
+    The active-superuser short-circuit on ``has_perm`` is a Django
+    ``PermissionsMixin`` behavior and is not duplicated in SQL list filters.
+    ``allow_inactive`` skips only the built-in ``is_active`` check.
     """
     if user is None:
         return False

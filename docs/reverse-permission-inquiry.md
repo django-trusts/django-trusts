@@ -126,8 +126,8 @@ An instance type without an explicit matching singular-backend capability is
 unsupported and raises before SQL. Malformed strings raise the same public
 configuration/permission-code error selected for the singular object check. A
 well-formed string that identifies no permission row applicable to the supplied
-content does not authorize an ordinary user. Active superusers remain governed
-by Django's superuser check.
+content does not authorize a user. Core does not add authority merely because
+the candidate is an active superuser.
 
 ## How the result matches `has_perm()`
 
@@ -139,33 +139,49 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must agree when called with the same `allow_inactive` value. Each supported
-backend contribution retains its own eligibility rules, composed with the
-same candidate queryset and Django's superuser check.
+must both equal the OR of singular object checks contributed by the supported
+configured backends for the normalized permission identity, when called with
+the same `allow_inactive` value:
 
-By default, membership in either queryset matches `user.has_perm(perm, content)`.
-For an `auth.Permission` instance, use its `app_label.codename` string in
-`has_perm()`; supported strings and custom permission instances are unchanged.
-Reverse compilation still uses the canonical permission row.
+```python
+normalized_perm = normalize_permission_for_singular_check(perm)
+any(
+    contributor_grants(backend, user, normalized_perm, content)
+    for backend in supported_configured_backends
+)
+```
+
+`normalize_permission_for_singular_check()` is explanatory notation, not a
+second public API. It leaves supported strings and explicitly supported custom
+permission instances unchanged, and reads
+`django_permission_instance.user_perm_str` for a Django
+`auth.Permission` instance. Reverse compilation still uses the canonical
+permission row. `contributor_grants()` is also explanatory notation: it means
+the backend's singular object-permission branch without
+`PermissionsMixin.has_perm()`'s outer active-superuser return.
 `allow_inactive=True` skips only Trusts' built-in `is_active` checks. Custom
 backend contributions are unchanged, and stock `user.has_perm()` cannot
 forward this keyword.
 
-This is stronger than the Trusts-only contract of
-`Model.objects.authorized(user, permission)`. The reverse inquiry must not
-silently omit a grant supplied by another backend and still call the result
-complete.
+The reverse inquiry must not silently omit a grant supplied by a supported
+contributing backend and still call the result complete. An unsupported
+object-permission backend makes the inquiry unsupported rather than silently
+narrowing it.
 
-### Django auth's checks before calling backends
+### Principal rules
 
-The reverse query reproduces Django auth's checks and each supported
-backend's own eligibility rules:
+The reverse query reproduces each supported backend's own eligibility rules,
+but not Django's outer `PermissionsMixin.has_perm()` shortcut:
 
-- an active superuser is included for every accepted permission/content pair;
-- an inactive superuser is not automatically granted every permission;
+- an active superuser is included only through a contributing registered path;
+- `is_superuser` by itself contributes no predicate and is not required on a
+  custom user model;
 - Trusts-owned grants follow the shared user checks;
+- an inactive ordinary user is included only if a configured supported backend
+  would grant that same singular object permission;
 - custom backend grants follow that backend's own rules, including any grants
-  to inactive users.
+  to inactive users;
+- an anonymous principal is not a persisted user row and cannot appear.
 
 A supported backend must express its contribution in SQL. Arbitrary
 Python-only state is unsupported and fails loudly.
@@ -225,19 +241,24 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    django_superuser_check(user)
-    OR (
-        user.is_active
-        AND trusts_complete_grant_predicate(user, permission, content)
+    (
+        backend_1_eligibility_predicate(user)
+        AND backend_1_complete_grant_predicate(user, permission, content)
     )
-    OR custom_backend_complete_predicate(user, permission, content)
+    OR (
+        backend_2_eligibility_predicate(user)
+        AND backend_2_complete_grant_predicate(user, permission, content)
+    )
     OR ...
 ```
 
 The named predicates are conceptual SQL placeholders, not Python callbacks.
-`user.is_active` is included only when `allow_inactive` is false.
-Backend branches retain their explicit conditions. Django's superuser
-check is unchanged.
+There is no Core-generated outer superuser contributor. Each backend branch
+includes that backend's own eligibility behavior, including any active-state
+rule it applies in the singular check. For a Trusts-owned branch,
+`user.is_active` is included only when `allow_inactive` is false. A custom
+predicate is not wrapped. Core adds no global `is_active` exclusion across
+all branches.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain
