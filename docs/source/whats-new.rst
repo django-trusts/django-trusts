@@ -13,8 +13,9 @@ Migration instructions remain in `migrates.md
 change appears in both places, this page says what changed and the migration
 record explains what an existing application must do.
 
-This index begins with the 1.1.0 development milestone. Older history remains
-available through the repository's release tags.
+Version 1.0.0 is frozen at the ``v1.0.0rc1`` feature set. This index
+therefore begins with the post-rc1 changes in the 1.1.0 development milestone.
+Older history remains available through the repository's release tags.
 
 1.1.0 (in development)
 ----------------------
