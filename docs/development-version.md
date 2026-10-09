@@ -45,6 +45,15 @@ generic mixin lives only at
 module is gone. Historical concrete models and `TrustModelBackend` live under
 `trusts.zero.*`. See [core-registry.md](core-registry.md).
 
+## Proposed feature contracts
+
+Proposed APIs are documented separately from shipped behavior. They guide
+review and later implementation but are not part of the current runtime claim.
+
+- [Delegation registration contract](delegation-registration.md) defines the
+  proposed `register(delegate=..., sponsor=...)` mode and its relationship to
+  ordinary `register(permission=..., user=...)` registrations.
+
 ## Preserved legacy source
 
 The pre-modernization tree remains available at:
