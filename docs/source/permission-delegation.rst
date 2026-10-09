@@ -1,14 +1,6 @@
 Considerations in Permission Delegation
 =======================================
 
-.. note::
-
-   This is a proposed Core model, not an implemented feature in 1.0 or 1.1.
-   The proposed public spelling is ``register(delegate=..., sponsor=...)``;
-   issue #266 tracks implementation. Whether an active superuser contributes
-   direct or sponsor-side authority remains open in issue #273 and is not
-   settled by this article.
-
 Permission delegation is often implemented as if it were permission copying. A user authorizes an application, agent, worker, or connected account; the system creates rows that resemble ordinary grants; and later checks ask whether those rows still exist. That design is simple, but it loses the fact that delegated authority depends on two independent families of evidence.
 
 The first family belongs to the relationship: which actor may act, for which content, for which operations, under which approval, selection, lifetime, and organizational boundary. The second family belongs to the sponsor: whether that sponsor is presently permitted to perform the same operation on the same content through the system's ordinary authorization policy.
@@ -180,8 +172,8 @@ An implementation must not discover sponsor authority by calling
 correlated relationship and ordinary-authority predicates can be composed.
 If a system treats superuser status or another shortcut as authority, it must
 represent that choice explicitly at the direct-actor and sponsor-authority
-composition points. django-trusts issue #273 is reconsidering those two
-choices; this delegation model does not choose either outcome.
+composition points. The delegation model itself does not choose whether such
+a shortcut supplies authority at either point.
 
 Exact relationship correlation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -241,63 +233,31 @@ Reproducing authority paths in relationship conditions
 
 An application can sometimes join concrete ownership, team, or collaborator rows from the delegation root and reproduce their predicates in a registration condition. This is useful as a bounded proof. It duplicates policy, fails to include paths added later, and makes the application schema carry forward links to authority records solely to make one traversal compile.
 
-A public registration model
----------------------------
+Public representation requirements
+----------------------------------
 
-A public API should make the two roles visible. The proposed shape is:
+A public model should expose the roles that the authorization rule needs
+without turning a delegation relationship into an ordinary grant. It must be
+able to identify:
 
-.. code:: python
+-  the acting principal;
 
-   backend.register(
-       trust=Delegation,
-       user=lambda d: d.acting_user,
-       delegate=lambda d: d.operation,
-       content=lambda d: d.repository,
-       sponsor=lambda d: d.installation.sponsor,
-       condition=lambda d: (
-           approval_matches(d)
-           & sponsor_is_eligible(d)
-           & relationship_is_active(d)
-       ),
-   )
+-  the sponsor whose live ordinary authority supplies the ceiling;
 
-The arguments have distinct policy roles:
+-  the protected content and operation; and
 
--  ``user`` binds the acting principal being checked.
+-  the relationship predicates governing approval, selection, lifetime,
+   revocation, organizational alignment, and other eligibility rules.
 
--  ``delegate`` binds the operation offered by the relationship. It uses the
-   same terminal path grammar as ordinary ``permission=`` but does not create
-   an ordinary grant.
+The representation must distinguish relationship records from ordinary grant
+records. A relationship cannot enter either ordinary authority union merely
+because it names a principal, content, and operation. Conversely, an ordinary
+grant cannot silently acquire delegation semantics merely because its model
+contains a sponsor-like field.
 
--  ``content`` binds the protected object.
-
--  ``sponsor`` binds the principal whose ordinary authority supplies the live ceiling.
-
--  ``condition`` narrows the relationship through approval, organization alignment, selected scope, lifetime, revocation, and application-specific eligibility.
-
-A delegated registration must be distinguishable from ordinary ``permission=`` and ``group=`` registrations. It cannot participate as an ordinary grant, and ordinary registration cannot silently acquire delegation semantics because a sponsor-like field happens to be present.
-
-The operation terminal may use the same underlying permission model and path shapes as an ordinary registration. The separate argument records its policy role, not necessarily a different database type.
-
-``delegate`` and ``sponsor`` form one mode switch:
-
--  an ordinary registration supplies exactly one of ``permission`` or
-   ``group`` and supplies neither ``delegate`` nor ``sponsor``;
-
--  a delegated registration supplies both ``delegate`` and ``sponsor`` and
-   supplies neither ``permission`` nor ``group``;
-
--  every partial or mixed form is a configuration error before any builder is
-   invoked or registry state is changed.
-
-The first implementation should require the sponsor path to resolve to the
-same persisted principal model used by ordinary authority records on that
-backend. Supporting heterogeneous principal models remains a separate design
-question.
-
-The sample condition names above are conceptual relationship predicates. The
-current condition language cannot yet express all of them, especially
-query-time expiry and revocation.
+This article does not prescribe keyword names, a registration signature, a
+schema, or a universal relationship model. Those choices belong to the
+authorization framework and application using this model.
 
 Compiler requirements
 ---------------------
