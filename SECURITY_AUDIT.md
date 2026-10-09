@@ -59,7 +59,7 @@ overlay:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register(...)` | Register an ordinary grant or a delegated relationship whose sponsor supplies live ordinary authority | Yes, only through a complete ordinary grant |
+| `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
@@ -69,10 +69,9 @@ rejected.
 
 ### Ordinary relationship authorization
 
-A trust registration has the public signature
-`register(*, trust, user, permission=None, group=None, content, condition=None, along=None)`
-in ordinary mode. The required `trust=` model is the root of the non-empty
-paths:
+A trust registration has the frozen 1.0 public signature
+`register(*, trust, user, permission, content, condition=None, along=None)`.
+The required `trust=` model is the root of the three non-empty paths:
 
 ```python
 backend.register(
@@ -124,7 +123,10 @@ relationship registrations for the same protected model are alternatives and
 combine with OR in one generated query. A condition attached to a relationship
 narrows only that branch and cannot create a grant.
 
-### Delegated authority
+### Proposed for 1.1: delegated authority
+
+This section records the security boundaries proposed for the 1.1 delegation
+feature. It does not describe behavior available in the current runtime.
 
 A delegated registration replaces the ordinary `user=` plus `permission=` or
 `group=` pair with `delegate=` plus `sponsor=`:
