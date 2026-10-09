@@ -6,9 +6,8 @@ documentation.
 
 ## 1.1
 
-- **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
-  use a sponsor's live ordinary permissions on the same content, narrowed by
-  the delegation's own scope. See the [user guide](source/index.rst) and
-  [implementation-driver contract](dev/delegation-registration.md) ([#279]).
+- **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor use a
+  sponsor's live ordinary permissions within delegation scope; one level is supported.
+  See the [user guide](source/index.rst) and [driver contract](dev/delegation-registration.md) ([#279]).
 
 [#279]: https://github.com/django-trusts/django-trusts/pull/279

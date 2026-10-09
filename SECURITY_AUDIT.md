@@ -170,8 +170,9 @@ Audit the following boundaries:
   condition state; rows must not borrow fields from one another;
 - the sponsor predicate is the live OR-union of applicable ordinary grants,
   including other configured Trusts handles;
-- delegated registrations are excluded from that inner union, keeping the
-  initial contract to one delegation hop;
+- delegated registrations are excluded from that inner union because the
+  current authorization model supports exactly one delegation level;
+- multi-level and recursive delegation are outside the supported boundary;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
   permission the sponsor does not hold;
 - the actor's independent ordinary grant remains the outer OR branch;
@@ -180,11 +181,11 @@ Audit the following boundaries:
 - object checks, permitted querysets, enumeration, reverse inquiry, and policy
   SQL must agree and remain one queryset statement per inquiry.
 
-Do not implement delegation by loading a sponsor and recursively calling
-`sponsor.has_perm()`. That imports Django's outer shortcuts, separates the
-relationship row from its authority predicate, adds query and consistency
-boundaries, and cannot provide equivalent queryset, reverse, or lockfile
-behavior.
+Delegation remains inside the registered declarative policy and its correlated
+sponsor-authority predicate. An application-level nested call to
+`sponsor.has_perm()` falls outside that audited policy surface: it can import
+Django's outer shortcuts, separate the relationship row from its authority
+predicate, and disagree with queryset, reverse-inquiry, or lockfile behavior.
 
 A terminal many-to-many user membership is supported where validated. Review
 the resolved comparison identity, duplicate-row behavior, and whether

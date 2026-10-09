@@ -141,9 +141,11 @@ A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS`` whose inner sponsor predicate is the complete
 applicable ordinary-trust union for the same content and permission. Delegated
-trusts are excluded from that inner union. Reviewers should verify the
-delegate/sponsor direction, the relationship-owned scope predicate, and the
-inner ordinary union in both the declaration fields and generated SQL.
+trusts are excluded from that inner union because the current feature supports
+one delegation level only; multi-level and recursive delegation are out of
+scope. Reviewers should verify the delegate/sponsor direction, the
+relationship-owned scope predicate, and the inner ordinary union in both the
+declaration fields and generated SQL.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.

@@ -129,7 +129,11 @@ state of another relationship.
 `ordinary(d.sponsor, c, p)` is the complete live OR-union of applicable
 ordinary registrations, including registrations under other configured
 handles. It is not one selected permission path. Delegated registrations are
-excluded from that inner union, establishing the initial one-hop bound.
+excluded from that inner union.
+
+The current proposal supports exactly one level of delegation. The sponsor's
+authority must come from ordinary registrations; one delegated relationship
+cannot sponsor another. Multi-level and recursive delegation are out of scope.
 
 The actor's independent ordinary authority remains the existing outer OR
 branch. Adding delegation neither converts an ordinary grant into a delegated
