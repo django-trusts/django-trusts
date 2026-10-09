@@ -118,14 +118,26 @@ question.
 For actor `u`, content `c`, and permission `p`, the compiled result is:
 
 ```text
-ordinary(u, c, p)
-OR
-EXISTS relationship d:
-    d.delegate = u
-    AND d.content = c
-    AND delegated_condition(d, p)
-    AND ordinary(d.sponsor, c, p)
+is_active_principal(u)
+AND (
+    ordinary(u, c, p)
+    OR
+    EXISTS relationship d:
+        d.delegate = u
+        AND d.content = c
+        AND delegated_condition(d, p)
+        AND is_active_principal(d.sponsor)
+        AND ordinary(d.sponsor, c, p)
+)
 ```
+
+`is_active_principal(x)` is expressed as its equivalent eligibility predicate
+where the inquiry projects persisted principals. A delegate or sponsor that
+fails that rule cannot
+authorize through delegation, even while its ordinary grants and delegation
+rows remain stored. The delegate gate applies to both the actor's ordinary
+branch and delegated branch. This eligibility rule does not decide whether
+active-superuser status supplies authority.
 
 The exact relationship row binds the sponsor. A matching relationship from
 one installation cannot borrow the sponsor, approval, content, or condition
@@ -187,8 +199,8 @@ code PR. At minimum, that work must include:
 6. forward, reverse, enumeration, queryset, and policy-SQL agreement tests;
 7. a lockfile representation that exposes delegate, sponsor, content,
    condition, and correlated ordinary-authority composition;
-8. backend, content-model, permission-model, chain, and cycle fail-closed
-   tests; and
+8. backend, content-model, permission-model, inactive delegate, inactive
+   sponsor, chain, and cycle fail-closed tests; and
 9. user documentation and What's New entries describing only behavior that
    actually ships.
 

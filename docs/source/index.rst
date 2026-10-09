@@ -309,6 +309,10 @@ django-trusts requires the same delegation row, its selected content and
 condition, and an ordinary sponsor grant on that content. The actor's own
 ordinary grants remain available as independent alternatives.
 
+Both principals must remain eligible. A delegate or sponsor that fails the
+same active-principal rule used by django-trusts receives no delegated access,
+even if its ordinary grants and delegation rows remain in the database.
+
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
 The one-argument form applies row-only restrictions. The two-argument form in

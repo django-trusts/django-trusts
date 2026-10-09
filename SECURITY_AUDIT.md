@@ -159,13 +159,22 @@ For actor `u`, content `c`, and permission `p`, every projection compiles the
 same shape:
 
 ```text
-ordinary(u, c, p)
-OR EXISTS delegation d:
-    d.delegate = u
-    AND d.content = c
-    AND delegated_condition(d, p)
-    AND ordinary(d.sponsor, c, p)
+is_active_principal(u)
+AND (
+    ordinary(u, c, p)
+    OR EXISTS delegation d:
+        d.delegate = u
+        AND d.content = c
+        AND delegated_condition(d, p)
+        AND is_active_principal(d.sponsor)
+        AND ordinary(d.sponsor, c, p)
+)
 ```
+
+For projections over persisted users, `is_active_principal(x)` is compiled as
+an equivalent principal-eligibility predicate. A delegate or sponsor that
+fails that rule receives no delegated authority even if its grants and
+relationship rows remain.
 
 Audit the following boundaries:
 
@@ -178,6 +187,8 @@ Audit the following boundaries:
 - multi-level and recursive delegation are outside the supported boundary;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
   permission the sponsor does not hold;
+- delegate and sponsor eligibility must be enforced inside the shared plan,
+  without loading the sponsor or issuing a second authorization inquiry;
 - the actor's independent ordinary grant remains the outer OR branch;
 - tenant, organization, approval, revocation, and expiry data require
   authorized write paths and database constraints; and

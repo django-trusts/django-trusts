@@ -144,8 +144,11 @@ applicable ordinary-trust union for the same content and permission. Delegated
 trusts are excluded from that inner union because the current feature supports
 one delegation level only; multi-level and recursive delegation are out of
 scope. Reviewers should verify the delegate/sponsor direction, the
-relationship-owned scope predicate, and the inner ordinary union in both the
-declaration fields and generated SQL.
+relationship-owned scope predicate, the delegate and sponsor eligibility
+predicates, and the inner ordinary union in both the policy document and
+generated SQL. A delegate or sponsor that fails the principal eligibility rule
+equivalent to ``is_active_principal`` must contribute no delegated authority,
+even while its grants and delegation rows remain stored.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
