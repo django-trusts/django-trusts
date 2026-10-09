@@ -63,11 +63,13 @@ may compare that requested permission with relationship-owned scope data, but
 it cannot grant an operation that the sponsor does not currently hold.
 
 `content=` identifies the meeting point of the two sides. In ordinary mode,
-`condition=` keeps its existing one-argument builder. In delegated mode, it is
-a two-argument symbolic builder: the first argument is the relationship row
-and the second is the requested permission. It may apply relationship-owned
-restrictions such as allowed operations, selected scope, approval,
-organization eligibility, revocation, and expiry.
+`condition=` keeps its existing one-argument builder. In delegated mode, it
+may take either the relationship row alone or that row plus the requested
+permission. The one-argument form applies row-only restrictions. The
+two-argument form additionally supports permission-dependent scope such as
+allowed operations. Either form may apply relationship-owned restrictions
+such as selected scope, approval, organization eligibility, revocation, and
+expiry.
 
 For example, a delegation row with an `allowed_permissions` relation may
 narrow the sponsor ceiling without adding another public registration
@@ -101,7 +103,10 @@ condition builder or mutating registry state:
 - delegated mode requires both `delegate=` and `sponsor=` and forbids
   `user=`, `permission=`, and `group=`;
 - either member of the delegated pair without the other is invalid; and
-- supplying none of the complete modes is invalid.
+- supplying none of the complete modes is invalid;
+- an ordinary condition builder must take one argument; and
+- a delegated condition builder may take one or two arguments, while any
+  other arity is invalid.
 
 The first implementation should require `delegate=` and `sponsor=` to resolve
 to the same persisted principal model used by applicable ordinary authority
@@ -175,7 +180,7 @@ After this contract is approved, implementation should remain in a separate
 code PR. At minimum, that work must include:
 
 1. public and internal registration validation for the two modes;
-2. delegated two-argument condition parsing and validation;
+2. delegated one- and two-argument condition parsing and validation;
 3. a stored non-ordinary relationship record shape;
 4. aggregate correlated compilation across applicable handles;
 5. exclusion of delegated records from both ordinary unions;

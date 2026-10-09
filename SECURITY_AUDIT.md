@@ -146,13 +146,14 @@ principal who delegated authority and whose current ordinary grants provide
 the ceiling. Reversing those paths changes who can act and is an authorization
 defect.
 
-The delegated condition builder receives two symbolic values once during
-registration: the relationship root and the requested permission. It may
-compare the requested permission with relationship-owned scope data and may
-apply row restrictions such as approval, tenant alignment, revocation, or
-expiry. The compiler stores normalized expression data and retains no
-callable. A two-argument builder on an ordinary registration, or a
-one-argument builder on a delegated registration, is a configuration error.
+A delegated condition builder receives either the relationship root alone or
+that root plus the requested permission as symbolic values. The one-argument
+form applies row-only restrictions. The two-argument form may also compare the
+requested permission with relationship-owned scope data. Both forms are
+invoked once during registration and may express restrictions such as
+approval, tenant alignment, revocation, or expiry. The compiler stores
+normalized expression data and retains no callable. A two-argument builder on
+an ordinary registration, or any unsupported arity, is a configuration error.
 
 For actor `u`, content `c`, and permission `p`, every projection compiles the
 same shape:

@@ -309,10 +309,11 @@ django-trusts requires the same delegation row, its selected content and
 condition, and an ordinary sponsor grant on that content. The actor's own
 ordinary grants remain available as independent alternatives.
 
-The delegated ``condition=`` builder receives the relationship and the
-requested permission as symbolic values. The example registration checks the
-requested permission against ``allowed_permissions``. Create the relationship
-and its scope with ordinary application data writes:
+The delegated ``condition=`` builder receives the relationship as a symbolic
+value and may receive the requested permission as a second symbolic value.
+The one-argument form applies row-only restrictions. The two-argument form in
+the example checks the requested permission against ``allowed_permissions``.
+Create the relationship and its scope with ordinary application data writes:
 
 .. code-block:: python
 
@@ -562,10 +563,11 @@ API also supports paths through multiple relationships:
    )
 
 For an ordinary registration, the ``condition=`` argument is a one-argument
-symbolic predicate rooted at the trust model. A delegated registration uses
-the two-argument form shown above so its relationship scope can compare with
-the requested permission. django-trusts invokes either builder once during
-registration and stores no callable. The condition grammar is path equality
+symbolic predicate rooted at the trust model. A delegated registration may
+use the same one-argument form for row-only restrictions or the two-argument
+form shown above when its relationship scope must compare with the requested
+permission. django-trusts invokes either builder once during registration and
+stores no callable. The condition grammar is path equality
 (``==``), collection-rooted membership (``.contains(member)``), and
 conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
 Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
