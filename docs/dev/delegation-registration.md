@@ -1,8 +1,16 @@
 # Delegation registration contract
 
-Status: proposed feature contract for [issue #266][issue-266]. This API is not
-implemented in django-trusts 1.0 or 1.1. Approval of this document defines the
-target for a later implementation PR; it does not make the feature available.
+Status: proposed implementation-driver contract for [issue #266][issue-266].
+
+- Release train: 1.1
+- Last updated: 2026-10-09
+- Documentation PR: [#279][docs-pr]
+- Implementation PR: not opened
+
+This document records the contract used to drive implementation. The public
+guide, security audit, and What's New describe the intended 1.1 behavior. The
+implementation PR and its tests determine when that behavior becomes
+available.
 
 The public `register()` API has two different authorization modes. They must
 remain visibly different because an ordinary registration is a grant, while a
@@ -32,7 +40,7 @@ backend.register(
     delegate=lambda relationship: relationship.delegate,
     sponsor=lambda relationship: relationship.sponsor,
     content=lambda relationship: relationship.repository,
-    condition=lambda relationship: ...,
+    condition=lambda relationship, permission: ...,
 )
 ```
 
@@ -43,20 +51,40 @@ The mode switch is therefore:
 | Ordinary permission | `user=` and `permission=` | The matching row is an ordinary grant. |
 | Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires the sponsor's live ordinary authority. |
 
-`delegate=` binds the principal who is acting. It takes the place of `user=`
-for the delegated mode. `sponsor=` binds the principal whose ordinary
-permission paths provide the live ceiling.
+`delegate=` binds the current principal who is acting and receiving delegated
+access. It takes the place of `user=` for the delegated mode. `sponsor=` binds
+the principal who delegated the authority and whose live ordinary permission
+paths provide the ceiling.
 
 The delegated row does not carry an ordinary `permission=` grant. The
 permission being checked comes from the inquiry and must be satisfied by the
-sponsor's ordinary authority union on the same content. A relationship may
-narrow allowed operations through its registered condition and related scope
-rows, but it cannot grant an operation merely by storing it.
+sponsor's ordinary authority union on the same content. A delegated condition
+may compare that requested permission with relationship-owned scope data, but
+it cannot grant an operation that the sponsor does not currently hold.
 
-`content=` identifies the meeting point of the two sides. `condition=` applies
-relationship-owned restrictions such as selected scope, approval,
-organization eligibility, revocation, and expiry. Those arguments are
-available in both modes, subject to their existing validation rules.
+`content=` identifies the meeting point of the two sides. In ordinary mode,
+`condition=` keeps its existing one-argument builder. In delegated mode, it is
+a two-argument symbolic builder: the first argument is the relationship row
+and the second is the requested permission. It may apply relationship-owned
+restrictions such as allowed operations, selected scope, approval,
+organization eligibility, revocation, and expiry.
+
+For example, a delegation row with an `allowed_permissions` relation may
+narrow the sponsor ceiling without adding another public registration
+argument:
+
+```python
+backend.register(
+    trust=RepositoryDelegation,
+    delegate=lambda d: d.delegate,
+    sponsor=lambda d: d.sponsor,
+    content=lambda d: d.repository,
+    condition=lambda d, p: d.allowed_permissions.contains(p),
+)
+```
+
+The permission argument is symbolic registration-time input. It does not turn
+the condition into a runtime callback.
 
 The existing explicit `group=` form remains an ordinary-authority
 registration. It continues to use `user=` and is mutually exclusive with
@@ -90,7 +118,7 @@ OR
 EXISTS relationship d:
     d.delegate = u
     AND d.content = c
-    AND relationship_condition(d, p)
+    AND delegated_condition(d, p)
     AND ordinary(d.sponsor, c, p)
 ```
 
@@ -117,7 +145,9 @@ The same correlated rule must drive:
 - reverse permitted-user inquiry; and
 - authorization-policy SQL and lockfiles.
 
-An application helper that loads a sponsor and calls `sponsor.has_perm()` is
+The implementation compiles the actor's direct branch and every correlated
+delegation branch into one queryset statement for each inquiry. An
+application helper that loads a sponsor and calls `sponsor.has_perm()` is
 not an implementation of this contract. It bypasses the shared declarative
 plan, can import an outer permission shortcut, and cannot provide equivalent
 queryset, reverse-inquiry, or policy-SQL behavior.
@@ -141,13 +171,16 @@ After this contract is approved, implementation should remain in a separate
 code PR. At minimum, that work must include:
 
 1. public and internal registration validation for the two modes;
-2. a stored non-ordinary relationship record shape;
-3. aggregate correlated compilation across applicable handles;
-4. exclusion of delegated records from both ordinary unions;
-5. forward, reverse, enumeration, queryset, and policy-SQL agreement tests;
-6. backend, content-model, permission-model, chain, and cycle fail-closed
+2. delegated two-argument condition parsing and validation;
+3. a stored non-ordinary relationship record shape;
+4. aggregate correlated compilation across applicable handles;
+5. exclusion of delegated records from both ordinary unions;
+6. forward, reverse, enumeration, queryset, and policy-SQL agreement tests;
+7. a lockfile representation that exposes delegate, sponsor, content,
+   condition, and correlated ordinary-authority composition;
+8. backend, content-model, permission-model, chain, and cycle fail-closed
    tests; and
-7. user documentation and What's New entries describing only behavior that
+9. user documentation and What's New entries describing only behavior that
    actually ships.
 
 ## Related design record
@@ -158,6 +191,7 @@ The framework-independent requirements and reasoning live in
 statement, concrete cases, and candidate scorecard.
 
 [considerations]: https://github.com/django-trusts/django-trusts/pull/278
+[docs-pr]: https://github.com/django-trusts/django-trusts/pull/279
 [issue-265]: https://github.com/django-trusts/django-trusts/issues/265
 [issue-266]: https://github.com/django-trusts/django-trusts/issues/266
 [issue-273]: https://github.com/django-trusts/django-trusts/issues/273

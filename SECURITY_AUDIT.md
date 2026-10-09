@@ -59,7 +59,7 @@ overlay:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
+| `register(...)` | Register an ordinary grant or a delegated relationship whose sponsor supplies live ordinary authority | Yes, only through a complete ordinary grant |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
@@ -67,11 +67,12 @@ types, constants, and combinations are intended to be rejected during setup.
 Registration closes when the configured registry freezes; late mutation is
 rejected.
 
-### Relationship authorization
+### Ordinary relationship authorization
 
 A trust registration has the public signature
-`register(*, trust, user, permission, content, condition=None, along=None)`.
-The required `trust=` model is the root of the three non-empty paths:
+`register(*, trust, user, permission=None, group=None, content, condition=None, along=None)`
+in ordinary mode. The required `trust=` model is the root of the non-empty
+paths:
 
 ```python
 backend.register(
@@ -122,6 +123,68 @@ A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and
 combine with OR in one generated query. A condition attached to a relationship
 narrows only that branch and cannot create a grant.
+
+### Delegated authority
+
+A delegated registration replaces the ordinary `user=` plus `permission=` or
+`group=` pair with `delegate=` plus `sponsor=`:
+
+```python
+backend.register(
+    trust=DocumentDelegation,
+    delegate=lambda d: d.delegate,
+    sponsor=lambda d: d.sponsor,
+    content=lambda d: d.document,
+    condition=lambda d, p: d.allowed_permissions.contains(p),
+)
+```
+
+`delegate` is the current actor receiving delegated access. `sponsor` is the
+principal who delegated authority and whose current ordinary grants provide
+the ceiling. Reversing those paths changes who can act and is an authorization
+defect.
+
+The delegated condition builder receives two symbolic values once during
+registration: the relationship root and the requested permission. It may
+compare the requested permission with relationship-owned scope data and may
+apply row restrictions such as approval, tenant alignment, revocation, or
+expiry. The compiler stores normalized expression data and retains no
+callable. A two-argument builder on an ordinary registration, or a
+one-argument builder on a delegated registration, is a configuration error.
+
+For actor `u`, content `c`, and permission `p`, every projection compiles the
+same shape:
+
+```text
+ordinary(u, c, p)
+OR EXISTS delegation d:
+    d.delegate = u
+    AND d.content = c
+    AND delegated_condition(d, p)
+    AND ordinary(d.sponsor, c, p)
+```
+
+Audit the following boundaries:
+
+- the exact delegation row must bind its delegate, sponsor, content, and
+  condition state; rows must not borrow fields from one another;
+- the sponsor predicate is the live OR-union of applicable ordinary grants,
+  including other configured Trusts handles;
+- delegated registrations are excluded from that inner union, keeping the
+  initial contract to one delegation hop;
+- relationship scope can narrow the sponsor ceiling but cannot manufacture a
+  permission the sponsor does not hold;
+- the actor's independent ordinary grant remains the outer OR branch;
+- tenant, organization, approval, revocation, and expiry data require
+  authorized write paths and database constraints; and
+- object checks, permitted querysets, enumeration, reverse inquiry, and policy
+  SQL must agree and remain one queryset statement per inquiry.
+
+Do not implement delegation by loading a sponsor and recursively calling
+`sponsor.has_perm()`. That imports Django's outer shortcuts, separates the
+relationship row from its authority predicate, adds query and consistency
+boundaries, and cannot provide equivalent queryset, reverse, or lockfile
+behavior.
 
 A terminal many-to-many user membership is supported where validated. Review
 the resolved comparison identity, duplicate-row behavior, and whether

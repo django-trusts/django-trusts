@@ -136,6 +136,15 @@ When more than one trust in that backend authorizes the same content model, the
 SQL combines those trusts with OR and each trust in the content row has
 ``or_group: true``. A sole trust omits ``or_group``.
 
+A delegated trust exposes its normalized ``delegate``, ``sponsor``,
+``content``, and condition relationships in the same content row. Its inquiry
+SQL remains one statement: the actor's ordinary branch is ORed with a
+correlated delegation ``EXISTS`` whose inner sponsor predicate is the complete
+applicable ordinary-trust union for the same content and permission. Delegated
+trusts are excluded from that inner union. Reviewers should verify the
+delegate/sponsor direction, the relationship-owned scope predicate, and the
+inner ordinary union in both the declaration fields and generated SQL.
+
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
 

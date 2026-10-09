@@ -50,9 +50,11 @@ module is gone. Historical concrete models and `TrustModelBackend` live under
 Proposed APIs are documented separately from shipped behavior. They guide
 review and later implementation but are not part of the current runtime claim.
 
-- [Delegation registration contract](delegation-registration.md) defines the
+- [Delegation registration contract](dev/delegation-registration.md) defines the
   proposed `register(delegate=..., sponsor=...)` mode and its relationship to
   ordinary `register(permission=..., user=...)` registrations.
+
+Release-train feature summaries live in [What's new](whats-new.md).
 
 ## Preserved legacy source
 
