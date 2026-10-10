@@ -27,9 +27,11 @@ def compile_permitted_users(content, perm, *, user_queryset=None):
 
     The candidate rows are ``user_queryset`` when given (the optional
     manager adapter) and otherwise ``AUTH_USER_MODEL``'s default manager.
-    Django's active-superuser rule is OR-ed with each configured backend
-    that can contribute an exact reverse predicate. An unsupported
-    object-permission backend raises before SQL.
+    Issue #273's accepted contract ORs only configured backends that can
+    contribute exact reverse predicates; Core adds no outer active-superuser
+    branch. The current implementation still adds that branch until the
+    follow-up runtime PR. An unsupported object-permission backend raises
+    before SQL.
     """
     from django.contrib.auth import get_backends, get_user_model
 

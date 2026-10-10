@@ -38,6 +38,7 @@ named filters, object and queryset authorization, and inherited relationships.
 ## Other documents
 
 - [Security audit guide](SECURITY_AUDIT.md)
+- [Superuser authority contract](docs/source/superuser-authority.rst)
 - [Migration boundary](migrates.md)
 - [Supported Python, Django, and database combinations](docs/support-matrix.md)
 - [Development and contribution guide](DEV.md)

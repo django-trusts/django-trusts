@@ -312,8 +312,12 @@ model keeps its own content type. Any other permission terminal, including
 a custom model with a ``content_type`` foreign key, is still matched by
 primary key. Django's active-superuser shortcut can still make
 ``user.has_perm`` return ``True`` before this check runs.
-``.permitted()``, enumeration, and the reverse user inquiry do not copy
-that shortcut.
+Trusts permission enumeration, ``.authorized()``, ``.permitted()``, and
+policy SQL require complete registered paths and do not copy that shortcut.
+``authorization_required()`` and the reverse user inquiry adopt the same rule
+when the pending runtime work in issue #273 lands. See
+:doc:`superuser-authority` for the cross-surface contract and implementation
+status.
 
 List the user's permissions on an object:
 
@@ -648,6 +652,22 @@ while
 retaining the same Django-facing permission APIs. It is not intended to
 reproduce every feature or security behavior of Windows ACLs.
 
+Permission delegation
+---------------------
+
+Delegated authority combines relationship-owned scope with a sponsor's live
+ordinary permission on the same content and operation. The design requirements,
+failure modes, and proposed correlated compiler model are developed in
+:doc:`permission-delegation`.
+
+Superuser authority
+-------------------
+
+Django's outer ``PermissionsMixin.has_perm()`` shortcut and Trusts-owned
+registered-path inquiries intentionally have different boundaries. The
+complete surface matrix, migration rule, and #273 implementation acceptance
+criteria are defined in :doc:`superuser-authority`.
+
 Migrating from django-trusts 0.x
 --------------------------------
 
@@ -695,5 +715,7 @@ in the `support matrix
    :hidden:
 
    authorization-policy-sql
+   permission-delegation
+   superuser-authority
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.

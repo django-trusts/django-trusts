@@ -5,6 +5,11 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the `Along` failure boundary below.
 
+The registered-path-only superuser rule below is the accepted contract for
+[issue #273](https://github.com/django-trusts/django-trusts/issues/273).
+The `dev` implementation still adds an outer active-superuser predicate until
+that runtime work lands.
+
 ## Decision
 
 Core exposes two public adapters for the same reverse inquiry:
@@ -123,8 +128,8 @@ An instance type without an explicit matching singular-backend capability is
 unsupported and raises before SQL. Malformed strings raise the same public
 configuration/permission-code error selected for the singular object check. A
 well-formed string that identifies no permission row applicable to the supplied
-content does not authorize an ordinary user. Active superusers remain governed
-by Django's outer superuser rule.
+content does not authorize a user. Core does not add authority merely because
+the candidate is an active superuser.
 
 ## Agreement invariant
 
@@ -136,11 +141,15 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must both equal the singular check for the normalized permission identity:
+must both equal the OR of singular object checks contributed by the supported
+configured backends for the normalized permission identity:
 
 ```python
 normalized_perm = normalize_permission_for_singular_check(perm)
-user.has_perm(normalized_perm, content)
+any(
+    contributor_grants(backend, user, normalized_perm, content)
+    for backend in supported_configured_backends
+)
 ```
 
 `normalize_permission_for_singular_check()` is explanatory notation, not a
@@ -148,21 +157,23 @@ second public API. It leaves supported strings and explicitly supported custom
 permission instances unchanged, and reads
 `django_permission_instance.user_perm_str` for a Django
 `auth.Permission` instance. Reverse compilation still uses the canonical
-permission row. The comparison uses the same configured Django authentication
-backends.
+permission row. `contributor_grants()` is also explanatory notation: it means
+the backend's singular object-permission branch without
+`PermissionsMixin.has_perm()`'s outer active-superuser return.
 
-This is stronger than the Trusts-only contract of
-`Model.objects.authorized(user, permission)`. The reverse inquiry must not
-silently omit a grant supplied by another backend and still call the result
-complete.
+The reverse inquiry must not silently omit a grant supplied by a supported
+contributing backend and still call the result complete. An unsupported
+object-permission backend makes the inquiry unsupported rather than silently
+narrowing it.
 
-### Django outer rules
+### Principal rules
 
-The reverse query reproduces Django's outer principal rules and each supported
-backend's own eligibility rules:
+The reverse query reproduces each supported backend's own eligibility rules,
+but not Django's outer `PermissionsMixin.has_perm()` shortcut:
 
-- an active superuser is included for every accepted permission/content pair;
-- an inactive superuser does not receive Django's outer superuser shortcut;
+- an active superuser is included only through a contributing registered path;
+- `is_superuser` by itself contributes no predicate and is not required on a
+  custom user model;
 - an inactive ordinary user is included only if a configured supported backend
   would grant that same singular object permission;
 - an anonymous principal is not a persisted user row and cannot appear.
@@ -228,8 +239,7 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    django_outer_superuser_predicate(user)
-    OR (
+    (
         backend_1_eligibility_predicate(user)
         AND backend_1_complete_grant_predicate(user, permission, content)
     )
@@ -241,10 +251,10 @@ WHERE
 ```
 
 The named predicates are conceptual SQL placeholders, not Python callbacks.
-Django's outer superuser contributor includes its active-state rule. Each
-backend branch includes that backend's own eligibility behavior, including any
-active-state rule it applies in the singular check. Core adds no global
-`is_active` exclusion across all branches.
+There is no Core-generated outer superuser contributor. Each backend branch
+includes that backend's own eligibility behavior, including any active-state
+rule it applies in the singular check. Core adds no global `is_active`
+exclusion across all branches.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain
