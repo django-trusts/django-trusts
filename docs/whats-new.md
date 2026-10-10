@@ -1,18 +1,15 @@
 # What's new
 
 This is the concise index of user-visible django-trusts changes. Features are
-arranged by release version or development milestone, summarized in one to
-three lines, and linked to their full documentation or implementing pull
-request. Design-only work is added when its user-visible runtime surface lands.
+arranged by release version, summarized in one to three lines, and linked to
+their full documentation or implementing pull request. Only implemented
+behavior appears here.
 
 Migration instructions remain in [`migrates.md`](../migrates.md). That guide
 records only changes requiring application attention; it is not a development
 log.
 
-## 1.1.0 (in development)
-
-Version 1.0.0 is frozen at the `v1.0.0rc1` feature set. This section records
-the post-RC feature train.
+## 1.1.0
 
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
   use a sponsor's live ordinary permissions within delegation scope; an
