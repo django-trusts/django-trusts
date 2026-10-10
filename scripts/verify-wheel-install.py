@@ -78,6 +78,7 @@ def main() -> int:
         BackendHandle,
         ConditionLookup,
         Ref,
+        RegisteredDelegation,
         RegisteredRelation,
         RelationPlan,
         TrustsRegistry,
@@ -110,7 +111,8 @@ def main() -> int:
     signature = inspect.signature(BackendHandle.register)
     param_names = [name for name in signature.parameters if name != 'self']
     expected_params = [
-        'trust', 'user', 'permission', 'content', 'group', 'condition', 'along',
+        'trust', 'user', 'permission', 'content', 'group',
+        'delegate', 'sponsor', 'condition', 'along',
     ]
     if param_names != expected_params:
         raise SystemExit(
@@ -142,6 +144,24 @@ def main() -> int:
                 '%s Callable args are %r, expected [TypeVar] + object'
                 % (role, callable_args)
             )
+    for role in ('delegate', 'sponsor'):
+        role_hint = hints.get(role)
+        parts = get_args(role_hint)
+        if str not in parts:
+            raise SystemExit('%s hint missing str: %r' % (role, role_hint))
+        if type(None) not in parts:
+            raise SystemExit('%s hint missing None: %r' % (role, role_hint))
+        callable_parts = [
+            part for part in parts if get_origin(part) is AbcCallable
+        ]
+        if len(callable_parts) != 1:
+            raise SystemExit('%s hint missing Callable: %r' % (role, role_hint))
+        callable_args = get_args(callable_parts[0])
+        if callable_args != ([trust_args[0]], object):
+            raise SystemExit(
+                '%s Callable args are %r, expected [TypeVar] + object'
+                % (role, callable_args)
+            )
     condition_hint = hints.get('condition')
     condition_parts = get_args(condition_hint)
     if type(None) not in condition_parts:
@@ -149,17 +169,37 @@ def main() -> int:
     condition_callables = [
         part for part in condition_parts if get_origin(part) is AbcCallable
     ]
-    if len(condition_callables) != 1:
-        raise SystemExit('condition hint missing Callable: %r' % condition_hint)
-    if get_args(condition_callables[0]) != ([trust_args[0]], object):
+    if len(condition_callables) != 2:
         raise SystemExit(
-            'condition Callable args are %r, expected [TypeVar] + object'
-            % (get_args(condition_callables[0]),)
+            'condition hint must include the ordinary one-argument form '
+            'and the delegated two-argument form, got %r' % (condition_hint,)
         )
-    if hints.get('return') is not RegisteredRelation:
+
+    def _callable_shape(part):
+        args = get_args(part)
+        if len(args) != 2:
+            raise SystemExit('condition Callable hint is %r' % (part,))
+        params, ret = args
+        return (tuple(params), ret)
+
+    shapes = [_callable_shape(part) for part in condition_callables]
+    ordinary_condition = ((trust_args[0],), object)
+    delegated_condition = ((trust_args[0], object), object)
+    if ordinary_condition not in shapes:
         raise SystemExit(
-            'register return annotation is %r, expected RegisteredRelation'
-            % hints.get('return')
+            'ordinary condition Callable args are %r, expected [TypeVar] + object'
+            % (shapes,)
+        )
+    if delegated_condition not in shapes:
+        raise SystemExit(
+            'delegated condition Callable args are %r, expected '
+            '[TypeVar, object] + object' % (shapes,)
+        )
+    return_hint = hints.get('return')
+    if set(get_args(return_hint)) != {RegisteredRelation, RegisteredDelegation}:
+        raise SystemExit(
+            'register return annotation is %r, expected '
+            'RegisteredRelation | RegisteredDelegation' % return_hint
         )
     print('py.typed present')
     print('register contextual typing', BackendHandle.register)
@@ -261,7 +301,10 @@ def main() -> int:
     if bound.conditions is not standalone.conditions:
         raise SystemExit('self-bound lookup does not wrap registry.conditions')
     print('condition lookup self-bound')
-    print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
+    print(
+        'trusts.core', TrustsRegistry, Ref, RegisteredRelation,
+        RegisteredDelegation, RelationPlan,
+    )
     print('permission_has_condition', permission_has_condition)
     print('permission_condition_code', permission_condition_code)
     print('PermissionConditionError', PermissionConditionError)
