@@ -1148,7 +1148,11 @@ def _bind_name(node, record):
     remote = getattr(target, 'remote_field', None)
     model = getattr(remote, 'model', None) if remote is not None else None
     direct_content = False
-    if model is None and getattr(_ctx, 'reverse_users', False):
+    if (
+        model is None
+        and getattr(_ctx, 'reverse_users', False)
+        and getattr(node, 'trusts_content_bind', False)
+    ):
         model = getattr(target, 'model', None)
         direct_content = model is not None
     if model is None:
@@ -1182,6 +1186,15 @@ def _bind_name(node, record):
                 or getattr(target, 'attname', None) == candidate.content_target
             )
         ):
+            # An Along reverse row binds only the comparison
+            # ``_bound_content_sql`` emitted. A condition literal on that
+            # same column, including ``folder__pk=<n>`` after Django
+            # collapses it to the foreign key, stays a constant.
+            if (
+                getattr(candidate, 'along', None) is not None
+                and not getattr(node, 'trusts_content_bind', False)
+            ):
+                continue
             labels.append('content.%s' % candidate.content_target)
     if not labels:
         return None

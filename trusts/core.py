@@ -2659,6 +2659,10 @@ class GrantReach(Expression):
                 **{walk.suffix_field: content},
             ).query.clone()
         inner.subquery = True
+        # One identity comparison. Policy SQL binds content.<target> only
+        # for this lookup; a condition literal on the same column stays
+        # a constant.
+        inner.where.children[0].trusts_content_bind = True
         inner.add_q(Q(_IdentInReach(
             walk.walk_ident, w_sql, w_params, walk.bound,
         )))

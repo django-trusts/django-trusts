@@ -33,7 +33,11 @@ from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import implementation_for_path
 from trusts.core import BackendHandle, PlanQueryCompiler, TrustsConfigurationError, TrustsRegistry
-from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.policy_lock import (
+    _compile_queryset,
+    _load_policy_sql_document,
+    render_policy_sql_bytes,
+)
 from trusts.query import PermittedUsersManagerMixin, PermittedUsersMixin
 
 
@@ -239,9 +243,59 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertNotEqual(first['id'], second['id'])
         reverse = content['get_permitted_users']
         self.assertIn('WITH RECURSIVE', reverse['sql'])
-        self.assertIn({'const': 2}, reverse['params'])
-        self.assertIn({'bind': 'content.id'}, reverse['params'])
-        self.assertIn({'bind': 'permission.id'}, reverse['params'])
+        for key in ('permitted', 'has_perm', 'get_all_permissions'):
+            forward = content[key]
+            self.assertIn('WITH RECURSIVE', forward['sql'])
+            self.assertEqual(forward['sql'].count('WITH RECURSIVE'), 2)
+            self.assertEqual(
+                forward['sql'].count('%s'), len(forward['params']),
+            )
+        self.assertEqual(content['permitted']['params'], [
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'bind': 'user.id'},
+            {'const': 2},
+            {'const': True},
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'bind': 'user.id'},
+            {'const': 2},
+            {'const': True},
+        ])
+        self.assertEqual(content['has_perm']['params'], [
+            {'const': 1},
+            {'const': 1},
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'bind': 'user.id'},
+            {'const': 2},
+            {'const': True},
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'bind': 'user.id'},
+            {'const': 2},
+            {'const': True},
+        ])
+        self.assertEqual(content['get_all_permissions']['params'], [
+            {'const': 1},
+            {'const': 1},
+            {'const': 1},
+            {'const': 1},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'bind': 'user.id'},
+            {'const': 2},
+            {'const': True},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'bind': 'user.id'},
+            {'const': 2},
+            {'const': True},
+        ])
         # One ordered list for the ORed reverse statement. Each walk
         # contributes is_active, the EXISTS sentinel, content and
         # permission binds, the content-type pair, then the depth
@@ -344,6 +398,32 @@ class Issue255PolicySqlTest(SimpleTestCase):
             ],
             [6],
         )
+
+    def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
+        handle = _export_handle('documents.backends.LiteralFolderBackend')
+        handle.register(
+            trust=FolderGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 2),
+        )
+        record = handle.registry.plan_for(Folder).records[0]
+        _sql, params = _compile_queryset(
+            FolderGrant.objects.filter(folder__pk=5),
+            'default',
+            record=record,
+            expr=None,
+            records=(record,),
+            reverse_users=True,
+        )
+        self.assertEqual(params, [{'const': 5}])
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        reverse = document['backends'][0]['contents'][0]['get_permitted_users']
+        self.assertIn({'bind': 'content.id'}, reverse['params'])
+        self.assertNotIn({'const': 5}, reverse['params'])
 
 
 class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
@@ -1253,3 +1333,133 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                 self.assertEqual(past_users, set())
                 self.assertNotIn(bob.pk, root_users)
                 self.assertNotIn(inactive.pk, root_users)
+
+    def test_suffix_content_reverse_agrees_at_bound_and_one_past(self):
+        User = get_user_model()
+
+        class Cabinet(models.Model):
+            title = models.CharField(max_length=40)
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=40)
+            cabinet = models.ForeignKey(
+                Cabinet, related_name='sheets', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class SheetGrant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            cabinet = models.ForeignKey(Cabinet, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Cabinet, Sheet, SheetGrant):
+            with _document_registry() as registry:
+                handle = _handle(registry)
+                record = handle.register(
+                    trust=SheetGrant,
+                    user='user',
+                    permission='permission',
+                    content='cabinet__sheets',
+                    along=('cabinet__parent', 1),
+                )
+                self.assertTrue(record.along.suffix_path)
+                self.assertIs(record.content_model, Sheet)
+                self.assertIs(record.along.walk_model, Cabinet)
+                alice = User.objects.create_user('sheet-alice', password='x')
+                outsider = User.objects.create_user('sheet-out', password='x')
+                permission = _permission(Sheet, 'change_sheet')
+                root = Cabinet.objects.create(title='root')
+                child = Cabinet.objects.create(title='child', parent=root)
+                past = Cabinet.objects.create(title='past', parent=child)
+                on_root = Sheet.objects.create(title='on-root', cabinet=root)
+                on_child = Sheet.objects.create(title='on-child', cabinet=child)
+                on_past = Sheet.objects.create(title='on-past', cabinet=past)
+                SheetGrant.objects.create(
+                    user=alice, cabinet=root, permission=permission,
+                )
+                candidates = User._default_manager.get_queryset()
+                root_users = _reverse_agrees(
+                    self, handle, on_root, permission, candidates,
+                )
+                child_users = _reverse_agrees(
+                    self, handle, on_child, permission, candidates,
+                )
+                past_users = _reverse_agrees(
+                    self, handle, on_past, permission, candidates,
+                )
+                self.assertEqual(root_users, {alice.pk})
+                self.assertEqual(child_users, {alice.pk})
+                self.assertEqual(past_users, set())
+                self.assertNotIn(outsider.pk, root_users)
+
+    def test_shape_c_reverse_agrees_at_bound_and_one_past(self):
+        User = get_user_model()
+
+        class Branch(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=40)
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class BranchGrant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            branch = models.ForeignKey(Branch, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Branch, BranchGrant):
+            with _document_registry() as registry:
+                handle = _handle(registry)
+                record = handle.register(
+                    trust=BranchGrant,
+                    user='user',
+                    permission='permission',
+                    content='branch',
+                    along=('branch__children', 1),
+                )
+                self.assertEqual(record.along.shape, 'C')
+                self.assertFalse(record.along.suffix_path)
+                alice = User.objects.create_user('branch-alice', password='x')
+                outsider = User.objects.create_user('branch-out', password='x')
+                permission = _permission(Branch, 'change_branch')
+                root = Branch.objects.create(title='root')
+                mid = Branch.objects.create(title='mid', parent=root)
+                leaf = Branch.objects.create(title='leaf', parent=mid)
+                BranchGrant.objects.create(
+                    user=alice, branch=leaf, permission=permission,
+                )
+                candidates = User._default_manager.get_queryset()
+                leaf_users = _reverse_agrees(
+                    self, handle, leaf, permission, candidates,
+                )
+                mid_users = _reverse_agrees(
+                    self, handle, mid, permission, candidates,
+                )
+                root_users = _reverse_agrees(
+                    self, handle, root, permission, candidates,
+                )
+                self.assertEqual(leaf_users, {alice.pk})
+                self.assertEqual(mid_users, {alice.pk})
+                self.assertEqual(root_users, set())
+                self.assertNotIn(outsider.pk, leaf_users)
