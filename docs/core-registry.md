@@ -54,13 +54,10 @@ forward single-valued steps followed by exactly one terminal
 many-to-many membership step (the accepted GH `t.team.members`
 mapping). Reverse one-to-many requester paths stay rejected so existing
 direct-user fail-closed tests remain. A content path may be a direct
-step, or one or more single-valued steps, then a reverse one-to-many
-gateway, then zero to two suffix steps. A prefix step may be forward or
-reverse one-to-one. This admits paths such as
-`delegation.sponsor.personal_organization.repositories`: the personal
-organization is one-to-one with the sponsor, and repositories are the
-one reverse one-to-many gateway. A suffix step is a forward
-single-valued, reverse one-to-one, or reverse one-to-many relation.
+step, or one or more forward single-valued steps, then a reverse
+one-to-many gateway, then zero to two suffix steps. A suffix step is a
+forward single-valued, reverse one-to-one, or reverse one-to-many
+relation.
 
 ```text
 permission := direct to-one terminal
@@ -69,7 +66,7 @@ direct to-one terminal := exactly one forward to-one step
 forward to-many terminal := one forward many-to-many step to auth.Permission
 user := one forward single-valued
       | (forward single-valued)*  M2M
-content := (forward single-valued | reverse O2O)+  reverse O2M  suffix{0..2}
+content := (forward single-valued)+  reverse O2M  suffix{0..2}
 suffix step := forward single-valued | reverse O2O | reverse O2M
 ```
 
@@ -90,9 +87,8 @@ does not reject that shape as a design direction.
 
 These shapes raise `TrustsConfigurationError` during `register`:
 
-- reverse relations before the gateway except a single-valued reverse
-  one-to-one, or a reverse as the only step
-- reverse one-to-one as the content terminal or gateway
+- reverse relations before the gateway, or a reverse as the only step
+- reverse one-to-one as the gateway
 - many-to-many except as the terminal user membership step or the
   terminal `permission=` collection (an intermediate permission
   collection is still rejected here, and that rejection is deferred
