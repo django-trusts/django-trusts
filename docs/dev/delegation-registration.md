@@ -1,11 +1,11 @@
 # Delegation registration contract
 
-Status: proposed implementation-driver contract for [issue #266][issue-266].
+Status: implementation-driver contract for [issue #266][issue-266].
 
 - Release train: 1.1
-- Last updated: 2026-10-09
+- Last updated: 2026-10-10
 - Documentation PR: [#279][docs-pr]
-- Implementation PR: not opened
+- Implementation PR: [#280][implementation-pr] (merged)
 
 This document records the contract used to drive implementation. The public
 guide, security audit, and What's New describe the intended 1.1 behavior. The
@@ -198,9 +198,10 @@ rule makes an ordinary source nondelegable, source eligibility should be
 designed explicitly rather than approximated by copying the permitted
 ordinary paths into each delegation condition.
 
-The current proposal supports exactly one level of delegation. The sponsor's
+The current implementation supports exactly one level of delegation. The sponsor's
 authority must come from ordinary registrations; one delegated relationship
-cannot sponsor another. Multi-level and recursive delegation are out of scope.
+cannot sponsor another. Multi-level and recursive delegation require a
+separate bounded design; this contract does not rule out either.
 
 The actor's independent ordinary authority remains the existing outer OR
 branch. Adding delegation neither converts an ordinary grant into a delegated
@@ -273,6 +274,7 @@ statement, concrete cases, and candidate scorecard.
 
 [considerations]: https://github.com/django-trusts/django-trusts/pull/278
 [docs-pr]: https://github.com/django-trusts/django-trusts/pull/279
+[implementation-pr]: https://github.com/django-trusts/django-trusts/pull/280
 [issue-265]: https://github.com/django-trusts/django-trusts/issues/265
 [issue-266]: https://github.com/django-trusts/django-trusts/issues/266
 [issue-273]: https://github.com/django-trusts/django-trusts/issues/273

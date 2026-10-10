@@ -140,10 +140,8 @@ A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 ``content``, and condition relationships in the same content row. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS`` whose inner sponsor predicate is the complete
-applicable ordinary-trust union for the same content and permission. Delegated
-trusts are excluded from that inner union because the current feature supports
-one delegation level only; multi-level and recursive delegation are out of
-scope. Reviewers should verify the delegate/sponsor direction, the
+applicable ordinary-trust union for the same content and permission.
+Reviewers should verify the delegate/sponsor direction, the
 relationship-owned scope predicate, the delegate and sponsor eligibility
 predicates, and the inner ordinary union in both the policy document and
 generated SQL. A delegate or sponsor that fails the principal eligibility rule

@@ -7,8 +7,8 @@ documentation.
 ## 1.1
 
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor use a
-  sponsor's live ordinary permissions within delegation scope; one level is supported,
-  and an inactive delegate or sponsor fails closed.
+  sponsor's live ordinary permissions within delegation scope;
+  an inactive delegate or sponsor fails closed.
   See the [user guide](source/index.rst) and [driver contract](dev/delegation-registration.md) ([#279]).
 
 [#279]: https://github.com/django-trusts/django-trusts/pull/279

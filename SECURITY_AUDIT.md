@@ -123,10 +123,7 @@ relationship registrations for the same protected model are alternatives and
 combine with OR in one generated query. A condition attached to a relationship
 narrows only that branch and cannot create a grant.
 
-### Proposed for 1.1: delegated authority
-
-This section records the security boundaries proposed for the 1.1 delegation
-feature. It does not describe behavior available in the current runtime.
+### Delegated authority
 
 A delegated registration replaces the ordinary `user=` plus `permission=` or
 `group=` pair with `delegate=` plus `sponsor=`:
@@ -182,9 +179,9 @@ Audit the following boundaries:
   condition state; rows must not borrow fields from one another;
 - the sponsor predicate is the live OR-union of applicable ordinary grants,
   including other configured Trusts handles;
-- delegated registrations are excluded from that inner union because the
-  current authorization model supports exactly one delegation level;
-- multi-level and recursive delegation are outside the supported boundary;
+- the current compiler excludes delegated registrations from the sponsor
+  union, preventing an unbounded chain or cycle; this implementation boundary
+  does not rule out a future bounded multi-level or recursive design;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
   permission the sponsor does not hold;
 - delegate and sponsor eligibility must be enforced inside the shared plan,

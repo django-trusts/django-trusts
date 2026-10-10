@@ -339,9 +339,8 @@ Permission checks keep the familiar Django spelling:
 
 The same correlated policy drives object checks, permission enumeration,
 ``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
-policy SQL. The 1.1 feature supports one level of delegation: sponsor authority
-comes from ordinary registrations. Multi-level delegation is outside this
-feature's scope.
+policy SQL. The sponsor's live ordinary permissions provide the authority
+ceiling.
 
 Several delegated relationship models may target the same content model. Each
 relationship remains a complete alternative: its own delegate, content,
