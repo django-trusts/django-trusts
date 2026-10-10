@@ -469,7 +469,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         )
         along_ids = _assign_ids(tuple(along.registry.records))
         self.assertEqual(along_ids, [
-            'documents__FolderGrant__folder__along_S_2',
+            'documents__FolderGrant__folder__along_folder__parent_S_2',
         ])
         for trust_id in cond_ids + along_ids:
             self.assertNotIn('.', trust_id)
