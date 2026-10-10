@@ -1016,10 +1016,11 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
     may be that same direct hop, or zero or more forward single-valued
     hops followed by exactly one terminal M2M membership hop. Reverse
     one-to-many requester paths stay rejected. A content path may be a
-    direct hop, or one or more forward single-valued hops, then a
-    reverse one-to-many gateway, then zero to two suffix hops. A suffix
-    hop is a forward single-valued, reverse one-to-one, or reverse
-    one-to-many relation.
+    direct hop, or one or more single-valued hops, then a reverse
+    one-to-many gateway, then zero to two suffix hops. Before the gateway,
+    a single-valued hop may be forward or reverse one-to-one. A suffix hop
+    is a forward single-valued, reverse one-to-one, or reverse one-to-many
+    relation.
     """
     if not path:
         raise TrustsConfigurationError(
@@ -1071,12 +1072,18 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
             if gateway_index is None:
                 if kind == 'single':
                     pass
+                elif kind == 'reverse_o2o' and not is_last:
+                    # A reverse one-to-one is still a single-valued join.
+                    # It may lead to the one reverse one-to-many gateway,
+                    # but it is not itself a supported content terminal.
+                    pass
                 elif kind == 'reverse_o2m' and index > 0:
                     gateway_index = index
                 elif kind == 'reverse_o2o':
                     raise TrustsConfigurationError(
                         '%s path %r uses reverse one-to-one relation %r on '
-                        '%s; reverse one-to-one is not a valid gateway.'
+                        '%s; reverse one-to-one is not a valid content '
+                        'terminal or gateway.'
                         % (role, _path_text(path), name, current._meta.label)
                     )
                 elif kind in ('reverse_o2m', 'reverse'):
@@ -1152,7 +1159,9 @@ def _resolve_path(root, path, role, *, trailing_reverse=False,
         elif trailing_reverse:
             raise TrustsConfigurationError(
                 '%s path %r is not a direct single-valued relation or a '
-                'forward path ending in one reverse one-to-many.'
+                'forward path ending in one reverse one-to-many; a reverse '
+                'one-to-one may appear only as a single-valued hop before '
+                'that gateway.'
                 % (role, _path_text(path))
             )
         else:
@@ -4114,7 +4123,9 @@ class BackendHandle:
         """Register one ordinary grant or delegated relationship.
 
         ``user`` and ``content`` accept a Django ``__`` path string or a
-        one-argument symbolic path builder. ``permission`` and ``group``
+        one-argument symbolic path builder. A dependent ``content`` path may
+        cross forward single-valued or reverse one-to-one prefix hops before
+        its one reverse one-to-many gateway. ``permission`` and ``group``
         are mutually exclusive sources. ``permission`` is one direct
         single-valued hop, or zero or more forward single-valued hops
         followed by exactly one forward many-to-many to

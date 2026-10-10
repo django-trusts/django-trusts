@@ -6,9 +6,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection
+from django.db import connection, models
 from django.test import SimpleTestCase, TestCase
-from django.test.utils import override_settings
+from django.test.utils import isolate_apps, override_settings
 
 from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
@@ -127,6 +127,73 @@ class DelegationRegistrationTest(TestCase):
             condition=lambda d: d.delegate == d.sponsor,
         )
         self.assertIsNone(record.condition_permission_model)
+
+    @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+    def test_content_may_cross_reverse_one_to_one_before_gateway(self):
+        class Principal(models.Model):
+            is_active = models.BooleanField(default=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PersonalOrganization(models.Model):
+            personal_user = models.OneToOneField(
+                Principal,
+                related_name='personal_organization_issue266',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Repository(models.Model):
+            organization = models.ForeignKey(
+                PersonalOrganization,
+                related_name='repositories',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PersonalDelegation(models.Model):
+            delegate = models.ForeignKey(
+                Principal, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                Principal, related_name='+', on_delete=models.CASCADE,
+            )
+            allowed_permissions = models.ManyToManyField(Permission)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        handle = _handle()
+        with self.assertNumQueries(0):
+            record = handle.register(
+                trust=PersonalDelegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content=(
+                    'sponsor__personal_organization_issue266__repositories'
+                ),
+                condition=lambda relationship, permission: (
+                    relationship.allowed_permissions.contains(permission)
+                ),
+            )
+
+        self.assertEqual(
+            record.content_path,
+            (
+                'sponsor', 'personal_organization_issue266',
+                'repositories',
+            ),
+        )
+        self.assertIs(record.content_model, Repository)
+        self.assertEqual(
+            record.content_field,
+            'sponsor__personal_organization_issue266__repositories',
+        )
 
     def test_incomplete_and_crossed_modes_fail_before_builder_invocation(self):
         cases = (
