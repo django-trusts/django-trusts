@@ -206,10 +206,20 @@ Conditions remain an AND overlay on a complete proof and never run on
 intermediate walk nodes. The same expression drives instance
 authorization, lazy `filter_authorized` before pagination, `all_match`,
 and `permissions` / `common_permissions` (including nested permission
-`OuterRef`). Unsupported vendors raise `TrustsConfigurationError` before
-walk SQL. Residual database errors stay loud and are not remapped to
+`OuterRef`). Reverse permission inquiry correlates each candidate user into
+the same grant seed and tests whether the supplied content is in that
+candidate's bounded reach. It must return exactly the users whose forward
+check succeeds; it may not drop the recursive branch or widen it to every
+user. Unsupported vendors raise `TrustsConfigurationError` before walk SQL.
+Residual database errors stay loud and are not remapped to
 `TrustsCompilerError`. Runtime authorization does not repeat the JSON/CTE
 capability probe.
+
+Policy SQL exports the same recursive predicate for every supported inquiry,
+including reverse users. Each trust row records the complete public `along`
+path, resolved shape, and bound. The bound is a registration constant, not a
+runtime binding. Rendering fails before returning a partial document if any
+applicable recursive statement or parameter cannot be represented.
 
 `trusts.E005` (`Tags.database`) reports each selected alias whose live
 Along records cannot render. It honors Django's `databases` argument

@@ -3,7 +3,7 @@
 Status: implemented for
 [django-trusts#255](https://github.com/django-trusts/django-trusts/issues/255).
 The scalar contract in this document is unchanged. Phase B records the
-protected backend hooks and the `Along` failure boundary below.
+protected backend hooks and the recursive agreement boundary below.
 
 ## Decision
 
@@ -372,10 +372,14 @@ as a known non-contributor. The exact classes `ModelBackend`,
 inferred from that ancestry. Any other object-capable `has_perm` without
 `permitted_users_predicate` raises `TrustsConfigurationError` before SQL.
 
-An `Along` registration grants through a user-seeded walk. That walk has
-no exact reverse predicate. `get_permitted_users` and the policy-lock
-render raise `TrustsConfigurationError` before SQL. The path is not
-dropped and is not widened to every user.
+An `Along` registration grants through a user-seeded walk. Reverse inquiry
+correlates each candidate user into that same seed, applies the same bound and
+directed edge, and tests whether the supplied content is reachable. For a
+fixed content and permission, the result must agree with the forward object
+check for every candidate user. The policy-lock statement uses this same
+reverse compiler. An unsupported renderer or unrenderable recursive predicate
+raises before SQL or partial policy output; the path is never dropped or
+widened to every user.
 
 The content adapter's candidate model is `settings.AUTH_USER_MODEL`. A
 registration whose user terminal is a different model fails that adapter

@@ -528,6 +528,10 @@ django-trusts evaluates the walk with a recursive common table expression
 rather than traversing the hierarchy in Python. The database combinations
 currently exercised by CI are recorded in the `support matrix
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
+The same bounded walk participates in object checks, permitted-content
+querysets, permission enumeration, reverse permitted-user inquiry, and
+authorization-policy SQL. For one content and permission, reverse inquiry
+returns exactly the users whose forward object check succeeds.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
