@@ -372,6 +372,13 @@ def _project_content(handle, alias, group, filters, handles):
             row['group'] = _relation(record, 'group')
         row['permission'] = _relation(record, 'permission')
         row['content'] = _relation(record, 'content')
+        along = getattr(record, 'along', None)
+        if along is not None:
+            row['along'] = {
+                'path': '__'.join(along.path),
+                'shape': along.shape,
+                'bound': along.bound,
+            }
         if multi:
             row['or_group'] = True
         trusts.append(row)
@@ -673,7 +680,8 @@ def _base_id(record):
         label += '__cond'
     along = getattr(record, 'along', None)
     if along is not None:
-        label += '__along_%s_%s' % (
+        label += '__along_%s_%s_%s' % (
+            '__'.join(along.path),
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
@@ -1086,6 +1094,12 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
+    from trusts.core import GrantReach, _IdentInReach
+
+    if isinstance(node, GrantReach):
+        return {'const': _json_const(node.record.along.bound)}
+    if isinstance(node, _IdentInReach):
+        return {'const': _json_const(node.bound)}
     if isinstance(node, Value):
         return {'const': _json_const(node.value)}
     record = getattr(_ctx, 'record', None)
@@ -1112,6 +1126,10 @@ def _bind_name(node, record):
         return None
     remote = getattr(target, 'remote_field', None)
     model = getattr(remote, 'model', None) if remote is not None else None
+    direct_content = False
+    if model is None and getattr(_ctx, 'reverse_users', False):
+        model = getattr(target, 'model', None)
+        direct_content = model is not None
     if model is None:
         return None
     concrete = model._meta.concrete_model
@@ -1125,13 +1143,23 @@ def _bind_name(node, record):
                 candidates.append(item)
     labels = []
     for candidate in candidates:
-        if concrete is candidate.user_model._meta.concrete_model:
+        if (
+            not direct_content
+            and concrete is candidate.user_model._meta.concrete_model
+        ):
             labels.append('user.%s' % candidate.user_target)
-        elif concrete is candidate.permission_model._meta.concrete_model:
+        elif (
+            not direct_content
+            and concrete is candidate.permission_model._meta.concrete_model
+        ):
             labels.append('permission.%s' % candidate.permission_target)
         elif (
             getattr(_ctx, 'reverse_users', False)
             and concrete is candidate.content_model._meta.concrete_model
+            and (
+                not direct_content
+                or getattr(target, 'attname', None) == candidate.content_target
+            )
         ):
             labels.append('content.%s' % candidate.content_target)
     if not labels:
