@@ -2051,6 +2051,7 @@ class All(object):
 class AlongWalk:
     """Immutable walk metadata resolved from ``Along`` at ``register()``."""
 
+    path: tuple
     bound: int
     shape: str
     walk_path: tuple
@@ -2372,6 +2373,7 @@ def _build_along_walk(root, content_path, content_model, along):
         walk_model, suffix_path, content_model, walk_ident,
     )
     return AlongWalk(
+        path=tuple(along_ref._path),
         bound=bound,
         shape=shape,
         walk_path=tuple(walk_path),
@@ -2848,16 +2850,21 @@ class RelationPlan:
         parts = []
         for record in self.records:
             if record.along is not None:
-                user = bindings['user']
                 if terminal_field_attr == 'content_field':
                     parts.append(GrantReach(
-                        record, user, bindings['permission'],
+                        record, bindings['user'], bindings['permission'],
+                        content_identity=self.content_identity,
+                    ))
+                elif terminal_field_attr == 'user_field':
+                    parts.append(GrantReach(
+                        record, OuterRef(record.user_target),
+                        bindings['permission'], content=bindings['content'],
                         content_identity=self.content_identity,
                     ))
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
                     parts.append(GrantReach(
-                        record, user, OuterRef(target),
+                        record, bindings['user'], OuterRef(target),
                         content=bindings['content'],
                         content_identity=self.content_identity,
                     ))
@@ -2900,8 +2907,9 @@ class RelationPlan:
 
         Inverse of ``content_exists``: content and permission are bound,
         and the user terminal is ``OuterRef`` of the resolved user target.
-        Complete records OR together. An ``Along`` record has no exact
-        reverse of its user-seeded walk and raises before SQL.
+        Complete records OR together. For ``Along``, each candidate user is
+        correlated into the recursive grant seed and the bound content is
+        tested against that candidate's reach.
         """
         content = _require_instance(content, 'content')
         if content.pk is None:
@@ -2912,13 +2920,6 @@ class RelationPlan:
         permission = _bind_terminal(permission, 'permission')
         if not self.records:
             return None
-        for record in self.records:
-            if record.along is not None:
-                raise TrustsConfigurationError(
-                    'Reverse permission inquiry cannot compile an exact '
-                    'user predicate for Along registration on %s.'
-                    % record.root._meta.label
-                )
         return self._correlated_exists(
             'user_field', content=content, permission=permission,
         )
