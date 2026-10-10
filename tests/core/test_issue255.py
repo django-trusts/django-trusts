@@ -26,6 +26,7 @@ from tests.core.test_issue147.test_sql_export import (
     _document_handle,
     _handle as _export_handle,
 )
+from tests.myapp.backends import DocumentBackend
 from trusts.reverse import lock_permitted_users_queryset
 from tests.core.test_issue246 import _tables
 from tests.myapp.apps import DOCUMENT_BACKEND
@@ -38,7 +39,11 @@ from trusts.policy_lock import (
     _load_policy_sql_document,
     render_policy_sql_bytes,
 )
-from trusts.query import PermittedUsersManagerMixin, PermittedUsersMixin
+from trusts.query import (
+    PermittedManager,
+    PermittedUsersManagerMixin,
+    PermittedUsersMixin,
+)
 
 
 HOST = 'tests.backends.HostTrustModelBackend'
@@ -329,6 +334,79 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertEqual(reverse['sql'].count('%s'), len(reverse['params']))
         self.assertEqual(reverse['sql'].count('WITH RECURSIVE'), 2)
         self.assertEqual(document['schema_version'], 1)
+
+    def test_two_self_fk_along_edges_keep_distinct_walks(self):
+        class WalkNode(models.Model):
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            mentor = models.ForeignKey(
+                'self', null=True, related_name='mentees',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'documents'
+
+        class ParentGrant(models.Model):
+            node = models.ForeignKey(WalkNode, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'documents'
+
+        class MentorGrant(models.Model):
+            node = models.ForeignKey(WalkNode, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'documents'
+
+        handle = _export_handle('documents.backends.WalkNodeBackend')
+        handle.register(
+            trust=ParentGrant,
+            user='user',
+            permission='permission',
+            content='node',
+            along=('node__parent', 8),
+        )
+        handle.register(
+            trust=MentorGrant,
+            user='user',
+            permission='permission',
+            content='node',
+            along=('node__mentor', 8),
+        )
+        content = _assert_along_lock(self, handle, (
+            {'path': 'node__parent', 'shape': 'S', 'bound': 8},
+            {'path': 'node__mentor', 'shape': 'S', 'bound': 8},
+        ))
+        permitted = content['permitted']['sql']
+        self.assertIn('parent_id', permitted)
+        self.assertIn('mentor_id', permitted)
+        self.assertIn('documents_parentgrant', permitted)
+        self.assertIn('documents_mentorgrant', permitted)
+        self.assertEqual(content['permitted']['params'], [
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'walknode'},
+            {'bind': 'user.id'},
+            {'const': 8},
+            {'const': True},
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'walknode'},
+            {'bind': 'user.id'},
+            {'const': 8},
+            {'const': True},
+        ])
 
     def test_along_reverse_uuid_to_field_binds_content_ident(self):
         class UuidNode(models.Model):
@@ -1047,6 +1125,10 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
             self.outsider.pk,
             _pks(cycle_b.get_permitted_users(permission)),
         )
+        sql = str(at_bound.get_permitted_users(permission).query)
+        self.assertIn('WITH RECURSIVE', sql.upper())
+        self.assertIn('approved_user_id', sql)
+        self.assertIn('parent_id', sql)
 
     def test_uuid_content_primary_key_agrees(self):
         paper = self.UuidPaper.objects.create(title='uuid-paper')
@@ -1107,6 +1189,13 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         self.assertIn(self.UuidUser._meta.label, str(ctx.exception))
 
 
+def _user_manager():
+    manager = PlainUserManager()
+    manager.model = get_user_model()
+    manager.name = 'objects'
+    return manager
+
+
 def _reverse_agrees(test, handle, content, perm, candidates):
     code = perm.user_perm_str
     with test.assertNumQueries(1):
@@ -1115,11 +1204,62 @@ def _reverse_agrees(test, handle, content, perm, candidates):
         user.pk for user in candidates if user.has_perm(code, content)
     }
     test.assertEqual(found, expected)
+    test.assertEqual(_pks(_user_manager().permitted(content, perm)), found)
+    # The lock is the backend grant branch. Django's active-superuser
+    # rule is OR-ed only on get_permitted_users.
+    grants = set()
+    for user in candidates:
+        active_super = user.is_active and user.is_superuser
+        if user.has_perm(code, content) and not active_super:
+            grants.add(user.pk)
     test.assertEqual(
         _pks(lock_permitted_users_queryset(handle, content, perm)),
-        found,
+        grants,
     )
     return found
+
+
+def _assert_along_lock(test, handle, specs, *, group=False):
+    document = _load_policy_sql_document(
+        render_policy_sql_bytes(handles=[handle]),
+    )
+    test.assertEqual(document['schema_version'], 1)
+    content = document['backends'][0]['contents'][0]
+    trusts = content['trusts']
+    test.assertEqual(
+        [row['along'] for row in trusts],
+        [
+            {'path': spec['path'], 'shape': spec['shape'], 'bound': spec['bound']}
+            for spec in specs
+        ],
+    )
+    for row, spec in zip(trusts, specs):
+        test.assertIn(
+            '__along_%s_%s_%s' % (spec['path'], spec['shape'], spec['bound']),
+            row['id'],
+        )
+        if len(specs) > 1:
+            test.assertIs(row['or_group'], True)
+    keys = (
+        'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
+    )
+    if group:
+        keys = keys + ('get_group_permissions',)
+    else:
+        test.assertNotIn('get_group_permissions', content)
+    for key in keys:
+        block = content[key]
+        test.assertEqual(
+            block['sql'].upper().count('WITH RECURSIVE'), len(specs),
+        )
+        for spec in specs:
+            test.assertIn({'const': spec['bound']}, block['params'])
+    users = content['get_permitted_users']
+    test.assertIn({'bind': 'content.id'}, users['params'])
+    test.assertIn('("auth_user"."id")', users['sql'])
+    if len(specs) > 1:
+        test.assertIn(' OR ', users['sql'])
+    return content
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -1209,6 +1349,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             parent = models.ForeignKey(
                 'self', null=True, on_delete=models.CASCADE,
             )
+            objects = PermittedManager()
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -1232,11 +1373,18 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                 )
                 self.assertTrue(record.via_group)
                 self.assertIsNotNone(record.along)
+                locked = _assert_along_lock(self, handle, (
+                    {'path': 'desk__parent', 'shape': 'S', 'bound': 1},
+                ), group=True)
+                self.assertEqual(locked['trusts'][0]['group']['path'], 'group')
                 alice = User.objects.create_user('desk-alice', password='x')
                 outsider = User.objects.create_user('desk-out', password='x')
                 inactive = User.objects.create_user('desk-inactive', password='x')
                 inactive.is_active = False
                 inactive.save(update_fields=['is_active'])
+                superuser = User.objects.create_superuser(
+                    'desk-super', email='desk-super@example.com', password='x',
+                )
                 permission = _permission(Desk, 'change_desk')
                 editors = Group.objects.create(name='desk-editors')
                 editors.permissions.add(permission)
@@ -1255,11 +1403,25 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                 past_users = _reverse_agrees(
                     self, handle, past, permission, candidates,
                 )
-                self.assertEqual(root_users, {alice.pk})
-                self.assertEqual(child_users, {alice.pk})
-                self.assertEqual(past_users, set())
+                self.assertEqual(root_users, {alice.pk, superuser.pk})
+                self.assertEqual(child_users, {alice.pk, superuser.pk})
+                self.assertEqual(past_users, {superuser.pk})
                 self.assertNotIn(inactive.pk, root_users)
                 self.assertNotIn(outsider.pk, root_users)
+                code = permission.user_perm_str
+                backend = DocumentBackend()
+                self.assertEqual(
+                    backend.get_group_permissions(alice, child), {code},
+                )
+                self.assertEqual(
+                    backend.get_group_permissions(alice, past), set(),
+                )
+                self.assertEqual(
+                    backend.get_group_permissions(outsider, child), set(),
+                )
+                self.assertEqual(
+                    set(Desk.objects.permitted(code, alice)), {root, child},
+                )
 
     def test_terminal_m2m_permission_along_agrees_at_bound_and_one_past(self):
         User = get_user_model()
@@ -1269,6 +1431,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             parent = models.ForeignKey(
                 'self', null=True, on_delete=models.CASCADE,
             )
+            objects = PermittedManager()
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -1300,11 +1463,17 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                 self.assertEqual(record.permission_path, ('permissions',))
                 self.assertIs(record.permission_model, Permission)
                 self.assertIsNotNone(record.along)
+                _assert_along_lock(self, handle, (
+                    {'path': 'shelf__parent', 'shape': 'S', 'bound': 1},
+                ))
                 alice = User.objects.create_user('shelf-alice', password='x')
                 bob = User.objects.create_user('shelf-bob', password='x')
                 inactive = User.objects.create_user('shelf-inactive', password='x')
                 inactive.is_active = False
                 inactive.save(update_fields=['is_active'])
+                superuser = User.objects.create_superuser(
+                    'shelf-super', email='shelf-super@example.com', password='x',
+                )
                 permission = _permission(Shelf, 'change_shelf')
                 other = _permission(Shelf, 'add_shelf')
                 root = Shelf.objects.create(title='root')
@@ -1328,11 +1497,22 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                 past_users = _reverse_agrees(
                     self, handle, past, permission, candidates,
                 )
-                self.assertEqual(root_users, {alice.pk})
-                self.assertEqual(child_users, {alice.pk})
-                self.assertEqual(past_users, set())
+                self.assertEqual(root_users, {alice.pk, superuser.pk})
+                self.assertEqual(child_users, {alice.pk, superuser.pk})
+                self.assertEqual(past_users, {superuser.pk})
                 self.assertNotIn(bob.pk, root_users)
                 self.assertNotIn(inactive.pk, root_users)
+                code = permission.user_perm_str
+                backend = DocumentBackend()
+                self.assertIn(code, backend.get_all_permissions(alice, child))
+                self.assertNotIn(code, backend.get_all_permissions(alice, past))
+                self.assertNotIn(code, backend.get_all_permissions(bob, child))
+                self.assertEqual(
+                    backend.get_group_permissions(alice, child), set(),
+                )
+                self.assertEqual(
+                    set(Shelf.objects.permitted(code, alice)), {root, child},
+                )
 
     def test_suffix_content_reverse_agrees_at_bound_and_one_past(self):
         User = get_user_model()
@@ -1463,3 +1643,108 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                 self.assertEqual(mid_users, {alice.pk})
                 self.assertEqual(root_users, set())
                 self.assertNotIn(outsider.pk, leaf_users)
+
+    def test_shape_s_or_shape_c_on_one_content_model(self):
+        User = get_user_model()
+
+        class Place(PermittedUsersMixin, models.Model):
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+            objects = PermittedManager()
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class North(models.Model):
+            place = models.ForeignKey(Place, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class South(models.Model):
+            place = models.ForeignKey(Place, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Place, North, South):
+            with _document_registry() as registry:
+                handle = _handle(registry)
+                handle.register(
+                    trust=North,
+                    user='user',
+                    permission='permission',
+                    content='place',
+                    along=('place__parent', 1),
+                )
+                handle.register(
+                    trust=South,
+                    user='user',
+                    permission='permission',
+                    content='place',
+                    along=('place__children', 1),
+                )
+                _assert_along_lock(self, handle, (
+                    {'path': 'place__parent', 'shape': 'S', 'bound': 1},
+                    {'path': 'place__children', 'shape': 'C', 'bound': 1},
+                ))
+                alice = User.objects.create_user('place-alice', password='x')
+                bob = User.objects.create_user('place-bob', password='x')
+                inactive = User.objects.create_user(
+                    'place-inactive', password='x',
+                )
+                inactive.is_active = False
+                inactive.save(update_fields=['is_active'])
+                superuser = User.objects.create_superuser(
+                    'place-super', email='place-super@example.com', password='x',
+                )
+                permission = _permission(Place, 'change_place')
+                code = permission.user_perm_str
+                root = Place.objects.create()
+                mid = Place.objects.create(parent=root)
+                leaf = Place.objects.create(parent=mid)
+                past = Place.objects.create(parent=leaf)
+                North.objects.create(place=mid, user=alice, permission=permission)
+                South.objects.create(place=mid, user=bob, permission=permission)
+                North.objects.create(
+                    place=mid, user=inactive, permission=permission,
+                )
+                candidates = User._default_manager.get_queryset()
+                on_leaf = _reverse_agrees(
+                    self, handle, leaf, permission, candidates,
+                )
+                on_root = _reverse_agrees(
+                    self, handle, root, permission, candidates,
+                )
+                on_mid = _reverse_agrees(
+                    self, handle, mid, permission, candidates,
+                )
+                on_past = _reverse_agrees(
+                    self, handle, past, permission, candidates,
+                )
+                self.assertIn(alice.pk, on_leaf)
+                self.assertNotIn(bob.pk, on_leaf)
+                self.assertIn(bob.pk, on_root)
+                self.assertNotIn(alice.pk, on_root)
+                self.assertIn(alice.pk, on_mid)
+                self.assertIn(bob.pk, on_mid)
+                self.assertNotIn(alice.pk, on_past)
+                self.assertNotIn(bob.pk, on_past)
+                self.assertNotIn(inactive.pk, on_mid)
+                self.assertIn(superuser.pk, on_past)
+                self.assertEqual(
+                    set(Place.objects.permitted(code, alice)), {mid, leaf},
+                )
+                self.assertEqual(
+                    set(Place.objects.permitted(code, bob)), {root, mid},
+                )
