@@ -7,10 +7,9 @@ Status: implementation-driver contract for [issue #266][issue-266].
 - Documentation PR: [#279][docs-pr]
 - Implementation PR: [#280][implementation-pr] (merged)
 
-This document records the contract used to drive implementation. The public
-guide, security audit, and What's New describe the intended 1.1 behavior. The
-implementation PR and its tests determine when that behavior becomes
-available.
+This document records the contract used to drive implementation and its
+acceptance tests. The public guide and security audit describe behavior on the
+development branch; What's New records release-train changes.
 
 The public `register()` API has two different authorization modes. They must
 remain visibly different because an ordinary registration is a grant, while a
@@ -249,8 +248,8 @@ applicable handle must not disappear as though it were merely inapplicable.
 
 ## Implementation split
 
-After this contract is approved, implementation should remain in a separate
-code PR. At minimum, that work must include:
+The initial implementation is recorded in the separate code [PR #280][implementation-pr].
+The implementation and follow-ups must preserve this acceptance checklist:
 
 1. public and internal registration validation for the two modes;
 2. delegated one- and two-argument condition parsing and validation;

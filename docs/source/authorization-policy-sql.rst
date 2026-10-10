@@ -139,12 +139,14 @@ SQL combines those trusts with OR and each trust in the content row has
 A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 ``content``, and condition relationships in the same content row. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
-correlated delegation ``EXISTS`` whose inner sponsor predicate is the complete
-applicable ordinary-trust union for the same content and permission.
+correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
+combines all applicable ordinary grants with OR: any matching ordinary grant
+may supply the sponsor's authority on the same content and permission.
 Reviewers should verify the delegate/sponsor direction, the
 relationship-owned scope predicate, the delegate and sponsor eligibility
-predicates, and the inner ordinary union in both the policy document and
-generated SQL. A delegate or sponsor that fails the principal eligibility rule
+predicates, and the sponsor's ordinary-authority predicate in both the policy
+document and generated SQL. A delegate or sponsor that fails the principal
+eligibility rule
 equivalent to ``is_active_principal`` must contribute no delegated authority,
 even while its grants and delegation rows remain stored.
 

@@ -59,7 +59,7 @@ overlay:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
+| `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the complete registered policy matches |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
@@ -69,9 +69,10 @@ rejected.
 
 ### Ordinary relationship authorization
 
-A trust registration has the frozen 1.0 public signature
-`register(*, trust, user, permission, content, condition=None, along=None)`.
-The required `trust=` model is the root of the three non-empty paths:
+The public registration signature is
+`register(*, trust, user=None, permission=None, content, group=None, delegate=None, sponsor=None, condition=None, along=None)`.
+An ordinary registration supplies `user=` and exactly one of `permission=` or
+`group=`. The required `trust=` model is the root of its non-empty paths:
 
 ```python
 backend.register(
@@ -105,7 +106,7 @@ rejected before django-trusts updates the registry. Side effects already
 performed by application code are outside that behavior.
 
 `condition=` is the same one-argument symbolic predicate, rooted at `trust=`.
-It is invoked once after the freeze check. 1.0 operations are path equality
+It is invoked once after the freeze check. Supported operations are path equality
 (`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
 Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
 or a `__contains__` side channel. The stored overlay is private `Equal` /
@@ -113,7 +114,7 @@ or a `__contains__` side channel. The stored overlay is private `Equal` /
 `register(condition=...)` rejects prebuilt `All` / `Equal` / `permission_in`
 values. `.contains` is a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and
-unsupported in 1.0. Invalid arity, foreign roots, empty or non-expression
+unsupported. Invalid arity, foreign roots, empty or non-expression
 returns, unsupported operations, and predicate exceptions fail closed.
 django-trusts' own validation is designed not to issue SQL and does not
 partially mutate the registry.

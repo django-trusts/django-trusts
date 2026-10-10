@@ -45,14 +45,14 @@ generic mixin lives only at
 module is gone. Historical concrete models and `TrustModelBackend` live under
 `trusts.zero.*`. See [core-registry.md](core-registry.md).
 
-## Proposed feature contracts
+## Feature contracts
 
-Proposed APIs are documented separately from shipped behavior. They guide
-review and later implementation but are not part of the current runtime claim.
+Development contracts record implementation choices and acceptance tests.
 
 - [Delegation registration contract](dev/delegation-registration.md) defines the
-  proposed `register(delegate=..., sponsor=...)` mode and its relationship to
-  ordinary `register(permission=..., user=...)` registrations.
+  `register(delegate=..., sponsor=...)` mode and its relationship to ordinary
+  `register(permission=..., user=...)` registrations. The initial implementation
+  landed in [PR #280](https://github.com/django-trusts/django-trusts/pull/280).
 
 Release-train feature summaries live in [What's new](whats-new.md).
 
