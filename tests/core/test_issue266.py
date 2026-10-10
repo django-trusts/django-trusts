@@ -5,6 +5,7 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import SimpleTestCase, TestCase
 
+from tests.core import KernelHostRequiredMixin
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.core import (
@@ -110,7 +111,7 @@ class DelegationRegistrationTest(TestCase):
                 self.assertEqual(handle.registry.delegations, ())
 
 
-class DelegatedAuthorityLiveTest(TestCase):
+class DelegatedAuthorityLiveTest(KernelHostRequiredMixin, TestCase):
     def setUp(self):
         User = get_user_model()
         self.sponsor = User.objects.create_user('sponsor-266', password='x')
