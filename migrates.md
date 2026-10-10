@@ -221,9 +221,9 @@ Migration-bot checklist:
 
 | | Old | New |
 | --- | --- | --- |
-| `get_permitted_users`, `User.objects.permitted`, and the policy-lock reverse statement for an `Along` registration | `TrustsConfigurationError` before SQL | The same bounded walk as the forward check. Each candidate user is correlated into the walk seed. The bound is a `const` in the policy lock. `schema_version` stays 1 |
+| Reverse inquiry on an `along=` registration (`get_permitted_users`, `User.objects.permitted`, and the policy-lock reverse statement) | Raised `TrustsConfigurationError` before SQL | Returns the exact permitted-user queryset. Each candidate is correlated into the same bounded walk as the forward check. The bound is a `const` in the policy lock. `schema_version` stays 1 |
 
-No mandatory consumer change for callers that did not catch that error. A caller that caught `TrustsConfigurationError` from reversing an `Along` registration now receives a user queryset. Delegated `along=` still raises at registration. The sponsor-ceiling walk is unchanged. Active principals stay `is_active=True` on the existing eligibility predicate.
+No mandatory consumer action. A caller that caught `TrustsConfigurationError` from reversing an `Along` registration now receives that queryset. Delegated `along=` still raises at registration. A sponsor's ordinary `along=` grant still counts only at the exact content until #282 settles the ceiling. Active principals stay `is_active=True` on the existing eligibility predicate.
 
 Migration-bot checklist:
 
