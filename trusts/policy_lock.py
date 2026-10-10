@@ -372,6 +372,13 @@ def _project_content(handle, alias, group, filters, handles):
             row['group'] = _relation(record, 'group')
         row['permission'] = _relation(record, 'permission')
         row['content'] = _relation(record, 'content')
+        along = getattr(record, 'along', None)
+        if along is not None:
+            row['along'] = {
+                'path': '__'.join(along.path),
+                'shape': along.shape,
+                'bound': along.bound,
+            }
         if multi:
             row['or_group'] = True
         trusts.append(row)
@@ -516,6 +523,26 @@ def _content_sentinel(model, alias):
     return _sentinel(model, model._meta.pk.attname, alias=alias)
 
 
+def _populate_reverse_along_identity(content, records, alias):
+    """Fill non-PK Along identities on the unsaved reverse sentinel.
+
+    ``_content_sentinel`` sets the primary key. A walk identity that is
+    a different column, such as a UUID ``to_field``, has to be present
+    so the reverse lookup classifies ``content.<target>``.
+    """
+    pk_attname = content._meta.pk.attname
+    for record in records:
+        along = getattr(record, 'along', None)
+        if along is None or along.suffix_path:
+            continue
+        if along.walk_ident == pk_attname:
+            continue
+        if getattr(content, along.walk_ident, None) is not None:
+            continue
+        field = _concrete_target_field(along.walk_model, along.walk_ident)
+        setattr(content, field.attname, _sentinel_value(field, alias))
+
+
 def _role_sentinel(record, role, alias):
     return _sentinel(
         getattr(record, '%s_model' % role),
@@ -594,6 +621,7 @@ def _compile_get_permitted_users(handle, alias, records, model, handles):
     from trusts.reverse import lock_permitted_users_queryset
 
     content = _content_sentinel(model, alias)
+    _populate_reverse_along_identity(content, records, alias)
     permission = _role_sentinel(records[0], 'permission', alias)
     queryset = lock_permitted_users_queryset(
         handle, content, permission, handles=handles,
@@ -673,7 +701,8 @@ def _base_id(record):
         label += '__cond'
     along = getattr(record, 'along', None)
     if along is not None:
-        label += '__along_%s_%s' % (
+        label += '__along_%s_%s_%s' % (
+            '__'.join(along.path),
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
@@ -1086,6 +1115,12 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
+    from trusts.core import GrantReach, _IdentInReach
+
+    if isinstance(node, GrantReach):
+        return {'const': _json_const(node.record.along.bound)}
+    if isinstance(node, _IdentInReach):
+        return {'const': _json_const(node.bound)}
     if isinstance(node, Value):
         return {'const': _json_const(node.value)}
     record = getattr(_ctx, 'record', None)
@@ -1112,6 +1147,14 @@ def _bind_name(node, record):
         return None
     remote = getattr(target, 'remote_field', None)
     model = getattr(remote, 'model', None) if remote is not None else None
+    direct_content = False
+    if (
+        model is None
+        and getattr(_ctx, 'reverse_users', False)
+        and getattr(node, 'trusts_content_bind', False)
+    ):
+        model = getattr(target, 'model', None)
+        direct_content = model is not None
     if model is None:
         return None
     concrete = model._meta.concrete_model
@@ -1125,14 +1168,33 @@ def _bind_name(node, record):
                 candidates.append(item)
     labels = []
     for candidate in candidates:
-        if concrete is candidate.user_model._meta.concrete_model:
+        if (
+            not direct_content
+            and concrete is candidate.user_model._meta.concrete_model
+        ):
             labels.append('user.%s' % candidate.user_target)
-        elif concrete is candidate.permission_model._meta.concrete_model:
+        elif (
+            not direct_content
+            and concrete is candidate.permission_model._meta.concrete_model
+        ):
             labels.append('permission.%s' % candidate.permission_target)
         elif (
             getattr(_ctx, 'reverse_users', False)
             and concrete is candidate.content_model._meta.concrete_model
+            and (
+                not direct_content
+                or getattr(target, 'attname', None) == candidate.content_target
+            )
         ):
+            # An Along reverse row binds only the comparison
+            # ``_bound_content_sql`` emitted. A condition literal on that
+            # same column, including ``folder__pk=<n>`` after Django
+            # collapses it to the foreign key, stays a constant.
+            if (
+                getattr(candidate, 'along', None) is not None
+                and not getattr(node, 'trusts_content_bind', False)
+            ):
+                continue
             labels.append('content.%s' % candidate.content_target)
     if not labels:
         return None

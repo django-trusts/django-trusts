@@ -222,6 +222,7 @@ class AlongRegistrationTest(SimpleTestCase):
             along=Along(j.node.parent, bound=16),
         )
         self.assertEqual(rec_s.along.shape, 'S')
+        self.assertEqual(rec_s.along.path, ('node', 'parent'))
         self.assertEqual(rec_s.along.walk_path, ('node',))
         self.assertIs(rec_s.along.walk_model, Node)
         self.assertEqual(rec_s.along.walk_ident, Node._meta.pk.attname)

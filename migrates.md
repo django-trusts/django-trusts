@@ -208,7 +208,7 @@ Migration-bot checklist:
 | --- | --- | --- |
 | Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
 
-No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion. An `Along` registration cannot be reversed exactly and raises `TrustsConfigurationError` before SQL, including when rendering the policy lock.
+No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion. An `Along` registration now reverses; see [Along reverse inquiry](#along-reverse-inquiry-282).
 
 Migration-bot checklist:
 
@@ -216,6 +216,22 @@ Migration-bot checklist:
 - `PermittedUsersManagerMixin`
 - `get_permitted_users(`
 - `User.objects.permitted(`
+
+## Along reverse inquiry (#282)
+
+| | Old | New |
+| --- | --- | --- |
+| Reverse inquiry on an `along=` registration (`get_permitted_users`, `User.objects.permitted`, and the policy-lock reverse statement) | Raised `TrustsConfigurationError` before SQL | Returns the exact permitted-user queryset. Each candidate is correlated into the same bounded walk as the forward check. The bound is a `const` in the policy lock. `schema_version` stays 1 |
+
+No mandatory consumer action. A caller that caught `TrustsConfigurationError` from reversing an `Along` registration now receives that queryset. Delegated `along=` still raises at registration. A sponsor's ordinary `along=` grant still counts only at the exact content until #282 settles the ceiling. Active principals stay `is_active=True` on the existing eligibility predicate.
+
+Migration-bot checklist:
+
+- `get_permitted_users(`
+- `User.objects.permitted(`
+- `along=`
+- `Along(`
+- `TrustsConfigurationError`
 
 ## Archaeology
 
