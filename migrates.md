@@ -1,5 +1,9 @@
 # Migrating to django-trusts 1.0
 
+This guide records only migrations that require application attention. It is
+not a development log. New features and changes that require no application
+action belong in [What's new](docs/whats-new.md) instead.
+
 django-trusts 1.0 is a step change from django-trusts 0.x. It is not API,
 model, or schema compatible with the 0.x package. Version 1.0 is a
 schema-neutral authorization library and does not provide a direct migration
@@ -204,7 +208,7 @@ Migration-bot checklist:
 | --- | --- | --- |
 | Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
 
-No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion.
+No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion. An `Along` registration cannot be reversed exactly and raises `TrustsConfigurationError` before SQL, including when rendering the policy lock.
 
 Migration-bot checklist:
 
