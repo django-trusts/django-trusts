@@ -1,13 +1,19 @@
 """Delegated authority registration and one-level correlated grants (#266)."""
 
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
+from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.test import SimpleTestCase, TestCase
+from django.test.utils import override_settings
 
-from tests.core import KernelHostRequiredMixin
+from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from trusts.backends import TrustModelBackendMixin
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
@@ -39,6 +45,44 @@ def _permission(model, codename):
         defaults={'name': codename},
     )
     return permission
+
+
+class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
+    """Stand-in for ``DocumentBackend`` when pair settings omit myapp."""
+
+    handle = None
+
+    def _own_handle(self):
+        handle = type(self).handle
+        if handle is None:
+            raise TrustsConfigurationError('pair document handle is unset')
+        return handle
+
+
+def _document_host_handle():
+    """Same registration ``DocumentConfig.ready`` installs on the kernel host."""
+    handle = _handle('tests.myapp.backends.DocumentBackend')
+    handle.register(
+        trust=DocumentGrant,
+        user='user',
+        permission='permission',
+        content='document',
+    )
+    handle.register(
+        trust=DocumentDelegation,
+        delegate='delegate',
+        sponsor='sponsor',
+        content='document',
+        condition=lambda relationship, permission: (
+            relationship.allowed_permissions.contains(permission)
+        ),
+    )
+    handle.add_named_filter(
+        Document,
+        'non_confidential',
+        lambda user, permission, obj: obj.confidential != True,
+    )
+    return handle
 
 
 class DelegationSuiteRegistrationTest(SimpleTestCase):
@@ -111,8 +155,46 @@ class DelegationRegistrationTest(TestCase):
                 self.assertEqual(handle.registry.delegations, ())
 
 
-class DelegatedAuthorityLiveTest(KernelHostRequiredMixin, TestCase):
+class DelegatedAuthorityLiveTest(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._created_myapp_tables = False
+        if 'myapp_document' not in connection.introspection.table_names():
+            with connection.schema_editor() as editor:
+                editor.create_model(Document)
+                editor.create_model(DocumentGrant)
+                editor.create_model(DocumentDelegation)
+            cls._created_myapp_tables = True
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if cls._created_myapp_tables:
+            with connection.schema_editor() as editor:
+                editor.delete_model(DocumentDelegation)
+                editor.delete_model(DocumentGrant)
+                editor.delete_model(Document)
+
     def setUp(self):
+        ContentType.objects.clear_cache()
+        if not kernel_host_listed():
+            handle = _document_host_handle()
+            _PairDocumentBackend.handle = handle
+            self.addCleanup(
+                lambda: setattr(_PairDocumentBackend, 'handle', None),
+            )
+            settings_override = override_settings(AUTHENTICATION_BACKENDS=(
+                'tests.core.test_issue266._PairDocumentBackend',
+            ))
+            settings_override.enable()
+            self.addCleanup(settings_override.disable)
+            relationship_handles = patch(
+                'trusts.apps._relationship_implementation_handles',
+                return_value=(handle,),
+            )
+            relationship_handles.start()
+            self.addCleanup(relationship_handles.stop)
         User = get_user_model()
         self.sponsor = User.objects.create_user('sponsor-266', password='x')
         self.delegate = User.objects.create_user('delegate-266', password='x')
@@ -134,6 +216,9 @@ class DelegatedAuthorityLiveTest(KernelHostRequiredMixin, TestCase):
             sponsor=self.sponsor,
         )
         relationship.allowed_permissions.add(self.change)
+
+    def tearDown(self):
+        ContentType.objects.clear_cache()
 
     def test_object_queryset_enumeration_and_reverse_agree(self):
         with self.assertNumQueries(1):
