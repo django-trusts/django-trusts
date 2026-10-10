@@ -49,6 +49,11 @@ object to either a user and Django permission or a Django group.
 Multiple registered trusts may authorize the same kind of content. Each
 complete trust is an independent way to receive permission.
 
+A delegated trust connects a **delegate** who is acting, a **sponsor** whose
+live ordinary authority supplies the ceiling, and the protected content. Its
+condition may narrow that authority to relationship-owned scope such as
+approved operations or selected repositories.
+
 Installation
 ------------
 
@@ -112,9 +117,30 @@ The application owns its protected content and trust models.
            on_delete=models.CASCADE,
        )
 
+
+   class DocumentDelegation(models.Model):
+       delegate = models.ForeignKey(
+           settings.AUTH_USER_MODEL,
+           on_delete=models.CASCADE,
+           related_name="received_document_delegations",
+       )
+       sponsor = models.ForeignKey(
+           settings.AUTH_USER_MODEL,
+           on_delete=models.CASCADE,
+           related_name="sponsored_document_delegations",
+       )
+       document = models.ForeignKey(
+           Document,
+           on_delete=models.CASCADE,
+       )
+       allowed_permissions = models.ManyToManyField(Permission)
+
 ``DocumentPermission`` connects one user and one permission to one document.
 ``GroupDocumentPermission`` connects a Django group to one document; users
 receive the group's permissions through group membership.
+``DocumentDelegation`` lets its delegate act within its sponsor's current
+permissions on one document, limited to the relationship's approved
+operations.
 
 ``PermittedQuerySetMixin`` adds
 ``permitted(permission, user, conditions=())`` to the application's
@@ -212,6 +238,7 @@ Register the model paths when the application starts:
 
            from .models import (
                Document,
+               DocumentDelegation,
                DocumentPermission,
                GroupDocumentPermission,
            )
@@ -228,6 +255,13 @@ Register the model paths when the application starts:
                user=lambda t: t.group.user,
                group=lambda t: t.group,
                content=lambda t: t.document,
+           )
+           backend.register(
+               trust=DocumentDelegation,
+               delegate=lambda d: d.delegate,
+               sponsor=lambda d: d.sponsor,
+               content=lambda d: d.document,
+               condition=lambda d, p: d.allowed_permissions.contains(p),
            )
            backend.add_named_filter(
                Document,
@@ -264,6 +298,66 @@ equivalent of the first registration is:
        permission="permission",
        content="document",
    )
+
+
+Delegate live authority
+-----------------------
+
+The delegated registration makes ``delegate`` the current actor and
+``sponsor`` the source of live ordinary authority. For a requested permission,
+django-trusts requires the same delegation row, its selected content and
+condition, and an ordinary sponsor grant on that content. The actor's own
+ordinary grants remain available as independent alternatives.
+
+Both principals must remain eligible. A delegate or sponsor that fails the
+same active-principal rule used by django-trusts receives no delegated access,
+even if its ordinary grants and delegation rows remain in the database.
+
+The delegated ``condition=`` builder receives the relationship as a symbolic
+value and may receive the requested permission as a second symbolic value.
+The one-argument form applies row-only restrictions. The two-argument form in
+the example checks the requested permission against ``allowed_permissions``.
+Create the relationship and its scope with ordinary application data writes:
+
+.. code-block:: python
+
+   delegation = DocumentDelegation.objects.create(
+       delegate=automation_user,
+       sponsor=owner,
+       document=document,
+   )
+   delegation.allowed_permissions.add(change_document)
+
+Permission checks keep the familiar Django spelling:
+
+.. code-block:: python
+
+   automation_user.has_perm(
+       "documents.change_document",
+       document,
+   )
+
+The same correlated policy drives object checks, permission enumeration,
+``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
+policy SQL. The sponsor's live ordinary permissions provide the authority
+ceiling.
+
+Several delegated relationship models may target the same content model. Each
+relationship remains a complete alternative: its own delegate, content,
+condition, and sponsor's ordinary-authority ceiling are ANDed before that
+branch is ORed with the others. A branch cannot borrow another relationship's
+approval or sponsor.
+
+In ordinary or delegated mode, ``content=`` may also reach a bounded content
+set rather than a foreign key on the relationship row. For example,
+``sponsor__personal_organization__repositories`` crosses a reverse one-to-one
+personal organization and then the one reverse one-to-many repository gateway.
+One or more reverse one-to-one relations may be chained as single-valued
+prefix hops before that gateway. A reverse one-to-one is not itself a
+supported content terminal or gateway.
+
+Ordinary sponsor grants may use ``along=``; their effective bounded reach
+participates in the sponsor's live authority ceiling.
 
 
 Configure Django
@@ -488,9 +582,12 @@ API also supports paths through multiple relationships:
        content=lambda t: t.document,  # or "document"
    )
 
-The ``condition=`` argument on ``register`` is a one-argument symbolic
-predicate rooted at the trust model. django-trusts invokes it once during
-registration and stores no callable. The 1.0 grammar is path equality
+For an ordinary registration, the ``condition=`` argument is a one-argument
+symbolic predicate rooted at the trust model. A delegated registration may
+use the same one-argument form for row-only restrictions or the two-argument
+form shown above when its relationship scope must compare with the requested
+permission. django-trusts invokes either builder once during registration and
+stores no callable. The condition grammar is path equality
 (``==``), collection-rooted membership (``.contains(member)``), and
 conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
 Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /

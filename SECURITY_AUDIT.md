@@ -59,7 +59,7 @@ overlay:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register(...)` | Register a trust model and its paths to user, permission, and protected content | Yes |
+| `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the complete registered policy matches |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
@@ -67,11 +67,12 @@ types, constants, and combinations are intended to be rejected during setup.
 Registration closes when the configured registry freezes; late mutation is
 rejected.
 
-### Relationship authorization
+### Ordinary relationship authorization
 
-A trust registration has the public signature
-`register(*, trust, user, permission, content, condition=None, along=None)`.
-The required `trust=` model is the root of the three non-empty paths:
+The public registration signature is
+`register(*, trust, user=None, permission=None, content, group=None, delegate=None, sponsor=None, condition=None, along=None)`.
+An ordinary registration supplies `user=` and exactly one of `permission=` or
+`group=`. The required `trust=` model is the root of its non-empty paths:
 
 ```python
 backend.register(
@@ -105,7 +106,7 @@ rejected before django-trusts updates the registry. Side effects already
 performed by application code are outside that behavior.
 
 `condition=` is the same one-argument symbolic predicate, rooted at `trust=`.
-It is invoked once after the freeze check. 1.0 operations are path equality
+It is invoked once after the freeze check. Supported operations are path equality
 (`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
 Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
 or a `__contains__` side channel. The stored overlay is private `Equal` /
@@ -113,7 +114,7 @@ or a `__contains__` side channel. The stored overlay is private `Equal` /
 `register(condition=...)` rejects prebuilt `All` / `Equal` / `permission_in`
 values. `.contains` is a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and
-unsupported in 1.0. Invalid arity, foreign roots, empty or non-expression
+unsupported. Invalid arity, foreign roots, empty or non-expression
 returns, unsupported operations, and predicate exceptions fail closed.
 django-trusts' own validation is designed not to issue SQL and does not
 partially mutate the registry.
@@ -122,6 +123,88 @@ A complete matching path is positive authorization evidence. Multiple complete
 relationship registrations for the same protected model are alternatives and
 combine with OR in one generated query. A condition attached to a relationship
 narrows only that branch and cannot create a grant.
+
+### Delegated authority
+
+A delegated registration replaces the ordinary `user=` plus `permission=` or
+`group=` pair with `delegate=` plus `sponsor=`:
+
+```python
+backend.register(
+    trust=DocumentDelegation,
+    delegate=lambda d: d.delegate,
+    sponsor=lambda d: d.sponsor,
+    content=lambda d: d.document,
+    condition=lambda d, p: d.allowed_permissions.contains(p),
+)
+```
+
+`delegate` is the current actor receiving delegated access. `sponsor` is the
+principal who delegated authority and whose current ordinary grants provide
+the ceiling. Reversing those paths changes who can act and is an authorization
+defect.
+
+A delegated condition builder receives either the relationship root alone or
+that root plus the requested permission as symbolic values. The one-argument
+form applies row-only restrictions. The two-argument form may also compare the
+requested permission with relationship-owned scope data. Both forms are
+invoked once during registration and may express restrictions such as
+approval, tenant alignment, revocation, or expiry. The compiler stores
+normalized expression data and retains no callable. A two-argument builder on
+an ordinary registration, or any unsupported arity, is a configuration error.
+
+For actor `u`, content `c`, and permission `p`, every projection compiles the
+same shape:
+
+```text
+is_active_principal(u)
+AND (
+    ordinary(u, c, p)
+    OR EXISTS delegation d:
+        d.delegate = u
+        AND d.content = c
+        AND delegated_condition(d, p)
+        AND is_active_principal(d.sponsor)
+        AND ordinary(d.sponsor, c, p)
+)
+```
+
+For projections over persisted users, `is_active_principal(x)` is compiled as
+an equivalent principal-eligibility predicate. A delegate or sponsor that
+fails that rule receives no delegated authority even if its grants and
+relationship rows remain.
+
+Audit the following boundaries:
+
+- the exact delegation row must bind its delegate, sponsor, content, and
+  condition state; rows must not borrow fields from one another;
+- the sponsor predicate is the live OR-union of applicable ordinary grants,
+  including other configured Trusts handles;
+- the current compiler excludes delegated registrations from the sponsor
+  union, preventing an unbounded chain or cycle; this implementation boundary
+  does not rule out a future bounded multi-level or recursive design;
+- relationship scope can narrow the sponsor ceiling but cannot manufacture a
+  permission the sponsor does not hold;
+- delegate and sponsor eligibility must be enforced inside the shared plan,
+  without loading the sponsor or issuing a second authorization inquiry;
+- the actor's independent ordinary grant remains the outer OR branch;
+- tenant, organization, approval, revocation, and expiry data require
+  authorized write paths and database constraints; and
+- object checks, permitted querysets, enumeration, reverse inquiry, and policy
+  SQL must agree and remain one queryset statement per inquiry.
+
+The initial delegated mode rejects `along=` on the delegated registration and
+fails closed as unsupported. This is a temporary proposed-1.1 boundary while
+the hierarchy design is resolved in [issue #282](https://github.com/django-trusts/django-trusts/issues/282),
+not a permanent decision against delegated hierarchical reach. An ordinary
+sponsor grant may still use `along=`, and its effective bounded reach
+participates in the live sponsor-authority ceiling.
+
+Delegation remains inside the registered declarative policy and its correlated
+sponsor-authority predicate. An application-level nested call to
+`sponsor.has_perm()` falls outside that audited policy surface: it can import
+Django's outer shortcuts, separate the relationship row from its authority
+predicate, and disagree with queryset, reverse-inquiry, or lockfile behavior.
 
 A terminal many-to-many user membership is supported where validated. Review
 the resolved comparison identity, duplicate-row behavior, and whether

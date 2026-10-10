@@ -1,5 +1,9 @@
 # Migrating to django-trusts 1.0
 
+This guide records only migrations that require application attention. It is
+not a development log. New features and changes that require no application
+action belong in [What's new](docs/whats-new.md) instead.
+
 django-trusts 1.0 is a step change from django-trusts 0.x. It is not API,
 model, or schema compatible with the 0.x package. Version 1.0 is a
 schema-neutral authorization library and does not provide a direct migration
