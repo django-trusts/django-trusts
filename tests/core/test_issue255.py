@@ -189,7 +189,15 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn('is_active', where)
         self.assertNotIn('is_superuser', where)
 
-    def test_along_lockfile_fails_before_a_partial_document(self):
+    def test_along_lockfile_records_path_bound_and_reverse_statement(self):
+        class FolderPermit(models.Model):
+            directory = models.ForeignKey(Folder, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'documents'
+
         handle = _export_handle('documents.backends.FolderBackend')
         handle.register(
             trust=FolderGrant,
@@ -198,13 +206,42 @@ class Issue255PolicySqlTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
+        handle.register(
+            trust=FolderPermit,
+            user='user',
+            permission='permission',
+            content='directory',
+            along=('directory__parent', 2),
+        )
         folder = Folder(pk=1)
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            lock_permitted_users_queryset(handle, folder, Permission(pk=1))
-        self.assertIn('Along', str(ctx.exception))
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[handle])
-        self.assertIn('GrantReach', str(ctx.exception))
+        queryset = lock_permitted_users_queryset(
+            handle, folder, Permission(pk=1),
+        )
+        self.assertIn('WITH RECURSIVE', str(queryset.query))
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        content = document['backends'][0]['contents'][0]
+        first, second = content['trusts']
+        self.assertEqual(first['id'], (
+            'documents__FolderGrant__folder__along_folder__parent_S_2'
+        ))
+        self.assertEqual(second['id'], (
+            'documents__FolderPermit__directory__along_'
+            'directory__parent_S_2'
+        ))
+        self.assertEqual(first['along'], {
+            'path': 'folder__parent', 'shape': 'S', 'bound': 2,
+        })
+        self.assertEqual(second['along'], {
+            'path': 'directory__parent', 'shape': 'S', 'bound': 2,
+        })
+        self.assertNotEqual(first['id'], second['id'])
+        reverse = content['get_permitted_users']
+        self.assertIn('WITH RECURSIVE', reverse['sql'])
+        self.assertIn({'const': 2}, reverse['params'])
+        self.assertIn({'bind': 'content.id'}, reverse['params'])
+        self.assertIn({'bind': 'permission.id'}, reverse['params'])
 
 
 class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
@@ -470,7 +507,8 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         models_ = self._models()
         (
             self.Org, self.Paper, self.Team, self.DirectGrant, self.TeamGrant,
-            self.GroupGrant, self.Folder,             self.FolderGrant, self.UuidPaper,
+            self.GroupGrant, self.Folder, self.FolderGrant, self.FolderPermit,
+            self.UuidPaper,
             self.UuidGrant, self.UuidUser, self.UuidUserPaper, self.UuidGrantUser,
         ) = models_
         self._table_cm = _tables(*models_)
@@ -576,6 +614,18 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
 
         class FolderGrant(models.Model):
             user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
+            approved_user = models.ForeignKey(
+                get_user_model(), null=True, on_delete=models.CASCADE,
+                related_name='+',
+            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class FolderPermit(models.Model):
+            user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
             folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
             permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
@@ -630,8 +680,8 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
 
         return (
             Org, Paper, Team, DirectGrant, TeamGrant, GroupGrant, Folder,
-            FolderGrant, UuidPaper, UuidGrant, UuidUser, UuidUserPaper,
-            UuidGrantUser,
+            FolderGrant, FolderPermit, UuidPaper, UuidGrant, UuidUser,
+            UuidUserPaper, UuidGrantUser,
         )
 
     def _register(self):
@@ -662,7 +712,15 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
             user='user',
             permission='permission',
             content='folder',
+            condition=lambda trust: trust.user == trust.approved_user,
             along=('folder__parent', 2),
+        )
+        self.handle.register(
+            trust=self.FolderPermit,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 1),
         )
         self.handle.register(
             trust=self.UuidGrant,
@@ -738,16 +796,71 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         self.assertNotIn(self.bob.pk, found)
         self.assertNotIn(self.alice.pk, found)
 
-    def test_along_fails_before_sql(self):
-        folder = self.Folder.objects.create(title='root')
-        permission = _permission(self.Folder, 'change_issue255folder')
+    def test_along_reverse_agrees_at_bounds_cycles_conditions_and_or(self):
+        root = self.Folder.objects.create(title='root')
+        child = self.Folder.objects.create(title='child', parent=root)
+        at_bound = self.Folder.objects.create(title='at-bound', parent=child)
+        beyond = self.Folder.objects.create(title='beyond', parent=at_bound)
+        cycle_a = self.Folder.objects.create(title='cycle-a')
+        cycle_b = self.Folder.objects.create(title='cycle-b', parent=cycle_a)
+        cycle_a.parent = cycle_b
+        cycle_a.save(update_fields=['parent'])
+        permission = _permission(self.Folder, 'change_folder')
         self.FolderGrant.objects.create(
-            user=self.alice, folder=folder, permission=permission,
+            user=self.alice, approved_user=self.alice,
+            folder=root, permission=permission,
         )
-        with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                folder.get_permitted_users(permission)
-        self.assertIn('Along', str(ctx.exception))
+        self.FolderGrant.objects.create(
+            user=self.bob, approved_user=self.alice,
+            folder=root, permission=permission,
+        )
+        inactive = self.User.objects.create_user(
+            'root-inactive-255', password='x', is_active=False,
+        )
+        self.FolderGrant.objects.create(
+            user=inactive, approved_user=inactive,
+            folder=root, permission=permission,
+        )
+        self.FolderPermit.objects.create(
+            user=self.cara, folder=child, permission=permission,
+        )
+        self.FolderPermit.objects.create(
+            user=self.outsider, folder=cycle_a, permission=permission,
+        )
+        candidates = self.User._default_manager.get_queryset()
+        for folder in (root, child, at_bound, beyond, cycle_a, cycle_b):
+            with self.subTest(folder=folder.title):
+                with self.assertNumQueries(1):
+                    found = _pks(folder.get_permitted_users(permission))
+                expected = {
+                    user.pk for user in candidates
+                    if user.has_perm(permission.user_perm_str, folder)
+                }
+                self.assertEqual(found, expected)
+        self.assertIn(
+            self.alice.pk,
+            _pks(at_bound.get_permitted_users(permission)),
+        )
+        self.assertNotIn(
+            self.alice.pk,
+            _pks(beyond.get_permitted_users(permission)),
+        )
+        self.assertNotIn(
+            self.bob.pk,
+            _pks(root.get_permitted_users(permission)),
+        )
+        self.assertNotIn(
+            inactive.pk,
+            _pks(root.get_permitted_users(permission)),
+        )
+        self.assertIn(
+            self.cara.pk,
+            _pks(at_bound.get_permitted_users(permission)),
+        )
+        self.assertIn(
+            self.outsider.pk,
+            _pks(cycle_b.get_permitted_users(permission)),
+        )
 
     def test_uuid_content_primary_key_agrees(self):
         paper = self.UuidPaper.objects.create(title='uuid-paper')
