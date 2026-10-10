@@ -76,6 +76,21 @@ unchanged, including one that names a custom permission model. A
 `get_group_permissions()`. The grammar is in
 [docs/core-registry.md](docs/core-registry.md).
 
+## Complete Along inquiry surfaces (#282)
+
+Bounded `along=` registrations now participate in reverse permitted-user
+inquiry and its authorization-policy SQL instead of raising before SQL. For a
+fixed content and permission, the reverse queryset must contain exactly the
+users whose complete forward object check succeeds, including the terminal
+condition and active-principal eligibility rule.
+
+Policy schema version 2 records the public walk path, resolved shape, and bound
+on each recursive trust row, includes the path in its stable identifier, and
+renders the bound as a registration constant. This expands a previously
+fail-closed development surface. It requires no consumer migration entry, but
+applications using development lockfiles must deliberately regenerate and
+review them.
+
 ## Change sizing and surface discovery
 
 Design tasks must estimate the complete implementation and review surface before

@@ -54,7 +54,7 @@ The following abridged example shows the schema:
 
 .. code-block:: yaml
 
-   schema_version: 1
+   schema_version: 2
    database:
      engine: "django.db.backends.sqlite3"
    backends:
@@ -129,10 +129,11 @@ user is the outer row. ``content.get_permitted_users(perm)`` and optional
 because they use the same reverse compiler; the document does not duplicate
 their SQL. The lockfile key stays ``get_permitted_users``. For an ``Along``
 registration, the candidate user is correlated into the recursive grant seed
-and the supplied content is tested against that user's bounded reach. The
-locked reverse statement must therefore agree with the forward object check.
-An unsupported renderer or unrenderable recursive predicate raises before a
-partial document is returned.
+and the supplied content is tested against that user's bounded reach. The same
+terminal ``condition=`` overlay and active-principal eligibility predicate are
+part of the reverse branch. The locked reverse statement must therefore agree
+with the complete forward object check. An unsupported renderer or unrenderable
+recursive predicate raises before a partial document is returned.
 
 A django-trusts backend issues one SQL statement for each permission inquiry.
 When more than one trust in that backend authorizes the same content model, the
@@ -172,6 +173,12 @@ For example, ``along=("folder__parent", 8)`` records:
 
 The public path is preserved even when two paths resolve to the same shape and
 bound, so their reviewed identifiers and metadata remain distinct.
+
+Adding the ``along`` object and path-bearing identifier changes the document
+shape from schema version 1 to schema version 2. The implementation change must
+regenerate the checked-in lockfile fixtures so reviewers see the complete
+format and SQL diff. A version-1 lockfile does not compare equal to version-2
+output and must be deliberately regenerated rather than silently accepted.
 
 Backend rows are sorted by backend path, independent of
 ``AUTHENTICATION_BACKENDS`` order. Content rows follow first-seen trust content,

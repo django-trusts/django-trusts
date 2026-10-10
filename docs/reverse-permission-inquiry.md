@@ -374,12 +374,14 @@ inferred from that ancestry. Any other object-capable `has_perm` without
 
 An `Along` registration grants through a user-seeded walk. Reverse inquiry
 correlates each candidate user into that same seed, applies the same bound and
-directed edge, and tests whether the supplied content is reachable. For a
-fixed content and permission, the result must agree with the forward object
-check for every candidate user. The policy-lock statement uses this same
-reverse compiler. An unsupported renderer or unrenderable recursive predicate
-raises before SQL or partial policy output; the path is never dropped or
-widened to every user.
+directed edge, and tests whether the supplied content is reachable. That
+branch also carries the same terminal `condition=` overlay and
+active-principal eligibility predicate as the forward proof. The condition is
+not evaluated on intermediate walk nodes. For a fixed content and permission,
+the result must agree with the forward object check for every candidate user.
+The policy-lock statement uses this same reverse compiler. An unsupported
+renderer or unrenderable recursive predicate raises before SQL or partial
+policy output; the path is never dropped or widened to every user.
 
 The content adapter's candidate model is `settings.AUTH_USER_MODEL`. A
 registration whose user terminal is a different model fails that adapter

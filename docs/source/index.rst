@@ -531,7 +531,8 @@ currently exercised by CI are recorded in the `support matrix
 The same bounded walk participates in object checks, permitted-content
 querysets, permission enumeration, reverse permitted-user inquiry, and
 authorization-policy SQL. For one content and permission, reverse inquiry
-returns exactly the users whose forward object check succeeds.
+returns exactly the users whose complete forward object check succeeds,
+including the terminal condition and active-principal eligibility rule.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~

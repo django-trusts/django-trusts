@@ -277,12 +277,15 @@ bounded reachability. Audit:
 
 Reverse inquiry must correlate each candidate user into the same registered
 `Along` seed and prove that the supplied content is within that user's bounded
-reach. Compare reverse results with forward object checks for the same content
-and permission. If the walk cannot be rendered exactly, inquiry raises before
-SQL rather than returning a broader user set. The policy lock does the same for
-that statement, so a document that would omit or simplify the reverse query is
-not emitted. Audit the exported walk path, shape, bound, constant parameter,
-and recursive SQL together.
+reach. The reverse branch must also carry the same terminal condition and
+active-principal eligibility predicate; the condition must not move onto
+intermediate walk nodes. Compare reverse results with complete forward object
+checks for the same content and permission. If the walk cannot be rendered
+exactly, inquiry raises before SQL rather than returning a broader user set.
+The policy lock does the same for that statement, so a document that would
+omit or simplify the reverse query is not emitted. Audit the schema version,
+exported walk path, shape, bound, constant parameter, and recursive SQL
+together.
 
 Current CI exercises Along only for the database combinations listed in the
 support matrix.
