@@ -92,6 +92,13 @@ Here `personal_organization` is reverse one-to-one from the sponsor and
 be a prefix hop, including one hop in a chain, but is not itself a supported
 content terminal or gateway.
 
+The initial delegated mode does not accept `along=` on the delegated
+registration itself. Such a registration fails closed as unsupported pending
+the hierarchy design in [issue #282][issue-282]. This is a temporary feature
+boundary, not a decision that delegated hierarchical reach should be rejected
+permanently. An ordinary registration may still use `along=`, and the
+sponsor-side ordinary-authority union must honor that effective bounded reach.
+
 For example, a delegation row with an `allowed_permissions` relation may
 narrow the sponsor ceiling without adding another public registration
 argument:
@@ -251,3 +258,4 @@ statement, concrete cases, and candidate scorecard.
 [issue-265]: https://github.com/django-trusts/django-trusts/issues/265
 [issue-266]: https://github.com/django-trusts/django-trusts/issues/266
 [issue-273]: https://github.com/django-trusts/django-trusts/issues/273
+[issue-282]: https://github.com/django-trusts/django-trusts/issues/282

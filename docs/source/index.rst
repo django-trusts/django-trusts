@@ -357,6 +357,14 @@ One or more reverse one-to-one relations may be chained as single-valued
 prefix hops before that gateway. A reverse one-to-one is not itself a
 supported content terminal or gateway.
 
+The initial delegated mode does not accept ``along=`` on the delegated
+registration itself. It fails closed as unsupported pending the hierarchy
+design in `issue #282
+<https://github.com/django-trusts/django-trusts/issues/282>`_; this is a
+temporary feature boundary rather than a permanent rejection. Ordinary
+sponsor grants may still use ``along=``, and their effective bounded reach
+participates in the sponsor's live authority ceiling.
+
 
 Configure Django
 ----------------
