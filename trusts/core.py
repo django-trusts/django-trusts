@@ -2053,6 +2053,7 @@ class AlongWalk:
 
     bound: int
     shape: str
+    path: str
     walk_path: tuple
     walk_model: type
     walk_ident: str
@@ -2374,6 +2375,7 @@ def _build_along_walk(root, content_path, content_model, along):
     return AlongWalk(
         bound=bound,
         shape=shape,
+        path=_lookup_text(tuple(along_ref._path)),
         walk_path=tuple(walk_path),
         walk_model=walk_model,
         walk_ident=walk_ident,
@@ -2547,11 +2549,15 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection):
 class _IdentInReach(Expression):
     """Boolean predicate ``alias.ident IN (W)`` compiled on the inner query."""
 
-    def __init__(self, attname, w_sql, w_params):
+    def __init__(self, attname, w_sql, w_params, bound):
         super().__init__(output_field=BooleanField())
         self.attname = attname
         self.w_sql = w_sql
         self.w_params = w_params
+        # Registration constant duplicated so policy SQL can classify the
+        # raw bound parameter on this node. The walk SQL still carries it
+        # once, as the depth ceiling.
+        self.bound = bound
 
     def as_sql(self, compiler, connection):
         qn = connection.ops.quote_name
@@ -2563,8 +2569,11 @@ class _IdentInReach(Expression):
 class GrantReach(Expression):
     """Grant-anchored bounded reachability predicate for one recursive record.
 
-    The walk is uncorrelated with candidate rows. One ``IN (WITH RECURSIVE …)``
-    per recursive record. Unsupported vendors raise before walk SQL.
+    Recursive generations are uncorrelated with content rows. The seed is
+    the registered grant for a bound user, or for the outer candidate user
+    when the projection is reverse permitted-users. One
+    ``IN (WITH RECURSIVE …)`` or bound-content ``EXISTS`` per recursive
+    record. Unsupported vendors raise before walk SQL.
     """
 
     filterable = True
@@ -2638,6 +2647,7 @@ class GrantReach(Expression):
         inner = self.suffix_query.clone()
         inner.add_q(Q(_IdentInReach(
             self.record.along.walk_ident, w_sql, w_params,
+            self.record.along.bound,
         )))
         return Exists(inner).as_sql(compiler, connection)
 
@@ -2645,15 +2655,19 @@ class GrantReach(Expression):
         walk = self.record.along
         content = self.content
         if not walk.suffix_path:
+            # Same identity the forward ``IN (W)`` test uses. An empty
+            # suffix's walk identity is the content target.
             inner = walk.walk_model._default_manager.filter(
-                pk=content.pk,
+                **{walk.walk_ident: getattr(content, walk.walk_ident)},
             ).query.clone()
         else:
             inner = walk.walk_model._default_manager.filter(
                 **{walk.suffix_field: content},
             ).query.clone()
         inner.subquery = True
-        inner.add_q(Q(_IdentInReach(walk.walk_ident, w_sql, w_params)))
+        inner.add_q(Q(_IdentInReach(
+            walk.walk_ident, w_sql, w_params, walk.bound,
+        )))
         return Exists(inner).as_sql(compiler, connection)
 
 
@@ -2828,19 +2842,9 @@ class RelationPlan:
         parts = []
         for record in self.records:
             if record.along is not None:
-                user = bindings['user']
-                if terminal_field_attr == 'content_field':
-                    parts.append(GrantReach(
-                        record, user, bindings['permission'],
-                        content_identity=self.content_identity,
-                    ))
-                else:
-                    target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
-                    parts.append(GrantReach(
-                        record, user, OuterRef(target),
-                        content=bindings['content'],
-                        content_identity=self.content_identity,
-                    ))
+                parts.append(self._along_grant_reach(
+                    record, terminal_field_attr, bindings,
+                ))
                 continue
             terminal = getattr(record, terminal_field_attr)
             target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
@@ -2855,6 +2859,36 @@ class RelationPlan:
         if len(parts) == 1:
             return parts[0]
         return reduce(or_, parts)
+
+    def _along_grant_reach(self, record, terminal_field_attr, bindings):
+        """One recursive proof. The outer terminal is the correlated side.
+
+        Content candidates keep the user bound and test ``ident IN (W)``.
+        Reverse permitted-users correlates each candidate into that same
+        seed and tests the supplied content. Permission enumeration
+        correlates the permission terminal. The registration condition
+        stays on the seed grant, never on an intermediate walk node.
+        """
+        identity = self.content_identity
+        if terminal_field_attr == 'content_field':
+            return GrantReach(
+                record, bindings['user'], bindings['permission'],
+                content_identity=identity,
+            )
+        if terminal_field_attr == 'user_field':
+            return GrantReach(
+                record,
+                OuterRef(record.user_target),
+                bindings['permission'],
+                content=bindings['content'],
+                content_identity=identity,
+            )
+        target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
+        return GrantReach(
+            record, bindings['user'], OuterRef(target),
+            content=bindings['content'],
+            content_identity=identity,
+        )
 
     def content_exists(self, user, permission):
         """Candidate-row ``EXISTS`` correlating content through this plan.
@@ -2880,8 +2914,10 @@ class RelationPlan:
 
         Inverse of ``content_exists``: content and permission are bound,
         and the user terminal is ``OuterRef`` of the resolved user target.
-        Complete records OR together. An ``Along`` record has no exact
-        reverse of its user-seeded walk and raises before SQL.
+        Complete records OR together. An ``Along`` record correlates that
+        same outer user into the recursive grant seed and tests whether
+        the supplied content is inside the bound. The result is the users
+        whose forward object check succeeds.
         """
         content = _require_instance(content, 'content')
         if content.pk is None:
@@ -2892,13 +2928,6 @@ class RelationPlan:
         permission = _bind_terminal(permission, 'permission')
         if not self.records:
             return None
-        for record in self.records:
-            if record.along is not None:
-                raise TrustsConfigurationError(
-                    'Reverse permission inquiry cannot compile an exact '
-                    'user predicate for Along registration on %s.'
-                    % record.root._meta.label
-                )
         return self._correlated_exists(
             'user_field', content=content, permission=permission,
         )

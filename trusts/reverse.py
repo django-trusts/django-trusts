@@ -80,13 +80,6 @@ def trusts_mixin_predicate(backend, content, perm):
     plan = handle.registry.plan_for(content)
     if not plan.records and not plan.delegations:
         return None
-    for record in plan.records:
-        if record.along is not None:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry cannot compile an exact user '
-                'predicate for Along registration on %s.'
-                % record.root._meta.label
-            )
     binding, condition = _permission_binding_for_plan(
         backend, content, perm, plan,
     )
@@ -137,13 +130,6 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    for record in plan.records:
-        if record.along is not None:
-            raise TrustsConfigurationError(
-                'Reverse permission inquiry cannot compile an exact user '
-                'predicate for Along registration on %s.'
-                % record.root._meta.label
-            )
     exists = plan.user_exists(content, permission) if plan.records else None
     if plan.delegations:
         sponsor_handles = (handle,) if handles is None else tuple(handles)
@@ -600,6 +586,16 @@ def _principal_presence(model, name):
     )
 
 
+def _active_principal_value():
+    """``is_active`` value required of a non-superuser candidate.
+
+    Reverse inquiry matches ``is_active_principal``. Issue #284 can
+    negate this one value for ``allow_in_active=True``. Django's
+    separate active-superuser rule stays in ``_superuser_q``.
+    """
+    return True
+
+
 def _trusts_eligibility_q(model):
     """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
 
@@ -613,7 +609,7 @@ def _trusts_eligibility_q(model):
         _principal_presence(model, 'is_anonymous')
         _principal_presence(model, 'is_authenticated')
         return None
-    predicate = Q(is_active=True)
+    predicate = Q(is_active=_active_principal_value())
     if _principal_presence(model, 'is_anonymous') == 'field':
         predicate &= Q(is_anonymous=False)
     if _principal_presence(model, 'is_authenticated') == 'field':

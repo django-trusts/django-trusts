@@ -269,8 +269,9 @@ class TrustModelBackendMixin(object):
         """``Q`` over candidate users, or ``None`` when this path does not apply.
 
         ``None`` contributes no grant. It is not an empty-queryset
-        fallback for a path that cannot be reversed: ``Along`` and other
-        inexact shapes raise ``TrustsConfigurationError`` before SQL.
+        fallback for a path that cannot be reversed. ``Along`` correlates
+        each candidate into the recursive grant seed. An unrenderable
+        walk raises ``TrustsConfigurationError`` before SQL.
         """
         from trusts.reverse import trusts_mixin_predicate
 

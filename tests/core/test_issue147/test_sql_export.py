@@ -48,6 +48,9 @@ GOLDEN_CONSTANTS = (
         'golden_condition_constants_sqlite.yaml',
     ).read_bytes()
 )
+GOLDEN_ALONG = (
+    Path(__file__).with_name('golden_along_sqlite.yaml').read_bytes()
+)
 
 _FORBIDDEN = (
     'fingerprint',
@@ -136,6 +139,10 @@ class Folder(models.Model):
         'self', null=True, related_name='children',
         on_delete=models.CASCADE,
     )
+    mentor = models.ForeignKey(
+        'self', null=True, related_name='pupils',
+        on_delete=models.CASCADE,
+    )
 
     class Meta:
         app_label = 'documents'
@@ -192,6 +199,15 @@ class ConstantDocument(models.Model):
 
 
 class FolderGrant(models.Model):
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'documents'
+
+
+class MentorGrant(models.Model):
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
     user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
     permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
@@ -457,8 +473,6 @@ class PolicySqlGoldenTest(SimpleTestCase):
             'documents__DocumentPermission__document__cond__2',
         ])
 
-        # Along SQL uses GrantReach, which this export does not classify.
-        # The id is still minted from the registered walk before compile.
         along = _handle('documents.backends.FolderBackend')
         along.register(
             trust=FolderGrant,
@@ -469,7 +483,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         )
         along_ids = _assign_ids(tuple(along.registry.records))
         self.assertEqual(along_ids, [
-            'documents__FolderGrant__folder__along_S_2',
+            'documents__FolderGrant__folder__along_folder__parent_S_2',
         ])
         for trust_id in cond_ids + along_ids:
             self.assertNotIn('.', trust_id)
@@ -583,6 +597,40 @@ class PolicySqlGoldenTest(SimpleTestCase):
                 with self.assertRaises(TrustsConfigurationError):
                     render_policy_sql_bytes(handles=[handle])
             probe.assert_not_called()
+
+    def test_along_document_matches_the_checked_in_bytes(self):
+        handle = _handle('documents.backends.FolderAlongBackend')
+        handle.register(
+            trust=FolderGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 8),
+        )
+        handle.register(
+            trust=MentorGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__mentor', 8),
+        )
+        payload = render_policy_sql_bytes(handles=[handle])
+        self.assertEqual(payload, GOLDEN_ALONG)
+        document = _load_policy_sql_document(payload)
+        self.assertEqual(document['schema_version'], 1)
+        trusts = document['backends'][0]['contents'][0]['trusts']
+        self.assertEqual([row['id'] for row in trusts], [
+            'documents__FolderGrant__folder__along_folder__parent_S_8',
+            'documents__MentorGrant__folder__along_folder__mentor_S_8',
+        ])
+        self.assertEqual(trusts[0]['along'], {
+            'path': 'folder__parent', 'shape': 'S', 'bound': 8,
+        })
+        self.assertEqual(trusts[1]['along'], {
+            'path': 'folder__mentor', 'shape': 'S', 'bound': 8,
+        })
+        self.assertIs(trusts[0]['or_group'], True)
+        self.assertIs(trusts[1]['or_group'], True)
 
 
 class PolicySqlCommandTest(SimpleTestCase):

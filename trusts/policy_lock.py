@@ -372,6 +372,13 @@ def _project_content(handle, alias, group, filters, handles):
             row['group'] = _relation(record, 'group')
         row['permission'] = _relation(record, 'permission')
         row['content'] = _relation(record, 'content')
+        along = getattr(record, 'along', None)
+        if along is not None:
+            row['along'] = {
+                'path': along.path,
+                'shape': along.shape,
+                'bound': along.bound,
+            }
         if multi:
             row['or_group'] = True
         trusts.append(row)
@@ -673,9 +680,10 @@ def _base_id(record):
         label += '__cond'
     along = getattr(record, 'along', None)
     if along is not None:
-        label += '__along_%s_%s' % (
-            getattr(along, 'shape', None),
-            getattr(along, 'bound', None),
+        label += '__along_%s_%s_%s' % (
+            along.path,
+            along.shape,
+            along.bound,
         )
     return label.replace('.', '__')
 
@@ -1088,6 +1096,9 @@ def _classify_compiled(node, sql, params):
 def _symbol_for_new_param(node):
     if isinstance(node, Value):
         return {'const': _json_const(node.value)}
+    along_bound = _along_bound_symbol(node)
+    if along_bound is not None:
+        return along_bound
     record = getattr(_ctx, 'record', None)
     if record is not None and isinstance(node, Lookup):
         bind = _bind_name(node, record)
@@ -1106,12 +1117,37 @@ def _symbol_for_new_param(node):
     return None
 
 
+def _along_bound_symbol(node):
+    """Registration ``along`` bound emitted as a raw recursive parameter.
+
+    ``GrantReach`` returns that parameter beside already-classified seed
+    placeholders. Bound-content projections nest the same parameter on
+    ``_IdentInReach``. Both are the registration constant, not a bind.
+    """
+    from trusts.core import GrantReach, _IdentInReach
+
+    if isinstance(node, GrantReach):
+        return {'const': _json_const(node.record.along.bound)}
+    if isinstance(node, _IdentInReach):
+        return {'const': _json_const(node.bound)}
+    return None
+
+
 def _bind_name(node, record):
     target = getattr(getattr(node, 'lhs', None), 'target', None)
     if target is None:
         return None
     remote = getattr(target, 'remote_field', None)
     model = getattr(remote, 'model', None) if remote is not None else None
+    if model is None and getattr(_ctx, 'reverse_users', False):
+        # Empty-suffix Along compares the walk identity, which is the
+        # content target, with no relation remote. Other scalar lookups
+        # (``is_active``) stay on their own model and fall through.
+        owner = target.model._meta.concrete_model
+        if owner is record.content_model._meta.concrete_model:
+            if target.attname == record.content_target:
+                return 'content.%s' % record.content_target
+        return None
     if model is None:
         return None
     concrete = model._meta.concrete_model

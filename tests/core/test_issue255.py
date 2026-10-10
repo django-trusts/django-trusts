@@ -189,7 +189,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn('is_active', where)
         self.assertNotIn('is_superuser', where)
 
-    def test_along_lockfile_fails_before_a_partial_document(self):
+    def test_along_lockfile_renders_recursive_forward_and_reverse_sql(self):
         handle = _export_handle('documents.backends.FolderBackend')
         handle.register(
             trust=FolderGrant,
@@ -199,12 +199,37 @@ class Issue255PolicySqlTest(SimpleTestCase):
             along=('folder__parent', 2),
         )
         folder = Folder(pk=1)
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            lock_permitted_users_queryset(handle, folder, Permission(pk=1))
-        self.assertIn('Along', str(ctx.exception))
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[handle])
-        self.assertIn('GrantReach', str(ctx.exception))
+        queryset = lock_permitted_users_queryset(
+            handle, folder, Permission(pk=1),
+        )
+        self.assertIn('WITH RECURSIVE', str(queryset.query).upper())
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        self.assertEqual(document['schema_version'], 1)
+        content = document['backends'][0]['contents'][0]
+        trust = content['trusts'][0]
+        self.assertEqual(trust['along'], {
+            'path': 'folder__parent',
+            'shape': 'S',
+            'bound': 2,
+        })
+        self.assertEqual(
+            trust['id'],
+            'documents__FolderGrant__folder__along_folder__parent_S_2',
+        )
+        for key in (
+            'permitted', 'has_perm', 'get_all_permissions',
+            'get_permitted_users',
+        ):
+            block = content[key]
+            self.assertIn('WITH RECURSIVE', block['sql'].upper())
+            self.assertIn({'const': 2}, block['params'])
+            self.assertNotIn({'bind': 2}, block['params'])
+        users = content['get_permitted_users']
+        self.assertIn({'bind': 'content.id'}, users['params'])
+        self.assertIn({'bind': 'permission.id'}, users['params'])
+        self.assertIn({'const': True}, users['params'])
 
 
 class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
@@ -738,16 +763,33 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         self.assertNotIn(self.bob.pk, found)
         self.assertNotIn(self.alice.pk, found)
 
-    def test_along_fails_before_sql(self):
-        folder = self.Folder.objects.create(title='root')
-        permission = _permission(self.Folder, 'change_issue255folder')
-        self.FolderGrant.objects.create(
-            user=self.alice, folder=folder, permission=permission,
+    def test_along_reverse_agrees_with_forward(self):
+        root = self.Folder.objects.create(title='root')
+        near = self.Folder.objects.create(title='near', parent=root)
+        at_bound = self.Folder.objects.create(title='at-bound', parent=near)
+        past = self.Folder.objects.create(title='past', parent=at_bound)
+        permission = _permission(self.Folder, 'change_folder')
+        code = '%s.%s' % (
+            permission.content_type.app_label, permission.codename,
         )
-        with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                folder.get_permitted_users(permission)
-        self.assertIn('Along', str(ctx.exception))
+        self.FolderGrant.objects.create(
+            user=self.alice, folder=root, permission=permission,
+        )
+        candidates = self.User._default_manager.get_queryset()
+        for node, alice_allowed in (
+            (root, True), (near, True), (at_bound, True), (past, False),
+        ):
+            with self.assertNumQueries(1):
+                found = _pks(node.get_permitted_users(permission))
+            expected = {
+                user.pk for user in candidates
+                if user.has_perm(code, node)
+            }
+            self.assertEqual(found, expected)
+            self.assertEqual(self.alice.pk in found, alice_allowed)
+            self.assertIn('WITH RECURSIVE', str(
+                node.get_permitted_users(permission).query,
+            ).upper())
 
     def test_uuid_content_primary_key_agrees(self):
         paper = self.UuidPaper.objects.create(title='uuid-paper')
