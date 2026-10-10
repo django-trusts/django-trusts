@@ -195,6 +195,13 @@ Audit the following boundaries:
 - object checks, permitted querysets, enumeration, reverse inquiry, and policy
   SQL must agree and remain one queryset statement per inquiry.
 
+The initial delegated mode rejects `along=` on the delegated registration and
+fails closed as unsupported. This is a temporary proposed-1.1 boundary while
+the hierarchy design is resolved in [issue #282](https://github.com/django-trusts/django-trusts/issues/282),
+not a permanent decision against delegated hierarchical reach. An ordinary
+sponsor grant may still use `along=`, and its effective bounded reach
+participates in the live sponsor-authority ceiling.
+
 Delegation remains inside the registered declarative policy and its correlated
 sponsor-authority predicate. An application-level nested call to
 `sponsor.has_perm()` falls outside that audited policy surface: it can import
