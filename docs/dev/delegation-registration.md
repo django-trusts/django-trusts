@@ -71,6 +71,26 @@ allowed operations. Either form may apply relationship-owned restrictions
 such as selected scope, approval, organization eligibility, revocation, and
 expiry.
 
+A delegated content path may use the same bounded dependent-content shape as
+an ordinary registration. A reverse one-to-one is a single-valued prefix hop
+and may appear before the one reverse one-to-many content gateway. This allows
+a relationship with no direct content foreign key to cover a bounded set, for
+example:
+
+```python
+backend.register(
+    trust=AllPersonalRepositoriesDelegation,
+    delegate="delegate",
+    sponsor="sponsor",
+    content="sponsor__personal_organization__repositories",
+    condition=lambda d, p: d.allowed_permissions.contains(p),
+)
+```
+
+Here `personal_organization` is reverse one-to-one from the sponsor and
+`repositories` is the reverse one-to-many gateway. Reverse one-to-one is not
+itself a supported content terminal or gateway.
+
 For example, a delegation row with an `allowed_permissions` relation may
 narrow the sponsor ceiling without adding another public registration
 argument:
@@ -142,6 +162,20 @@ active-superuser status supplies authority.
 The exact relationship row binds the sponsor. A matching relationship from
 one installation cannot borrow the sponsor, approval, content, or condition
 state of another relationship.
+
+More than one delegated relationship model may target the same content model.
+Those registrations are ORed only after each branch is complete:
+
+```text
+ordinary(u, c, p)
+OR EXISTS d1: left1(d1, u, c, p) AND ordinary(d1.sponsor, c, p)
+OR EXISTS d2: left2(d2, u, c, p) AND ordinary(d2.sponsor, c, p)
+```
+
+They are not flattened into
+`(left1 OR left2) AND (ordinary(sponsor1) OR ordinary(sponsor2))`. Approval,
+scope, and the sponsor-authority ceiling stay correlated to the exact row from
+the same relationship branch.
 
 `ordinary(d.sponsor, c, p)` is the complete live OR-union of applicable
 ordinary registrations, including registrations under other configured
