@@ -1,13 +1,16 @@
 """Delegated authority registration and one-level correlated grants (#266)."""
 
+from contextlib import contextmanager
+
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
+from django.contrib.auth.models import PermissionsMixin
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps, override_settings
 
 from tests.core import kernel_host_listed
@@ -25,7 +28,7 @@ from trusts.core import (
 )
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
 from trusts._permitted import permitted_queryset
-from trusts.query import PermittedQuerySet
+from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from trusts.reverse import lock_permitted_users_queryset
 
 
@@ -83,6 +86,109 @@ def _document_host_handle():
         lambda user, permission, obj: obj.confidential != True,
     )
     return handle
+
+
+@contextmanager
+def _listed(handle):
+    _PairDocumentBackend.handle = handle
+    with override_settings(AUTHENTICATION_BACKENDS=(
+        'tests.core.test_issue266._PairDocumentBackend',
+    )), patch(
+        'trusts.apps._relationship_implementation_handles',
+        return_value=(handle,),
+    ):
+        try:
+            yield
+        finally:
+            _PairDocumentBackend.handle = None
+
+
+@contextmanager
+def _tables(*model_classes):
+    with connection.schema_editor() as editor:
+        for model in model_classes:
+            editor.create_model(model)
+    try:
+        yield
+    finally:
+        with connection.schema_editor() as editor:
+            for model in reversed(model_classes):
+                editor.delete_model(model)
+
+
+def _indirect_content_models():
+    class Principal(PermissionsMixin, models.Model):
+        username = models.CharField(max_length=80, unique=True)
+        is_active = models.BooleanField(default=True)
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'issue266_principal'
+
+    class PersonalOrganization(models.Model):
+        personal_user = models.OneToOneField(
+            Principal,
+            related_name='personal_organization_issue266_query',
+            on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'issue266_personal_organization'
+
+    class Repository(PermittedUsersMixin, models.Model):
+        organization = models.ForeignKey(
+            PersonalOrganization,
+            related_name='repositories',
+            on_delete=models.CASCADE,
+        )
+        title = models.CharField(max_length=80)
+
+        objects = PermittedManager()
+
+        def get_permitted_users(self, perm):
+            from trusts.reverse import compile_permitted_users
+
+            return compile_permitted_users(
+                self, perm,
+                user_queryset=Principal.objects.all(),
+            )
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'issue266_repository'
+
+    class DirectGrant(models.Model):
+        user = models.ForeignKey(Principal, on_delete=models.CASCADE)
+        repository = models.ForeignKey(Repository, on_delete=models.CASCADE)
+        permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'issue266_direct_grant'
+
+    class AllPersonalDelegation(models.Model):
+        delegate = models.ForeignKey(
+            Principal, related_name='+', on_delete=models.CASCADE,
+        )
+        sponsor = models.ForeignKey(
+            Principal, related_name='+', on_delete=models.CASCADE,
+        )
+        allowed_permissions = models.ManyToManyField(Permission)
+
+        class Meta:
+            app_label = 'trusts_tests'
+            db_table = 'issue266_all_personal_delegation'
+
+    return (
+        Principal, PersonalOrganization, Repository, DirectGrant,
+        AllPersonalDelegation,
+    )
+
+
+def _contribute_m2m(field, model):
+    if not hasattr(field, 'm2m_field_name'):
+        field.contribute_to_related_class(model, field.remote_field)
 
 
 class DelegationSuiteRegistrationTest(SimpleTestCase):
@@ -220,6 +326,139 @@ class DelegationRegistrationTest(TestCase):
                 self.assertEqual(calls, [])
                 self.assertEqual(handle.registry.records, ())
                 self.assertEqual(handle.registry.delegations, ())
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
+    def setUp(self):
+        (
+            self.Principal,
+            self.PersonalOrganization,
+            self.Repository,
+            self.DirectGrant,
+            self.AllPersonalDelegation,
+        ) = _indirect_content_models()
+        self._table_cm = _tables(
+            self.Principal,
+            self.PersonalOrganization,
+            self.Repository,
+            self.DirectGrant,
+            self.AllPersonalDelegation,
+        )
+        self._table_cm.__enter__()
+        self.addCleanup(self._table_cm.__exit__, None, None, None)
+        _contribute_m2m(
+            self.AllPersonalDelegation._meta.get_field(
+                'allowed_permissions'
+            ),
+            Permission,
+        )
+
+        self.sponsor = self.Principal.objects.create(
+            username='indirect-sponsor-266',
+        )
+        self.delegate = self.Principal.objects.create(
+            username='indirect-delegate-266',
+        )
+        self.sponsor_without_personal_org = self.Principal.objects.create(
+            username='indirect-sponsor-without-org-266',
+        )
+        self.delegate_without_personal_org = self.Principal.objects.create(
+            username='indirect-delegate-without-org-266',
+        )
+        self.read = _permission(self.Repository, 'read_repository')
+        self.code = '%s.%s' % (
+            self.read.content_type.app_label, self.read.codename,
+        )
+        organization = self.PersonalOrganization.objects.create(
+            personal_user=self.sponsor,
+        )
+        self.repository = self.Repository.objects.create(
+            organization=organization, title='indirect-repository-266',
+        )
+        for sponsor in (
+            self.sponsor, self.sponsor_without_personal_org,
+        ):
+            self.DirectGrant.objects.create(
+                user=sponsor,
+                repository=self.repository,
+                permission=self.read,
+            )
+        for delegate, sponsor in (
+            (self.delegate, self.sponsor),
+            (
+                self.delegate_without_personal_org,
+                self.sponsor_without_personal_org,
+            ),
+        ):
+            relationship = self.AllPersonalDelegation.objects.create(
+                delegate=delegate, sponsor=sponsor,
+            )
+            relationship.allowed_permissions.add(self.read)
+
+        self.handle = _handle('tests.core.issue266.indirect')
+        self.handle.register(
+            trust=self.DirectGrant,
+            user='user',
+            permission='permission',
+            content='repository',
+        )
+        self.handle.register(
+            trust=self.AllPersonalDelegation,
+            delegate='delegate',
+            sponsor='sponsor',
+            content=(
+                'sponsor__personal_organization_issue266_query'
+                '__repositories'
+            ),
+            condition=lambda relationship, permission: (
+                relationship.allowed_permissions.contains(permission)
+            ),
+        )
+
+    def tearDown(self):
+        ContentType.objects.clear_cache()
+        super().tearDown()
+
+    def test_reverse_one_to_one_prefix_agrees_across_query_surfaces(self):
+        with _listed(self.handle):
+            self.assertTrue(
+                self.delegate.has_perm(self.code, self.repository)
+            )
+            self.assertEqual(
+                list(self.Repository.objects.permitted(
+                    self.read, self.delegate,
+                )),
+                [self.repository],
+            )
+            self.assertIn(
+                self.delegate,
+                set(self.repository.get_permitted_users(self.read)),
+            )
+
+            # This sponsor has a live ordinary grant and a delegation row,
+            # but no reverse one-to-one personal organization. Every public
+            # query surface denies cleanly rather than raising.
+            self.assertTrue(
+                self.sponsor_without_personal_org.has_perm(
+                    self.code, self.repository,
+                )
+            )
+            self.assertFalse(
+                self.delegate_without_personal_org.has_perm(
+                    self.code, self.repository,
+                )
+            )
+            self.assertEqual(
+                list(self.Repository.objects.permitted(
+                    self.read, self.delegate_without_personal_org,
+                )),
+                [],
+            )
+            self.assertNotIn(
+                self.delegate_without_personal_org,
+                set(self.repository.get_permitted_users(self.read)),
+            )
 
 
 class DelegatedAuthorityLiveTest(TestCase):
