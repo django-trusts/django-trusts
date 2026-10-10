@@ -71,11 +71,11 @@ allowed operations. Either form may apply relationship-owned restrictions
 such as selected scope, approval, organization eligibility, revocation, and
 expiry.
 
-A delegated content path may use the same bounded dependent-content shape as
-an ordinary registration. A reverse one-to-one is a single-valued prefix hop
-and may appear before the one reverse one-to-many content gateway. This allows
-a relationship with no direct content foreign key to cover a bounded set, for
-example:
+A delegated content path uses the same bounded dependent-content grammar as
+an ordinary registration. One or more reverse one-to-one relations may be
+chained as single-valued prefix hops before the one reverse one-to-many
+content gateway. This allows a relationship with no direct content foreign
+key to cover a bounded set, for example:
 
 ```python
 backend.register(
@@ -88,8 +88,9 @@ backend.register(
 ```
 
 Here `personal_organization` is reverse one-to-one from the sponsor and
-`repositories` is the reverse one-to-many gateway. Reverse one-to-one is not
-itself a supported content terminal or gateway.
+`repositories` is the reverse one-to-many gateway. A reverse one-to-one may
+be a prefix hop, including one hop in a chain, but is not itself a supported
+content terminal or gateway.
 
 For example, a delegation row with an `allowed_permissions` relation may
 narrow the sponsor ceiling without adding another public registration

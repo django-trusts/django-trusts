@@ -349,12 +349,13 @@ condition, and sponsor's ordinary-authority ceiling are ANDed before that
 branch is ORed with the others. A branch cannot borrow another relationship's
 approval or sponsor.
 
-``content=`` may also reach a bounded content set rather than a foreign key on
-the relationship row. For example,
+In ordinary or delegated mode, ``content=`` may also reach a bounded content
+set rather than a foreign key on the relationship row. For example,
 ``sponsor__personal_organization__repositories`` crosses a reverse one-to-one
 personal organization and then the one reverse one-to-many repository gateway.
-The reverse one-to-one is a single-valued prefix; it is not itself a supported
-content terminal or gateway.
+One or more reverse one-to-one relations may be chained as single-valued
+prefix hops before that gateway. A reverse one-to-one is not itself a
+supported content terminal or gateway.
 
 
 Configure Django
