@@ -174,12 +174,6 @@ For example, ``along=("folder__parent", 8)`` records:
 The public path is preserved even when two paths resolve to the same shape and
 bound, so their reviewed identifiers and metadata remain distinct.
 
-Adding the ``along`` object and path-bearing identifier changes the
-unreleased document shape without changing its schema version. The
-implementation change must regenerate the checked-in lockfile fixtures so
-reviewers see the complete format and SQL diff. Existing development lockfiles
-must be deliberately regenerated rather than silently accepted.
-
 Backend rows are sorted by backend path, independent of
 ``AUTHENTICATION_BACKENDS`` order. Content rows follow first-seen trust content,
 followed by filter-only contents. Trusts preserve ``register()`` order, named
