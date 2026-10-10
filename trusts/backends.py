@@ -90,8 +90,13 @@ class TrustModelBackendMixin(object):
         return getattr(user_obj, '_trust_perm_cache')
 
     def _path_permissions(self, user_obj, obj, *, kind):
+        from trusts.apps import _relationship_implementation_handles
+
         handle = self._own_handle()
-        qs = _compile_common_permissions((handle,), obj, user_obj, kind=kind)
+        qs = _compile_common_permissions(
+            (handle,), obj, user_obj, kind=kind,
+            sponsor_handles=_relationship_implementation_handles(),
+        )
         if qs is None:
             return set()
         return _perm_codes(qs)
@@ -185,20 +190,28 @@ class TrustModelBackendMixin(object):
         return record, extra_q
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None):
+        from trusts.apps import _relationship_implementation_handles
+
         handle = self._own_handle()
         binding = _permission_binding(perm, obj.model)
         matched = all_match(
             (handle,), obj, user_obj, binding, kind='complete', extra_q=extra_q,
+            sponsor_handles=_relationship_implementation_handles(),
+            permission_model=Permission,
         )
         if matched is None:
             return False
         return matched
 
     def _instance_has_perm(self, user_obj, perm, obj, extra_q=None):
+        from trusts.apps import _relationship_implementation_handles
+
         handle = self._own_handle()
         binding = _permission_binding(perm, obj.__class__)
         matched = instance_match(
             handle, obj, user_obj, binding, kind='complete', extra_q=extra_q,
+            sponsor_handles=_relationship_implementation_handles(),
+            permission_model=Permission,
         )
         if matched is None:
             return False

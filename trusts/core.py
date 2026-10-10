@@ -82,10 +82,14 @@ class QueryCompiler(object):
     def applies(self, plan):
         """True when this compiler has a grant plan for ``plan``.
 
-        Relationship default is ``bool(plan.records)``. Construction
-        issues no SQL. Inapplicable backends must not compile a grant.
+        Relationship default recognizes ordinary records and delegation
+        records. Construction issues no SQL. Inapplicable backends must not
+        compile a grant.
         """
-        return bool(getattr(plan, 'records', None))
+        return bool(
+            getattr(plan, 'records', None)
+            or getattr(plan, 'delegations', None)
+        )
 
     def complete_exists(self, plan, candidates, user, permission):
         raise NotImplementedError
@@ -107,8 +111,11 @@ class PlanQueryCompiler(object):
     historical_fallback = False
 
     def applies(self, plan):
-        """Relationship applicability: registered AnyPath records only."""
-        return bool(getattr(plan, 'records', None))
+        """Relationship applicability: ordinary or delegated records."""
+        return bool(
+            getattr(plan, 'records', None)
+            or getattr(plan, 'delegations', None)
+        )
 
     def complete_exists(self, plan, candidates, user, permission):
         if not plan.records:
@@ -184,7 +191,7 @@ def _plan_for_permission(handle, candidates, user, permission):
 
 
 def any_plan_records(handles, content):
-    """True when any handle registry has ``plan_for(content).records``.
+    """True when any handle registry declares an ordinary or delegated plan.
 
     Aggregate **support** gate across configured Trusts paths. A
     declaration on one path establishes that the content terminal is
@@ -197,7 +204,7 @@ def any_plan_records(handles, content):
     """
     for handle in handles:
         plan = handle.registry.plan_for(content)
-        if plan.records:
+        if plan.records or plan.delegations:
             return True
     return False
 
@@ -216,11 +223,24 @@ def _relationship_handles(handles):
     return _relationship_family_handles(handles)
 
 
-def _compile_granted(handles, candidates, user, permission, *, kind='complete'):
-    """OR compiler predicates for the given handles. No family filter."""
+def _compile_granted(handles, candidates, user, permission, *, kind='complete',
+                     sponsor_handles=None, permission_model=None):
+    """OR ordinary predicates and one-level delegated predicates.
+
+    ``handles`` owns the direct and delegation branches being projected.
+    ``sponsor_handles`` supplies the complete ordinary-authority union inside
+    each delegation branch and defaults to the same handles.
+    """
+    handles = tuple(handles)
+    sponsor_handles = handles if sponsor_handles is None else tuple(sponsor_handles)
+    if permission_model is None and isinstance(permission, Model):
+        permission_model = permission._meta.concrete_model
     parts = []
+    delegations = []
+    content_identity = _candidate_model(candidates)
     for handle in handles:
         plan = _plan_for_permission(handle, candidates, user, permission)
+        delegations.extend(getattr(plan, 'delegations', ()) or ())
         if kind == 'complete':
             fn = handle.compiler.complete_exists
         else:
@@ -229,6 +249,16 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete'):
         if part is None:
             continue
         parts.append(part)
+    if kind == 'complete' and delegations:
+        sponsor_records = _ordinary_records(
+            sponsor_handles, candidates, permission_model,
+        )
+        delegated = _delegated_content_exists(
+            tuple(delegations), sponsor_records, user, permission,
+            content_identity=content_identity,
+        )
+        if delegated is not None:
+            parts.append(delegated)
     if not parts:
         return None
     if len(parts) == 1:
@@ -236,7 +266,8 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete'):
     return reduce(or_, parts)
 
 
-def granted(handles, candidates, user, permission, *, kind='complete'):
+def granted(handles, candidates, user, permission, *, kind='complete',
+            sponsor_handles=None, permission_model=None):
     """OR each applicable relationship-family handle's complete (or group) predicate.
 
     Core-owned aggregate: fold-family handles are omitted. Noun-blind
@@ -258,8 +289,12 @@ def granted(handles, candidates, user, permission, *, kind='complete'):
     """
     participating = _relationship_handles(handles)
     return _compile_granted(
-        participating,
-        candidates, user, permission, kind=kind,
+        participating, candidates, user, permission, kind=kind,
+        sponsor_handles=(
+            participating if sponsor_handles is None
+            else _relationship_handles(sponsor_handles)
+        ),
+        permission_model=permission_model,
     )
 
 
@@ -374,7 +409,8 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     return queryset.filter(granted_q).distinct()
 
 
-def all_match(handles, candidates, user, permission, *, kind='complete', extra_q=None):
+def all_match(handles, candidates, user, permission, *, kind='complete',
+              extra_q=None, sponsor_handles=None, permission_model=None):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
     One SQL. ``None`` when no handle applies so the caller may use the
@@ -382,7 +418,11 @@ def all_match(handles, candidates, user, permission, *, kind='complete', extra_q
     never creates a grant. Every supplied handle participates.
     """
     handles = tuple(handles)
-    granted_q = _compile_granted(handles, candidates, user, permission, kind=kind)
+    granted_q = _compile_granted(
+        handles, candidates, user, permission, kind=kind,
+        sponsor_handles=sponsor_handles,
+        permission_model=permission_model,
+    )
     if granted_q is None:
         return None
     if extra_q is not None:
@@ -395,13 +435,18 @@ def all_match(handles, candidates, user, permission, *, kind='complete', extra_q
     return stats['total'] > 0 and stats['lacking'] == 0
 
 
-def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None):
+def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None,
+                   sponsor_handles=None, permission_model=None):
     """One grant EXISTS for ``obj`` through ``handle`` only.
 
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
     overlay (AND); it never creates a grant.
     """
-    granted_q = _compile_granted((handle,), obj, user, permission, kind=kind)
+    granted_q = _compile_granted(
+        (handle,), obj, user, permission, kind=kind,
+        sponsor_handles=sponsor_handles,
+        permission_model=permission_model,
+    )
     if granted_q is None:
         return None
     if extra_q is not None:
@@ -411,10 +456,13 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
     ).filter(granted_q).exists()
 
 
-def _compile_common_permissions(handles, candidates, user, *, kind='complete'):
+def _compile_common_permissions(handles, candidates, user, *, kind='complete',
+                                sponsor_handles=None):
     """Permission queryset for the given handles. No family filter."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
+    handles = tuple(handles)
+    sponsor_handles = handles if sponsor_handles is None else tuple(sponsor_handles)
     parts = []
     permission_model = None
     applicable = False
@@ -441,8 +489,38 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete'):
             fn = handle.compiler.group_exists
         part = _as_q(fn(plan, qs, user, perm_expr))
         if part is None:
-            continue
-        parts.append(part)
+            pass
+        else:
+            parts.append(part)
+        if kind == 'complete' and getattr(plan, 'delegations', None):
+            sponsor_records = _ordinary_records(sponsor_handles, candidates)
+            compatible_records = _compatible_sponsor_records(
+                plan.delegations, sponsor_records,
+            )
+            delegated = _delegated_content_exists(
+                plan.delegations, compatible_records, user, perm_expr,
+                content_identity=_candidate_model(candidates),
+            )
+            if delegated is not None:
+                parts.append(delegated)
+                applicable = True
+                terminals = {
+                    (record.permission_model, record.permission_target)
+                    for record in compatible_records
+                }
+                if len(terminals) != 1:
+                    raise TrustsConfigurationError(
+                        'Delegated sponsor registrations must share one '
+                        'permission model and comparison target.'
+                    )
+                delegated_model, _delegated_target = terminals.pop()
+                if permission_model is None:
+                    permission_model = delegated_model
+                elif permission_model is not delegated_model:
+                    raise TrustsConfigurationError(
+                        'Applicable registrations must share one '
+                        'permission model.'
+                    )
     if not applicable or permission_model is None:
         return None
     if not parts:
@@ -469,8 +547,8 @@ def common_permissions(handles, candidates, user, *, kind='complete'):
     """
     participating = _relationship_handles(handles)
     return _compile_common_permissions(
-        participating,
-        candidates, user, kind=kind,
+        participating, candidates, user, kind=kind,
+        sponsor_handles=participating,
     )
 
 
@@ -1363,12 +1441,62 @@ def _validate_condition(condition, root, permission_model,
     )
 
 
-def _compile_predicate(node, record):
+def _validate_delegated_condition(condition, root):
+    """Validate delegated row predicates and return inquiry terminal metadata.
+
+    Row-only equality has no permission terminal. Every inquiry-permission
+    match must resolve to the same model and comparison target. Validation is
+    metadata-only and therefore remains zero SQL.
+    """
+    if condition is None:
+        return condition, None, None
+    matches = []
+
+    def visit(node):
+        if isinstance(node, All):
+            if not node.predicates:
+                raise TrustsConfigurationError(
+                    'All requires one or more predicates.'
+                )
+            for predicate in node.predicates:
+                visit(predicate)
+            return
+        if isinstance(node, Equal):
+            _validate_equal(node, root)
+            return
+        if isinstance(node, _InquiryPermissionMatch):
+            ref = _require_same_root(
+                node.ref, root, 'delegated inquiry permission',
+            )
+            _path, model, _field, target = _resolve_permission_path(
+                root, ref._path,
+            )
+            matches.append((model, target))
+            return
+        raise TrustsConfigurationError(
+            'delegated condition is not supported; omit it or use '
+            'row equality and inquiry-permission matches.'
+        )
+
+    visit(condition)
+    if not matches:
+        return condition, None, None
+    first_model, first_target = matches[0]
+    for model, target in matches[1:]:
+        if model is not first_model or target != first_target:
+            raise TrustsConfigurationError(
+                'Delegated inquiry-permission paths must share one model '
+                'and comparison target.'
+            )
+    return condition, first_model, first_target
+
+
+def _compile_predicate(node, record, *, permission=None):
     if node is None:
         return None
     if isinstance(node, All):
         parts = [
-            _compile_predicate(predicate, record)
+            _compile_predicate(predicate, record, permission=permission)
             for predicate in node.predicates
         ]
         parts = [part for part in parts if part is not None]
@@ -1389,6 +1517,18 @@ def _compile_predicate(node, record):
                 _lookup_text(ref._path): F(record.permission_field),
             })
         return compiled
+    if isinstance(node, _InquiryPermissionMatch):
+        if permission is None:
+            raise TrustsConfigurationError(
+                'Delegated inquiry-permission condition needs the requested '
+                'permission binding.'
+            )
+        ref = _require_same_root(
+            node.ref, record.root, 'delegated inquiry permission',
+        )
+        return Q(**{
+            _lookup_text(ref._path): _bind_terminal(permission, 'permission'),
+        })
     raise TrustsConfigurationError(
         'condition is not supported; omit it or pass None.'
     )
@@ -1472,6 +1612,183 @@ def _bind_record_qs(record, correlation=None, *, content_identity=None, **bindin
             **bindings,
         ),
     )
+
+
+def _shift_outer_ref(value):
+    """Add one correlation level to a symbolic outer reference."""
+    if isinstance(value, OuterRef):
+        return OuterRef(value)
+    return value
+
+
+def _principal_eligibility_q(model, path):
+    """SQL equivalent of ``is_active_principal`` through ``path``.
+
+    Missing ``is_active`` fails closed because the runtime helper's default is
+    false. Anonymous/authenticated attributes use their runtime defaults when
+    they are not concrete fields. Any concrete eligibility field must be
+    boolean.
+    """
+    lookups = {}
+    for name, expected, required in (
+        ('is_active', True, True),
+        ('is_anonymous', False, False),
+        ('is_authenticated', True, False),
+    ):
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            if required:
+                return None
+            continue
+        if (
+            not getattr(field, 'concrete', False)
+            or field.get_internal_type() != 'BooleanField'
+        ):
+            raise TrustsConfigurationError(
+                '%s.%s must be a concrete BooleanField for delegated '
+                'principal eligibility.' % (model._meta.label, name)
+            )
+        lookups['%s__%s' % (path, name)] = expected
+    return Q(**lookups)
+
+
+def _ordinary_records(handles, content, permission_model=None):
+    """Applicable ordinary records across relationship handles."""
+    records = []
+    for handle in handles:
+        plan = handle.registry.plan_for(content)
+        for record in plan.records:
+            if (
+                permission_model is not None
+                and record.permission_model is not permission_model
+            ):
+                continue
+            records.append(record)
+    return tuple(records)
+
+
+def _compatible_sponsor_records(delegations, sponsor_records):
+    """Ordinary records that can satisfy at least one delegation row."""
+    compatible = []
+    for ordinary in sponsor_records:
+        for delegation in delegations:
+            if ordinary.content_model is not delegation.content_model:
+                continue
+            if ordinary.user_model is not delegation.sponsor_model:
+                continue
+            expected = delegation.condition_permission_model
+            if expected is not None and ordinary.permission_model is not expected:
+                continue
+            if (
+                expected is not None
+                and ordinary.permission_target
+                != delegation.condition_permission_target
+            ):
+                continue
+            compatible.append(ordinary)
+            break
+    return tuple(compatible)
+
+
+def _delegation_sponsor_q(record, sponsor_records, permission, content_identity):
+    """Sponsor ordinary-authority OR, correlated to one delegation row."""
+    parts = []
+    expected_model = record.condition_permission_model
+    expected_target = record.condition_permission_target
+    for ordinary in sponsor_records:
+        if ordinary.content_model is not record.content_model:
+            continue
+        if ordinary.user_model is not record.sponsor_model:
+            continue
+        if expected_model is not None:
+            if ordinary.permission_model is not expected_model:
+                continue
+            if ordinary.permission_target != expected_target:
+                continue
+        inner = _bind_record_qs(
+            ordinary,
+            content_identity=content_identity,
+            user=OuterRef(record.sponsor_field),
+            content=OuterRef(record.content_field),
+            permission=_shift_outer_ref(permission),
+        )
+        parts.append(Exists(inner))
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else reduce(or_, parts)
+
+
+def _delegated_content_exists(delegations, sponsor_records, user, permission,
+                              *, content_identity=None):
+    """Candidate-content predicate for one-level delegated authority."""
+    if (
+        user is None
+        or getattr(user, 'is_anonymous', False)
+        or not getattr(user, 'is_authenticated', True)
+        or not getattr(user, 'is_active', False)
+    ):
+        return None
+    parts = []
+    for record in delegations:
+        sponsor_q = _delegation_sponsor_q(
+            record, sponsor_records, permission, content_identity,
+        )
+        if sponsor_q is None:
+            continue
+        eligibility = _principal_eligibility_q(
+            record.sponsor_model, record.sponsor_field,
+        )
+        if eligibility is None:
+            continue
+        combined = Q(**{
+            record.delegate_field: _bind_terminal(user, 'delegate'),
+            record.content_field: OuterRef(record.content_target),
+        })
+        condition = _compile_predicate(
+            record.condition, record, permission=permission,
+        )
+        if condition is not None:
+            combined &= condition
+        combined &= eligibility
+        combined &= sponsor_q
+        parts.append(Exists(record.root._default_manager.filter(combined)))
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else reduce(or_, parts)
+
+
+def _delegated_user_exists(delegations, sponsor_records, content, permission,
+                           *, content_identity=None):
+    """Candidate-user predicate for one-level delegated authority."""
+    content = _require_instance(content, 'content')
+    parts = []
+    for record in delegations:
+        sponsor_q = _delegation_sponsor_q(
+            record, sponsor_records, permission, content_identity,
+        )
+        if sponsor_q is None:
+            continue
+        eligibility = _principal_eligibility_q(
+            record.sponsor_model, record.sponsor_field,
+        )
+        if eligibility is None:
+            continue
+        combined = Q(**{
+            record.delegate_field: OuterRef(record.delegate_target),
+            record.content_field: content,
+        })
+        condition = _compile_predicate(
+            record.condition, record, permission=permission,
+        )
+        if condition is not None:
+            combined &= condition
+        combined &= eligibility
+        combined &= sponsor_q
+        parts.append(Exists(record.root._default_manager.filter(combined)))
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else reduce(or_, parts)
 
 
 class Ref(object):
@@ -1644,6 +1961,43 @@ class PermissionIn(object):
 permission_in = PermissionIn
 
 
+class _InquiryPermissionMatch(object):
+    """Closed match between one relationship path and inquiry permission.
+
+    This node is produced only by a two-argument delegated ``condition=``
+    builder. It is deliberately private: application code supplies the
+    symbolic expression, never a prebuilt node.
+    """
+
+    __slots__ = ('ref',)
+
+    def __init__(self, ref):
+        if not _is_condition_operand(ref):
+            raise TrustsConfigurationError(
+                'inquiry permission match requires one root-relative Ref, '
+                'not %r.' % (ref,)
+            )
+        object.__setattr__(self, 'ref', ref)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('Inquiry permission match is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('Inquiry permission match is immutable.')
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, _InquiryPermissionMatch)
+            and self.ref == other.ref
+        )
+
+    def __hash__(self):
+        return hash((_InquiryPermissionMatch, self.ref))
+
+    def __repr__(self):
+        return 'inquiry_permission_match(%r)' % (self.ref,)
+
+
 class All(object):
     """Closed AND of one or more typed predicate nodes."""
 
@@ -1655,9 +2009,12 @@ class All(object):
                 'All requires one or more predicates.'
             )
         for predicate in predicates:
-            if not isinstance(predicate, (All, Equal, PermissionIn)):
+            if not isinstance(
+                predicate, (All, Equal, PermissionIn, _InquiryPermissionMatch)
+            ):
                 raise TrustsConfigurationError(
-                    'All predicates must be All, Equal, or permission_in '
+                    'All predicates must be All, Equal, permission_in, or '
+                    'an inquiry-permission match '
                     'nodes, not %r.' % (predicate,)
                 )
         object.__setattr__(self, 'predicates', predicates)
@@ -2322,6 +2679,33 @@ class RegisteredRelation:
     group_target: str = ''
 
 
+@dataclass(frozen=True, slots=True)
+class RegisteredDelegation:
+    """Immutable normalized bridge to a sponsor's ordinary authority.
+
+    A delegation is not an ordinary grant and therefore stores no ordinary
+    ``permission`` path. ``condition_permission_model`` is present only when
+    the delegated condition refers to the requested permission.
+    """
+
+    root: type
+    content_path: tuple
+    content_model: type
+    content_field: str
+    content_target: str
+    delegate_path: tuple
+    delegate_model: type
+    delegate_field: str
+    delegate_target: str
+    sponsor_path: tuple
+    sponsor_model: type
+    sponsor_field: str
+    sponsor_target: str
+    condition: object | None = None
+    condition_permission_model: type | None = None
+    condition_permission_target: str | None = None
+
+
 _BINDING_FIELDS = {
     'user': 'user_field',
     'content': 'content_field',
@@ -2420,6 +2804,7 @@ class RelationPlan:
     """
 
     records: tuple
+    delegations: tuple = ()
     permission_model: type | None = None
     content_identity: type | None = None
 
@@ -2594,6 +2979,8 @@ class TrustsRegistry(object):
 
         self._by_root = {}
         self._order = []
+        self._delegations_by_root = {}
+        self._delegation_order = []
         self._frozen = False
         self._condition_lookup = None
         self.conditions = ConditionRegistry()
@@ -2676,6 +3063,10 @@ class TrustsRegistry(object):
     def records(self):
         return tuple(self._order)
 
+    @property
+    def delegations(self):
+        return tuple(self._delegation_order)
+
     def records_for_root(self, root):
         """Insertion-ordered records registered for ``root``.
 
@@ -2687,6 +3078,109 @@ class TrustsRegistry(object):
             raise TrustsConfigurationError(
                 'No registration for %r.' % (getattr(root, '__name__', root),)
             )
+
+    def delegations_for_root(self, root):
+        """Insertion-ordered delegated records registered for ``root``."""
+        try:
+            return tuple(self._delegations_by_root[root])
+        except KeyError:
+            raise TrustsConfigurationError(
+                'No delegated registration for %r.'
+                % (getattr(root, '__name__', root),)
+            )
+
+    def register_delegation(self, *, content, delegate, sponsor, condition=None):
+        """Register one non-granting delegation relationship.
+
+        The three paths share one root. Delegate and sponsor are
+        single-valued forward paths to the same persisted principal model.
+        The condition is row-only or may contain a private symbolic match to
+        the requested permission. Registration validates metadata only.
+        """
+        if self._frozen:
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        content_ref = _require_ref(content, 'content')
+        delegate_ref = _require_ref(delegate, 'delegate')
+        sponsor_ref = _require_ref(sponsor, 'sponsor')
+        roots = (
+            content_ref._root, delegate_ref._root, sponsor_ref._root,
+        )
+        if len(set(roots)) != 1:
+            raise TrustsConfigurationError(
+                'All refs in one delegated registration must share the same '
+                'root model; got %s.'
+                % ', '.join(root._meta.label for root in roots)
+            )
+        root = roots[0]
+        content_path, content_model, content_field, content_target = _resolve_path(
+            root, content_ref._path, 'content', trailing_reverse=True,
+        )
+        (
+            delegate_path, delegate_model, delegate_field, delegate_target,
+        ) = _resolve_forward_singles(root, delegate_ref._path, 'delegate')
+        (
+            sponsor_path, sponsor_model, sponsor_field, sponsor_target,
+        ) = _resolve_forward_singles(root, sponsor_ref._path, 'sponsor')
+        if (
+            delegate_model is not sponsor_model
+            or delegate_target != sponsor_target
+        ):
+            raise TrustsConfigurationError(
+                'delegate and sponsor must resolve to the same principal '
+                'model and comparison target; got %s.%s and %s.%s.'
+                % (
+                    delegate_model._meta.label, delegate_target,
+                    sponsor_model._meta.label, sponsor_target,
+                )
+            )
+        (
+            condition, condition_permission_model,
+            condition_permission_target,
+        ) = _validate_delegated_condition(condition, root)
+        record = RegisteredDelegation(
+            root=root,
+            content_path=content_path,
+            content_model=content_model,
+            content_field=content_field,
+            content_target=content_target,
+            delegate_path=delegate_path,
+            delegate_model=delegate_model,
+            delegate_field=delegate_field,
+            delegate_target=delegate_target,
+            sponsor_path=sponsor_path,
+            sponsor_model=sponsor_model,
+            sponsor_field=sponsor_field,
+            sponsor_target=sponsor_target,
+            condition=condition,
+            condition_permission_model=condition_permission_model,
+            condition_permission_target=condition_permission_target,
+        )
+        existing_rows = self._delegations_by_root.get(root)
+        if existing_rows:
+            if record in existing_rows:
+                raise TrustsConfigurationError(
+                    'Duplicate delegated registration for %s.'
+                    % root._meta.label
+                )
+            for existing in existing_rows:
+                if existing.content_model is record.content_model:
+                    raise TrustsConfigurationError(
+                        'Conflicting delegated registration for %s content '
+                        'terminal %s: existing %r, new %r.'
+                        % (
+                            root._meta.label,
+                            record.content_model._meta.label,
+                            existing,
+                            record,
+                        )
+                    )
+            existing_rows.append(record)
+        else:
+            self._delegations_by_root[root] = [record]
+        self._delegation_order.append(record)
+        return record
 
     def register(self, *, content, user, permission=None, group=None,
                  condition=None, along=None):
@@ -2846,6 +3340,19 @@ class TrustsRegistry(object):
             chosen.append(record)
         return tuple(chosen)
 
+    def _delegations_for(self, content_model, delegate_model=None):
+        chosen = []
+        for record in self._delegation_order:
+            if record.content_model is not content_model:
+                continue
+            if (
+                delegate_model is not None
+                and record.delegate_model is not delegate_model
+            ):
+                continue
+            chosen.append(record)
+        return tuple(chosen)
+
     def plan_for(self, content, *, user=None, permission=None):
         """Build the common relation plan for these terminals.
 
@@ -2864,6 +3371,7 @@ class TrustsRegistry(object):
             )
 
         records = self._records_for(content_model, user_model, permission_model)
+        delegations = self._delegations_for(content_model, user_model)
         plan_permission = permission_model
         if records:
             models = {record.permission_model for record in records}
@@ -2876,6 +3384,7 @@ class TrustsRegistry(object):
             plan_permission = models.pop()
         return RelationPlan(
             records=records,
+            delegations=delegations,
             permission_model=plan_permission,
             content_identity=_candidate_model(content),
         )
@@ -3022,6 +3531,12 @@ class _ConditionProxy(object):
         raise TrustsConfigurationError('Condition builder is immutable.')
 
     def contains(self, member):
+        if isinstance(member, _InquiryPermissionProxy):
+            if not self._path:
+                raise TrustsConfigurationError(
+                    'condition .contains collection returned an empty path.'
+                )
+            return _ConditionInquiryMatch(self)
         if not isinstance(member, _ConditionProxy):
             raise TrustsConfigurationError(
                 'condition .contains member must be a path rooted at the '
@@ -3042,6 +3557,12 @@ class _ConditionProxy(object):
         return _ConditionIn(self, member)
 
     def __eq__(self, other):
+        if isinstance(other, _InquiryPermissionProxy):
+            if not self._path:
+                raise TrustsConfigurationError(
+                    'condition equality returned an empty path.'
+                )
+            return _ConditionInquiryMatch(self)
         if not isinstance(other, _ConditionProxy):
             raise TrustsConfigurationError(
                 'condition equality requires two trust-rooted paths, '
@@ -3111,6 +3632,52 @@ class _ConditionIn(object):
         return _condition_and(other, self)
 
 
+class _InquiryPermissionProxy(object):
+    """Symbolic requested permission for delegated conditions."""
+
+    __slots__ = ('_token',)
+
+    def __init__(self, token):
+        object.__setattr__(self, '_token', token)
+
+    def __getattr__(self, name):
+        raise TrustsConfigurationError(
+            'requested permission is a symbolic terminal and has no '
+            'traversable attributes.'
+        )
+
+    def __eq__(self, other):
+        if isinstance(other, _ConditionProxy) and other._path:
+            return _ConditionInquiryMatch(other)
+        raise TrustsConfigurationError(
+            'requested permission equality requires one relationship path.'
+        )
+
+    def __bool__(self):
+        raise TrustsConfigurationError(_CONDITION_BOOLEAN_MESSAGE)
+
+    def __setattr__(self, name, value):
+        raise TrustsConfigurationError('Requested permission is immutable.')
+
+    def __delattr__(self, name):
+        raise TrustsConfigurationError('Requested permission is immutable.')
+
+
+class _ConditionInquiryMatch(object):
+    """Private executing proxy for ``row_path == p`` or contains(p)."""
+
+    __slots__ = ('path',)
+
+    def __init__(self, path):
+        object.__setattr__(self, 'path', path)
+
+    def __and__(self, other):
+        return _condition_and(self, other)
+
+    def __rand__(self, other):
+        return _condition_and(other, self)
+
+
 class _ConditionAnd(object):
     """Private executing-proxy conjunction. Flattened to ``All`` on store."""
 
@@ -3127,7 +3694,9 @@ class _ConditionAnd(object):
         return _condition_and(other, self)
 
 
-_CONDITION_EXPR_TYPES = (_ConditionEq, _ConditionIn, _ConditionAnd)
+_CONDITION_EXPR_TYPES = (
+    _ConditionEq, _ConditionIn, _ConditionInquiryMatch, _ConditionAnd,
+)
 
 
 def _condition_and(left, right):
@@ -3202,6 +3771,35 @@ def _require_condition_arity(builder):
         ) from exc
 
 
+def _delegated_condition_arity(builder):
+    """Return 1 or 2 without invoking a delegated condition builder."""
+    try:
+        signature = inspect.signature(builder)
+    except (TypeError, ValueError):
+        return 1
+    if any(
+        parameter.kind is inspect.Parameter.VAR_POSITIONAL
+        for parameter in signature.parameters.values()
+    ):
+        raise TrustsConfigurationError(
+            'delegated condition builder must accept one or two positional '
+            'arguments, not *args.'
+        )
+    accepted = []
+    for count in (1, 2, 3):
+        try:
+            signature.bind(*((_CONDITION_ARITY_PROBE,) * count))
+        except TypeError:
+            continue
+        accepted.append(count)
+    if 3 in accepted or not any(count in accepted for count in (1, 2)):
+        raise TrustsConfigurationError(
+            'delegated condition builder must accept one or two positional '
+            'arguments (the relationship and optional requested permission).'
+        )
+    return 2 if 2 in accepted else 1
+
+
 def _public_condition_path(proxy, token, role):
     if not isinstance(proxy, _ConditionProxy):
         raise TrustsConfigurationError(
@@ -3249,6 +3847,12 @@ def _lower_public_condition(node, trust, token, permission_path):
             ),
         )
     if isinstance(node, _ConditionIn):
+        if permission_path is None:
+            raise TrustsConfigurationError(
+                'row-only delegated condition .contains() cannot bind the '
+                'requested permission; accept a second argument and pass it '
+                'as the member.'
+            )
         member_path = _public_condition_path(
             node.member, token, 'condition .contains member',
         )
@@ -3270,6 +3874,16 @@ def _lower_public_condition(node, trust, token, permission_path):
                 'permission_in',
             ),
         )
+    if isinstance(node, _ConditionInquiryMatch):
+        return _InquiryPermissionMatch(
+            _public_ref(
+                trust,
+                _public_condition_path(
+                    node.path, token, 'delegated inquiry permission path',
+                ),
+                'delegated inquiry permission',
+            )
+        )
     raise TrustsConfigurationError(
         'condition builder must return a boolean expression of path '
         'equality, collection.contains(member), or their conjunction, '
@@ -3288,19 +3902,19 @@ def _reject_public_condition_value(condition):
         or condition is permission_in
     ):
         raise TypeError(
-            'condition must be a one-argument symbolic callable, '
+            'condition must be a symbolic callable, '
             'not a prebuilt All / Equal / permission_in value or other '
             'non-callable %r.' % (condition,)
         )
     if isinstance(condition, (All, Equal, PermissionIn, Expr, Ref, Q, str, bool)):
         raise TypeError(
-            'condition must be a one-argument symbolic callable, '
+            'condition must be a symbolic callable, '
             'not a prebuilt All / Equal / permission_in value or other '
             'non-callable %r.' % (condition,)
         )
     if not callable(condition):
         raise TypeError(
-            'condition must be a one-argument symbolic callable, '
+            'condition must be a symbolic callable, '
             'not %r.' % (condition,)
         )
 
@@ -3334,6 +3948,41 @@ def _normalize_public_condition(trust, condition, permission_path, *, token):
             'not %r.' % (result,)
         )
     return _lower_public_condition(result, trust, token, permission_path)
+
+
+def _normalize_delegated_condition(trust, condition, *, token):
+    """Invoke a delegated condition builder once and lower to private IR."""
+    if condition is None:
+        return None
+    _reject_public_condition_value(condition)
+    if inspect.iscoroutinefunction(condition) or inspect.isasyncgenfunction(
+        condition,
+    ):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression, not a '
+            'coroutine or async generator.'
+        )
+    arity = _delegated_condition_arity(condition)
+    relationship = _ConditionProxy(trust, token=token)
+    inquiry_permission = _InquiryPermissionProxy(token)
+    try:
+        if arity == 2:
+            result = condition(relationship, inquiry_permission)
+        else:
+            result = condition(relationship)
+    except TrustsConfigurationError:
+        raise
+    except Exception as exc:
+        raise TrustsConfigurationError(
+            'condition builder failed: %s' % exc
+        ) from exc
+    if not isinstance(result, _CONDITION_EXPR_TYPES):
+        raise TrustsConfigurationError(
+            'condition builder must return a boolean expression of path '
+            'equality, collection.contains(permission), or their '
+            'conjunction, not %r.' % (result,)
+        )
+    return _lower_public_condition(result, trust, token, None)
 
 
 def _normalize_public_role(trust, value, role, *, token):
@@ -3449,14 +4098,20 @@ class BackendHandle:
         self,
         *,
         trust: type[T],
-        user: str | Callable[[T], object],
+        user: str | Callable[[T], object] | None = None,
         permission: str | Callable[[T], object] | None = None,
         content: str | Callable[[T], object],
         group: str | Callable[[T], object] | None = None,
-        condition: Callable[[T], object] | None = None,
+        delegate: str | Callable[[T], object] | None = None,
+        sponsor: str | Callable[[T], object] | None = None,
+        condition: (
+            Callable[[T], object]
+            | Callable[[T, object], object]
+            | None
+        ) = None,
         along=None,
-    ) -> RegisteredRelation:
-        """Donate one AnyPath permission relationship on this backend.
+    ) -> RegisteredRelation | RegisteredDelegation:
+        """Register one ordinary grant or delegated relationship.
 
         ``user`` and ``content`` accept a Django ``__`` path string or a
         one-argument symbolic path builder. ``permission`` and ``group``
@@ -3469,20 +4124,23 @@ class BackendHandle:
         on the group path. Supplying both, or neither, raises
         ``TrustsConfigurationError`` before any path builder runs. A
         ``permission=`` registration does not contribute to
-        ``get_group_permissions``.
+        ``get_group_permissions``. Delegated mode instead requires exactly
+        ``delegate=`` and ``sponsor=`` and forbids ``user=``, ``permission=``,
+        ``group=``, and ``along=``. A delegated row is not an ordinary grant.
 
         A builder is called once during registration with a value typed
         as ``trust``. Attribute access records a path; the callable is
         discarded and never stored or run during authorization.
-        ``condition`` is a one-argument trust-rooted symbolic callable
-        using path ``==``, collection-rooted ``.contains(member)``, and
-        ``&``. It is invoked once after the freeze check; the stored
-        overlay is private ``Equal`` / ``PermissionIn`` / ``All`` and
-        contains no callable. For ``group=``, ``.contains`` member is
-        the compiler-owned permission path. Prebuilt ``All`` / ``Equal``
-        / ``permission_in`` values are ``TypeError``. ``predicate`` is
-        reserved and unsupported. ``along`` is ``(path, bound)``.
-        Passing a ``Ref`` is ``TypeError``. A frozen backend raises
+        In ordinary mode, ``condition`` is a one-argument trust-rooted
+        symbolic callable. In delegated mode it accepts either the
+        relationship alone or ``(relationship, requested_permission)``.
+        Conditions use path ``==``, collection-rooted
+        ``.contains(member)``, and ``&``. They are invoked once after the
+        freeze check; the stored overlay contains no callable. For
+        ``group=``, ``.contains`` member is the compiler-owned permission
+        path. Prebuilt predicate nodes are ``TypeError``. ``predicate`` is
+        reserved and unsupported. ``along`` is ``(path, bound)``. Passing
+        a ``Ref`` is ``TypeError``. A frozen backend raises
         ``TrustsConfigurationError`` before path parsing or builder
         invocation.
 
@@ -3496,7 +4154,32 @@ class BackendHandle:
             raise TrustsConfigurationError(
                 'Cannot register on a frozen TrustsRegistry.'
             )
-        _require_one_permission_source(permission, group)
+        ordinary = user is not None or permission is not None or group is not None
+        delegated = delegate is not None or sponsor is not None
+        if ordinary and delegated:
+            raise TrustsConfigurationError(
+                'register accepts ordinary user=/permission=/group= or '
+                'delegated delegate=/sponsor= arguments, not both modes.'
+            )
+        if delegated:
+            if delegate is None or sponsor is None:
+                raise TrustsConfigurationError(
+                    'delegated register requires both delegate= and sponsor=.'
+                )
+            if user is not None or permission is not None or group is not None:
+                raise TrustsConfigurationError(
+                    'delegated register forbids user=, permission=, and group=.'
+                )
+            if along is not None:
+                raise TrustsConfigurationError(
+                    'delegated register does not support along=.'
+                )
+        else:
+            if user is None:
+                raise TrustsConfigurationError(
+                    'ordinary register requires user=.'
+                )
+            _require_one_permission_source(permission, group)
         if isinstance(trust, Ref):
             raise TypeError(
                 'register trust must be a Django model class, '
@@ -3508,10 +4191,25 @@ class BackendHandle:
                 'not %r.' % (trust,)
             )
         token = object()
-        user_path = _normalize_public_role(trust, user, 'user', token=token)
         content_path = _normalize_public_role(
             trust, content, 'content', token=token,
         )
+        if delegated:
+            delegate_path = _normalize_public_role(
+                trust, delegate, 'delegate', token=token,
+            )
+            sponsor_path = _normalize_public_role(
+                trust, sponsor, 'sponsor', token=token,
+            )
+            return self.registry.register_delegation(
+                content=_public_ref(trust, content_path, 'content'),
+                delegate=_public_ref(trust, delegate_path, 'delegate'),
+                sponsor=_public_ref(trust, sponsor_path, 'sponsor'),
+                condition=_normalize_delegated_condition(
+                    trust, condition, token=token,
+                ),
+            )
+        user_path = _normalize_public_role(trust, user, 'user', token=token)
         if group is not None:
             group_text = _normalize_public_role(
                 trust, group, 'group', token=token,

@@ -11,7 +11,12 @@ from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import F, Model, Q, QuerySet
 
-from trusts.core import TrustsConfigurationError, _as_q
+from trusts.core import (
+    TrustsConfigurationError,
+    _as_q,
+    _delegated_user_exists,
+    _ordinary_records,
+)
 
 
 _OBJECT_BLIND_BACKENDS = None
@@ -69,9 +74,11 @@ def compile_permitted_users(content, perm, *, user_queryset=None):
 
 def trusts_mixin_predicate(backend, content, perm):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
+    from trusts.apps import _relationship_implementation_handles
+
     handle = backend._own_handle()
     plan = handle.registry.plan_for(content)
-    if not plan.records:
+    if not plan.records and not plan.delegations:
         return None
     for record in plan.records:
         if record.along is not None:
@@ -83,10 +90,24 @@ def trusts_mixin_predicate(backend, content, perm):
     binding, condition = _permission_binding_for_plan(
         backend, content, perm, plan,
     )
-    exists = plan.user_exists(content, binding)
+    exists = plan.user_exists(content, binding) if plan.records else None
+    if plan.delegations:
+        permission_model = (
+            binding._meta.concrete_model
+            if isinstance(binding, Model) else Permission
+        )
+        sponsor_records = _ordinary_records(
+            _relationship_implementation_handles(), content, permission_model,
+        )
+        delegated = _delegated_user_exists(
+            plan.delegations, sponsor_records, content, binding,
+            content_identity=getattr(plan, 'content_identity', None),
+        )
+        if delegated is not None:
+            exists = delegated if exists is None else (_as_q(exists) | delegated)
     if exists is None:
         return None
-    user_model = plan.records[0].user_model
+    user_model = _plan_user_model(plan, content)
     eligibility = _trusts_eligibility_q(user_model)
     if eligibility is None:
         return None
@@ -102,7 +123,7 @@ def trusts_mixin_predicate(backend, content, perm):
     return predicate
 
 
-def lock_permitted_users_queryset(handle, content, permission):
+def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
     """Backend-local reverse queryset compiled into the policy lock.
 
     This is the backend branch (eligibility and complete grants), not
@@ -111,7 +132,7 @@ def lock_permitted_users_queryset(handle, content, permission):
     Content is classified as ``content.<target>``.
     """
     plan = handle.registry.plan_for(content)
-    if not plan.records:
+    if not plan.records and not plan.delegations:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
@@ -123,13 +144,30 @@ def lock_permitted_users_queryset(handle, content, permission):
                 'predicate for Along registration on %s.'
                 % record.root._meta.label
             )
-    exists = plan.user_exists(content, permission)
+    exists = plan.user_exists(content, permission) if plan.records else None
+    if plan.delegations:
+        sponsor_handles = (handle,) if handles is None else tuple(handles)
+        permission_model = (
+            permission._meta.concrete_model
+            if isinstance(permission, Model) else None
+        )
+        delegated = _delegated_user_exists(
+            plan.delegations,
+            _ordinary_records(
+                sponsor_handles, content, permission_model,
+            ),
+            content,
+            permission,
+            content_identity=getattr(plan, 'content_identity', None),
+        )
+        if delegated is not None:
+            exists = delegated if exists is None else (_as_q(exists) | delegated)
     if exists is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    user_model = plan.records[0].user_model
+    user_model = _plan_user_model(plan, content)
     eligibility = _trusts_eligibility_q(user_model)
     if eligibility is None:
         # ``none()`` does not render. ``pk IS NULL`` is the same empty
@@ -137,6 +175,23 @@ def lock_permitted_users_queryset(handle, content, permission):
         return user_model._default_manager.all().filter(pk__isnull=True)
     predicate = eligibility & _as_q(exists)
     return user_model._default_manager.all().filter(predicate).distinct()
+
+
+def _plan_user_model(plan, content):
+    """One concrete candidate-user model shared by every reverse branch."""
+    models = {
+        record.user_model._meta.concrete_model for record in plan.records
+    }
+    models.update(
+        record.delegate_model._meta.concrete_model
+        for record in plan.delegations
+    )
+    if len(models) != 1:
+        raise TrustsConfigurationError(
+            'Reverse permission inquiry for %s requires one registered '
+            'candidate user model.' % content._meta.label
+        )
+    return models.pop()
 
 
 def _require_saved_content(content):
@@ -585,6 +640,18 @@ def _assert_registration_user_model(backend, content, user_model):
                     registered._meta.label,
                 )
             )
+    for record in plan.delegations:
+        registered = record.delegate_model._meta.concrete_model
+        if registered is not expected:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry candidate user model is %s, '
+                'but %s registers delegate %s.'
+                % (
+                    expected._meta.label,
+                    record.root._meta.label,
+                    registered._meta.label,
+                )
+            )
 
 
 def _registration_models(backend, content):
@@ -601,6 +668,15 @@ def _registration_models(backend, content):
             record.permission_model,
             record.content_model,
         ))
+    for record in plan.delegations:
+        models.extend((
+            record.root,
+            record.delegate_model,
+            record.sponsor_model,
+            record.content_model,
+        ))
+        if record.condition_permission_model is not None:
+            models.append(record.condition_permission_model)
     return models
 
 

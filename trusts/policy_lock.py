@@ -240,7 +240,7 @@ def _build_document(handles, alias):
         )
     projected = []
     for handle in handles:
-        projected.append(_project_backend(handle, alias))
+        projected.append(_project_backend(handle, alias, handles))
     projected.sort(key=lambda row: row['path'])
     paths = [row['path'] for row in projected]
     if len(paths) != len(set(paths)):
@@ -254,7 +254,7 @@ def _build_document(handles, alias):
     }
 
 
-def _project_backend(handle, alias):
+def _project_backend(handle, alias, handles):
     path = getattr(handle, 'path', None)
     if not isinstance(path, str) or path == '':
         raise TrustsConfigurationError(
@@ -277,17 +277,19 @@ def _project_backend(handle, alias):
             % (path,)
         )
     records = tuple(getattr(registry, 'records', ()) or ())
-    ids = _assign_ids(records)
+    delegations = tuple(getattr(registry, 'delegations', ()) or ())
+    all_records = records + delegations
+    ids = _assign_ids(all_records)
     named_filters = _project_named_filters(registry, alias)
     return {
         'path': path,
         'contents': _project_contents(
-            handle, alias, records, ids, named_filters,
+            handle, alias, all_records, ids, named_filters, handles,
         ),
     }
 
 
-def _project_contents(handle, alias, records, ids, named_filters):
+def _project_contents(handle, alias, records, ids, named_filters, handles):
     groups = []
     index = {}
     for record, trust_id in zip(records, ids):
@@ -317,6 +319,7 @@ def _project_contents(handle, alias, records, ids, named_filters):
         seen.add(group['label'])
         contents.append(_project_content(
             handle, alias, group, filters_by_model.get(group['label'], ()),
+            handles,
         ))
     for model in filter_order:
         if model in seen:
@@ -330,13 +333,36 @@ def _project_contents(handle, alias, records, ids, named_filters):
     return contents
 
 
-def _project_content(handle, alias, group, filters):
+def _project_content(handle, alias, group, filters, handles):
+    from trusts.core import RegisteredDelegation
+
     legs = group['legs']
-    records = tuple(record for record, _trust_id in legs)
-    _require_shared_terminals(records, group['label'])
+    records = tuple(
+        record for record, _trust_id in legs
+        if not isinstance(record, RegisteredDelegation)
+    )
+    delegations = tuple(
+        record for record, _trust_id in legs
+        if isinstance(record, RegisteredDelegation)
+    )
+    if records:
+        _require_shared_terminals(records, group['label'])
     multi = len(legs) > 1
     trusts = []
+    delegated_rows = []
     for record, trust_id in legs:
+        if isinstance(record, RegisteredDelegation):
+            row = {
+                'id': trust_id,
+                'root': _model_label(record.root),
+                'delegate': _delegation_relation(record, 'delegate'),
+                'sponsor': _delegation_relation(record, 'sponsor'),
+                'content': _relation(record, 'content'),
+            }
+            if multi:
+                row['or_group'] = True
+            delegated_rows.append(row)
+            continue
         row = {
             'id': trust_id,
             'root': _model_label(record.root),
@@ -349,19 +375,28 @@ def _project_content(handle, alias, group, filters):
         if multi:
             row['or_group'] = True
         trusts.append(row)
+    classifier_records = _policy_classifier_records(
+        records, delegations, handles, group['model'],
+    )
+    _require_shared_terminals(classifier_records, group['label'])
     content = {
         'model': group['label'],
-        'trusts': trusts,
+    }
+    if trusts:
+        content['trusts'] = trusts
+    if delegated_rows:
+        content['delegations'] = delegated_rows
+    content.update({
         'permitted': _sql_row(_compile_permitted(
-            handle, alias, records, group['model'],
+            handle, alias, classifier_records, group['model'], handles,
         )),
         'has_perm': _sql_row(_compile_has_perm(
-            handle, alias, records, group['model'],
+            handle, alias, classifier_records, group['model'], handles,
         )),
         'get_all_permissions': _sql_row(_compile_get_all_permissions(
-            handle, alias, records, group['model'],
+            handle, alias, classifier_records, group['model'], handles,
         )),
-    }
+    })
     if any(getattr(record, 'via_group', False) for record in records):
         content['get_group_permissions'] = _sql_row(
             _compile_get_group_permissions(
@@ -369,7 +404,7 @@ def _project_content(handle, alias, group, filters):
             )
         )
     content['get_permitted_users'] = _sql_row(_compile_get_permitted_users(
-        handle, alias, records, group['model'],
+        handle, alias, classifier_records, group['model'], handles,
     ))
     if filters:
         content['named_filters'] = [_named_filter_row(row) for row in filters]
@@ -406,6 +441,73 @@ def _require_shared_terminals(records, label):
                 )
 
 
+def _delegation_relation(record, role):
+    return {
+        'path': getattr(record, '%s_field' % role),
+        'model': _model_label(getattr(record, '%s_model' % role)),
+        'target': getattr(record, '%s_target' % role),
+    }
+
+
+def _policy_classifier_records(records, delegations, handles, model):
+    """Ordinary records that classify policy-lock bind placeholders.
+
+    A delegation-only backend has no permission terminal of its own. Its
+    requested-permission and user sentinels therefore come from compatible
+    ordinary sponsor grants across the rendered relationship handles. This
+    is also the exact ordinary-only union used by the runtime compiler, so a
+    delegated row can never become a sponsor record here.
+    """
+    selected = list(records)
+    seen = {id(record) for record in selected}
+    for candidate_handle in handles:
+        registry = getattr(candidate_handle, 'registry', None)
+        if registry is None:
+            continue
+        plan = registry.plan_for(model)
+        for ordinary in plan.records:
+            if id(ordinary) in seen:
+                continue
+            for delegation in delegations:
+                if ordinary.content_model is not delegation.content_model:
+                    continue
+                if ordinary.user_model is not delegation.sponsor_model:
+                    continue
+                expected = delegation.condition_permission_model
+                if (
+                    expected is not None
+                    and ordinary.permission_model is not expected
+                ):
+                    continue
+                if (
+                    expected is not None
+                    and ordinary.permission_target
+                    != delegation.condition_permission_target
+                ):
+                    continue
+                selected.append(ordinary)
+                seen.add(id(ordinary))
+                break
+    if not selected:
+        raise TrustsConfigurationError(
+            'Policy SQL found no ordinary sponsor grant for delegated '
+            'content %s.' % _model_label(model)
+        )
+    for delegation in delegations:
+        first = selected[0]
+        if (
+            delegation.delegate_model._meta.concrete_model
+            is not first.user_model._meta.concrete_model
+            or delegation.delegate_target != first.user_target
+        ):
+            raise TrustsConfigurationError(
+                'Policy SQL on %s requires delegate and ordinary user '
+                'terminals to share one model and target.'
+                % _model_label(model)
+            )
+    return tuple(selected)
+
+
 def _content_manager(model):
     return model._meta.concrete_model._default_manager
 
@@ -422,18 +524,27 @@ def _role_sentinel(record, role, alias):
     )
 
 
-def _compile_permitted(handle, alias, records, model):
+def _compile_permitted(handle, alias, records, model, handles):
+    from trusts.core import _compile_granted
+
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
-    queryset = handle.registry.filter_authorized(
-        _content_manager(model).all(), user, permission,
+    queryset = _content_manager(model).all()
+    granted = _compile_granted(
+        (handle,), queryset, user, permission, kind='complete',
+        sponsor_handles=handles,
     )
+    if granted is None:
+        raise TrustsConfigurationError(
+            'Policy SQL found no grant for %s.' % _model_label(model)
+        )
+    queryset = queryset.filter(granted).distinct()
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
     )
 
 
-def _compile_has_perm(handle, alias, records, model):
+def _compile_has_perm(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
     user = _role_sentinel(records[0], 'user', alias)
@@ -441,6 +552,7 @@ def _compile_has_perm(handle, alias, records, model):
     instance = _content_sentinel(model, alias)
     granted = _compile_granted(
         (handle,), instance, user, permission, kind='complete',
+        sponsor_handles=handles,
     )
     if granted is None:
         raise TrustsConfigurationError(
@@ -453,14 +565,21 @@ def _compile_has_perm(handle, alias, records, model):
     )
 
 
-def _compile_get_all_permissions(handle, alias, records, model):
+def _compile_get_all_permissions(handle, alias, records, model, handles):
     from trusts.core import _compile_common_permissions
 
     user = _role_sentinel(records[0], 'user', alias)
     instance = _content_sentinel(model, alias)
-    queryset = _compile_common_permissions(
-        (handle,), instance, user, kind='complete',
-    )
+    plan = handle.registry.plan_for(model)
+    if plan.delegations:
+        queryset = _compile_common_permissions(
+            (handle,), instance, user, kind='complete',
+            sponsor_handles=handles,
+        )
+    else:
+        queryset = _compile_common_permissions(
+            (handle,), instance, user, kind='complete',
+        )
     if queryset is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permissions query for %s.'
@@ -471,12 +590,14 @@ def _compile_get_all_permissions(handle, alias, records, model):
     )
 
 
-def _compile_get_permitted_users(handle, alias, records, model):
+def _compile_get_permitted_users(handle, alias, records, model, handles):
     from trusts.reverse import lock_permitted_users_queryset
 
     content = _content_sentinel(model, alias)
     permission = _role_sentinel(records[0], 'permission', alias)
-    queryset = lock_permitted_users_queryset(handle, content, permission)
+    queryset = lock_permitted_users_queryset(
+        handle, content, permission, handles=handles,
+    )
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
         reverse_users=True,

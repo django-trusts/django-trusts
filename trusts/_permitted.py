@@ -13,7 +13,7 @@ from operator import or_
 from django.contrib.auth.models import Permission
 from django.db.models import Subquery
 
-from trusts.core import TrustsConfigurationError, granted
+from trusts.core import TrustsConfigurationError, _ordinary_records, granted
 from trusts.query import is_active_principal
 
 
@@ -120,19 +120,36 @@ def _condition_permission_label(model, normalized):
     return '%s.%s' % (model._meta.app_label, normalized[2])
 
 
-def _plan_is_auth_permission(plan):
+def _plan_is_auth_permission(plan, sponsor_records=()):
     """True when ``plan`` is applicable and terminates on auth.Permission."""
     permission_model = getattr(plan, 'permission_model', None)
-    if permission_model is None:
-        return False
-    if permission_model._meta.concrete_model is not Permission:
-        return False
-    if not plan.records:
-        return False
-    return True
+    if (
+        plan.records
+        and permission_model is not None
+        and permission_model._meta.concrete_model is Permission
+    ):
+        return True
+    for delegation in getattr(plan, 'delegations', ()) or ():
+        for ordinary in sponsor_records:
+            if ordinary.content_model is not delegation.content_model:
+                continue
+            if ordinary.user_model is not delegation.sponsor_model:
+                continue
+            expected = delegation.condition_permission_model
+            if expected is not None and ordinary.permission_model is not expected:
+                continue
+            if (
+                expected is not None
+                and ordinary.permission_target
+                != delegation.condition_permission_target
+            ):
+                continue
+            if ordinary.permission_model._meta.concrete_model is Permission:
+                return True
+    return False
 
 
-def _auth_permission_plan(handle, candidates, user):
+def _auth_permission_plan(handle, candidates, user, handles):
     """Applicable plan only when the permission terminal is auth.Permission.
 
     ``granted()`` does not pass a Subquery into ``plan_for(..., permission=)``.
@@ -141,19 +158,21 @@ def _auth_permission_plan(handle, candidates, user):
     id. Those plans are omitted from this string and instance guard.
     """
     plan = handle.registry.plan_for(candidates, user=user)
-    if not _plan_is_auth_permission(plan):
+    if not _plan_is_auth_permission(
+        plan, _ordinary_records(handles, candidates),
+    ):
         return None
     return plan
 
 
-def _auth_permission_plan_for_model(handle, model):
+def _auth_permission_plan_for_model(handle, model, handles):
     """Zero-SQL applicable auth.Permission plan for this content model."""
     registry = getattr(handle, 'registry', None)
     plan_for = getattr(registry, 'plan_for', None)
     if not callable(plan_for):
         return None
     plan = plan_for(model)
-    if not _plan_is_auth_permission(plan):
+    if not _plan_is_auth_permission(plan, _ordinary_records(handles, model)):
         return None
     return plan
 
@@ -188,7 +207,7 @@ def _authorization_preflight_state(handles, model, conditions):
     """
     participating = False
     for handle in handles:
-        if _auth_permission_plan_for_model(handle, model) is None:
+        if _auth_permission_plan_for_model(handle, model, handles) is None:
             continue
         participating = True
         if _backend_has_selected_conditions(handle, model, conditions):
@@ -247,7 +266,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
     parts = []
     complete = 0
     for handle in handles:
-        if _auth_permission_plan(handle, candidates, user) is None:
+        if _auth_permission_plan(handle, candidates, user, handles) is None:
             continue
         if conditions:
             overlay = _overlay_for_backend(
@@ -256,12 +275,20 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             if overlay is None:
                 continue
             complete += 1
-            part = granted((handle,), candidates, user, binding, kind='complete')
+            part = granted(
+                (handle,), candidates, user, binding, kind='complete',
+                sponsor_handles=handles,
+                permission_model=Permission,
+            )
             if part is None:
                 continue
             parts.append(part & overlay)
             continue
-        part = granted((handle,), candidates, user, binding, kind='complete')
+        part = granted(
+            (handle,), candidates, user, binding, kind='complete',
+            sponsor_handles=handles,
+            permission_model=Permission,
+        )
         if part is None:
             continue
         parts.append(part)

@@ -28,6 +28,7 @@ from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
+    RegisteredDelegation,
     RegisteredRelation,
     TrustsConfigurationError,
     TrustsRegistry,
@@ -92,7 +93,9 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertEqual(len(type_args), 1)
         self.assertIsInstance(type_args[0], TypeVar)
         self.assertIs(type_args[0].__bound__, Model)
-        for role in ('user', 'permission', 'content', 'group'):
+        for role in (
+            'user', 'permission', 'content', 'group', 'delegate', 'sponsor',
+        ):
             origin = get_origin(hints[role])
             self.assertIn(origin, (types.UnionType, type(str | int)))
             parts = get_args(hints[role])
@@ -114,12 +117,15 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         condition_callables = [
             part for part in condition_parts if get_origin(part) is Callable
         ]
-        self.assertEqual(len(condition_callables), 1)
-        self.assertEqual(
-            get_args(condition_callables[0]),
+        self.assertEqual(len(condition_callables), 2)
+        self.assertIn(
             ([type_args[0]], object),
+            [get_args(part) for part in condition_callables],
         )
-        self.assertIs(hints['return'], RegisteredRelation)
+        self.assertEqual(
+            set(get_args(hints['return'])),
+            {RegisteredRelation, RegisteredDelegation},
+        )
         # Python does not prove lambda attributes exist on trust=.
         self.assertNotIn('document', BackendHandle.register.__annotations__)
 
@@ -148,7 +154,10 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         names = [name for name in signature.parameters if name != 'self']
         self.assertEqual(
             names,
-            ['trust', 'user', 'permission', 'content', 'group', 'condition', 'along'],
+            [
+                'trust', 'user', 'permission', 'content', 'group',
+                'delegate', 'sponsor', 'condition', 'along',
+            ],
         )
         for name in names:
             self.assertEqual(
