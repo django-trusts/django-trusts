@@ -6,8 +6,8 @@ from django.db.models import Manager, Model, QuerySet
 def is_active_principal(user):
     """Match ``User.has_perm``: anonymous and inactive principals are denied.
 
-    Superuser short-circuit on ``has_perm`` is a Django ``ModelBackend``
-    behavior and is not duplicated in SQL list filters.
+    The active-superuser short-circuit on ``has_perm`` is a Django
+    ``PermissionsMixin`` behavior and is not duplicated in SQL list filters.
     """
     if user is None:
         return False

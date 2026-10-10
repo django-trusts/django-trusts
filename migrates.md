@@ -15,6 +15,63 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## No implicit superuser authority in Trusts inquiries (#273)
+
+**Status:** implemented. This change is the runtime for the contract in
+docs PR #274. The table, downstream notes, and checklist below match that
+contract. `authorization_required()` and the reverse inquiry no longer add
+an active-superuser shortcut.
+
+`is_superuser` no longer creates authority inside a Trusts-owned inquiry. A
+superuser needs the same complete registered path, including selected
+conditions, as another principal. Django's own
+`PermissionsMixin.has_perm()` active-superuser return is outside this change.
+
+| Surface | Before #273 implementation | Contract after #273 implementation |
+| --- | --- | --- |
+| `authorization_required()` | An active superuser can bypass grants and selected conditions after structural preflight; the candidate must still exist | Complete registered grant plus selected conditions; ordinary 403/404 behavior |
+| `get_permitted_users()` and `User.objects.permitted()` | Core ORs an active-superuser predicate with backend contributions | Only supported backend contributions; each contains its own eligibility and complete registered grant |
+| Custom user model without a concrete `is_superuser` field | Reverse inquiry rejects the model because Core needs the field for its outer predicate | Accepted when the model otherwise satisfies persisted-principal and registered-path requirements |
+| `user.has_perm(code, obj)` on an active `PermissionsMixin` superuser | Django returns `True` before consulting backends | Unchanged Django behavior |
+| Direct Trusts backend check, Trusts enumeration, `.authorized()`, `.permitted()`, and policy-lock SQL | Registered-path-only | Unchanged |
+| Delegated actor or sponsor | No runtime delegation compiler yet; the accepted design already excludes implicit superuser authority | Direct and delegated branches both require registered paths |
+
+This intentionally removes the old reverse-inquiry equality with
+`user.has_perm(code, obj)` for an active superuser. The reverse invariant is
+the OR of supported backend contributions without Django's outer
+`PermissionsMixin` shortcut.
+
+No schema migration is required. Backend-local policy-lock bytes do not change
+solely because the outer runtime shortcuts are removed.
+
+Downstream applications should review Trusts-owned list, view-guard, and
+reverse-inquiry expectations. Application code that intentionally applies
+Django's outer superuser policy remains application-owned. In particular, the
+GitHub reference application's `_inquiry_bypassed` service rule is not changed
+by Core #273; its reverse tests and README must adopt the new Core contract when
+the application repins Core.
+
+The ordered-fold extension's `trusts_ordered_fold/decorators.py` currently
+copies the Core decorator's superuser shortcut and must remove that copy when it
+adopts this contract. django-trusts-zero should also correct the
+`trusts/zero/query.py` docstring that attributes Django's outer shortcut to
+`ModelBackend` when it coordinates or repins its documentation.
+
+Migration-bot checklist:
+
+- `is_superuser`
+- `authorization_required(`
+- `get_permitted_users(`
+- `User.objects.permitted(`
+- `.permitted(`
+- `.authorized(`
+- `has_perm(`
+- `create_superuser(`
+- `include_superusers`
+- custom user models without `is_superuser`
+- delegated actor and sponsor paths
+- `trusts_policy_sql`
+
 ## Permission content type must match the object (#267)
 
 `1.0.0 → 1.1.0`. Crossed `auth.Permission.content_type` positives are
