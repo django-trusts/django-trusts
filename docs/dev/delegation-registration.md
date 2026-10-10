@@ -190,6 +190,14 @@ ordinary registrations, including registrations under other configured
 handles. It is not one selected permission path. Delegated registrations are
 excluded from that inner union.
 
+The initial profile does not preserve or select the provenance of the
+ordinary path that matched. It has neither a per-registration `delegable`
+flag nor a delegation-kind-by-authority-path pairing matrix. Every applicable
+ordinary registration participates in the sponsor union. If a future product
+rule makes an ordinary source nondelegable, source eligibility should be
+designed explicitly rather than approximated by copying the permitted
+ordinary paths into each delegation condition.
+
 The current proposal supports exactly one level of delegation. The sponsor's
 authority must come from ordinary registrations; one delegated relationship
 cannot sponsor another. Multi-level and recursive delegation are out of scope.
@@ -197,6 +205,11 @@ cannot sponsor another. Multi-level and recursive delegation are out of scope.
 The actor's independent ordinary authority remains the existing outer OR
 branch. Adding delegation neither converts an ordinary grant into a delegated
 one nor forces an independently permitted actor through a relationship.
+
+Inquiry-time named conditions retain their existing actor-relative meaning.
+They apply once at the inquiry level and are not independently rebound to the
+sponsor inside every ordinary-authority branch. A future sponsor-relative
+inquiry condition would require a separate public contract.
 
 ## Shared compiler surfaces
 
@@ -227,6 +240,11 @@ Real expiry and revocation rules also require the existing registration
 condition language to express null tests and ordered comparison against a
 database-side query clock. That condition-language work remains a separate
 prerequisite and should not be hidden inside the correlated-plan patch.
+
+Applicable registrations with incompatible principal, content, or permission
+models must fail closed during registration or planning. An ordinary handle
+that is genuinely inapplicable contributes no sponsor authority; a malformed
+applicable handle must not disappear as though it were merely inapplicable.
 
 ## Implementation split
 
