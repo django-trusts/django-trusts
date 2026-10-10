@@ -206,10 +206,31 @@ Conditions remain an AND overlay on a complete proof and never run on
 intermediate walk nodes. The same expression drives instance
 authorization, lazy `filter_authorized` before pagination, `all_match`,
 and `permissions` / `common_permissions` (including nested permission
-`OuterRef`). Unsupported vendors raise `TrustsConfigurationError` before
-walk SQL. Residual database errors stay loud and are not remapped to
+`OuterRef`). Reverse permission inquiry correlates each candidate user into
+the same grant seed and tests whether the supplied content is in that
+candidate's bounded reach. The reverse branch carries the same terminal
+`condition=` overlay and active-principal eligibility predicate as the forward
+proof; conditions still do not apply to intermediate walk nodes. It must
+return exactly the users whose forward check succeeds; it may not drop the
+recursive branch or widen it to every user. Unsupported vendors raise
+`TrustsConfigurationError` before walk SQL.
+Residual database errors stay loud and are not remapped to
 `TrustsCompilerError`. Runtime authorization does not repeat the JSON/CTE
 capability probe.
+
+Policy SQL exports the same recursive predicate for every supported inquiry,
+including reverse users. Each trust row records the complete public `along`
+path, resolved shape, and bound. The bound is a registration constant, not a
+runtime binding. Rendering fails before returning a partial document if any
+applicable recursive statement or parameter cannot be represented.
+
+Implementation agreement tests compare the reverse user set with per-user
+forward checks for the same content and permission. They cover depth exactly
+at the bound and one hop beyond it, cycles, a failing condition, an inactive
+principal, two `Along` registrations on one content model ORed together, and
+policy-lock rendering for each registered walk. The implementation change
+records combined statement-plus-branch coverage before and after and does not
+lower it.
 
 `trusts.E005` (`Tags.database`) reports each selected alias whose live
 Along records cannot render. It honors Django's `databases` argument
