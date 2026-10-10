@@ -1,553 +1,937 @@
-Considerations in Permission Delegation
-=======================================
+Permission Delegation: A Reference Model
+========================================
 
-Permission delegation is often implemented as if it were permission copying. A user authorizes an application, agent, worker, or connected account; the system creates rows that resemble ordinary grants; and later checks ask whether those rows still exist. That design is simple, but it loses the fact that delegated authority depends on two independent families of evidence.
+Permission delegation is often described as giving another principal a
+permission. That description hides the policy's most important fact.
+Delegated authority exists only when a relationship and an authority source
+are valid at the same time.
 
-The first family belongs to the relationship: which actor may act, for which content, for which operations, under which approval, selection, lifetime, and organizational boundary. The second family belongs to the sponsor: whether that sponsor is presently permitted to perform the same operation on the same content through the system's ordinary authorization policy.
+The relationship answers who may act, under which approval, scope, and state.
+The sponsor answers whether the authority being exercised still exists.
+Neither answer is sufficient by itself.
 
-A delegated decision therefore has the form:
+This article develops a framework-independent reference model for that
+composition. It is not tied to a programming language, database, web
+framework, identity provider, or product schema. It also records the questions,
+candidate models, scorecards, and concrete counterexamples used to reach the
+model.
+
+Other models remain possible. A system that chooses one should be able to name
+the additional requirement it serves, identify which reference properties it
+does not provide, and accept or mitigate those consequences explicitly.
+
+The reference rule is:
 
 .. code:: text
 
-   ordinary authority of the actor
+   effective authority of the actor
+   =
+   the actor's independent authority
    OR
    (
        a matching delegation relationship
        AND
-       the sponsor's live ordinary authority
+       the matching sponsor's live authority
    )
 
-This structure preserves narrowing and revocation at the same time. The relationship may be narrower than the sponsor's authority, and the sponsor's loss of authority immediately removes the delegated result. The difficult part is not the Boolean AND itself. The difficult part is preserving the exact relationship, sponsor, content, and operation while the sponsor's ordinary authority remains an OR-union of independently registered paths.
+The relationship may narrow authority. It cannot manufacture authority the
+sponsor does not have.
 
-Delegation is a conditional authority relationship
---------------------------------------------------
+Terms and roles
+---------------
 
-An ordinary permission states a direct proposition:
+``actor``
+   The principal attempting the operation. An actor may be a person, service,
+   agent, application installation, worker, session, or token holder.
+
+``sponsor``
+   The principal whose live authority supplies the ceiling. The sponsor is
+   the bridge between the relationship and the system's ordinary authority
+   policy. A sponsor need not be the requester, approver, or person who created
+   the relationship.
+
+``relationship``
+   The evidence that this actor may act through this sponsor. It may also
+   carry approval, resource selection, operation selection, tenant alignment,
+   expiry, revocation, and other eligibility state.
+
+``resource``
+   The object or bounded set on which the actor wants to operate.
+
+``operation``
+   The action being requested on that resource.
+
+These are policy roles, not required schema names. One record may expose all
+of them, or an application may join several records to establish one
+relationship.
+
+A delegation relationship is not an ordinary grant
+---------------------------------------------------
+
+An ordinary grant states a complete proposition:
 
 .. code:: text
 
    Alice may modify repository R.
 
-A delegation states a conditional proposition:
+A delegation relationship states an incomplete proposition:
 
 .. code:: text
 
    Bot B may modify repository R through relationship D
-   only while sponsor Alice may modify repository R.
+   if sponsor Alice may currently modify repository R.
 
-The stored delegation is not an ordinary grant. It supplies the acting principal, selected content, delegated operations, approval, and other relationship state. It becomes grant-producing only when the sponsor's live authority completes it.
+Relationship D may name an operation, but that operation is offered scope,
+not self-sufficient authority. It becomes grant-producing only when the
+sponsor side completes it.
 
-This distinction matters even when both relationships terminate at the same permission object. A database column may still point at ``modify_repository``, but its policy role differs. In an ordinary grant, that terminal permission is sufficient when the path matches. In a delegation, the terminal operation describes the scope offered by the relationship; it remains insufficient without the sponsor bridge.
+Treating D as an ordinary grant removes the bridge. The actor remains
+authorized when the sponsor loses authority because the relationship row is
+now sufficient by itself. That is a copied grant with a different revocation
+model, not live delegation.
 
-Treating both rows as ordinary grants creates an authorization hole. The delegation row enters the usual OR-union, so matching the actor, content, and operation authorizes the request even when the sponsor has no authority. A correct compiler must know that a delegated relationship is non-ordinary and must keep it out of both the actor's direct branch and the sponsor's ordinary union.
-
-A relational formulation
-------------------------
+The relational rule
+-------------------
 
 Let:
 
--  :math:`O(u,c,p)` mean that principal :math:`u` has ordinary permission :math:`p` on content :math:`c`.
+-  :math:`O(u,r,p)` mean that principal :math:`u` has qualifying ordinary
+   authority for operation :math:`p` on resource :math:`r`.
 
--  :math:`D(r,u,s,c,p)` mean that relationship row :math:`r` delegates operation :math:`p` on content :math:`c` to acting principal :math:`u`, with sponsor :math:`s`, and that the relationship's own predicates hold.
+-  :math:`D(d,u,s,r,p)` mean that relationship :math:`d` binds actor
+   :math:`u`, sponsor :math:`s`, resource :math:`r`, and operation :math:`p`,
+   and that all relationship-owned predicates hold.
 
--  :math:`P(u,c,p)` mean that :math:`u` is permitted to perform :math:`p` on :math:`c`.
+-  :math:`A(u,r,p)` mean that :math:`u` is effectively authorized.
 
-The delegated policy is:
-
-.. math::
-
-   P(u,c,p) = O(u,c,p) \lor \exists r,s\; \bigl(D(r,u,s,c,p) \land O(s,c,p)\bigr)
-
-The variables :math:`r`, :math:`s`, :math:`c`, and :math:`p` are not incidental. They are the correlation boundary.
-
--  The sponsor must come from the exact relationship row that matched the actor.
-
--  Both sides must meet on the same content.
-
--  Both sides must meet on the same operation.
-
--  Conditions on the relationship must be evaluated inside the same existential match.
-
--  Another relationship belonging to the same actor cannot contribute its sponsor, approval, or scope.
-
-The ordinary predicate :math:`O` is itself generally a union:
+The one-level reference rule is:
 
 .. math::
 
-   O(u,c,p) = O_1(u,c,p) \lor O_2(u,c,p) \lor \dots \lor O_n(u,c,p)
+   A(u,r,p) = O(u,r,p)
+   \lor \exists d,s\;\bigl(D(d,u,s,r,p) \land O(s,r,p)\bigr)
 
-An application may permit a repository operation through ownership, team membership, direct collaboration, a role, or a future path added after the delegation feature ships. Delegation should normally reuse that live union rather than copy each path into a second policy.
+None of the variables may be discarded.
 
-OR within families and AND across families
-------------------------------------------
+-  The sponsor comes from the exact relationship that matched the actor.
 
-Most relationship authorization systems already have two useful rules:
+-  Relationship and sponsor authority meet on the same resource.
 
-1. Hops within one registered path are ANDed. Every required join and condition must hold.
+-  They meet on the same operation.
 
-2. Separate grant paths are ORed. Any applicable ordinary path may authorize.
+-  Approval, selection, tenant, lifetime, and revocation predicates belong to
+   that same relationship match.
 
-Delegation introduces a third composition rule:
+-  Another relationship belonging to the actor cannot lend its sponsor,
+   approval, or scope.
+
+Ordinary authority is usually a union of paths:
+
+.. math::
+
+   O(u,r,p) = O_1(u,r,p) \lor O_2(u,r,p) \lor \dots \lor O_n(u,r,p)
+
+For a repository, those paths might be ownership, team membership, direct
+collaboration, a role, or a source added later. The reference model reuses
+that live union rather than copying it into every delegation relationship.
+
+How the inquiry was conducted
+-----------------------------
+
+The investigation began with behavior, not an API. The first issue asked:
+
+   "Can the existing declarative authorization model express these
+   requirements without application callbacks or copied grants?"
+
+   -- `Initial problem statement, issue #265
+      <https://github.com/django-trusts/django-trusts/issues/265>`__
+
+It also asked how missing or ambiguous relationship facts should fail closed,
+and what bounds would govern chains, cycles, and traversal.
+
+The follow-up deliberately prohibited choosing syntax first. It defined Cases
+A through K and required more than one approach to be scored:
+
+   "Cells = pass / fail only at first pass: use ✅ or ❌. Use ⚠️ only when the
+   approach can pass with an explicit extra constraint."
+
+   -- `Requirements and original scorecard, issue #266
+      <https://github.com/django-trusts/django-trusts/issues/266#issuecomment-6007836197>`__
+
+Every red and warning then required a concrete explanation rather than a vague
+"needs more work" label.
+
+Grok performed the candidate comparison and the later concrete model traces
+through bounded Cursor design jobs. Chat reviewed the assumptions and returned
+new questions rather than allowing a plausible first answer to become the API.
+The record therefore includes false starts, corrected hypotheses, scratch
+models, executable cases, and the reason the recommendation changed.
+
+The cases were:
+
+``A`` relationship scope can refuse a resource the sponsor may still use.
+
+``B`` loss of the sponsor's last live path revokes without rewriting rows.
+
+``C`` any remaining qualifying sponsor path keeps authority alive.
+
+``D`` two relationships cannot borrow scope or authority from each other.
+
+``E`` requester, approver, and runtime sponsor may be different facts.
+
+``F`` the model is role-neutral, including a rich principal hiring a worker.
+
+``G`` independent actor authority remains an independent branch.
+
+``H`` expiry, revocation, and relationship state apply at decision time.
+
+``I`` the policy remains declarative, inspectable, and consistently enforced.
+
+``J`` both families meet on the resource; no universal delegation table is
+required.
+
+``K`` chaining has an explicit bound and fails closed.
+
+Candidate models
+~~~~~~~~~~~~~~~~
+
+The investigation compared eight candidates:
+
+``Remap``
+   Substitute the sponsor for the actor and run the ordinary authority check.
+
+``Copy``
+   Materialize the sponsor's current grants as actor grants.
+
+``Single``
+   Encode one sponsor authority path inside one relationship traversal.
+
+``Cartesian``
+   Reproduce one complete relationship traversal for every sponsor path.
+
+``Uncorrelated``
+   Test whether the actor has any relationship and whether any associated
+   sponsor has authority, without binding both results to the same row.
+
+``Correlated``
+   Complete each matching relationship with the live ordinary union of the
+   sponsor bound by that exact relationship.
+
+``Listed``
+   Use the correlated model, but consult an explicit list of authority paths.
+
+``Two-phase``
+   Query the relationship, then perform a separate sponsor authorization
+   check in application code.
+
+Condensed green/red scorecard
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The original scorecard split the requirements into 22 columns. This condensed
+version preserves the security-distinguishing results. The full table and the
+reason for every red and warning remain in `the investigation record
+<https://github.com/django-trusts/django-trusts/issues/266#issuecomment-6007836197>`__.
+
+``N`` narrowing; ``V`` live revocation; ``U`` complete sponsor authority
+union; ``X`` exact relationship correlation; ``D`` independent direct
+authority; ``E`` consistent enforcement surfaces; ``B`` bounded chaining;
+``T`` decision-time null, expiry, and revocation predicates in the inspected
+engine. The ``T`` warning was a shared implementation prerequisite, not a
+semantic advantage for another model.
+
+.. list-table:: Candidate scorecard
+   :header-rows: 1
+   :widths: 18 5 5 5 5 5 5 5 5 7 7 7
+
+   * - Approach
+     - N
+     - V
+     - U
+     - X
+     - D
+     - E
+     - B
+     - T
+     - ✅
+     - ❌
+     - ⚠️
+   * - Remap
+     - ❌
+     - ✅
+     - ✅
+     - ❌
+     - ❌
+     - ✅
+     - ❌
+     - ❌
+     - 3
+     - 5
+     - 0
+   * - Copy
+     - ❌
+     - ❌
+     - ❌
+     - ❌
+     - ❌
+     - ✅
+     - ✅
+     - ❌
+     - 2
+     - 6
+     - 0
+   * - Single
+     - ✅
+     - ✅
+     - ❌
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ⚠️
+     - 6
+     - 1
+     - 1
+   * - Cartesian
+     - ✅
+     - ✅
+     - ❌
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ⚠️
+     - 6
+     - 1
+     - 1
+   * - Uncorrelated
+     - ✅
+     - ✅
+     - ✅
+     - ❌
+     - ✅
+     - ✅
+     - ⚠️
+     - ⚠️
+     - 5
+     - 1
+     - 2
+   * - Correlated
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ⚠️
+     - 7
+     - 0
+     - 1
+   * - Listed
+     - ✅
+     - ✅
+     - ❌
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ⚠️
+     - 6
+     - 1
+     - 1
+   * - Two-phase
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ✅
+     - ❌
+     - ⚠️
+     - ❌
+     - 5
+     - 2
+     - 1
+
+The detailed table found that only Correlated and Two-phase had no red on the
+critical A through D properties. Two-phase then failed the shared-enforcement
+requirement: list filtering and policy inspection could bypass the application
+helper. Correlated was the only candidate with no critical red.
+
+Why the nearest alternatives miss
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``Single`` and ``Cartesian`` can encode a particular paired policy, but they
+do not reuse the sponsor's existing authority union. A new ordinary authority
+path remains invisible until the delegation policy is edited.
+
+``Listed`` uses real authority paths, but a path omitted from the list does not
+keep delegation alive. A path added later is absent until the list is updated.
+
+``Uncorrelated`` reuses the union, but can complete relationship 1 with the
+authority of relationship 2.
+
+``Two-phase`` can return the correct answer in one service while list, bulk,
+reverse, or audit consumers enforce a different policy.
+
+``Copy`` changes the meaning from live delegation to materialized authority
+with synchronization and revocation latency.
+
+The concrete model trace
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The scorecard selected a survivor, but the team did not choose an API from
+algebra alone. A second investigation built concrete organization, ownership,
+team, collaborator, repository, installation, approval, and selection models.
+It compared:
 
 .. code:: text
 
-   OR within the delegation family
-   AND
-   OR within the sponsor's ordinary authority family
+   Shape 1
+   (authority path a AND delegation path sa)
+   OR (authority path b AND delegation path sb)
+   OR ...
 
-For ordinary paths :math:`a`, :math:`b`, and :math:`c`, and delegation relationships :math:`s_1` and :math:`s_2`, the common rule is:
+   Shape 2
+   each complete relationship
+   AND the exact sponsor's full ordinary authority union
+
+The investigation initially appeared to favor the paired traversal. That
+conclusion was paused:
+
+   "My earlier recommendation to implement P was premature: organization-
+   removal behavior alone does not distinguish shape 1 from shape 2."
+
+   -- `Revised design baton, GH issue #43
+      <https://github.com/django-trusts/django-trusts-gh-permissions/issues/43#issuecomment-6048891599>`__
+
+The key correction was to put continuing organization membership on the
+relationship side. When the sponsor leaves the organization, the relationship
+fails even if a direct collaborator grant survives. The surviving grant never
+gets a chance to complete that relationship. This is eligibility, not
+authority provenance.
+
+The follow-up was instructed to search for a counterexample where all
+relationship facts held, the sponsor was authorized for the same resource and
+operation, but delegation should still deny solely because the wrong ordinary
+path supplied that authority. It tested GitHub-style access, hired-person
+tasks, agent delegation, marketplace relationships, break-glass access,
+temporary grants, public links, and a sponsor whose access was itself
+delegated.
+
+The reported result was:
+
+   "Shape 2 holds up for every concrete case we have."
+
+   "No demonstrated requirement needs shape 1 path provenance."
+
+   -- `Shape 2 stress test, GH issue #43
+      <https://github.com/django-trusts/django-trusts-gh-permissions/issues/43#issuecomment-6048998724>`__
+
+The scratch relationship runner reported 21 cases and no failed expectations.
+It could compile and execute the relationship half, but the then-current engine
+could not compile the correlated sponsor-union half. That limitation was
+recorded rather than treated as a passing implementation test. The complete
+correlated rule was subsequently implemented and independently exercised in
+the repository example.
+
+Concrete stress-test results
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table:: Selected model trace
+   :header-rows: 1
+   :widths: 58 20 22
+
+   * - Event
+     - Expected
+     - Correlated result
+   * - Approval and sponsor eligibility remain; any qualifying ordinary path grants
+     - allow
+     - allow
+   * - Organization removes sponsor; approval remains
+     - deny
+     - deny on relationship eligibility
+   * - One ordinary path is lost; another still grants
+     - allow
+     - allow through live union
+   * - Collaborator grant survives after organization removal
+     - deny
+     - deny before authority union
+   * - Operation is absent from one path but granted by another
+     - allow
+     - allow through live union
+   * - Approval belongs to another installation
+     - deny
+     - deny on exact correlation
+   * - Repository is deselected or operation removed
+     - deny
+     - deny on relationship scope
+   * - Same actor has two installations
+     - no cross-borrowing
+     - each branch binds its own sponsor
+   * - Actor has an independent direct grant
+     - direct grant remains
+     - independent outer branch
+   * - Sponsor's only authority is itself delegated
+     - deny in one-level profile
+     - excluded from ordinary sponsor union
+
+The trace also exposed a separate condition-language gap: revocation, null
+tests, expiry, and a decision-time clock must be expressible in the same
+policy. That was not evidence for path pairing. It was an independent
+implementation prerequisite.
+
+Composition across the two families
+-----------------------------------
+
+Within one authority path, required joins and conditions are naturally ANDed.
+Separate ordinary paths are normally ORed. Separate delegation relationships
+are also ORed, but only after each relationship branch is complete:
 
 .. code:: text
 
-   (a | b | c) AND (s1 | s2)
+   ordinary(actor, resource, operation)
+   OR (
+       relationship_1(actor, sponsor_1, resource, operation)
+       AND ordinary(sponsor_1, resource, operation)
+   )
+   OR (
+       relationship_2(actor, sponsor_2, resource, operation)
+       AND ordinary(sponsor_2, resource, operation)
+   )
 
-This expression is safe only when correlation is preserved. A more exact reading is:
-
-.. code:: text
-
-   EXISTS matching relationship S:
-       S matches actor + content + operation
-       AND ordinary(S.sponsor, same content, same operation)
-
-The compiler cannot evaluate the two unions independently and combine their truth values later. That would allow a relationship from one installation to borrow authority from another sponsor or organization.
-
-A different policy is possible:
+It is sometimes summarized as:
 
 .. code:: text
 
-   (a AND sa) OR (b AND sb) OR (c AND sc)
+   (relationships) AND (ordinary sponsor paths)
 
-That rule makes the provenance of the sponsor's permission part of the delegation. It is more specific and substantially harder to maintain because each delegated path must reproduce or name its permitted authority paths. The general model should require this pairing only when the product actually cares how the sponsor obtained permission.
+That summary is safe only if the sponsor expression remains correlated inside
+each matching relationship. Computing the two unions independently permits
+cross-relationship borrowing.
 
-Relationship eligibility is not permission provenance
------------------------------------------------------
+Relationship eligibility is not authority provenance
+----------------------------------------------------
 
-Many apparent provenance requirements are actually relationship eligibility requirements.
+Consider an organization-approved agent. Alice selects an organization and
+repositories, the organization approves the installation, and the agent acts
+under Alice's live authority. The product requires access to end when Alice
+leaves the organization, even if Alice retains a direct collaborator grant on
+one repository.
 
-Consider an organization-approved bot relationship. Alice selects an organization and repositories, the organization approves the relationship, and the bot acts under Alice's live authority. The product requires the bot to lose organization access when Alice is removed from the organization, even if Alice retains a direct collaborator grant on one repository.
-
-At first glance, that appears to require pairing the organization delegation only with the organization-owner permission path. It does not. The relationship side can require Alice's continuing organization relationship:
+The relationship side can require Alice's continued organization eligibility:
 
 .. code:: text
 
-   left side:
-       this installation was approved
-       AND this bot, sponsor, and organization match
-       AND this repository and operation were selected
-       AND the sponsor still owns or belongs to this organization
+   relationship side:
+       installation is approved
+       AND actor, sponsor, and organization match
+       AND resource and operation were selected
+       AND sponsor still belongs to the required organization role
 
-   right side:
-       the sponsor is ordinarily permitted for this repository and operation
+   authority side:
+       sponsor is ordinarily authorized for this resource and operation
 
-After Alice is removed, the left side fails. Her surviving collaborator permission never gets a chance to complete the relationship. While Alice remains eligible, any ordinary path that permits the same operation may satisfy the live ceiling.
+When Alice leaves, the relationship side fails. Her collaborator grant never
+completes that relationship. While she remains eligible, any qualifying
+ordinary path may satisfy the live ceiling.
 
-The distinction can be stated as a diagnostic question:
+The diagnostic question is:
 
-   If the relationship, sponsor eligibility, approval, content, operation, and state all match, must the result still depend on which ordinary grant path happened to authorize the sponsor?
+   After relationship identity, sponsor eligibility, approval, resource,
+   operation, and state all match, must the result still depend on which
+   authority path happened to authorize the sponsor?
 
-If the answer is no, the complete ordinary union is the correct authority side. If the answer is yes, permission provenance is part of the product policy and requires an additional mechanism.
+If no, use the complete qualifying ordinary union. If yes, provenance is an
+additional product requirement and should be represented explicitly.
 
-Invariants of a delegated permission system
--------------------------------------------
-
-A delegated permission system should preserve the following invariants.
+Reference invariants
+--------------------
 
 Relationship narrowing
 ~~~~~~~~~~~~~~~~~~~~~~
 
-The actor receives no more content or operations than the relationship selects. A sponsor who can reach every repository in an organization may still delegate only one repository and one operation.
+The actor receives no more resources or operations than the relationship
+selects. Sponsor authority is a ceiling, not the actor's resulting scope.
 
-Live authority ceiling
-~~~~~~~~~~~~~~~~~~~~~~
+Live sponsor ceiling
+~~~~~~~~~~~~~~~~~~~~
 
-The actor loses delegated access when the sponsor loses the last applicable ordinary path. The system does not depend on a cleanup job rewriting copied grants.
-
-Principal state and shortcut isolation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The acting principal must pass the same active-principal check before either the direct or delegated branch can authorize. A sponsor contributes authority only while that sponsor is also active.
-
-An implementation must not discover sponsor authority by calling
-``sponsor.has_perm()``. That would import an outer shortcut before the
-correlated relationship and ordinary-authority predicates can be composed.
-If a system treats superuser status or another shortcut as authority, it must
-represent that choice explicitly at the direct-actor and sponsor-authority
-composition points. The delegation model itself does not choose whether such
-a shortcut supplies authority at either point.
+Loss of the sponsor's last qualifying path removes delegated access without
+waiting for copied grants to be rewritten.
 
 Exact relationship correlation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The sponsor, approval, content selection, operation selection, and state must come from one matching relationship. Two installations owned by the same actor cannot borrow facts from each other.
+Actor, sponsor, approval, selected scope, operation, and state come from one
+matching relationship. Separate relationships cannot contribute fragments to
+one synthetic authorization.
 
-Same content and operation
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Same resource and operation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A relationship selecting repository A cannot combine with sponsor authority on repository B. A delegated read cannot combine with sponsor write or vice versa merely because both concern the same object.
+Relationship scope on resource A cannot combine with sponsor authority on
+resource B. A delegated read cannot be completed by an unrelated write.
 
-Independent ordinary authority
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Independent actor authority
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The actor's own ordinary grants remain a separate OR branch. Adding delegation must not force an independently permitted account through a delegation relationship.
+The actor's own ordinary authority remains an independent OR branch. Adding
+delegation must not force an independently authorized actor through a
+relationship.
 
-Bounded delegation
-~~~~~~~~~~~~~~~~~~
+Explicit authority-source policy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A sponsor whose only access is delegated is not an ordinary authority source in a one-hop design. Delegated records must be excluded from the inner ordinary union. Longer chains require an explicit policy, depth bound, and cycle behavior.
+The system states which authority sources may sponsor delegation. In the
+one-level reference profile, delegated authority is excluded from the sponsor
+side. A direct but nondelegable source is excluded explicitly rather than
+through accidental behavior.
 
-Declarative equivalence
-~~~~~~~~~~~~~~~~~~~~~~~
+Principal eligibility and shortcut isolation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Point checks, permitted querysets, permission enumeration, reverse principal inquiry, and emitted policy SQL must compile the same logical rule. A helper around one view or MCP endpoint does not establish an authorization policy.
+Actor and sponsor eligibility are part of the composed policy. Administrator,
+break-glass, public, share-link, and other shortcuts must be assigned
+explicitly to the actor's direct branch, the sponsor side, both, or neither.
 
-Common designs and their failure modes
---------------------------------------
+Evaluating a high-level actor shortcut as the sponsor can import rules that
+were never intended to sponsor delegation. The sponsor side evaluates the
+authority sources selected by the delegation policy.
 
-Copying grants
-~~~~~~~~~~~~~~
-
-A system may copy the sponsor's current grants onto the actor when the relationship is approved. This loses live revocation. When the sponsor leaves a team or loses ownership, the copied rows remain until a separate process finds and rewrites them. Relationship scope and authority provenance also collapse into one pool of actor-level grants.
-
-Substituting the sponsor for the actor
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A system may rerun the ordinary check as the sponsor. This preserves live authority but loses narrowing. The actor inherits everything the sponsor can reach unless a second relationship predicate is applied in the same authorization plan.
-
-Adding one sponsor hop to one path
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A single longer join can express one paired policy. It cannot reuse an ordinary authority union whose alternatives start from different models or relationship handles. A new ordinary path remains invisible until the paired policy is edited.
-
-Combining uncorrelated families
+Consistent enforcement surfaces
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A system may check whether the actor has any relationship and whether any associated sponsor has authority. This admits cross-relationship borrowing. Approval and scope from one installation can combine with authority belonging only to another.
+Single-resource decisions, collection filtering, operation enumeration,
+reverse principal lookup, bulk work, and policy explanation implement the
+same rule. A helper used by one endpoint does not establish system-wide
+delegation semantics.
 
-Running two application checks
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Current relationship state
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A service may query the relationship and then call an ordinary permission check for the sponsor. The result may be correct for that service, but queryset filtering, reverse inquiry, permission enumeration, and policy export still see a different policy. Other callers can skip the helper.
+Approval, selection, expiry, revocation, tenant alignment, and principal
+eligibility are current predicates. A system may materialize derived state,
+but must state its freshness and revocation guarantees.
 
-Reproducing authority paths in relationship conditions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Alternative models and intentional tradeoffs
+---------------------------------------------
 
-An application can sometimes join concrete ownership, team, or collaborator rows from the delegation root and reproduce their predicates in a registration condition. This is useful as a bounded proof. It duplicates policy, fails to include paths added later, and makes the application schema carry forward links to authority records solely to make one traversal compile.
+The reference model is not the only possible model. A red is not a claim that
+another model is forbidden. It is a property the design must willingly give
+up, bound, or restore with another mechanism.
 
-Public representation requirements
-----------------------------------
+Copied or materialized authority
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A public model should expose the roles that the authorization rule needs
-without turning a delegation relationship into an ordinary grant. It must be
-able to identify:
+Choose copying when disconnected evaluation or very cheap reads matter more
+than immediate sponsor revocation. Specify synchronization ownership, maximum
+revocation delay, behavior during sync failure, and whether changes to either
+relationship scope or sponsor authority invalidate the copy.
 
--  the acting principal;
+Sponsor impersonation
+~~~~~~~~~~~~~~~~~~~~~
 
--  the sponsor whose live ordinary authority supplies the ceiling;
+Choose impersonation to reuse an existing evaluator with little new machinery.
+Accept that sponsor scope is over-granted unless the exact relationship is
+intersected, and preserve the real actor for audit and rate limiting. Once the
+intersection is exact, the design is approaching the correlated model.
 
--  the protected content and operation; and
-
--  the relationship predicates governing approval, selection, lifetime,
-   revocation, organizational alignment, and other eligibility rules.
-
-The representation must distinguish relationship records from ordinary grant
-records. A relationship cannot enter either ordinary authority union merely
-because it names a principal, content, and operation. Conversely, an ordinary
-grant cannot silently acquire delegation semantics merely because its model
-contains a sponsor-like field.
-
-This article does not prescribe keyword names, a registration signature, a
-schema, or a universal relationship model. Those choices belong to the
-authorization framework and application using this model.
-
-Compiler requirements
----------------------
-
-The compiler needs an aggregate view of ordinary authority. Compiling delegation entirely inside one relationship plan is insufficient when ordinary owner, team, and collaborator paths live under different configured handles.
-
-For each candidate content and operation, the compiler must:
-
-1. Compile the actor's direct ordinary union.
-
-2. Find matching delegated relationship records.
-
-3. Apply the relationship's user, content, operation, sponsor, and condition bindings.
-
-4. Compile every applicable ordinary authority handle with its user binding replaced by the correlated sponsor expression from that exact row.
-
-5. OR those ordinary predicates while retaining the surrounding relationship EXISTS.
-
-6. Exclude all delegated records from the inner union.
-
-7. OR the completed delegated result with the actor's direct ordinary result.
-
-Conceptually:
-
-.. code:: sql
-
-   ordinary_for_actor
-   OR EXISTS (
-       SELECT 1
-       FROM relationship AS d
-       WHERE d.actor = :actor
-         AND d.content = candidate_content
-         AND d.operation = :operation
-         AND relationship_condition(d)
-         AND (
-             ordinary_handle_a(d.sponsor, candidate_content, :operation)
-             OR ordinary_handle_b(d.sponsor, candidate_content, :operation)
-             OR ordinary_handle_c(d.sponsor, candidate_content, :operation)
-         )
-   )
-
-The expression must fail closed when content models, permission models, backend identities, or sponsor principal types are incompatible. An absent or inapplicable ordinary handle contributes no authority. A malformed applicable configuration should fail loudly during registration or planning rather than disappear as a silent denial.
-
-Conditions, time, and revocation
---------------------------------
-
-Relationship state belongs inside the authorization predicate. Common fields include:
-
--  approval state;
-
--  selected repositories or objects;
-
--  allowed operations or tools;
-
--  organization or tenant alignment;
-
--  ``revoked_at``;
-
--  ``expires_at``;
-
--  activation or adoption timestamps.
-
-A condition language that supports only equality between model paths and permission membership cannot express two common rules:
-
-.. code:: text
-
-   revoked_at IS NULL
-   expires_at > database_now
-
-Evaluating these only during relationship creation or cleanup leaves stale rows effective. Evaluating them in Python after authorization causes point checks and queryset filtering to disagree.
-
-The condition system therefore needs null predicates and ordered comparisons against a database-side clock fixed for the query. Registration must store a symbolic expression, not the result of calling a clock during application startup. The same compiled predicate must appear in point checks, querysets, reverse inquiries, and policy SQL.
-
-Inquiry-time named conditions require separate care. Their principal references ordinarily mean the acting principal. A compiler should not rebound them independently to the sponsor inside every authority handle. They should apply once at the level defined by the inquiry contract.
-
-Permission provenance and nondelegable authority
-------------------------------------------------
-
-The base model intentionally forgets which ordinary path succeeded. It asks whether the sponsor is permitted for the same content and operation.
-
-Some products may later need a stronger rule:
-
--  break-glass access may never be delegated;
-
--  a temporary emergency grant may be usable only by its holder;
-
--  public or share-link access may not establish sponsorship;
-
--  delegation kind X may use only an ownership path while kind Y may use only a team path.
-
-The first three examples can often be expressed by marking an ordinary registration family as ineligible for the sponsor-side union. The sponsor may still use that path directly, but the correlated inner compiler skips it. This adds a property of an authority source without reproducing all allowed pairs.
-
-The fourth example is genuinely path-paired. The same ordinary path is acceptable for one delegation kind and forbidden for another. It requires named authority families, paired registrations, or another explicit provenance policy.
-
-Provenance should enter the base API only after a real product requirement establishes it. Adding path identity too early replaces a stable Boolean rule with a matrix of pairings that applications must keep synchronized with their ordinary policy.
-
-Authorization surfaces
-----------------------
-
-Delegation is incomplete if it works only for ``has_perm()``.
-
-Point checks
-~~~~~~~~~~~~
-
-A point check evaluates direct ordinary authority and the correlated delegation branch for one actor, content object, and operation.
-
-Permitted querysets
-~~~~~~~~~~~~~~~~~~~
-
-A queryset must embed the same correlated EXISTS against each candidate row. It cannot retrieve all content and filter in Python. Authorization must occur before pagination.
-
-Permission enumeration
+Path-paired provenance
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Enumerating an actor's permissions on content must include an operation only when both the relationship and sponsor authority match. The enumeration cannot treat stored delegated operations as grants by themselves.
+Choose path pairing when the product genuinely cares how the sponsor obtained
+authority. A break-glass source may never be delegable. A regulated operation
+may require ownership. One delegation kind may accept team authority while
+another may not.
 
-Reverse principal inquiry
-~~~~~~~~~~~~~~~~~~~~~~~~~
+If a rule applies to an authority source for every delegation, mark that
+source delegable or nondelegable. If it depends jointly on delegation kind and
+authority path, use an explicit pairing matrix.
 
-Asking which users are permitted on one content and operation must seed the same relationship predicate in reverse. The sponsor remains a correlated field on each relationship; it is not a globally substituted inquiry user.
+That matrix couples delegation maintenance to ordinary-policy maintenance.
+Every new authority path requires a decision for each relevant delegation
+kind. Choose that cost for a demonstrated provenance requirement, not merely
+because two paths happen to share a join.
 
-Policy SQL and lockfiles
-~~~~~~~~~~~~~~~~~~~~~~~~
+Recursive delegation
+~~~~~~~~~~~~~~~~~~~~
 
-Inspectable policy output should show the relationship EXISTS and sponsor ordinary union. Operators need to see that both families participate and that delegated records are excluded from the inner union.
+Replacing :math:`O(s,r,p)` with effective authority :math:`A(s,r,p)` allows a
+sponsor to rely on delegated authority. This creates a graph, not a single
+bridge. The design must define depth or termination, cycles, attenuation,
+eligibility at every edge, downstream revocation, nondelegable sources, and
+explanation of the complete chain.
 
-These surfaces should share one plan node or one aggregate compiler. Independent implementations will drift precisely at the boundaries that make delegation difficult.
+One-level delegation is not a claim that deeper delegation is conceptually
+wrong. It is a bounded profile that declines these semantics until they are
+needed and defined.
 
-Application-owned relationship models
--------------------------------------
+Portable capabilities and signed tokens
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Core authorization should not require one universal ``Delegation`` table. Applications already have different relationship models:
+Choose a capability when cross-system or offline verification matters. Its
+advantage is its deliberate departure from a live sponsor lookup. State how
+short expiry, introspection, revocation lists, key rotation, audience binding,
+or proof-of-possession restore the required properties.
 
--  an app installation approved by an organization;
+Separate service checks
+~~~~~~~~~~~~~~~~~~~~~~~
 
--  an agent connection created by a human;
+Architectural boundaries may require one service to validate the relationship
+and another to validate sponsor authority. Preserve relationship identity,
+sponsor, resource, operation, and decision time across the boundary. Reproduce
+the same rule for lists, bulk work, reverse lookup, and audit output.
 
--  a client engagement assigned to a contractor;
+Choosing the sponsor authority set
+----------------------------------
 
--  a marketplace transaction with a worker and customer;
+"Sponsor authority" is incomplete until the qualifying source set is named:
 
--  a support session approved for selected resources;
+1. Start with all live ordinary sources.
 
--  a personal token with selected repositories and operations.
+2. Exclude source families that are never delegable.
 
-The model needs only to expose paths for the acting principal, sponsor, content, operation, and relationship predicates.
+3. Add path pairing only when the same source is acceptable for one
+   relationship kind and forbidden for another.
 
-A typical application may separate stable relationship identity from selected scope:
+4. Include delegated authority only after recursive semantics are defined.
+
+This progression preserves the common rule while allowing real requirements
+to refine it.
+
+Relationship representation
+---------------------------
+
+No universal delegation table is required. Applications may use an approved
+app installation, agent connection, client engagement, support session,
+marketplace transaction, or selected-scope token grant.
+
+The representation must establish actor, sponsor, resource, operation, and
+relationship predicates. Stable relationship identity may be separate from
+selected scope:
 
 .. code:: text
 
    Installation
-       acting principal
+       actor
        sponsor
-       organization or tenant
+       tenant
 
    Approval
        installation
-       approver and approval state
+       approver
+       approval state
 
-   Delegated scope
+   Selected scope
        installation
-       selected content
-       delegated operation
+       resource
+       operation
        expiry and revocation state
 
-Database constraints and authorization conditions should bind these rows to the same relationship. An approval for one bot or installation cannot authorize another. A sponsor cannot be swapped while reusing an approval for the previous sponsor unless the product explicitly permits reassignment.
+Constraints and policy conditions prevent approval or scope from one
+installation authorizing another.
 
-Worked cases
-------------
+Evaluation requirements
+-----------------------
 
-Organization-approved agent
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The evaluator may use relational queries, a graph engine, a policy engine,
+capability validation, remote calls, or materialized state. The logical
+obligations remain:
 
-An owner connects an agent, selects repositories and operations, and obtains organization approval. The relationship requires the sponsor to remain an eligible owner. The sponsor's live repository authority may come from ownership, a team, or direct collaboration. Removal from ownership fails the relationship side even if a collaborator grant survives.
+1. Evaluate the actor's independent authority.
 
-Hired human under a rich principal
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2. Find each applicable delegation relationship.
 
-A client hires a worker for one task. The task row selects content and operations; the client is the sponsor. The worker receives only the intersection of the task scope and the client's live authority. The model is role-neutral: Core does not need to know which principal is human or automated.
+3. Bind that relationship's actor, sponsor, resource, operation, and state.
 
-Multiple organizations
-~~~~~~~~~~~~~~~~~~~~~~
+4. Evaluate the selected sponsor authority sources for that correlated
+   sponsor, resource, and operation.
 
-One actor has two installations with different sponsors and approvals. Each relationship row binds its own sponsor, organization, content, and state. Authority from one sponsor cannot complete the other installation.
+5. AND each relationship with its own sponsor result.
 
-Independent and delegated access together
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+6. OR only the completed branches.
 
-An actor has a direct collaborator grant on repository A and a delegated relationship for repository B. Direct access remains an ordinary branch. Revoking the delegation affects B without changing A.
+Incompatible principal types, resource types, operation namespaces, or policy
+domains are rejected, declared inapplicable, or bridged by an explicit
+mapping. They are not silently compared as though they shared identity.
 
-Sponsor whose access is delegated
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Time-dependent state uses a decision-time value consistent throughout one
+evaluation. A relationship must not be active at one stage and expired at
+another because separate checks used different clocks or snapshots.
 
-A contractor acts through a client-sponsored relationship and attempts to sponsor another agent. Under a one-hop policy, the contractor has no qualifying ordinary authority from that relationship. The second delegation fails unless the contractor also has an independent ordinary grant.
+Enforcement surfaces
+--------------------
 
-Design checklist
-----------------
+Single-resource decisions
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Before adopting a delegation design, answer these questions:
+The common "may actor U perform P on R?" decision evaluates independent
+authority and every complete correlated delegation branch.
 
-1.  Which row binds the acting principal?
+Collection filtering
+~~~~~~~~~~~~~~~~~~~~
 
-2.  Which exact row binds the sponsor?
+Apply the same rule before pagination and before returning protected fields.
+Fetching everything and filtering later is easy to bypass.
 
-3.  Which facts represent approval, selection, and current relationship eligibility?
+Operation enumeration
+~~~~~~~~~~~~~~~~~~~~~
 
-4.  Can the relationship deny content or operations the sponsor may still access?
+List a delegated operation only when relationship and sponsor authority both
+currently match.
 
-5.  Does loss of the sponsor's last ordinary path revoke access immediately?
+Reverse principal inquiry
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-6.  Do both sides meet on the same content and operation?
+Asking which actors may perform an operation preserves each relationship's
+own sponsor and state. The sponsor does not become a global actor substitute.
 
-7.  Can two relationships belonging to one actor borrow facts from each other?
+Bulk and asynchronous work
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-8.  Does the actor's independent ordinary authority remain a separate branch?
+Bulk jobs, queued work, and retries define whether authority is checked at
+submission, execution, or both. A decision snapshot is a capability with a
+freshness policy, even when the system does not call it one.
 
-9.  Are delegated records excluded from the sponsor-side union?
+Explanation and audit
+~~~~~~~~~~~~~~~~~~~~~
 
-10. What is the chain depth, and how do cycles fail?
+An explanation identifies the direct branch or the exact relationship,
+sponsor, qualifying authority source, resource, operation, and relevant state.
+"Allowed by delegation" is not enough for incident review.
 
-11. Do point checks, querysets, enumeration, reverse inquiry, and policy SQL share the same plan?
+Decision checklist
+------------------
 
-12. Can revocation and expiry be expressed inside that plan?
+1. Which exact relationship binds actor and sponsor?
 
-13. Does the product truly care which ordinary path authorized the sponsor?
+2. Which facts represent approval, selected scope, and current eligibility?
 
-14. If some ordinary paths are nondelegable, can the inner union exclude them explicitly?
+3. Can the relationship narrow below sponsor authority?
 
-15. What configuration errors fail during registration, and which inapplicable paths contribute no authority?
+4. Does loss of the last qualifying sponsor path revoke immediately?
 
-Open design questions
----------------------
+5. Do both sides meet on the same resource and operation?
 
-The semantic model does not settle every public API detail.
+6. Can two relationships be combined accidentally?
 
--  Whether delegated group bundles need their own argument or share one terminal contract.
+7. Does independent actor authority remain independent?
 
--  How sponsor principal types are validated in systems with more than one principal model.
+8. Which authority sources may sponsor delegation?
 
--  How an aggregate plan represents ordinary handles from multiple configured backends.
+9. Does authority provenance matter, and for which concrete requirement?
 
--  Which named conditions refer to the actor, sponsor, or content, and whether sponsor-relative inquiry conditions are ever needed.
+10. Is delegation one level or recursive? What terminates a chain?
 
--  How reverse inquiry interacts with recursive reachability features.
+11. How do expiry, revocation, tenant changes, and principal inactivity affect
+    a current decision?
 
--  Whether ordinary registrations need a future ``delegable`` property.
+12. Do point, list, enumeration, reverse, bulk, and audit surfaces agree?
 
--  Which database clock expression provides stable query-time expiry semantics across supported databases.
+13. What is the maximum revocation delay?
 
--  How policy SQL identifies the inner ordinary union without obscuring the relationship correlation.
+14. Which failures deny, which configurations are rejected, and which sources
+    are merely inapplicable?
 
-These questions should be answered against executable cases. The core equation is useful precisely because it lets API and compiler proposals be judged without confusing syntax with semantics.
+15. Can the system explain the exact relationship and sponsor authority that
+    completed an allowed decision?
+
+How to justify a departure
+--------------------------
+
+A design that departs from the reference model should record:
+
+.. code:: text
+
+   Requirement served:
+       The concrete behavior the reference model does not provide.
+
+   Chosen model:
+       Copy, impersonation, path pairing, recursion, capability,
+       separate checks, or another named design.
+
+   Reference properties not provided:
+       The accepted ❌ and ⚠️ items.
+
+   Compensating controls:
+       Revalidation, expiry, synchronization, bounded depth,
+       cycle detection, audit, or another mechanism.
+
+   Revocation and failure semantics:
+       Maximum delay and behavior during partial failure.
+
+   Enforcement coverage:
+       Point, list, bulk, reverse, enumeration, and audit surfaces.
+
+This turns "our delegation works differently" into a reviewable policy choice.
 
 Conclusion
 ----------
 
-Permission delegation is an intersection, not a copied grant and not a change of identity.
+Permission delegation is not permission copying and not identity
+substitution. It is a conditional authority relationship.
 
 The relationship family answers:
 
 .. code:: text
 
-   Who may act, under which relationship, on which content,
-   for which operation, under which approval and state?
+   Who may act, through which relationship, on which resource,
+   for which operation, under which approval and current state?
 
-The ordinary authority family answers:
+The sponsor authority family answers:
 
 .. code:: text
 
-   Is this relationship's sponsor presently permitted
-   for that same content and operation?
+   Does that relationship's sponsor currently hold qualifying authority
+   for the same resource and operation?
 
-Correlation joins those answers without flattening either family. The relationship remains narrow. The sponsor's authority remains live. Direct authority remains independent. Applications keep their own schemas, while the authorization engine supplies the shared algebra.
+Correlation joins those answers without flattening either family. The
+relationship remains narrow. Sponsor authority remains live. Independent
+authority remains independent.
 
-That algebra is small:
+Systems may choose another model. They should do so because a named
+requirement demands it, with lost properties and compensating controls made
+explicit.
 
-.. math::
+Application note: django-trusts
+-------------------------------
 
-   O(u,c,p)
-   \lor \exists r,s\;
-   \bigl(D(r,u,s,c,p) \land O(s,c,p)\bigr)
+django-trusts applies the reference model as a bounded one-level profile:
 
-Most of the engineering follows from refusing to lose the variables inside it.
+-  ordinary registrations remain grants;
 
-Project sources
----------------
+-  delegated registrations bind the actor with ``delegate=`` and the live
+   authority source with ``sponsor=``;
 
--  `Core issue 265: Delegated access problem statement <https://github.com/django-trusts/django-trusts/issues/265>`__
+-  the requested permission comes from the inquiry and may be narrowed by
+   relationship conditions;
 
--  `Core issue 266: Detailed requirements and correlated design <https://github.com/django-trusts/django-trusts/issues/266>`__
+-  each relationship is completed by the sponsor's live union of applicable
+   ordinary registrations on the same content and permission;
 
--  `GH permissions issue 43: Concrete model and provenance stress test <https://github.com/django-trusts/django-trusts-gh-permissions/issues/43>`__
+-  multiple delegation models remain separate correlated branches;
+
+-  delegated registrations are excluded from the sponsor-side union; and
+
+-  object decisions, permitted-object filtering, permission enumeration,
+   reverse permitted-user inquiry, and policy output share the composed rule.
+
+The framework's exact API, validation, path grammar, temporary ``along=``
+boundary, and test obligations belong to the `delegation registration
+contract <https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/delegation-registration.md>`__.
+Those choices apply the reference model; they do not define it.
+
+Research trail
+--------------
+
+-  `Initial questions and required behavior
+   <https://github.com/django-trusts/django-trusts/issues/265>`__
+
+-  `Cases A through K and full requirements scorecard
+   <https://github.com/django-trusts/django-trusts/issues/266#issuecomment-6007836197>`__
+
+-  `Concrete model trace and corrected alternatives
+   <https://github.com/django-trusts/django-trusts-gh-permissions/issues/43>`__
+
+-  `Final shape 2 stress test
+   <https://github.com/django-trusts/django-trusts-gh-permissions/issues/43#issuecomment-6048998724>`__

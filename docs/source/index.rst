@@ -652,8 +652,9 @@ Permission delegation
 ---------------------
 
 Delegated authority combines relationship-owned scope with a sponsor's live
-ordinary permission on the same content and operation. The design requirements,
-failure modes, and proposed correlated compiler model are developed in
+authority on the same resource and operation. The framework-independent
+reference model, investigation questions, candidate scorecards, concrete
+counterexamples, and intentional alternatives are developed in
 :doc:`permission-delegation`.
 
 Migrating from django-trusts 0.x
