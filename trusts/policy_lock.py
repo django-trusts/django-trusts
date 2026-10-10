@@ -523,6 +523,26 @@ def _content_sentinel(model, alias):
     return _sentinel(model, model._meta.pk.attname, alias=alias)
 
 
+def _populate_reverse_along_identity(content, records, alias):
+    """Fill non-PK Along identities on the unsaved reverse sentinel.
+
+    ``_content_sentinel`` sets the primary key. A walk identity that is
+    a different column, such as a UUID ``to_field``, has to be present
+    so the reverse lookup classifies ``content.<target>``.
+    """
+    pk_attname = content._meta.pk.attname
+    for record in records:
+        along = getattr(record, 'along', None)
+        if along is None or along.suffix_path:
+            continue
+        if along.walk_ident == pk_attname:
+            continue
+        if getattr(content, along.walk_ident, None) is not None:
+            continue
+        field = _concrete_target_field(along.walk_model, along.walk_ident)
+        setattr(content, field.attname, _sentinel_value(field, alias))
+
+
 def _role_sentinel(record, role, alias):
     return _sentinel(
         getattr(record, '%s_model' % role),
@@ -601,6 +621,7 @@ def _compile_get_permitted_users(handle, alias, records, model, handles):
     from trusts.reverse import lock_permitted_users_queryset
 
     content = _content_sentinel(model, alias)
+    _populate_reverse_along_identity(content, records, alias)
     permission = _role_sentinel(records[0], 'permission', alias)
     queryset = lock_permitted_users_queryset(
         handle, content, permission, handles=handles,

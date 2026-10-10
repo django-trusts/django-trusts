@@ -2649,8 +2649,10 @@ class GrantReach(Expression):
         walk = self.record.along
         content = self.content
         if not walk.suffix_path:
+            # Compare the walk identity, which is the content target.
+            # A non-PK ``to_field`` (UUID ``ident``) is not ``content.pk``.
             inner = walk.walk_model._default_manager.filter(
-                pk=content.pk,
+                **{walk.walk_ident: getattr(content, walk.walk_ident)},
             ).query.clone()
         else:
             inner = walk.walk_model._default_manager.filter(
