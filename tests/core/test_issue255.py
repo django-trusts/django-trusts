@@ -242,6 +242,108 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn({'const': 2}, reverse['params'])
         self.assertIn({'bind': 'content.id'}, reverse['params'])
         self.assertIn({'bind': 'permission.id'}, reverse['params'])
+        # One ordered list for the ORed reverse statement. Each walk
+        # contributes is_active, the EXISTS sentinel, content and
+        # permission binds, the content-type pair, then the depth
+        # ceiling. That ceiling is the only ``const: 2``.
+        self.assertEqual(reverse['params'], [
+            {'const': True},
+            {'const': 1},
+            {'bind': 'content.id'},
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'const': 2},
+            {'const': True},
+            {'const': True},
+            {'const': 1},
+            {'bind': 'content.id'},
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'folder'},
+            {'const': 2},
+            {'const': True},
+            {'const': True},
+        ])
+        self.assertEqual(
+            [
+                index for index, param in enumerate(reverse['params'])
+                if param == {'const': 2}
+            ],
+            [6, 14],
+        )
+        self.assertEqual(reverse['sql'].count('%s'), len(reverse['params']))
+        self.assertEqual(reverse['sql'].count('WITH RECURSIVE'), 2)
+        self.assertEqual(document['schema_version'], 1)
+
+    def test_along_reverse_uuid_to_field_binds_content_ident(self):
+        class UuidNode(models.Model):
+            ident = models.UUIDField(unique=True)
+            parent = models.ForeignKey(
+                'self', to_field='ident', null=True,
+                related_name='uuid_children', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'documents'
+
+        class UuidNodeGrant(models.Model):
+            node = models.ForeignKey(
+                UuidNode, to_field='ident', on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'documents'
+
+        handle = _export_handle('documents.backends.UuidNodeBackend')
+        handle.register(
+            trust=UuidNodeGrant,
+            user='user',
+            permission='permission',
+            content='node',
+            along=('node__parent', 2),
+        )
+        record = handle.registry.plan_for(UuidNode).records[0]
+        self.assertEqual(record.content_target, 'ident')
+        self.assertNotEqual(
+            record.content_target, UuidNode._meta.pk.attname,
+        )
+        self.assertEqual(record.along.walk_ident, 'ident')
+        self.assertEqual(record.along.ident_family, 'uuid')
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        self.assertEqual(document['schema_version'], 1)
+        reverse = document['backends'][0]['contents'][0]['get_permitted_users']
+        self.assertIn('WITH RECURSIVE', reverse['sql'])
+        self.assertIn('"ident" = %s', reverse['sql'])
+        self.assertIn('"user_id" = ("auth_user"."id")', reverse['sql'])
+        self.assertEqual(reverse['params'], [
+            {'const': True},
+            {'const': 1},
+            {'bind': 'content.ident'},
+            {'bind': 'permission.id'},
+            {'const': 'documents'},
+            {'const': 'uuidnode'},
+            {'const': 2},
+            {'const': True},
+            {'const': True},
+        ])
+        self.assertNotIn({'bind': 'content.id'}, reverse['params'])
+        self.assertFalse(any(
+            isinstance(param.get('const'), dict) for param in reverse['params']
+        ))
+        self.assertEqual(
+            [
+                index for index, param in enumerate(reverse['params'])
+                if param == {'const': 2}
+            ],
+            [6],
+        )
 
 
 class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
@@ -837,6 +939,10 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
                     if user.has_perm(permission.user_perm_str, folder)
                 }
                 self.assertEqual(found, expected)
+                locked = _pks(lock_permitted_users_queryset(
+                    self.handle, folder, permission,
+                ))
+                self.assertEqual(locked, found)
         self.assertIn(
             self.alice.pk,
             _pks(at_bound.get_permitted_users(permission)),
@@ -919,3 +1025,231 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 paper.get_permitted_users(permission)
         self.assertIn(self.UuidUser._meta.label, str(ctx.exception))
+
+
+def _reverse_agrees(test, handle, content, perm, candidates):
+    code = perm.user_perm_str
+    with test.assertNumQueries(1):
+        found = _pks(content.get_permitted_users(perm))
+    expected = {
+        user.pk for user in candidates if user.has_perm(code, content)
+    }
+    test.assertEqual(found, expected)
+    test.assertEqual(
+        _pks(lock_permitted_users_queryset(handle, content, perm)),
+        found,
+    )
+    return found
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
+    """Reverse Along on a non-PK UUID target, on ``group=``, and on a terminal M2M."""
+
+    def test_uuid_to_field_reverse_agrees_at_bound_and_one_past(self):
+        User = get_user_model()
+
+        class UuidNode(PermittedUsersMixin, models.Model):
+            ident = models.UUIDField(unique=True)
+            parent = models.ForeignKey(
+                'self', to_field='ident', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class UuidNodeGrant(models.Model):
+            node = models.ForeignKey(
+                UuidNode, to_field='ident', on_delete=models.CASCADE,
+            )
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(UuidNode, UuidNodeGrant):
+            with _document_registry() as registry:
+                handle = _handle(registry)
+                record = handle.register(
+                    trust=UuidNodeGrant,
+                    user='user',
+                    permission='permission',
+                    content='node',
+                    along=('node__parent', 1),
+                )
+                self.assertEqual(record.content_target, 'ident')
+                self.assertNotEqual(
+                    record.content_target, UuidNode._meta.pk.attname,
+                )
+                alice = User.objects.create_user('uuid-along-alice', password='x')
+                bob = User.objects.create_user('uuid-along-bob', password='x')
+                inactive = User.objects.create_user(
+                    'uuid-along-inactive', password='x',
+                )
+                inactive.is_active = False
+                inactive.save(update_fields=['is_active'])
+                permission = _permission(UuidNode, 'change_uuidnode')
+                root = UuidNode.objects.create(ident=uuid.uuid4())
+                child = UuidNode.objects.create(ident=uuid.uuid4(), parent=root)
+                past = UuidNode.objects.create(ident=uuid.uuid4(), parent=child)
+                UuidNodeGrant.objects.create(
+                    user=alice, node=root, permission=permission,
+                )
+                UuidNodeGrant.objects.create(
+                    user=inactive, node=root, permission=permission,
+                )
+                UuidNodeGrant.objects.create(
+                    user=bob, node=past, permission=permission,
+                )
+                candidates = User._default_manager.get_queryset()
+                root_users = _reverse_agrees(
+                    self, handle, root, permission, candidates,
+                )
+                child_users = _reverse_agrees(
+                    self, handle, child, permission, candidates,
+                )
+                past_users = _reverse_agrees(
+                    self, handle, past, permission, candidates,
+                )
+                self.assertIn(alice.pk, root_users)
+                self.assertIn(alice.pk, child_users)
+                self.assertNotIn(alice.pk, past_users)
+                self.assertNotIn(inactive.pk, root_users)
+                self.assertIn(bob.pk, past_users)
+                self.assertNotIn(bob.pk, child_users)
+
+    def test_group_along_agrees_at_bound_and_one_past(self):
+        User = get_user_model()
+
+        class Desk(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=40)
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class DeskGrant(models.Model):
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            desk = models.ForeignKey(Desk, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Desk, DeskGrant):
+            with _document_registry() as registry:
+                handle = _handle(registry)
+                record = handle.register(
+                    trust=DeskGrant,
+                    user=lambda trust: trust.group.user,
+                    group=lambda trust: trust.group,
+                    content='desk',
+                    along=('desk__parent', 1),
+                )
+                self.assertTrue(record.via_group)
+                self.assertIsNotNone(record.along)
+                alice = User.objects.create_user('desk-alice', password='x')
+                outsider = User.objects.create_user('desk-out', password='x')
+                inactive = User.objects.create_user('desk-inactive', password='x')
+                inactive.is_active = False
+                inactive.save(update_fields=['is_active'])
+                permission = _permission(Desk, 'change_desk')
+                editors = Group.objects.create(name='desk-editors')
+                editors.permissions.add(permission)
+                editors.user_set.add(alice, inactive)
+                root = Desk.objects.create(title='root')
+                child = Desk.objects.create(title='child', parent=root)
+                past = Desk.objects.create(title='past', parent=child)
+                DeskGrant.objects.create(group=editors, desk=root)
+                candidates = User._default_manager.get_queryset()
+                root_users = _reverse_agrees(
+                    self, handle, root, permission, candidates,
+                )
+                child_users = _reverse_agrees(
+                    self, handle, child, permission, candidates,
+                )
+                past_users = _reverse_agrees(
+                    self, handle, past, permission, candidates,
+                )
+                self.assertEqual(root_users, {alice.pk})
+                self.assertEqual(child_users, {alice.pk})
+                self.assertEqual(past_users, set())
+                self.assertNotIn(inactive.pk, root_users)
+                self.assertNotIn(outsider.pk, root_users)
+
+    def test_terminal_m2m_permission_along_agrees_at_bound_and_one_past(self):
+        User = get_user_model()
+
+        class Shelf(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=40)
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class ShelfStamp(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            shelf = models.ForeignKey(Shelf, on_delete=models.CASCADE)
+            permissions = models.ManyToManyField(
+                Permission, related_name='+', blank=True,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _tables(Shelf, ShelfStamp):
+            _contribute_m2m(
+                ShelfStamp._meta.get_field('permissions'), Permission,
+            )
+            with _document_registry() as registry:
+                handle = _handle(registry)
+                record = handle.register(
+                    trust=ShelfStamp,
+                    user='user',
+                    permission='permissions',
+                    content='shelf',
+                    along=('shelf__parent', 1),
+                )
+                self.assertFalse(record.via_group)
+                self.assertEqual(record.permission_path, ('permissions',))
+                self.assertIs(record.permission_model, Permission)
+                self.assertIsNotNone(record.along)
+                alice = User.objects.create_user('shelf-alice', password='x')
+                bob = User.objects.create_user('shelf-bob', password='x')
+                inactive = User.objects.create_user('shelf-inactive', password='x')
+                inactive.is_active = False
+                inactive.save(update_fields=['is_active'])
+                permission = _permission(Shelf, 'change_shelf')
+                other = _permission(Shelf, 'add_shelf')
+                root = Shelf.objects.create(title='root')
+                child = Shelf.objects.create(title='child', parent=root)
+                past = Shelf.objects.create(title='past', parent=child)
+                alice_stamp = ShelfStamp.objects.create(user=alice, shelf=root)
+                alice_stamp.permissions.add(permission)
+                bob_stamp = ShelfStamp.objects.create(user=bob, shelf=root)
+                bob_stamp.permissions.add(other)
+                inactive_stamp = ShelfStamp.objects.create(
+                    user=inactive, shelf=root,
+                )
+                inactive_stamp.permissions.add(permission)
+                candidates = User._default_manager.get_queryset()
+                root_users = _reverse_agrees(
+                    self, handle, root, permission, candidates,
+                )
+                child_users = _reverse_agrees(
+                    self, handle, child, permission, candidates,
+                )
+                past_users = _reverse_agrees(
+                    self, handle, past, permission, candidates,
+                )
+                self.assertEqual(root_users, {alice.pk})
+                self.assertEqual(child_users, {alice.pk})
+                self.assertEqual(past_users, set())
+                self.assertNotIn(bob.pk, root_users)
+                self.assertNotIn(inactive.pk, root_users)
