@@ -16,6 +16,114 @@ from pathlib import Path
 EXPECTED_VERSION = '1.0.0rc1'
 
 
+def _callable_shape(part, get_args):
+    args = get_args(part)
+    if len(args) != 2:
+        raise SystemExit('condition Callable hint is %r' % (part,))
+    params, ret = args
+    return (tuple(params), ret)
+
+
+def assert_register_signature(register) -> None:
+    """Fail closed unless installed ``register`` is the 1.1 public contract.
+
+    Ordinary roles stay one-argument path callables. Delegated registration
+    adds ``delegate`` and ``sponsor``, a second ``condition`` callable, and
+    the ``RegisteredRelation | RegisteredDelegation`` return.
+    """
+    import inspect
+    from collections.abc import Callable as AbcCallable
+    from typing import TypeVar, get_args, get_origin, get_type_hints
+
+    from trusts.core import RegisteredDelegation, RegisteredRelation
+
+    signature = inspect.signature(register)
+    param_names = [name for name in signature.parameters if name != 'self']
+    expected_params = [
+        'trust', 'user', 'permission', 'content', 'group',
+        'delegate', 'sponsor', 'condition', 'along',
+    ]
+    if param_names != expected_params:
+        raise SystemExit(
+            'register parameters are %r, expected %r' % (param_names, expected_params)
+        )
+    for name in expected_params:
+        if signature.parameters[name].kind != inspect.Parameter.KEYWORD_ONLY:
+            raise SystemExit('register parameter %s is not keyword-only' % name)
+    hints = get_type_hints(register)
+    trust_hint = hints.get('trust')
+    if get_origin(trust_hint) is not type:
+        raise SystemExit('register trust annotation is not type[T]: %r' % trust_hint)
+    trust_args = get_args(trust_hint)
+    if len(trust_args) != 1 or not isinstance(trust_args[0], TypeVar):
+        raise SystemExit('register trust is not type[TypeVar]: %r' % trust_hint)
+    for role in ('user', 'permission', 'content', 'group'):
+        role_hint = hints.get(role)
+        parts = get_args(role_hint)
+        if str not in parts:
+            raise SystemExit('%s hint missing str: %r' % (role, role_hint))
+        callable_parts = [
+            part for part in parts if get_origin(part) is AbcCallable
+        ]
+        if len(callable_parts) != 1:
+            raise SystemExit('%s hint missing Callable: %r' % (role, role_hint))
+        callable_args = get_args(callable_parts[0])
+        if callable_args != ([trust_args[0]], object):
+            raise SystemExit(
+                '%s Callable args are %r, expected [TypeVar] + object'
+                % (role, callable_args)
+            )
+    for role in ('delegate', 'sponsor'):
+        role_hint = hints.get(role)
+        parts = get_args(role_hint)
+        if str not in parts:
+            raise SystemExit('%s hint missing str: %r' % (role, role_hint))
+        if type(None) not in parts:
+            raise SystemExit('%s hint missing None: %r' % (role, role_hint))
+        callable_parts = [
+            part for part in parts if get_origin(part) is AbcCallable
+        ]
+        if len(callable_parts) != 1:
+            raise SystemExit('%s hint missing Callable: %r' % (role, role_hint))
+        callable_args = get_args(callable_parts[0])
+        if callable_args != ([trust_args[0]], object):
+            raise SystemExit(
+                '%s Callable args are %r, expected [TypeVar] + object'
+                % (role, callable_args)
+            )
+    condition_hint = hints.get('condition')
+    condition_parts = get_args(condition_hint)
+    if type(None) not in condition_parts:
+        raise SystemExit('condition hint missing None: %r' % condition_hint)
+    condition_callables = [
+        part for part in condition_parts if get_origin(part) is AbcCallable
+    ]
+    if len(condition_callables) != 2:
+        raise SystemExit(
+            'condition hint must include the ordinary one-argument form '
+            'and the delegated two-argument form, got %r' % (condition_hint,)
+        )
+    shapes = [_callable_shape(part, get_args) for part in condition_callables]
+    ordinary_condition = ((trust_args[0],), object)
+    delegated_condition = ((trust_args[0], object), object)
+    if ordinary_condition not in shapes:
+        raise SystemExit(
+            'ordinary condition Callable args are %r, expected [TypeVar] + object'
+            % (shapes,)
+        )
+    if delegated_condition not in shapes:
+        raise SystemExit(
+            'delegated condition Callable args are %r, expected '
+            '[TypeVar, object] + object' % (shapes,)
+        )
+    return_hint = hints.get('return')
+    if set(get_args(return_hint)) != {RegisteredRelation, RegisteredDelegation}:
+        raise SystemExit(
+            'register return annotation is %r, expected '
+            'RegisteredRelation | RegisteredDelegation' % return_hint
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -78,6 +186,7 @@ def main() -> int:
         BackendHandle,
         ConditionLookup,
         Ref,
+        RegisteredDelegation,
         RegisteredRelation,
         RelationPlan,
         TrustsRegistry,
@@ -103,64 +212,7 @@ def main() -> int:
         raise SystemExit('installed wheel missing trusts/py.typed')
     if hasattr(BackendHandle, 'register_relationship'):
         raise SystemExit('library wheel still exposes register_relationship')
-    import inspect
-    from collections.abc import Callable as AbcCallable
-    from typing import TypeVar, get_args, get_origin, get_type_hints
-
-    signature = inspect.signature(BackendHandle.register)
-    param_names = [name for name in signature.parameters if name != 'self']
-    expected_params = [
-        'trust', 'user', 'permission', 'content', 'group', 'condition', 'along',
-    ]
-    if param_names != expected_params:
-        raise SystemExit(
-            'register parameters are %r, expected %r' % (param_names, expected_params)
-        )
-    for name in expected_params:
-        if signature.parameters[name].kind != inspect.Parameter.KEYWORD_ONLY:
-            raise SystemExit('register parameter %s is not keyword-only' % name)
-    hints = get_type_hints(BackendHandle.register)
-    trust_hint = hints.get('trust')
-    if get_origin(trust_hint) is not type:
-        raise SystemExit('register trust annotation is not type[T]: %r' % trust_hint)
-    trust_args = get_args(trust_hint)
-    if len(trust_args) != 1 or not isinstance(trust_args[0], TypeVar):
-        raise SystemExit('register trust is not type[TypeVar]: %r' % trust_hint)
-    for role in ('user', 'permission', 'content', 'group'):
-        role_hint = hints.get(role)
-        parts = get_args(role_hint)
-        if str not in parts:
-            raise SystemExit('%s hint missing str: %r' % (role, role_hint))
-        callable_parts = [
-            part for part in parts if get_origin(part) is AbcCallable
-        ]
-        if len(callable_parts) != 1:
-            raise SystemExit('%s hint missing Callable: %r' % (role, role_hint))
-        callable_args = get_args(callable_parts[0])
-        if callable_args != ([trust_args[0]], object):
-            raise SystemExit(
-                '%s Callable args are %r, expected [TypeVar] + object'
-                % (role, callable_args)
-            )
-    condition_hint = hints.get('condition')
-    condition_parts = get_args(condition_hint)
-    if type(None) not in condition_parts:
-        raise SystemExit('condition hint missing None: %r' % condition_hint)
-    condition_callables = [
-        part for part in condition_parts if get_origin(part) is AbcCallable
-    ]
-    if len(condition_callables) != 1:
-        raise SystemExit('condition hint missing Callable: %r' % condition_hint)
-    if get_args(condition_callables[0]) != ([trust_args[0]], object):
-        raise SystemExit(
-            'condition Callable args are %r, expected [TypeVar] + object'
-            % (get_args(condition_callables[0]),)
-        )
-    if hints.get('return') is not RegisteredRelation:
-        raise SystemExit(
-            'register return annotation is %r, expected RegisteredRelation'
-            % hints.get('return')
-        )
+    assert_register_signature(BackendHandle.register)
     print('py.typed present')
     print('register contextual typing', BackendHandle.register)
 
@@ -261,7 +313,10 @@ def main() -> int:
     if bound.conditions is not standalone.conditions:
         raise SystemExit('self-bound lookup does not wrap registry.conditions')
     print('condition lookup self-bound')
-    print('trusts.core', TrustsRegistry, Ref, RegisteredRelation, RelationPlan)
+    print(
+        'trusts.core', TrustsRegistry, Ref, RegisteredRelation,
+        RegisteredDelegation, RelationPlan,
+    )
     print('permission_has_condition', permission_has_condition)
     print('permission_condition_code', permission_condition_code)
     print('PermissionConditionError', PermissionConditionError)

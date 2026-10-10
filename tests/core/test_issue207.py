@@ -6,6 +6,7 @@ families, honest contextual typing, and ``py.typed`` / Pyright
 packaging. OrderedFold stays gone.
 """
 
+import importlib.util
 import inspect
 import types
 from collections.abc import Callable
@@ -28,6 +29,7 @@ from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
+    RegisteredDelegation,
     RegisteredRelation,
     TrustsConfigurationError,
     TrustsRegistry,
@@ -92,7 +94,9 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         self.assertEqual(len(type_args), 1)
         self.assertIsInstance(type_args[0], TypeVar)
         self.assertIs(type_args[0].__bound__, Model)
-        for role in ('user', 'permission', 'content', 'group'):
+        for role in (
+            'user', 'permission', 'content', 'group', 'delegate', 'sponsor',
+        ):
             origin = get_origin(hints[role])
             self.assertIn(origin, (types.UnionType, type(str | int)))
             parts = get_args(hints[role])
@@ -114,12 +118,15 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         condition_callables = [
             part for part in condition_parts if get_origin(part) is Callable
         ]
-        self.assertEqual(len(condition_callables), 1)
-        self.assertEqual(
-            get_args(condition_callables[0]),
+        self.assertEqual(len(condition_callables), 2)
+        self.assertIn(
             ([type_args[0]], object),
+            [get_args(part) for part in condition_callables],
         )
-        self.assertIs(hints['return'], RegisteredRelation)
+        self.assertEqual(
+            set(get_args(hints['return'])),
+            {RegisteredRelation, RegisteredDelegation},
+        )
         # Python does not prove lambda attributes exist on trust=.
         self.assertNotIn('document', BackendHandle.register.__annotations__)
 
@@ -148,7 +155,10 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
         names = [name for name in signature.parameters if name != 'self']
         self.assertEqual(
             names,
-            ['trust', 'user', 'permission', 'content', 'group', 'condition', 'along'],
+            [
+                'trust', 'user', 'permission', 'content', 'group',
+                'delegate', 'sponsor', 'condition', 'along',
+            ],
         )
         for name in names:
             self.assertEqual(
@@ -156,6 +166,104 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
                 inspect.Parameter.KEYWORD_ONLY,
                 name,
             )
+
+
+def _wheel_install_module():
+    path = ROOT / 'scripts' / 'verify-wheel-install.py'
+    spec = importlib.util.spec_from_file_location('verify_wheel_install', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_REGISTER_NAMES = (
+    'trust', 'user', 'permission', 'content', 'group',
+    'delegate', 'sponsor', 'condition', 'along',
+)
+
+
+def _fake_register(names=_REGISTER_NAMES, annotations=None, *, keyword_only=True):
+    def register(self, **_kwargs):
+        return None
+
+    params = [
+        inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD),
+    ]
+    for index, name in enumerate(names):
+        if keyword_only:
+            kind = inspect.Parameter.KEYWORD_ONLY
+        elif index == 0:
+            kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
+        else:
+            kind = inspect.Parameter.KEYWORD_ONLY
+        params.append(inspect.Parameter(name, kind))
+    register.__signature__ = inspect.Signature(params)
+    register.__annotations__ = dict(annotations or {})
+    return register
+
+
+class RegisterWheelSignatureTest(SimpleTestCase):
+    def setUp(self):
+        self.wheel = _wheel_install_module()
+        self.hints = dict(get_type_hints(BackendHandle.register))
+
+    def _check(self, names=_REGISTER_NAMES, *, keyword_only=True, **updates):
+        annotations = dict(self.hints)
+        annotations.update(updates)
+        register = _fake_register(
+            names, annotations, keyword_only=keyword_only,
+        )
+        self.wheel.assert_register_signature(register)
+
+    def test_installed_contract_accepts_backend_handle_register(self):
+        self.wheel.assert_register_signature(BackendHandle.register)
+
+    def test_error_branches_fail_closed(self):
+        trust_var = get_args(self.hints['trust'])[0]
+        one_arg = Callable[[trust_var], object]
+        two_arg = Callable[[trust_var, object], object]
+        cases = (
+            ('parameters', {'names': ('trust', 'user')}),
+            ('keyword-only', {'keyword_only': False}),
+            ('trust-origin', {'trust': trust_var}),
+            ('trust-var', {'trust': type[Model]}),
+            ('user-str', {'user': one_arg | None}),
+            ('user-callable', {'user': str | None}),
+            ('user-callable-args', {'user': str | Callable[[object], object] | None}),
+            ('delegate-str', {'delegate': one_arg | None}),
+            ('delegate-none', {'delegate': str | one_arg}),
+            ('delegate-callable', {'delegate': str | None}),
+            (
+                'delegate-callable-args',
+                {'delegate': str | Callable[[object], object] | None},
+            ),
+            ('sponsor-str', {'sponsor': one_arg | None}),
+            ('condition-none', {'condition': one_arg | two_arg}),
+            ('condition-forms', {'condition': one_arg | None}),
+            (
+                'ordinary-condition',
+                {'condition': two_arg | Callable[[trust_var, int], object] | None},
+            ),
+            (
+                'delegated-condition',
+                {'condition': one_arg | Callable[[trust_var, int], object] | None},
+            ),
+            ('return-type', {'return': RegisteredRelation}),
+        )
+        for label, updates in cases:
+            with self.subTest(label=label):
+                names = updates.pop('names', _REGISTER_NAMES)
+                keyword_only = updates.pop('keyword_only', True)
+                with self.assertRaises(SystemExit):
+                    self._check(names, keyword_only=keyword_only, **updates)
+
+    def test_malformed_condition_callable_fails_closed(self):
+        class _Box:
+            __class_getitem__ = classmethod(lambda cls, item: item)
+
+        with self.assertRaises(SystemExit) as raised:
+            self.wheel._callable_shape(_Box, lambda part: (part,))
+        self.assertIn('condition Callable hint', str(raised.exception))
 
 
 class RegisterNormalizeTest(SimpleTestCase):

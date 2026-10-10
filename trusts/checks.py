@@ -181,6 +181,8 @@ def _covered_content_models(config):
             continue
         for record in handle.registry.records:
             covered.add(record.content_model)
+        for record in handle.registry.delegations:
+            covered.add(record.content_model)
     return covered
 
 
