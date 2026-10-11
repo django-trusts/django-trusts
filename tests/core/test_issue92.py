@@ -1,4 +1,4 @@
-"""Bounded SQLite Along reachability (issue #92 / #91 r2+r3).
+"""Bounded Along reachability (issue #92 / #91 r2+r3, #288).
 
 Isolated noun-neutral models only. Structural and behavioral tests —
 no source-token or frozen-SQL-string assertions.
@@ -603,11 +603,16 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         qs = registry.filter_authorized(
             self.Node.objects.order_by('pk'), self.alice, self.read,
         )
-        plan = _plan_text(qs)
-        self.assertIn('LIST SUBQUERY', plan)
-        self.assertIn('MATERIALIZE', plan)
-        self.assertEqual(plan.count('MATERIALIZE'), 1)
-        self.assertIn('SCAN trusts_tests_node', plan.split('\n')[0])
+        sql = str(qs.query)
+        self.assertIn('WITH RECURSIVE', sql.upper())
+        self.assertIn('UNION ALL', sql.upper())
+        self.assertNotIn('json_', sql.lower())
+        if connection.vendor == 'sqlite':
+            plan = _plan_text(qs)
+            self.assertIn('LIST SUBQUERY', plan)
+            self.assertIn('MATERIALIZE', plan)
+            self.assertEqual(plan.count('MATERIALIZE'), 1)
+            self.assertIn('SCAN trusts_tests_node', plan.split('\n')[0])
 
     def test_shape_c_grant_on_descendant_authorizes_ancestors(self):
         root = self.Node.objects.create(title='root')
@@ -1025,7 +1030,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongRuntimeGateTest(TransactionTestCase):
-    def test_as_sql_rejects_non_sqlite_before_walk_sql(self):
+    def test_as_sql_renders_portable_sql_and_rejects_other_engines(self):
         User = get_user_model()
 
         class Node(models.Model):
@@ -1060,23 +1065,29 @@ class AlongRuntimeGateTest(TransactionTestCase):
             compiler = Node.objects.filter(pk=node.pk).query.get_compiler('default')
 
             class Stub(object):
-                vendor = 'mysql'
-                alias = 'replica'
-                settings_dict = {'ENGINE': 'django.db.backends.mysql'}
+                def __init__(self, vendor, engine, alias):
+                    self.vendor = vendor
+                    self.alias = alias
+                    self.settings_dict = {'ENGINE': engine}
 
-            executed = []
-            stub = Stub()
-            stub.cursor = lambda: (_ for _ in ()).throw(AssertionError('probe'))
+                def cursor(self):
+                    raise AssertionError('probe')
+
+            oracle = Stub('oracle', 'django.db.backends.oracle', 'legacy')
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                expr.as_sql(compiler, stub)
+                expr.as_sql(compiler, oracle)
             self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
-            self.assertIn('mysql', str(ctx.exception).lower())
-            self.assertIn('replica', str(ctx.exception))
-            self.assertEqual(executed, [])
-            sql = str(registry.filter_authorized(
+            self.assertIn('oracle', str(ctx.exception).lower())
+            self.assertIn('legacy', str(ctx.exception))
+            rendered_qs = registry.filter_authorized(
                 Node.objects.all(), alice, read,
-            ).query).upper()
-            self.assertIn('WITH RECURSIVE', sql)
+            )
+            rendered = str(rendered_qs.query)
+            self.assertIn('WITH RECURSIVE', rendered.upper())
+            self.assertIn('UNION ALL', rendered.upper())
+            self.assertNotIn('json_', rendered.lower())
+            _sql, params = rendered_qs.query.sql_with_params()
+            self.assertIn(4, params)
 
 
 class _LiveRegistryRestoreMixin(object):
@@ -1139,8 +1150,8 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
         registry, Node, NodeGrant = self._along_registry()
         isolate_live_registry(self.live, registry)
         fake = MagicMock()
-        fake.settings_dict = {'ENGINE': 'django.db.backends.postgresql'}
-        fake.vendor = 'postgresql'
+        fake.settings_dict = {'ENGINE': 'django.db.backends.oracle'}
+        fake.vendor = 'oracle'
         fake.alias = 'other'
         mapping = {
             'default': connections['default'],
@@ -1175,7 +1186,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
                 return False
 
             def execute(self, sql, params=None):
-                raise OperationalError('no such function: json_group_array')
+                raise OperationalError('recursive cte unavailable')
 
             def fetchone(self):
                 return None
@@ -1185,7 +1196,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 1)
         self.assertIn('default', errors[0].msg)
-        self.assertIn('json_group_array', errors[0].msg)
+        self.assertIn('recursive cte unavailable', errors[0].msg)
 
     def test_isolated_registry_is_not_scanned(self):
         self._along_registry()

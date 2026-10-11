@@ -172,7 +172,7 @@ E := reverse O2M onto an edge model, then one forward
 
 The same resolved identity field (`get_path_info()[0].target_fields[0]`,
 including non-PK `to_field`) must appear on the grant walk step and both
-Along edge ends. V1 then admits only one JSON identity family per record:
+Along edge ends. V1 then admits only one identity family per record:
 
 | Family | `get_internal_type()` |
 | --- | --- |
@@ -180,20 +180,23 @@ Along edge ends. V1 then admits only one JSON identity family per record:
 | text | `CharField`, `TextField`, `SlugField` (and subclasses that report `CharField`, such as `EmailField`) |
 | uuid | `UUIDField` |
 
-`UUIDField` is a JSON-string carrier but a distinct family from
+`UUIDField` is a distinct family from
 `CharField` / `SlugField` / `TextField` (hyphenation collision). Mixed
 families, BLOB/date/decimal/float/boolean/JSON/IP identities, unsupported
 S/C/E edges, empty walk-site/edge, and suffixes that cannot be re-resolved
 from the walk-site via stored names all raise `TrustsConfigurationError`
 before mutation.
 
-V1 compiles `GrantReach` only for Django's `django.db.backends.sqlite3`
-backend with JSON functions and recursive CTEs. The walk is uncorrelated
-with candidate rows: one `IN (WITH RECURSIVE …)` per recursive record,
-generation-level `frontier`/`seen`, identity-level cycle suppression, and a
-final join of JSON values back to the typed walk-model identity column.
+V1 compiles `GrantReach` for Django's sqlite3, postgresql, and mysql
+backends. The walk is uncorrelated with candidate rows: one plain
+`IN (WITH RECURSIVE …)` per recursive record. The recursive member is
+`UNION ALL` plus a join to the next hop. A depth column is the cycle
+guard and stops at `bound`. There is no JSON frontier or seen-array.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
 NULL and dangling steps deny. Direct and recursive registrations `OR`.
+The same statement shape is the lockfile's shared subset. Identifier
+quotes follow the connection. A closure table is a documented fallback
+only and is not generated.
 
 A non-empty content suffix compiles a walk-model-rooted `EXISTS` from the
 stored path names (`items__image`, `rows__content`, …). Every S5 suffix
@@ -208,8 +211,8 @@ authorization, lazy `filter_authorized` before pagination, `all_match`,
 and `permissions` / `common_permissions` (including nested permission
 `OuterRef`). Unsupported vendors raise `TrustsConfigurationError` before
 walk SQL. Residual database errors stay loud and are not remapped to
-`TrustsCompilerError`. Runtime authorization does not repeat the JSON/CTE
-capability probe.
+`TrustsCompilerError`. Runtime authorization does not repeat the recursive
+CTE capability probe.
 
 `trusts.E005` (`Tags.database`) reports each selected alias whose live
 Along records cannot render. It honors Django's `databases` argument

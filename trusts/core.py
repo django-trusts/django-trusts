@@ -2121,7 +2121,7 @@ def _ident_family(field):
         return 'uuid'
     raise TrustsConfigurationError(
         'Along identity field %s (%s) is not a V1 integer, text, or UUID '
-        'JSON identity.' % (field.attname, kind)
+        'identity.' % (field.attname, kind)
     )
 
 
@@ -2363,7 +2363,7 @@ def _build_along_walk(root, content_path, content_model, along):
     families = {_ident_family(field) for field in ident_fields}
     if len(families) != 1:
         raise TrustsConfigurationError(
-            'along identity fields mix JSON families %s.'
+            'along identity fields mix identity families %s.'
             % ', '.join(sorted(families))
         )
     ident_family = families.pop()
@@ -2389,22 +2389,22 @@ def _build_along_walk(root, content_path, content_model, along):
     )
 
 
+_ALONG_ENGINES = frozenset((
+    _DJANGO_SQLITE3,
+    'django.db.backends.postgresql',
+    'django.db.backends.mysql',
+))
+
+
 def along_connection_supported(connection):
-    """True when ``connection`` is Django's sqlite3 backend (no SQL)."""
+    """True for SQLite, PostgreSQL, or MySQL. No SQL."""
     engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
-    return engine == _DJANGO_SQLITE3
+    return engine in _ALONG_ENGINES
 
 
 def probe_along_capabilities(connection):
-    """Execute JSON1 + recursive-CTE capability SQL. Raises on failure."""
+    """Execute a plain recursive CTE. Raises on failure."""
     with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT json_array(1, 'x'), json_group_array(x), "
-            "json_array_length(json_array(1)) FROM (SELECT 1 AS x)"
-        )
-        cursor.fetchone()
-        cursor.execute("SELECT value FROM json_each('[1]')")
-        cursor.fetchone()
         cursor.execute(
             'WITH RECURSIVE t(n) AS ('
             'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
@@ -2413,13 +2413,13 @@ def probe_along_capabilities(connection):
         cursor.fetchone()
 
 
-def _require_sqlite_along_renderer(connection):
+def _require_along_renderer(connection):
     if along_connection_supported(connection):
         return
     engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
     raise TrustsConfigurationError(
-        'Along reachability requires Django sqlite3 with JSON functions '
-        'and recursive CTEs; got ENGINE=%r vendor=%r alias=%r.'
+        'Along reachability requires a recursive CTE on Django sqlite3, '
+        'postgresql, or mysql; got ENGINE=%r vendor=%r alias=%r.'
         % (
             engine,
             getattr(connection, 'vendor', None),
@@ -2428,20 +2428,19 @@ def _require_sqlite_along_renderer(connection):
     )
 
 
-def _neighbor_sql(walk, qn, g, frontier, ident_sql):
-    f = 'f'
+def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
+    """Join generation ``g`` to the next identity. The CTE is referenced once."""
+    source = 'FROM %(gen)s AS %(g)s ' % {'gen': gen, 'g': g}
     if walk.shape == 'S':
         child = qn('child')
         parent_col = qn(walk.parent_attname)
         walk_table = qn(walk.walk_model._meta.db_table)
-        frm = (
-            'FROM json_each(%(g)s.%(frontier)s) AS %(f)s '
+        frm = source + (
             'JOIN %(walk_table)s AS %(child)s '
-            'ON %(child)s.%(parent_col)s = %(f)s.value'
+            'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s'
             % {
-                'g': g, 'frontier': frontier, 'f': f,
-                'walk_table': walk_table, 'child': child,
-                'parent_col': parent_col,
+                'g': g, 'walk_table': walk_table, 'child': child,
+                'parent_col': parent_col, 'ident_col': ident_col,
             }
         )
         project = '%s.%s' % (child, ident_sql)
@@ -2451,15 +2450,14 @@ def _neighbor_sql(walk, qn, g, frontier, ident_sql):
         parent = qn('parent')
         parent_col = qn(walk.parent_attname)
         walk_table = qn(walk.walk_model._meta.db_table)
-        frm = (
-            'FROM json_each(%(g)s.%(frontier)s) AS %(f)s '
+        frm = source + (
             'JOIN %(walk_table)s AS %(cur)s '
-            'ON %(cur)s.%(ident)s = %(f)s.value '
+            'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s '
             'JOIN %(walk_table)s AS %(parent)s '
             'ON %(parent)s.%(ident)s = %(cur)s.%(parent_col)s'
             % {
-                'g': g, 'frontier': frontier, 'f': f,
-                'walk_table': walk_table, 'cur': cur, 'ident': ident_sql,
+                'g': g, 'walk_table': walk_table, 'cur': cur,
+                'ident': ident_sql, 'ident_col': ident_col,
                 'parent': parent, 'parent_col': parent_col,
             }
         )
@@ -2470,14 +2468,12 @@ def _neighbor_sql(walk, qn, g, frontier, ident_sql):
         edge_table = qn(walk.edge_model._meta.db_table)
         parent_col = qn(walk.edge_parent_attname)
         child_col = qn(walk.edge_child_attname)
-        frm = (
-            'FROM json_each(%(g)s.%(frontier)s) AS %(f)s '
+        frm = source + (
             'JOIN %(edge_table)s AS %(link)s '
-            'ON %(link)s.%(parent_col)s = %(f)s.value'
+            'ON %(link)s.%(parent_col)s = %(g)s.%(ident_col)s'
             % {
-                'g': g, 'frontier': frontier, 'f': f,
-                'edge_table': edge_table, 'link': link,
-                'parent_col': parent_col,
+                'g': g, 'edge_table': edge_table, 'link': link,
+                'parent_col': parent_col, 'ident_col': ident_col,
             }
         )
         project = '%s.%s' % (link, child_col)
@@ -2488,57 +2484,40 @@ def _neighbor_sql(walk, qn, g, frontier, ident_sql):
 
 
 def _render_reach_sql(walk, seed_sql, seed_params, connection):
-    """Return ``(sql, params)`` for the uncorrelated W membership list."""
+    """Return ``(sql, params)`` for the uncorrelated W membership list.
+
+    One plain ``WITH RECURSIVE`` shared by SQLite, PostgreSQL, and MySQL 8+.
+    The depth column is the cycle guard: recursion stops at ``along`` bound.
+    There is no JSON frontier or seen-array.
+    """
     qn = connection.ops.quote_name
     gen = qn('gen')
     g = qn('g')
     depth = qn('depth')
-    frontier = qn('frontier')
-    seen = qn('seen')
+    ident_col = qn('ident')
     ident = qn(walk.walk_ident)
-    ident_alias = qn('ident')
     walk_table = qn(walk.walk_model._meta.db_table)
     site = qn('s')
-    j = 'j'
-    seed = qn('seed')
-    arr = qn('arr')
-    frm, project = _neighbor_sql(walk, qn, g, frontier, ident)
-    recursive_frontier = (
-        '(SELECT COALESCE((SELECT json_group_array(DISTINCT %(project)s) '
-        '%(frm)s WHERE %(project)s IS NOT NULL AND %(project)s NOT IN '
-        '(SELECT value FROM json_each(%(g)s.%(seen)s))), \'[]\'))'
-        % {'project': project, 'frm': frm, 'g': g, 'seen': seen}
-    )
-    recursive_seen = (
-        '(SELECT COALESCE((SELECT json_group_array(x) FROM ('
-        'SELECT value AS x FROM json_each(%(g)s.%(seen)s) '
-        'UNION SELECT %(project)s %(frm)s WHERE %(project)s IS NOT NULL'
-        ')), \'[]\'))'
-        % {'g': g, 'seen': seen, 'project': project, 'frm': frm}
-    )
+    seed_alias = qn('seed_rows')
+    frm, project = _neighbor_sql(walk, qn, gen, g, ident_col, ident)
     sql = (
-        'WITH RECURSIVE %(gen)s(%(depth)s, %(frontier)s, %(seen)s) AS ('
-        'SELECT 0, %(seed)s.%(arr)s, %(seed)s.%(arr)s FROM ('
-        'SELECT COALESCE((SELECT json_group_array(%(ident_alias)s) FROM (%(seed_sql)s) '
-        'AS seed_rows), \'[]\') AS %(arr)s'
-        ') AS %(seed)s '
+        'WITH RECURSIVE %(gen)s(%(ident_col)s, %(depth)s) AS ('
+        'SELECT %(seed_alias)s.%(ident_col)s, 0 '
+        'FROM (%(seed_sql)s) AS %(seed_alias)s '
         'UNION ALL '
-        'SELECT %(g)s.%(depth)s + 1, %(next_frontier)s, %(next_seen)s '
-        'FROM %(gen)s AS %(g)s '
-        'WHERE %(g)s.%(depth)s < %%s '
-        'AND json_array_length(%(g)s.%(frontier)s) > 0'
+        'SELECT %(project)s, %(g)s.%(depth)s + 1 '
+        '%(frm)s '
+        'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
         ') '
         'SELECT DISTINCT %(site)s.%(ident)s '
-        'FROM %(gen)s, json_each(%(gen)s.%(seen)s) AS %(j)s '
+        'FROM %(gen)s '
         'JOIN %(walk_table)s AS %(site)s '
-        'ON %(site)s.%(ident)s = %(j)s.value'
+        'ON %(site)s.%(ident)s = %(gen)s.%(ident_col)s'
         % {
-            'gen': gen, 'depth': depth, 'frontier': frontier, 'seen': seen,
-            'seed': seed, 'arr': arr, 'ident_alias': ident_alias,
-            'seed_sql': seed_sql, 'g': g,
-            'next_frontier': recursive_frontier, 'next_seen': recursive_seen,
-            'site': site, 'ident': ident, 'j': j,
-            'walk_table': walk_table,
+            'gen': gen, 'ident_col': ident_col, 'depth': depth,
+            'seed_alias': seed_alias, 'seed_sql': seed_sql,
+            'project': project, 'g': g, 'frm': frm,
+            'site': site, 'ident': ident, 'walk_table': walk_table,
         }
     )
     return sql, tuple(seed_params) + (walk.bound,)
@@ -2547,11 +2526,12 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection):
 class _IdentInReach(Expression):
     """Boolean predicate ``alias.ident IN (W)`` compiled on the inner query."""
 
-    def __init__(self, attname, w_sql, w_params):
+    def __init__(self, attname, w_sql, w_params, bound):
         super().__init__(output_field=BooleanField())
         self.attname = attname
         self.w_sql = w_sql
         self.w_params = w_params
+        self.bound = bound
 
     def as_sql(self, compiler, connection):
         qn = connection.ops.quote_name
@@ -2563,8 +2543,10 @@ class _IdentInReach(Expression):
 class GrantReach(Expression):
     """Grant-anchored bounded reachability predicate for one recursive record.
 
-    The walk is uncorrelated with candidate rows. One ``IN (WITH RECURSIVE …)``
-    per recursive record. Unsupported vendors raise before walk SQL.
+    The walk is uncorrelated with candidate rows. One plain
+    ``IN (WITH RECURSIVE …)`` per recursive record, with a depth counter
+    capped at the bound. SQLite, PostgreSQL, and MySQL share that SQL.
+    Other engines raise before walk SQL.
     """
 
     filterable = True
@@ -2621,7 +2603,7 @@ class GrantReach(Expression):
             self.suffix_query = exprs.pop(0)
 
     def as_sql(self, compiler, connection):
-        _require_sqlite_along_renderer(connection)
+        _require_along_renderer(connection)
         seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
         if seed_sql.startswith('(') and seed_sql.endswith(')'):
             seed_sql = seed_sql[1:-1]
@@ -2638,6 +2620,7 @@ class GrantReach(Expression):
         inner = self.suffix_query.clone()
         inner.add_q(Q(_IdentInReach(
             self.record.along.walk_ident, w_sql, w_params,
+            self.record.along.bound,
         )))
         return Exists(inner).as_sql(compiler, connection)
 
@@ -2653,7 +2636,9 @@ class GrantReach(Expression):
                 **{walk.suffix_field: content},
             ).query.clone()
         inner.subquery = True
-        inner.add_q(Q(_IdentInReach(walk.walk_ident, w_sql, w_params)))
+        inner.add_q(Q(_IdentInReach(
+            walk.walk_ident, w_sql, w_params, walk.bound,
+        )))
         return Exists(inner).as_sql(compiler, connection)
 
 

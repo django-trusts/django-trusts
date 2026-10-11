@@ -204,7 +204,11 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn('Along', str(ctx.exception))
         with self.assertRaises(TrustsConfigurationError) as ctx:
             render_policy_sql_bytes(handles=[handle])
-        self.assertIn('GrantReach', str(ctx.exception))
+        self.assertIn(
+            'Reverse permission inquiry cannot compile an exact '
+            'user predicate for Along registration',
+            str(ctx.exception),
+        )
 
 
 class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):

@@ -35,16 +35,20 @@ install of the declared range.
 
 ## Database (provisional inherited relationships)
 
-The provisional `along=` evaluator is currently exercised in CI only with
-Django's `django.db.backends.sqlite3` engine, the JSON functions
-`json_array`, `json_group_array`, `json_array_length`, and `json_each`,
-and `WITH RECURSIVE`.
+The provisional `along=` evaluator compiles one plain `WITH RECURSIVE`
+statement: `UNION ALL`, a depth column capped at the bound, and a join to
+the next hop. That shape is the shared subset for SQLite, PostgreSQL, and
+MySQL 8.4+ (Django 6.1's MySQL floor). It does not use JSON functions. The checked-in lockfile is that
+statement as Django's SQLite connection quotes it; PostgreSQL uses the same
+quotes and MySQL quotes identifiers with backticks. The walk SQL itself
+stays the shared subset.
 
-CI does not currently exercise this evaluator on PostgreSQL, MySQL, MariaDB,
-Oracle, or another vendor. In the current implementation, compilation on a
-non-SQLite connection raises `TrustsConfigurationError` before the walk
-query. `trusts.E005` checks the aliases Django supplies in `databases`; an
-absent or empty argument should not be read as a database all-clear.
+CI runs the along tests on SQLite in the kernel job, and on PostgreSQL and
+MySQL 8 service containers in dedicated jobs. Other engines still raise
+`TrustsConfigurationError` before walk SQL. `trusts.E005` checks the aliases
+Django supplies in `databases` and probes a plain recursive CTE. An absent
+or empty argument should not be read as a database all-clear. A closure
+table is not implemented; it remains a documented fallback only.
 
 ## What is intentionally not declared
 
