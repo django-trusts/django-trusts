@@ -2493,9 +2493,10 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
 def _along_cycle_clause(connection, ident_col, qn):
     """One PostgreSQL cycle suffix. SQLite and MySQL stay plain.
 
-    ``CYCLE ident SET is_cycle USING path`` is appended after the CTE
-    and suppresses cycle and diamond repeats. The outer query does not
-    select those columns. The depth cap still guarantees termination.
+    ``CYCLE ident SET is_cycle USING path`` prunes only a path that
+    revisits an ident already on that same path. It does not suppress
+    diamonds. The outer query does not select the added columns. The
+    depth cap still guarantees termination on every engine.
     """
     if getattr(connection, 'vendor', None) != 'postgresql':
         return ''
@@ -2509,13 +2510,16 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection):
 
     SQLite, PostgreSQL, and MySQL 8.4+ share one plain ``WITH RECURSIVE``:
     ``UNION ALL``, a depth column capped at the ``along`` bound, and one
-    join to the next hop. The cap guarantees termination. ``UNION ALL``
-    can revisit cycles and multiply diamond paths up to that cap; the
-    outer ``DISTINCT`` keeps the reachable set correct. That growth is
-    the accepted tradeoff for dropping the JSON seen-set. PostgreSQL
-    appends ``CYCLE ident SET is_cycle USING path``, which suppresses
-    those repeats, and does not project the added columns. The lockfile
-    records the plain statement. MariaDB is rejected before this SQL.
+    join to the next hop. The cap guarantees termination. On SQLite and
+    MySQL, ``UNION ALL`` can revisit a cycle. PostgreSQL appends
+    ``CYCLE ident SET is_cycle USING path``, which prunes only a path
+    that revisits an ident already on that same path, and does not
+    project those columns. A diamond is not such a path, so fan-out to
+    the same node by two routes multiplies on all three engines, bounded
+    by the cap. The outer ``DISTINCT`` keeps the reachable set correct.
+    That growth is the accepted tradeoff for dropping the JSON seen-set.
+    The lockfile records the plain statement. MariaDB is rejected before
+    this SQL.
     """
     qn = connection.ops.quote_name
     gen = qn('gen')

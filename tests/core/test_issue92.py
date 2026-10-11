@@ -689,6 +689,33 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         else:
             self.assertNotIn('CYCLE', sql.upper())
 
+    def test_diamond_returns_d_once_on_every_backend(self):
+        # A -> B -> D and A -> C -> D. CYCLE does not prune either path.
+        # Both emit D. DISTINCT returns D once on every engine.
+        a = self.Node.objects.create(title='dia-a')
+        b = self.Node.objects.create(title='dia-b')
+        c = self.Node.objects.create(title='dia-c')
+        d = self.Node.objects.create(title='dia-d')
+        other = self.Node.objects.create(title='dia-other')
+        self.Link.objects.create(child=b, parent=a)
+        self.Link.objects.create(child=c, parent=a)
+        self.Link.objects.create(child=d, parent=b)
+        self.Link.objects.create(child=d, parent=c)
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent_links.parent, bound=4),
+        )
+        rows = list(registry.filter_authorized(
+            self.Node.objects.order_by('pk'), self.alice, self.read,
+        ))
+        pks = [row.pk for row in rows]
+        self.assertEqual(pks.count(d.pk), 1)
+        self.assertEqual(pks, sorted((a.pk, b.pk, c.pk, d.pk)))
+        self.assertNotIn(other.pk, pks)
+
     def test_self_link_two_node_cycle_diamond_duplicates_null_empty_bound(self):
         self_node = self.Node.objects.create(title='self')
         self_node.parent = self_node

@@ -40,11 +40,13 @@ statement: `UNION ALL`, a depth column capped at the bound, and a join to
 the next hop. That shape is the shared subset for SQLite, PostgreSQL, and
 MySQL 8.4+ only (Django 6.1's MySQL floor). It does not use JSON functions.
 The depth cap guarantees termination. On SQLite and MySQL, `UNION ALL` can
-revisit a cycle and can multiply diamond paths up to that cap. The final
-`DISTINCT` keeps the reachable set correct. That growth is the accepted
-tradeoff for dropping the JSON seen-set. PostgreSQL appends
-`CYCLE <ident> SET is_cycle USING path`, which suppresses those repeats.
-The outer query does not select `is_cycle` or `path`.
+revisit a cycle. PostgreSQL appends `CYCLE <ident> SET is_cycle USING path`,
+which prunes only a path that revisits an ident already on that same path.
+The outer query does not select `is_cycle` or `path`. A diamond is not such
+a path: A→B→D and A→C→D still yield D twice inside the walk on all three
+engines. That fan-out is bounded by the depth cap. The final `DISTINCT`
+keeps the reachable set correct. That growth is the accepted tradeoff for
+dropping the JSON seen-set.
 
 The checked-in lockfile records the portable statement as Django's SQLite
 connection quotes it. MySQL quotes identifiers with backticks and does not

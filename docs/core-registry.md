@@ -192,11 +192,13 @@ backends. The walk is uncorrelated with candidate rows: one plain
 `IN (WITH RECURSIVE …)` per recursive record. The recursive member is
 `UNION ALL` plus a join to the next hop. A depth column capped at
 `bound` guarantees termination. It is not a seen-set. On SQLite and
-MySQL, `UNION ALL` can revisit a cycle and can multiply diamond paths
-up to that cap. The final `DISTINCT` keeps the reachable set correct.
-That growth is the accepted tradeoff for dropping the JSON seen-set.
-PostgreSQL's `CYCLE ident SET is_cycle USING path` clause suppresses
-those repeats. There is no JSON frontier or seen-array.
+MySQL, `UNION ALL` can revisit a cycle. PostgreSQL's
+`CYCLE ident SET is_cycle USING path` clause prunes only a path that
+revisits an ident already on that same path. A diamond is not such a
+path, so fan-out to the same node by two routes multiplies on all three
+engines, bounded by the cap. The final `DISTINCT` keeps the reachable
+set correct. That growth is the accepted tradeoff for dropping the JSON
+seen-set. There is no JSON frontier or seen-array.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
 NULL and dangling steps deny. Direct and recursive registrations `OR`.
 The lockfile records that portable statement (SQLite identifier quotes).
