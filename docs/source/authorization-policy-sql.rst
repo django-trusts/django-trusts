@@ -203,8 +203,9 @@ the way SQLite, PostgreSQL, and MySQL quote them, plain single-quoted
 strings, numbers, ``%s`` and ``?`` placeholders, parentheses, commas, dots,
 and an explicit allowlist of operators and keywords those compilers and
 ``along=`` SQL emit. A line comment, a block comment, a MySQL ``#`` comment,
-a dollar-quoted string, an ``E''`` string, a backslash escape, an unknown
-operator, or any other unrecognized token raises
+a dollar-quoted string, an ``E''`` string, a backslash escape, adjacent
+string literals (including a newline between two ``'...'`` literals), an
+unknown operator, or any other unrecognized token raises
 ``TrustsConfigurationError``. The error names the query and the token.
 Formatting does not strip comments, guess, or return the original text.
 After formatting, the token stream must match the original stream, or

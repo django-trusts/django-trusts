@@ -43,9 +43,12 @@ def _format_policy_sql(sql):
     Whitespace between tokens is a single space, or a newline and indent
     at a break. Spacing that Django omitted, such as ``EXISTS(``, stays
     omitted. The result has no trailing newline. A comment, dollar quote,
-    E-string, backslash escape, unknown operator, or other unrecognized
-    token raises ``TrustsConfigurationError`` and names the query and the
-    token. The formatted text is checked against the original token stream.
+    E-string, backslash escape, adjacent string literals, unknown operator,
+    or other unrecognized token raises ``TrustsConfigurationError`` and
+    names the query and the token. Adjacent string literals are rejected
+    before emission: a newline between them is not the same SQL as a space,
+    and token texts alone cannot tell those apart. The formatted text is
+    checked against the original token stream.
     """
     if not isinstance(sql, str):
         raise TrustsConfigurationError(
@@ -55,6 +58,7 @@ def _format_policy_sql(sql):
     tokens = _tokenize_policy_sql(sql)
     if not tokens:
         return ''
+    _reject_adjacent_strings(sql, tokens)
     formatted = _emit(tokens)
     try:
         again = _tokenize_policy_sql(formatted)
@@ -70,6 +74,28 @@ def _reject(sql, token, kind):
         'Policy SQL formatter rejected %s %r in query %r.'
         % (kind, token, sql)
     )
+
+
+def _reject_adjacent_strings(sql, tokens):
+    """Reject string literals that have only whitespace between them.
+
+    ``'a'\\n'b'`` and ``'a' 'b'`` tokenize as two plain strings. Emitting
+    them puts a space between the literals. Token texts still match, but
+    PostgreSQL treats a newline between them as continuation and a space
+    as invalid syntax. The narrow contract rejects the construct.
+    """
+    previous = None
+    for text, _spaced in tokens:
+        if (
+            previous is not None
+            and previous.startswith("'")
+            and text.startswith("'")
+        ):
+            _reject(
+                sql, '%s %s' % (previous, text),
+                'adjacent string literals',
+            )
+        previous = text
 
 
 def _reject_round_trip(sql):

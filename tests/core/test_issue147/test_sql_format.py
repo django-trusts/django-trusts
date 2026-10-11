@@ -6,6 +6,7 @@ from django.test import SimpleTestCase
 
 from trusts.core import TrustsConfigurationError
 from trusts.policy_sql_format import (
+    _emit,
     _format_policy_sql,
     _tokenize_policy_sql,
 )
@@ -145,6 +146,25 @@ class PolicySqlFormatTest(SimpleTestCase):
         self.assertEqual(_format_policy_sql('SELECT 1)'), 'SELECT 1)')
         ordered = 'SELECT "t"."id" FROM "t" ORDER BY "t"."id" DESC'
         self.assertIn('\nORDER BY "t"."id" DESC', _format_policy_sql(ordered))
+
+    def test_adjacent_string_literals_are_rejected(self):
+        raw = "SELECT 'a'\n'b'"
+        collapsed = "SELECT 'a' 'b'"
+        # A space and a newline produce the same token texts, and emitting
+        # the newline form collapses it to that space. Token equality
+        # would accept the change.
+        self.assertEqual(_texts(raw), _texts(collapsed))
+        emitted = _emit(_tokenize_policy_sql(raw))
+        self.assertEqual(emitted, collapsed)
+        self.assertEqual(_texts(raw), _texts(emitted))
+        message = _rejected(self, raw, "'a' 'b'")
+        self.assertIn('adjacent string literals', message)
+        self.assertIn(repr(raw), message)
+        spaced = _rejected(self, collapsed, "'a' 'b'")
+        self.assertIn('adjacent string literals', spaced)
+        continued = "SELECT 'a'\n'b'\n'c'"
+        self.assertEqual(_texts(continued), ["SELECT", "'a'", "'b'", "'c'"])
+        _rejected(self, continued, "'a' 'b'")
 
     def test_line_comment_is_rejected(self):
         raw = 'SELECT 1 -- keep newline\n+ 2'
