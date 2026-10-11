@@ -196,8 +196,10 @@ other clause keywords (``ORDER BY``, ``GROUP BY``, ``HAVING``, ``LIMIT``,
 ``OFFSET``, ``CYCLE``, and a ``SELECT`` or ``WITH`` that continues the
 statement). The seed and recursive member of ``WITH RECURSIVE``, and the
 subqueries inside them, are indented. A break never falls inside a quoted
-identifier, a string literal, or a comment. The token sequence is the
-statement Django compiled, so the formatted text is the same statement.
+identifier, a string literal, or a comment. A ``--`` comment keeps the
+newline that ends it. Operator characters are copied as a run, including
+PostgreSQL ``~`` / ``~*`` and JSON operators, so an operator the formatter
+does not name is not rejected. The formatted text is the same statement.
 
 Creating the lockfile
 ---------------------

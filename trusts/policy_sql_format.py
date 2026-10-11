@@ -22,8 +22,10 @@ _CLAUSE_WORDS = frozenset((
 _JOIN_MODIFIERS = frozenset((
     'INNER', 'CROSS', 'NATURAL', 'LEFT', 'RIGHT', 'FULL', 'OUTER',
 ))
-_TWO_CHAR = frozenset(('<=', '>=', '<>', '!=', '||', '::'))
-_ONE_CHAR = frozenset('=<>+-*/(),.;?')
+# Structural punctuation stays one character. Everything else that is
+# not a word, number, quote, or placeholder is an operator run, so a
+# Django operator such as ``~*``, ``->>``, or ``#>>`` is kept verbatim.
+_STRUCTURAL = frozenset('(),.;')
 
 
 def format_policy_sql(sql):
@@ -31,7 +33,10 @@ def format_policy_sql(sql):
 
     Whitespace between tokens is a single space, or a newline and indent
     at a break. Spacing that Django omitted, such as ``EXISTS(``, stays
-    omitted. The result has no trailing newline.
+    omitted. A ``--`` line comment keeps the newline that ends it, so the
+    next token cannot fall inside the comment. Operator characters are
+    copied as a run, including ones this module does not name. The result
+    has no trailing newline.
     """
     if not isinstance(sql, str):
         raise TrustsConfigurationError(
@@ -72,10 +77,12 @@ def _one_token(sql, index):
     if char == '[':
         return _bracket(sql, index)
     if char == '-' and sql.startswith('--', index):
+        # The newline is part of the comment. Dropping it would comment
+        # out the next token whenever that token does not itself break.
         end = sql.find('\n', index)
         if end == -1:
-            end = len(sql)
-        return sql[index:end], end
+            return sql[index:], len(sql)
+        return sql[index:end + 1], end + 1
     if char == '/' and sql.startswith('/*', index):
         end = sql.find('*/', index + 2)
         if end == -1:
@@ -84,11 +91,9 @@ def _one_token(sql, index):
             )
         return sql[index:end + 2], end + 2
     if char == '%':
-        return _placeholder(sql, index)
-    if sql.startswith(tuple(_TWO_CHAR), index):
-        return sql[index:index + 2], index + 2
-    if char in _ONE_CHAR:
-        return char, index + 1
+        if sql.startswith(('%%', '%s'), index) or sql.startswith('%(', index):
+            return _placeholder(sql, index)
+        return _operator_run(sql, index)
     if char.isalpha() or char == '_':
         end = index + 1
         while end < len(sql) and (sql[end].isalnum() or sql[end] == '_'):
@@ -96,9 +101,9 @@ def _one_token(sql, index):
         return sql[index:end], end
     if char.isdigit():
         return _number(sql, index)
-    raise TrustsConfigurationError(
-        'Policy SQL formatter found an unsupported character %r.' % (char,)
-    )
+    if char in _STRUCTURAL:
+        return char, index + 1
+    return _operator_run(sql, index)
 
 
 def _quoted(sql, index, quote):
@@ -131,21 +136,33 @@ def _bracket(sql, index):
     )
 
 
+def _is_operator_char(char):
+    if char.isalnum() or char == '_' or char.isspace():
+        return False
+    return char not in '\'"`[](),.;%'
+
+
+def _operator_run(sql, index):
+    """Copy one maximal operator run, stopping before a comment start."""
+    end = index + 1
+    length = len(sql)
+    while end < length and _is_operator_char(sql[end]):
+        if sql.startswith(('--', '/*'), end):
+            break
+        end += 1
+    return sql[index:end], end
+
+
 def _placeholder(sql, index):
-    if sql.startswith('%%', index):
-        return '%%', index + 2
-    if sql.startswith('%s', index):
-        return '%s', index + 2
-    if sql.startswith('%(', index):
-        end = sql.find(')s', index + 2)
-        if end == -1:
-            raise TrustsConfigurationError(
-                'Policy SQL formatter found an unclosed placeholder.'
-            )
-        return sql[index:end + 2], end + 2
-    raise TrustsConfigurationError(
-        'Policy SQL formatter found an unsupported placeholder.'
-    )
+    """``%s``, ``%%``, or ``%(name)s``. The caller already matched the form."""
+    if sql.startswith(('%%', '%s'), index):
+        return sql[index:index + 2], index + 2
+    end = sql.find(')s', index + 2)
+    if end == -1:
+        raise TrustsConfigurationError(
+            'Policy SQL formatter found an unclosed placeholder.'
+        )
+    return sql[index:end + 2], end + 2
 
 
 def _number(sql, index):

@@ -150,6 +150,38 @@ class PolicySqlFormatTest(SimpleTestCase):
         self.assertEqual(format_policy_sql('   \n'), '')
         self.assertEqual(format_policy_sql('SELECT 1)'), 'SELECT 1)')
 
+    def test_line_comment_keeps_the_newline_before_a_non_clause_token(self):
+        raw = 'SELECT 1 -- keep newline\n+ 2'
+        formatted = format_policy_sql(raw)
+        self.assertEqual(formatted, 'SELECT 1 -- keep newline\n+ 2')
+        self.assertEqual(formatted, format_policy_sql(formatted))
+        self.assertEqual(_texts(raw), _texts(formatted))
+        glued = 'SELECT 1+-- comment\n2'
+        self.assertEqual(
+            format_policy_sql(glued),
+            'SELECT 1+-- comment\n2',
+        )
+
+    def test_operator_runs_are_preserved_verbatim(self):
+        raw = (
+            "SELECT 1 ~* 2, 3 & 4, 5 # 6, data ->> 'a', "
+            "data #> '{a}', data #>> '{a}', data @> '{}', data <@ '{}', "
+            "data ? 'k', data ?& keys, data ?| keys, "
+            "1 << 2, 8 >> 1, 1 ^ 2, 'a' || 'b', col::int, 1 <= 2, 1 <> 2, "
+            "1 != 2, title ~ 'A'"
+        )
+        formatted = format_policy_sql(raw)
+        for operator in (
+            '~*', '&', '#', '->>', '#>', '#>>', '@>', '<@',
+            '?', '?&', '?|', '<<', '>>', '^', '||', '::', '<=', '<>', '!=', '~',
+        ):
+            self.assertIn(operator, formatted)
+        self.assertEqual(_texts(raw), _texts(formatted))
+        self.assertEqual(formatted, format_policy_sql(formatted))
+        self.assertEqual(format_policy_sql('SELECT @'), 'SELECT @')
+        self.assertEqual(format_policy_sql('SELECT %q'), 'SELECT %q')
+        self.assertEqual(format_policy_sql('SELECT $1'), 'SELECT $1')
+
     def test_malformed_sql_fails_closed(self):
         with self.assertRaises(TrustsConfigurationError):
             format_policy_sql(None)
@@ -160,8 +192,6 @@ class PolicySqlFormatTest(SimpleTestCase):
             'SELECT [open',
             'SELECT 1 /* open',
             'SELECT %(open',
-            'SELECT %q',
-            'SELECT @',
         ):
             with self.assertRaises(TrustsConfigurationError):
                 format_policy_sql(raw)
