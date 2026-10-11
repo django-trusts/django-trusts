@@ -196,10 +196,19 @@ other clause keywords (``ORDER BY``, ``GROUP BY``, ``HAVING``, ``LIMIT``,
 ``OFFSET``, ``CYCLE``, and a ``SELECT`` or ``WITH`` that continues the
 statement). The seed and recursive member of ``WITH RECURSIVE``, and the
 subqueries inside them, are indented. A break never falls inside a quoted
-identifier, a string literal, or a comment. A ``--`` comment keeps the
-newline that ends it. Operator characters are copied as a run, including
-PostgreSQL ``~`` / ``~*`` and JSON operators, so an operator the formatter
-does not name is not rejected. The formatted text is the same statement.
+identifier or a plain single-quoted string.
+
+The formatter accepts only tokens it fully understands: identifiers quoted
+the way SQLite, PostgreSQL, and MySQL quote them, plain single-quoted
+strings, numbers, ``%s`` and ``?`` placeholders, parentheses, commas, dots,
+and an explicit allowlist of operators and keywords those compilers and
+``along=`` SQL emit. A line comment, a block comment, a MySQL ``#`` comment,
+a dollar-quoted string, an ``E''`` string, a backslash escape, an unknown
+operator, or any other unrecognized token raises
+``TrustsConfigurationError``. The error names the query and the token.
+Formatting does not strip comments, guess, or return the original text.
+After formatting, the token stream must match the original stream, or
+formatting raises. The formatted text is that same statement.
 
 Creating the lockfile
 ---------------------

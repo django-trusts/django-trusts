@@ -17,8 +17,9 @@ log.
 
 - **Readable policy-lock SQL.** Each lockfile statement is broken between
   tokens onto predictable lines, including a `WITH RECURSIVE` walk and
-  PostgreSQL's `CYCLE` clause. The token sequence is unchanged, and schema
-  version stays 1. See the
+  PostgreSQL's `CYCLE` clause. The formatter accepts only the tokens those
+  statements use and fails closed on anything else. Schema version stays 1.
+  See the
   [authorization-policy SQL guide](source/authorization-policy-sql.rst)
   and [#292].
 

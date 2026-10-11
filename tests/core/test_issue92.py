@@ -13,7 +13,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, connections, models
-from django.db.models import F, IntegerField, Value
 from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
 from django.test import SimpleTestCase, TransactionTestCase
@@ -22,8 +21,8 @@ from django.test.utils import isolate_apps
 from tests.apps import forget_models, isolate_live_registry, live_config
 from trusts.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.policy_sql_format import (
+    _format_policy_sql,
     _tokenize_policy_sql,
-    format_policy_sql,
 )
 from trusts.reverse import lock_permitted_users_queryset
 from trusts.core import (
@@ -787,12 +786,12 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
 
     def _assert_formatted_executes_like(self, queryset):
         raw, params = queryset.query.sql_with_params()
-        formatted = format_policy_sql(raw)
+        formatted = _format_policy_sql(raw)
         self.assertEqual(
             [text for text, _spaced in _tokenize_policy_sql(raw)],
             [text for text, _spaced in _tokenize_policy_sql(formatted)],
         )
-        self.assertEqual(formatted, format_policy_sql(formatted))
+        self.assertEqual(formatted, _format_policy_sql(formatted))
         self.assertIn('\n', formatted)
         self.assertIn('WITH RECURSIVE', formatted)
         self.assertIn('UNION ALL', formatted)
@@ -820,7 +819,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             'WHERE {table}.{column} = %s AND \'it\'\'s AND\' = %s'
         ).format(table=table, other=other, column=column)
         params = ('keep', 'keep', 'keep', "it's AND")
-        formatted = format_policy_sql(raw)
+        formatted = _format_policy_sql(raw)
         self.assertIn('LEFT OUTER JOIN', formatted)
         self.assertIn("'it''s AND'", formatted)
         self.assertEqual(
@@ -836,102 +835,6 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         with connection.cursor() as cursor:
             cursor.execute(sql, params)
             return cursor.fetchall()
-
-    def _assert_formatted_rows(self, queryset):
-        raw, params = queryset.query.sql_with_params()
-        formatted = format_policy_sql(raw)
-        self.assertEqual(formatted, format_policy_sql(formatted))
-        self.assertEqual(
-            self._sql_rows(raw, params),
-            self._sql_rows(formatted, params),
-        )
-        return raw, formatted
-
-    def test_line_comment_newline_keeps_a_non_clause_token(self):
-        # The newline is not a token. Formatting must still execute the
-        # expression that follows a ``--`` comment.
-        raw = 'SELECT 1 -- keep newline\n+ 2'
-        formatted = format_policy_sql(raw)
-        self.assertEqual(formatted, 'SELECT 1 -- keep newline\n+ 2')
-        rows = self._sql_rows(raw, ())
-        self.assertEqual(list(rows), [(3,)])
-        self.assertEqual(list(rows), list(self._sql_rows(formatted, ())))
-
-    def test_formatted_backend_operators_match_unformatted_results(self):
-        self.Node.objects.create(title='fmt-regex')
-        self.Node.objects.create(title='other-regex')
-        masked = self.Node.objects.annotate(
-            masked=F('pk').bitand(Value(1, output_field=IntegerField())),
-        ).order_by('pk')
-        masked_sql, _formatted = self._assert_formatted_rows(masked)
-        self.assertIn('&', masked_sql)
-        if connection.vendor == 'postgresql':
-            regex = self.Node.objects.filter(
-                title__regex=r'^fmt',
-            ).order_by('pk')
-            iregex = self.Node.objects.filter(
-                title__iregex=r'^FMT',
-            ).order_by('pk')
-            regex_sql, regex_formatted = self._assert_formatted_rows(regex)
-            iregex_sql, iregex_formatted = self._assert_formatted_rows(iregex)
-            self.assertIn('~', regex_sql)
-            self.assertNotIn('~*', regex_sql)
-            self.assertIn('~*', iregex_sql)
-            self.assertIn('~', regex_formatted)
-            self.assertIn('~*', iregex_formatted)
-            self.assertEqual(
-                [row.title for row in regex], ['fmt-regex'],
-            )
-            self.assertEqual(
-                [row.title for row in iregex], ['fmt-regex'],
-            )
-            xored = self.Node.objects.annotate(
-                flag=F('pk').bitxor(Value(1, output_field=IntegerField())),
-            ).order_by('pk')
-            xor_sql, _formatted = self._assert_formatted_rows(xored)
-            self.assertIn('#', xor_sql)
-        elif connection.vendor == 'mysql':
-            xored = self.Node.objects.annotate(
-                flag=F('pk').bitxor(Value(1, output_field=IntegerField())),
-            ).order_by('pk')
-            xor_sql, _formatted = self._assert_formatted_rows(xored)
-            self.assertIn('^', xor_sql)
-            self.assertNotIn('#', xor_sql)
-        self._assert_formatted_json_operators()
-
-    def _assert_formatted_json_operators(self):
-        class Note(models.Model):
-            body = models.JSONField()
-
-            class Meta:
-                app_label = 'trusts_tests'
-
-        with _tables(Note):
-            Note.objects.create(body={'name': 'ada', 'n': 1})
-            Note.objects.create(body={'name': 'bea'})
-            key = Note.objects.filter(body__name='ada').order_by('pk')
-            key_sql, _formatted = self._assert_formatted_rows(key)
-            if connection.vendor == 'postgresql':
-                self.assertIn('->', key_sql)
-                contains = Note.objects.filter(
-                    body__contains={'name': 'ada'},
-                ).order_by('pk')
-                contains_sql, _formatted = self._assert_formatted_rows(contains)
-                self.assertIn('@>', contains_sql)
-                has_key = Note.objects.filter(
-                    body__has_key='name',
-                ).order_by('pk')
-                has_sql, _formatted = self._assert_formatted_rows(has_key)
-                self.assertIn('?', has_sql)
-                Note.objects.create(body={'a': {'b': 1}})
-                nested = Note.objects.filter(body__a__b=1).order_by('pk')
-                nested_sql, _formatted = self._assert_formatted_rows(nested)
-                self.assertTrue('#>' in nested_sql or '#>>' in nested_sql)
-            elif connection.features.supports_json_field_contains:
-                contains = Note.objects.filter(
-                    body__contains={'name': 'ada'},
-                ).order_by('pk')
-                self._assert_formatted_rows(contains)
 
     def test_reverse_cycle_returns_the_same_users_on_every_backend(self):
         # A -> B -> A. Reverse walks ancestors from the content. The

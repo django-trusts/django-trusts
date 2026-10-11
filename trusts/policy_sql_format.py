@@ -1,16 +1,25 @@
-"""Deterministic line breaks for policy-lock SQL.
+"""Internal line breaks for policy-lock SQL.
 
-Core tokenizes the compiled statement and inserts breaks only between
-tokens. Quoted identifiers, string literals, and comments stay intact.
-The same tokens always produce the same bytes. No formatter library is
-involved. Schema version 1 is unchanged: ``trusts.E009`` compares this
-text, and the token sequence is the statement Django compiled.
+The formatter accepts only tokens that Django's SQLite, PostgreSQL, and
+MySQL compilers and ``along=`` SQL emit for policy queries. Anything else
+raises. Breaks are inserted only between accepted tokens. The formatted
+text must tokenize back to that same stream. No formatter library is
+involved. Schema version 1 is unchanged.
 """
 
 from __future__ import annotations
 
 from trusts.core import TrustsConfigurationError
 
+# Unquoted words the compilers and ``along=`` SQL emit. Any other bare
+# word is rejected. Quoted identifiers are a separate token class.
+_KEYWORDS = frozenset((
+    'ALL', 'AND', 'AS', 'ASC', 'BY', 'CROSS', 'CYCLE', 'DESC', 'DISTINCT',
+    'EXISTS', 'FROM', 'FULL', 'GROUP', 'HAVING', 'IN', 'INNER', 'IS', 'JOIN',
+    'LEFT', 'LIMIT', 'NATURAL', 'NOT', 'NULL', 'OFFSET', 'ON', 'OR', 'ORDER',
+    'OUTER', 'RECURSIVE', 'RIGHT', 'SELECT', 'SET', 'UNION', 'USING', 'WHERE',
+    'WITH',
+))
 # Clause and boolean keywords that start a new line. ``AND`` and ``OR``
 # are the boolean connectives of the group that contains them. ``JOIN``
 # and its leading modifier (``LEFT OUTER``, ``INNER``, ...) share one line.
@@ -22,21 +31,21 @@ _CLAUSE_WORDS = frozenset((
 _JOIN_MODIFIERS = frozenset((
     'INNER', 'CROSS', 'NATURAL', 'LEFT', 'RIGHT', 'FULL', 'OUTER',
 ))
-# Structural punctuation stays one character. Everything else that is
-# not a word, number, quote, or placeholder is an operator run, so a
-# Django operator such as ``~*``, ``->>``, or ``#>>`` is kept verbatim.
-_STRUCTURAL = frozenset('(),.;')
+# Longest match first. These are the symbol operators in the three
+# compilers' comparison lookups and in the ``along=`` depth expression.
+_OPERATORS = ('<=', '>=', '=', '<', '>', '+')
+_STRUCTURAL = frozenset('(),.')
 
 
-def format_policy_sql(sql):
-    """Return ``sql`` with predictable breaks between tokens.
+def _format_policy_sql(sql):
+    """Return ``sql`` with predictable breaks between accepted tokens.
 
     Whitespace between tokens is a single space, or a newline and indent
     at a break. Spacing that Django omitted, such as ``EXISTS(``, stays
-    omitted. A ``--`` line comment keeps the newline that ends it, so the
-    next token cannot fall inside the comment. Operator characters are
-    copied as a run, including ones this module does not name. The result
-    has no trailing newline.
+    omitted. The result has no trailing newline. A comment, dollar quote,
+    E-string, backslash escape, unknown operator, or other unrecognized
+    token raises ``TrustsConfigurationError`` and names the query and the
+    token. The formatted text is checked against the original token stream.
     """
     if not isinstance(sql, str):
         raise TrustsConfigurationError(
@@ -46,7 +55,28 @@ def format_policy_sql(sql):
     tokens = _tokenize_policy_sql(sql)
     if not tokens:
         return ''
-    return _emit(tokens)
+    formatted = _emit(tokens)
+    try:
+        again = _tokenize_policy_sql(formatted)
+    except TrustsConfigurationError:
+        _reject_round_trip(sql)
+    if [text for text, _spaced in tokens] != [text for text, _spaced in again]:
+        _reject_round_trip(sql)
+    return formatted
+
+
+def _reject(sql, token, kind):
+    raise TrustsConfigurationError(
+        'Policy SQL formatter rejected %s %r in query %r.'
+        % (kind, token, sql)
+    )
+
+
+def _reject_round_trip(sql):
+    raise TrustsConfigurationError(
+        'Policy SQL formatter could not preserve the token stream of query %r.'
+        % (sql,)
+    )
 
 
 def _tokenize_policy_sql(sql):
@@ -68,105 +98,156 @@ def _tokenize_policy_sql(sql):
 
 def _one_token(sql, index):
     char = sql[index]
-    if char == '"':
-        return _quoted(sql, index, '"')
-    if char == "'":
-        return _quoted(sql, index, "'")
-    if char == '`':
-        return _quoted(sql, index, '`')
-    if char == '[':
-        return _bracket(sql, index)
     if char == '-' and sql.startswith('--', index):
-        # The newline is part of the comment. Dropping it would comment
-        # out the next token whenever that token does not itself break.
-        end = sql.find('\n', index)
-        if end == -1:
-            return sql[index:], len(sql)
-        return sql[index:end + 1], end + 1
+        _reject(sql, _until_newline(sql, index), 'line comment')
     if char == '/' and sql.startswith('/*', index):
         end = sql.find('*/', index + 2)
         if end == -1:
-            raise TrustsConfigurationError(
-                'Policy SQL formatter found an unclosed comment.'
-            )
-        return sql[index:end + 2], end + 2
+            _reject(sql, sql[index:], 'block comment')
+        _reject(sql, sql[index:end + 2], 'block comment')
+    if char == '#':
+        _reject(sql, _until_newline(sql, index), 'hash comment')
+    if char == '\\':
+        nxt = sql[index + 1] if index + 1 < len(sql) else ''
+        _reject(sql, '\\' + nxt, 'backslash escape')
+    if char == '$':
+        _reject_dollar(sql, index)
+    if char in 'eE' and index + 1 < len(sql) and sql[index + 1] == "'":
+        _reject_e_string(sql, index)
+    if char == '"':
+        return _quoted(sql, index, '"', 'identifier')
+    if char == '`':
+        return _quoted(sql, index, '`', 'identifier')
+    if char == "'":
+        return _quoted(sql, index, "'", 'string')
+    if char == '[':
+        end = sql.find(']', index + 1)
+        if end == -1:
+            _reject(sql, sql[index:], 'token')
+        _reject(sql, sql[index:end + 1], 'token')
     if char == '%':
-        if sql.startswith(('%%', '%s'), index) or sql.startswith('%(', index):
-            return _placeholder(sql, index)
-        return _operator_run(sql, index)
+        if sql.startswith('%s', index):
+            return '%s', index + 2
+        _reject(sql, _unrecognized_percent(sql, index), 'placeholder')
+    if char == '?':
+        if index + 1 < len(sql) and _is_operator_char(sql[index + 1]):
+            _reject(sql, _operator_run(sql, index), 'operator')
+        return '?', index + 1
     if char.isalpha() or char == '_':
         end = index + 1
         while end < len(sql) and (sql[end].isalnum() or sql[end] == '_'):
             end += 1
-        return sql[index:end], end
+        word = sql[index:end]
+        if word.upper() not in _KEYWORDS:
+            _reject(sql, word, 'keyword')
+        return word, end
     if char.isdigit():
         return _number(sql, index)
     if char in _STRUCTURAL:
         return char, index + 1
-    return _operator_run(sql, index)
+    return _operator(sql, index)
 
 
-def _quoted(sql, index, quote):
+def _until_newline(sql, index):
+    end = sql.find('\n', index)
+    if end == -1:
+        return sql[index:]
+    return sql[index:end]
+
+
+def _reject_dollar(sql, index):
+    if sql.startswith('$$', index):
+        end = sql.find('$$', index + 2)
+        if end == -1:
+            _reject(sql, sql[index:], 'dollar-quoted string')
+        _reject(sql, sql[index:end + 2], 'dollar-quoted string')
+    tag_end = index + 1
+    while tag_end < len(sql) and (sql[tag_end].isalnum() or sql[tag_end] == '_'):
+        tag_end += 1
+    if (
+        tag_end > index + 1
+        and tag_end < len(sql)
+        and sql[tag_end] == '$'
+    ):
+        closer = sql[index:tag_end + 1]
+        end = sql.find(closer, tag_end + 1)
+        if end == -1:
+            _reject(sql, sql[index:], 'dollar-quoted string')
+        _reject(sql, sql[index:end + len(closer)], 'dollar-quoted string')
+    end = index + 1
+    while end < len(sql) and (sql[end].isalnum() or sql[end] in '_$'):
+        end += 1
+    _reject(sql, sql[index:end], 'token')
+
+
+def _reject_e_string(sql, index):
+    try:
+        _text, end = _quoted(sql, index + 1, "'", 'string')
+    except TrustsConfigurationError:
+        _reject(sql, sql[index:], 'E-string')
+    _reject(sql, sql[index:end], 'E-string')
+
+
+def _unrecognized_percent(sql, index):
+    if sql.startswith('%(', index):
+        end = sql.find(')s', index + 2)
+        if end != -1:
+            return sql[index:end + 2]
+        end = index + 2
+        while end < len(sql) and sql[end] not in ' \t\r\n':
+            end += 1
+        return sql[index:end]
+    end = index + 1
+    while end < len(sql) and (sql[end].isalnum() or sql[end] in '%_'):
+        end += 1
+    return sql[index:end]
+
+
+def _quoted(sql, index, quote, kind):
     end = index + 1
     length = len(sql)
     while end < length:
+        if sql[end] == '\\':
+            nxt = sql[end + 1] if end + 1 < length else ''
+            _reject(sql, '\\' + nxt, 'backslash escape')
         if sql[end] == quote:
             if end + 1 < length and sql[end + 1] == quote:
                 end += 2
                 continue
             return sql[index:end + 1], end + 1
         end += 1
-    raise TrustsConfigurationError(
-        'Policy SQL formatter found an unclosed quote.'
-    )
-
-
-def _bracket(sql, index):
-    end = index + 1
-    length = len(sql)
-    while end < length:
-        if sql[end] == ']':
-            if end + 1 < length and sql[end + 1] == ']':
-                end += 2
-                continue
-            return sql[index:end + 1], end + 1
-        end += 1
-    raise TrustsConfigurationError(
-        'Policy SQL formatter found an unclosed quote.'
-    )
+    _reject(sql, sql[index:], 'unclosed %s' % kind)
 
 
 def _is_operator_char(char):
     if char.isalnum() or char == '_' or char.isspace():
         return False
-    return char not in '\'"`[](),.;%'
+    return char not in '\'"`$%?(),.'
 
 
 def _operator_run(sql, index):
-    """Copy one maximal operator run, stopping before a comment start."""
     end = index + 1
     length = len(sql)
     while end < length and _is_operator_char(sql[end]):
         if sql.startswith(('--', '/*'), end):
             break
         end += 1
-    return sql[index:end], end
+    return sql[index:end]
 
 
-def _placeholder(sql, index):
-    """``%s``, ``%%``, or ``%(name)s``. The caller already matched the form."""
-    if sql.startswith(('%%', '%s'), index):
-        return sql[index:index + 2], index + 2
-    end = sql.find(')s', index + 2)
-    if end == -1:
-        raise TrustsConfigurationError(
-            'Policy SQL formatter found an unclosed placeholder.'
-        )
-    return sql[index:end + 2], end + 2
+def _operator(sql, index):
+    for operator in _OPERATORS:
+        if not sql.startswith(operator, index):
+            continue
+        end = index + len(operator)
+        if end < len(sql) and _is_operator_char(sql[end]):
+            _reject(sql, _operator_run(sql, index), 'operator')
+        return operator, end
+    _reject(sql, _operator_run(sql, index), 'operator')
 
 
 def _number(sql, index):
-    end = index
+    end = index + 1
     length = len(sql)
     while end < length and sql[end].isdigit():
         end += 1
@@ -181,15 +262,16 @@ def _number(sql, index):
         exponent = end + 1
         if exponent < length and sql[exponent] in '+-':
             exponent += 1
-        if exponent < length and sql[exponent].isdigit():
-            end = exponent + 1
-            while end < length and sql[end].isdigit():
-                end += 1
+        if exponent >= length or not sql[exponent].isdigit():
+            _reject(sql, sql[index:exponent], 'number')
+        end = exponent + 1
+        while end < length and sql[end].isdigit():
+            end += 1
     return sql[index:end], end
 
 
 def _bare_upper(text):
-    """Uppercase an unquoted word. Operators and quotes are not words."""
+    """Uppercase an unquoted keyword. Operators and quotes are not words."""
     if not text or not (text[0].isalpha() or text[0] == '_'):
         return None
     return text.upper()

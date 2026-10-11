@@ -36,7 +36,7 @@ from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
 from trusts.core import TrustsConfigurationError
-from trusts.policy_sql_format import format_policy_sql
+from trusts.policy_sql_format import _format_policy_sql
 from trusts.policy_yaml import (
     PolicyYamlError,
     dump_policy_yaml,
@@ -425,13 +425,13 @@ def _named_filter_row(row):
     return {
         'id': row['id'],
         'params': row['params'],
-        'sql': format_policy_sql(row['sql']),
+        'sql': _format_policy_sql(row['sql']),
     }
 
 
 def _sql_row(compiled):
     sql, params = compiled
-    return {'params': params, 'sql': format_policy_sql(sql)}
+    return {'params': params, 'sql': _format_policy_sql(sql)}
 
 
 def _require_shared_terminals(records, label):

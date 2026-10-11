@@ -1,16 +1,27 @@
-"""Deterministic policy-lock SQL line breaks (issue #291)."""
+"""Fail-closed policy-lock SQL line breaks (issue #291)."""
+
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
 from trusts.core import TrustsConfigurationError
 from trusts.policy_sql_format import (
+    _format_policy_sql,
     _tokenize_policy_sql,
-    format_policy_sql,
 )
 
 
 def _texts(sql):
     return [text for text, _spaced in _tokenize_policy_sql(sql)]
+
+
+def _rejected(test, sql, token):
+    with test.assertRaises(TrustsConfigurationError) as caught:
+        _format_policy_sql(sql)
+    message = str(caught.exception)
+    test.assertIn(repr(token), message)
+    test.assertIn(repr(sql), message)
+    return message
 
 
 class PolicySqlFormatTest(SimpleTestCase):
@@ -23,7 +34,7 @@ class PolicySqlFormatTest(SimpleTestCase):
             'SELECT "t"."id" FROM "t" WHERE NOT EXISTS('
             'SELECT %s AS "a" FROM "t" "U0" WHERE "U0"."id" = %s LIMIT 1)'
         )
-        formatted = format_policy_sql(raw)
+        formatted = _format_policy_sql(raw)
         self.assertEqual(formatted, (
             'SELECT DISTINCT "t"."id"\n'
             'FROM "t"\n'
@@ -42,7 +53,7 @@ class PolicySqlFormatTest(SimpleTestCase):
             ')'
         ))
         self.assertEqual(_texts(raw), _texts(formatted))
-        self.assertEqual(formatted, format_policy_sql(formatted))
+        self.assertEqual(formatted, _format_policy_sql(formatted))
         self.assertFalse(formatted.endswith('\n'))
 
     def test_with_recursive_and_cycle_stay_outside_quotes(self):
@@ -67,16 +78,16 @@ class PolicySqlFormatTest(SimpleTestCase):
             'JOIN "documents_folder" AS "s" '
             'ON "s"."id" = "gen"."ident"'
         )
-        formatted = format_policy_sql(raw)
+        formatted = _format_policy_sql(raw)
         self.assertIn(
             'CYCLE "ident" SET "is_cycle" USING "path"', formatted,
         )
         self.assertIn('\n  UNION ALL\n', formatted)
         self.assertIn('\n  SELECT "seed_rows"."ident", 0\n', formatted)
         self.assertEqual(_texts(raw), _texts(formatted))
-        self.assertEqual(formatted, format_policy_sql(formatted))
+        self.assertEqual(formatted, _format_policy_sql(formatted))
         exists = 'SELECT 1 FROM "t" WHERE EXISTS(SELECT 1) OR "t"."id" = %s'
-        formatted_exists = format_policy_sql(exists)
+        formatted_exists = _format_policy_sql(exists)
         self.assertIn('\nWHERE\nEXISTS(\n', formatted_exists)
         self.assertIn('\n  OR "t"."id" = %s', formatted_exists)
         self.assertEqual(_texts(exists), _texts(formatted_exists))
@@ -86,37 +97,21 @@ class PolicySqlFormatTest(SimpleTestCase):
             'SELECT "FROM" FROM (SELECT \'AND OR FROM\' AS "FROM") AS "t" '
             'WHERE "FROM" = %s AND \'it\'\'s\' = %s'
         )
-        formatted = format_policy_sql(raw)
+        formatted = _format_policy_sql(raw)
         self.assertIn('SELECT "FROM"\nFROM (', formatted)
         self.assertIn("SELECT 'AND OR FROM' AS \"FROM\"", formatted)
         self.assertIn("'it''s'", formatted)
         self.assertEqual(_texts(raw), _texts(formatted))
         backtick = 'SELECT `FROM` FROM `t` WHERE `a``b` = %s'
-        self.assertIn('`a``b`', format_policy_sql(backtick))
-        self.assertEqual(_texts(backtick), _texts(format_policy_sql(backtick)))
-        bracket = 'SELECT [FROM] FROM [t] WHERE [weird]]name] = %s'
-        formatted_bracket = format_policy_sql(bracket)
-        self.assertIn('[weird]]name]', formatted_bracket)
-        self.assertIn('[FROM]', formatted_bracket.splitlines()[0])
-        self.assertEqual(_texts(bracket), _texts(formatted_bracket))
+        self.assertIn('`a``b`', _format_policy_sql(backtick))
+        self.assertEqual(_texts(backtick), _texts(_format_policy_sql(backtick)))
 
-    def test_comments_placeholders_numbers_and_other_joins(self):
-        commented = (
-            'SELECT 1 -- FROM JOIN\n'
-            'FROM "t" /* AND OR */ WHERE 1 = 1'
-        )
-        formatted = format_policy_sql(commented)
-        self.assertIn('SELECT 1 -- FROM JOIN\nFROM "t" /* AND OR */', formatted)
-        self.assertEqual(_texts(commented), _texts(formatted))
-        block = 'SELECT 1 /* FROM\nJOIN */ FROM "t"'
-        formatted_block = format_policy_sql(block)
-        self.assertIn('/* FROM\nJOIN */', formatted_block)
-        self.assertEqual(_texts(block), _texts(formatted_block))
+    def test_placeholders_numbers_comparisons_and_joins(self):
         clauses = (
             'SELECT "t"."id" FROM "t" GROUP BY "t"."id" '
             'HAVING "t"."id" = %s ORDER BY "t"."id" ASC LIMIT 1 OFFSET 0'
         )
-        self.assertEqual(format_policy_sql(clauses), (
+        self.assertEqual(_format_policy_sql(clauses), (
             'SELECT "t"."id"\n'
             'FROM "t"\n'
             'GROUP BY "t"."id"\n'
@@ -131,67 +126,123 @@ class PolicySqlFormatTest(SimpleTestCase):
             'FULL OUTER JOIN "x" ON (1 = 1) '
             'RIGHT OUTER JOIN "y" ON (1 = 1)'
         )
-        formatted_joins = format_policy_sql(joins)
+        formatted_joins = _format_policy_sql(joins)
         self.assertIn('\nCROSS JOIN "u"\n', formatted_joins)
         self.assertIn('\nNATURAL JOIN "v"\n', formatted_joins)
         self.assertIn('\nRIGHT JOIN "w"', formatted_joins)
         self.assertIn('\nFULL OUTER JOIN "x"', formatted_joins)
         self.assertIn('\nRIGHT OUTER JOIN "y"', formatted_joins)
         numeric = (
-            'SELECT 1.5e+2, 10.25, 2e10, 1 <= 2, 1e+ FROM "t" '
-            'WHERE %% = %(user_id)s -- tail'
+            'SELECT 1.5e+2, 10.25, 2e10 FROM "t" '
+            'WHERE "a" > %s AND "a" >= ? AND "a" < %s AND "a" <= %s'
         )
-        formatted_numeric = format_policy_sql(numeric)
+        formatted_numeric = _format_policy_sql(numeric)
         self.assertIn('1.5e+2', formatted_numeric)
-        self.assertIn('%%', formatted_numeric)
-        self.assertIn('%(user_id)s', formatted_numeric)
+        self.assertIn('?', formatted_numeric)
         self.assertEqual(_texts(numeric), _texts(formatted_numeric))
-        self.assertEqual(format_policy_sql(''), '')
-        self.assertEqual(format_policy_sql('   \n'), '')
-        self.assertEqual(format_policy_sql('SELECT 1)'), 'SELECT 1)')
+        self.assertEqual(_format_policy_sql(''), '')
+        self.assertEqual(_format_policy_sql('   \n'), '')
+        self.assertEqual(_format_policy_sql('SELECT 1)'), 'SELECT 1)')
+        ordered = 'SELECT "t"."id" FROM "t" ORDER BY "t"."id" DESC'
+        self.assertIn('\nORDER BY "t"."id" DESC', _format_policy_sql(ordered))
 
-    def test_line_comment_keeps_the_newline_before_a_non_clause_token(self):
+    def test_line_comment_is_rejected(self):
         raw = 'SELECT 1 -- keep newline\n+ 2'
-        formatted = format_policy_sql(raw)
-        self.assertEqual(formatted, 'SELECT 1 -- keep newline\n+ 2')
-        self.assertEqual(formatted, format_policy_sql(formatted))
-        self.assertEqual(_texts(raw), _texts(formatted))
-        glued = 'SELECT 1+-- comment\n2'
-        self.assertEqual(
-            format_policy_sql(glued),
-            'SELECT 1+-- comment\n2',
-        )
+        message = _rejected(self, raw, '-- keep newline')
+        self.assertIn('line comment', message)
+        self.assertNotIn('+ 2', message.split(' in query ', 1)[0])
 
-    def test_operator_runs_are_preserved_verbatim(self):
-        raw = (
-            "SELECT 1 ~* 2, 3 & 4, 5 # 6, data ->> 'a', "
-            "data #> '{a}', data #>> '{a}', data @> '{}', data <@ '{}', "
-            "data ? 'k', data ?& keys, data ?| keys, "
-            "1 << 2, 8 >> 1, 1 ^ 2, 'a' || 'b', col::int, 1 <= 2, 1 <> 2, "
-            "1 != 2, title ~ 'A'"
-        )
-        formatted = format_policy_sql(raw)
-        for operator in (
-            '~*', '&', '#', '->>', '#>', '#>>', '@>', '<@',
-            '?', '?&', '?|', '<<', '>>', '^', '||', '::', '<=', '<>', '!=', '~',
+    def test_block_comment_is_rejected(self):
+        raw = 'SELECT 1 /* AND OR */ FROM "t"'
+        message = _rejected(self, raw, '/* AND OR */')
+        self.assertIn('block comment', message)
+        with self.assertRaises(TrustsConfigurationError):
+            _format_policy_sql('SELECT 1 /* open')
+
+    def test_hash_comment_is_rejected(self):
+        raw = 'SELECT 1 # note'
+        message = _rejected(self, raw, '# note')
+        self.assertIn('hash comment', message)
+
+    def test_dollar_quoted_string_is_rejected(self):
+        raw = 'SELECT $$AND$$'
+        message = _rejected(self, raw, '$$AND$$')
+        self.assertIn('dollar-quoted string', message)
+        tagged = 'SELECT $tag$AND$tag$'
+        message = _rejected(self, tagged, '$tag$AND$tag$')
+        self.assertIn('dollar-quoted string', message)
+        unclosed = 'SELECT $$AND'
+        message = _rejected(self, unclosed, '$$AND')
+        self.assertIn('dollar-quoted string', message)
+        open_tag = 'SELECT $tag$AND'
+        message = _rejected(self, open_tag, '$tag$AND')
+        self.assertIn('dollar-quoted string', message)
+
+    def test_e_string_is_rejected(self):
+        raw = "SELECT E'AND'"
+        message = _rejected(self, raw, "E'AND'")
+        self.assertIn('E-string', message)
+        unclosed = "SELECT E'open"
+        message = _rejected(self, unclosed, unclosed)
+        self.assertIn('E-string', message)
+
+    def test_backslash_escape_is_rejected(self):
+        raw = "SELECT 'a\\b'"
+        message = _rejected(self, raw, '\\b')
+        self.assertIn('backslash escape', message)
+        bare = 'SELECT \\x'
+        message = _rejected(self, bare, '\\x')
+        self.assertIn('backslash escape', message)
+
+    def test_unknown_operator_is_rejected(self):
+        raw = "SELECT 'a' ~ 'b'"
+        message = _rejected(self, raw, '~')
+        self.assertIn('operator', message)
+        regex = "SELECT \"title\" ~* 'A'"
+        starred = _rejected(self, regex, '~*')
+        self.assertIn('operator', starred)
+        glued = 'SELECT 1 +~ 2'
+        message = _rejected(self, glued, '+~')
+        self.assertIn('operator', message)
+        with self.assertRaises(TrustsConfigurationError):
+            _format_policy_sql('SELECT 1 +-- comment')
+
+    def test_other_unrecognized_tokens_are_rejected(self):
+        for raw, token in (
+            ('SELECT [FROM]', '[FROM]'),
+            ('SELECT [open', '[open'),
+            ('SELECT @', '@'),
+            ('SELECT %q', '%q'),
+            ('SELECT %(name)s', '%(name)s'),
+            ('SELECT $1', '$1'),
+            ('SELECT definitely_not_a_keyword', 'definitely_not_a_keyword'),
+            ('SELECT %(open', '%(open'),
+            ('SELECT ?~', '?~'),
+            ('SELECT 1e+', '1e+'),
         ):
-            self.assertIn(operator, formatted)
-        self.assertEqual(_texts(raw), _texts(formatted))
-        self.assertEqual(formatted, format_policy_sql(formatted))
-        self.assertEqual(format_policy_sql('SELECT @'), 'SELECT @')
-        self.assertEqual(format_policy_sql('SELECT %q'), 'SELECT %q')
-        self.assertEqual(format_policy_sql('SELECT $1'), 'SELECT $1')
+            _rejected(self, raw, token)
+
+    def test_round_trip_failure_names_the_query(self):
+        raw = 'SELECT 1'
+        with patch(
+            'trusts.policy_sql_format._emit', return_value='SELECT 1 FROM',
+        ):
+            message = _rejected(self, raw, raw)
+        self.assertIn('token stream', message)
+        with patch(
+            'trusts.policy_sql_format._emit', return_value='SELECT 1 -- gone',
+        ):
+            message = _rejected(self, raw, raw)
+        self.assertIn('token stream', message)
 
     def test_malformed_sql_fails_closed(self):
         with self.assertRaises(TrustsConfigurationError):
-            format_policy_sql(None)
+            _format_policy_sql(None)
         for raw in (
             "SELECT 'open",
             'SELECT "open',
             'SELECT `open',
-            'SELECT [open',
-            'SELECT 1 /* open',
-            'SELECT %(open',
         ):
-            with self.assertRaises(TrustsConfigurationError):
-                format_policy_sql(raw)
+            with self.assertRaises(TrustsConfigurationError) as caught:
+                _format_policy_sql(raw)
+            self.assertIn(repr(raw), str(caught.exception))
