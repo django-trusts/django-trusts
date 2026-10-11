@@ -32,7 +32,6 @@ from decimal import Decimal
 from pathlib import Path
 
 from django.core import checks as django_checks
-from django.db import connections
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
@@ -331,8 +330,7 @@ def _project_contents(handle, alias, records, ids, named_filters, handles):
         contents.append({
             'model': model,
             'named_filters': [
-                _named_filter_row(row, connections[alias].vendor)
-                for row in filters_by_model[model]
+                _named_filter_row(row) for row in filters_by_model[model]
             ],
         })
     return contents
@@ -398,46 +396,42 @@ def _project_content(handle, alias, group, filters, handles):
         content['trusts'] = trusts
     if delegated_rows:
         content['delegations'] = delegated_rows
-    vendor = connections[alias].vendor
     content.update({
         'permitted': _sql_row(_compile_permitted(
             handle, alias, classifier_records, group['model'], handles,
-        ), vendor),
+        )),
         'has_perm': _sql_row(_compile_has_perm(
             handle, alias, classifier_records, group['model'], handles,
-        ), vendor),
+        )),
         'get_all_permissions': _sql_row(_compile_get_all_permissions(
             handle, alias, classifier_records, group['model'], handles,
-        ), vendor),
+        )),
     })
     if any(getattr(record, 'via_group', False) for record in records):
         content['get_group_permissions'] = _sql_row(
             _compile_get_group_permissions(
                 handle, alias, records, group['model'],
-            ),
-            vendor,
+            )
         )
     content['get_permitted_users'] = _sql_row(_compile_get_permitted_users(
         handle, alias, classifier_records, group['model'], handles,
-    ), vendor)
+    ))
     if filters:
-        content['named_filters'] = [
-            _named_filter_row(row, vendor) for row in filters
-        ]
+        content['named_filters'] = [_named_filter_row(row) for row in filters]
     return content
 
 
-def _named_filter_row(row, vendor=None):
+def _named_filter_row(row):
     return {
         'id': row['id'],
         'params': row['params'],
-        'sql': _format_policy_sql(row['sql'], vendor=vendor),
+        'sql': _format_policy_sql(row['sql']),
     }
 
 
-def _sql_row(compiled, vendor=None):
+def _sql_row(compiled):
     sql, params = compiled
-    return {'params': params, 'sql': _format_policy_sql(sql, vendor=vendor)}
+    return {'params': params, 'sql': _format_policy_sql(sql)}
 
 
 def _require_shared_terminals(records, label):

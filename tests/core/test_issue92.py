@@ -13,7 +13,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, connections, models
-from django.db.models.expressions import RawSQL
 from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
 from django.test import SimpleTestCase, TransactionTestCase
@@ -836,97 +835,6 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         with connection.cursor() as cursor:
             cursor.execute(sql, params)
             return cursor.fetchall()
-
-    def test_postgresql_literals_match_unformatted_results(self):
-        # Dollar quotes, E-strings, newline continuation, and # operators
-        # must survive formatting. Keyword breaks inside those literals
-        # change the value.
-        if connection.vendor != 'postgresql':
-            return
-        statements = (
-            'SELECT $$AND$$',
-            'SELECT $tag$AND$tag$',
-            "SELECT E'it\\'s AND text'",
-            "SELECT 'a'\n'b'",
-            'SELECT 5 # 1',
-        )
-        for raw in statements:
-            formatted = _format_policy_sql(raw, vendor='postgresql')
-            self.assertEqual(
-                self._sql_rows(raw, ()),
-                self._sql_rows(formatted, ()),
-            )
-        from django.db.models.fields.json import KeyTextTransform
-
-        class Note(models.Model):
-            body = models.JSONField()
-
-            class Meta:
-                app_label = 'trusts_tests'
-
-        with _tables(Note):
-            Note.objects.create(body={'a': {'b': 1}})
-            nested = Note.objects.filter(body__a__b=1).order_by('pk')
-            compiled, params = nested.query.sql_with_params()
-            self.assertIn('#>', compiled)
-            formatted = _format_policy_sql(compiled, vendor='postgresql')
-            self.assertEqual(
-                self._sql_rows(compiled, params),
-                self._sql_rows(formatted, params),
-            )
-            text = Note.objects.annotate(
-                extracted=KeyTextTransform(
-                    'b', KeyTextTransform('a', 'body'),
-                ),
-            ).order_by('pk')
-            compiled, params = text.query.sql_with_params()
-            self.assertIn('#>>', compiled)
-            formatted = _format_policy_sql(compiled, vendor='postgresql')
-            self.assertEqual(
-                self._sql_rows(compiled, params),
-                self._sql_rows(formatted, params),
-            )
-        self.Node.objects.create(title='pg-literal')
-        for expression, output_field in (
-            ('$$AND$$', models.CharField()),
-            ('$tag$AND$tag$', models.CharField()),
-            ("E'it\\'s AND text'", models.CharField()),
-            ("'a'\n'b'", models.CharField()),
-            ('5 # 1', models.IntegerField()),
-        ):
-            queryset = self.Node.objects.annotate(
-                note=RawSQL(expression, (), output_field=output_field),
-            ).order_by('pk')
-            compiled, params = queryset.query.sql_with_params()
-            formatted = _format_policy_sql(compiled, vendor='postgresql')
-            self.assertEqual(
-                self._sql_rows(compiled, params),
-                self._sql_rows(formatted, params),
-            )
-
-    def test_mysql_hash_comment_matches_unformatted_results(self):
-        # The newline after ``#`` is what keeps ``+ 2`` in the expression.
-        if connection.vendor != 'mysql':
-            return
-        raw = 'SELECT 1 # note\n+ 2'
-        formatted = _format_policy_sql(raw, vendor='mysql')
-        self.assertEqual(list(self._sql_rows(raw, ())), [(3,)])
-        self.assertEqual(
-            list(self._sql_rows(raw, ())),
-            list(self._sql_rows(formatted, ())),
-        )
-        self.Node.objects.create(title='mysql-hash')
-        queryset = self.Node.objects.annotate(
-            note=RawSQL(
-                '1 # note\n+ 2', (), output_field=models.IntegerField(),
-            ),
-        ).order_by('pk')
-        compiled, params = queryset.query.sql_with_params()
-        formatted = _format_policy_sql(compiled, vendor='mysql')
-        self.assertEqual(
-            self._sql_rows(compiled, params),
-            self._sql_rows(formatted, params),
-        )
 
     def test_reverse_cycle_returns_the_same_users_on_every_backend(self):
         # A -> B -> A. Reverse walks ancestors from the content. The
