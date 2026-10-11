@@ -555,8 +555,8 @@ def check_along_renderer(app_configs, **kwargs):
         if not along_connection_supported(connection):
             messages.append(django_checks.Error(
                 'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
-                'Along reachability: Django sqlite3 with JSON functions '
-                'and recursive CTEs is required.'
+                'Along reachability: a recursive CTE on Django sqlite3, '
+                'postgresql, or mysql is required.'
                 % (alias, engine, vendor),
                 hint=_E005_HINT,
                 obj=None,
@@ -568,7 +568,7 @@ def check_along_renderer(app_configs, **kwargs):
         except OperationalError as exc:
             messages.append(django_checks.Error(
                 'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
-                'Along reachability: JSON/recursive capability probe '
+                'Along reachability: recursive CTE probe '
                 'failed (%s).' % (alias, engine, vendor, exc),
                 hint=_E005_HINT,
                 obj=None,
@@ -577,7 +577,7 @@ def check_along_renderer(app_configs, **kwargs):
         except Exception as exc:
             messages.append(django_checks.Error(
                 'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
-                'Along reachability: JSON/recursive capability probe '
+                'Along reachability: recursive CTE probe '
                 'failed (%s).' % (alias, engine, vendor, exc),
                 hint=_E005_HINT,
                 obj=None,

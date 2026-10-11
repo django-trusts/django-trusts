@@ -69,6 +69,20 @@ if os.environ.get('TRUSTS_TEST_DATABASE') == 'postgresql':
             'PORT': os.environ.get('TRUSTS_PG_PORT', '5432'),
         }
     }
+elif os.environ.get('TRUSTS_TEST_DATABASE') == 'mysql':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.mysql',
+            'NAME': os.environ.get('TRUSTS_MYSQL_NAME', 'trusts'),
+            'USER': os.environ.get('TRUSTS_MYSQL_USER', 'root'),
+            'PASSWORD': os.environ.get('TRUSTS_MYSQL_PASSWORD', 'root'),
+            'HOST': os.environ.get('TRUSTS_MYSQL_HOST', '127.0.0.1'),
+            'PORT': os.environ.get('TRUSTS_MYSQL_PORT', '3306'),
+            'OPTIONS': {
+                'charset': 'utf8mb4',
+            },
+        }
+    }
 else:
     DATABASES = {
         'default': {
