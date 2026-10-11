@@ -53,10 +53,13 @@ connection quotes it. MySQL quotes identifiers with backticks and does not
 otherwise change the statement. A PostgreSQL rendering is the locked
 statement plus that one clause. There is no second lockfile.
 
-Reverse `along=` is one uncorrelated inverse walk from the content
-identity, then a join to users and grants. The recursive member does not
-reference the outer user. The same depth cap, `DISTINCT`, PostgreSQL
-`CYCLE` clause, and MariaDB rejection apply.
+Reverse `along=` derives content-derived walk-site identity or
+identities from the bound content and walks that inverse graph once,
+without the outer user. A non-empty suffix selects the related
+walk-site rows, such as Cabinet identities for a Sheet. Eligible grants
+and candidate users join outside the CTE. The grant query is correlated
+to the outer candidate user only after the walk. The same depth cap,
+`DISTINCT`, PostgreSQL `CYCLE` clause, and MariaDB rejection apply.
 
 MariaDB is not supported yet. Django uses `django.db.backends.mysql` for
 MariaDB as well, so `connection.mysql_is_mariadb` fails closed at runtime

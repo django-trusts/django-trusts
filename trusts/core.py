@@ -2632,7 +2632,12 @@ class _IdentInReach(Expression):
 
 
 def _content_walk_seed(walk, content):
-    """One identity row for ``content``. No user and no grant table."""
+    """Walk-site identities derived from the bound content.
+
+    No user and no grant table. An empty suffix selects that content's
+    walk-site identity. A suffix selects the related walk-site rows,
+    such as the Cabinet identities for a Sheet.
+    """
     if not walk.suffix_path:
         qs = walk.walk_model._default_manager.filter(
             **{walk.walk_ident: getattr(content, walk.walk_ident)},
@@ -2672,10 +2677,12 @@ class GrantReach(Expression):
 
     The forward walk is uncorrelated with candidate rows. One plain
     ``IN (WITH RECURSIVE …)`` per recursive record, with a depth counter
-    capped at the bound. The reverse walk is also uncorrelated: it is
-    seeded by the content identity, walks the inverse edges once, then
-    joins users and grants outside the CTE. The user correlation is not
-    inside the walk. SQLite and MySQL 8.4+ use that statement.
+    capped at the bound. The reverse walk is also uncorrelated. It
+    derives walk-site identities from the bound content, walks the
+    inverse edges once without the outer user, then joins eligible
+    grants and candidate users outside the CTE. The grant query is
+    correlated to the outer candidate user only after the walk. SQLite
+    and MySQL 8.4+ use that statement.
     PostgreSQL appends ``CYCLE ident SET is_cycle USING path`` and does
     not project those columns. MariaDB and other engines raise before
     walk SQL.
@@ -3019,9 +3026,10 @@ class RelationPlan:
 
         Inverse of ``content_exists``: content and permission are bound,
         and the user terminal is ``OuterRef`` of the resolved user target.
-        Complete records OR together. For ``Along``, one uncorrelated
-        inverse walk starts at the content identity. Users and grants
-        join that walk outside the recursive CTE.
+        Complete records OR together. For ``Along``, walk-site identities
+        are derived from the bound content. The inverse walk runs once
+        without the outer user. Eligible grants and candidate users join
+        outside the recursive CTE.
         """
         content = _require_instance(content, 'content')
         if content.pk is None:
