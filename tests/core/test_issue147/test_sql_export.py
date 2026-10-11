@@ -25,20 +25,27 @@ from trusts.core import (
     PlanQueryCompiler,
     TrustsConfigurationError,
     TrustsRegistry,
+    _IdentInReach,
 )
 from trusts.policy_lock import (
     CHECK_ID_POLICY_LOCK,
     CONVENTIONAL_LOCKFILE_NAME,
     _Symbol,
     _classify_compiled,
+    _compile_get_all_permissions,
+    _compile_has_perm,
+    _compile_permitted,
     _const_from_json,
     _json_const,
     _sentinel,
     _assign_ids,
     _load_policy_sql_document,
+    _sql_row,
+    _symbol_for_new_param,
     check_policy_sql_lockfile,
     render_policy_sql_bytes,
 )
+from trusts.policy_yaml import dump_policy_yaml
 
 GOLDEN_SQLITE = (
     Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
@@ -47,6 +54,9 @@ GOLDEN_CONSTANTS = (
     Path(__file__).with_name(
         'golden_condition_constants_sqlite.yaml',
     ).read_bytes()
+)
+GOLDEN_ALONG = (
+    Path(__file__).with_name('golden_along_sqlite.yaml').read_bytes()
 )
 
 _FORBIDDEN = (
@@ -566,6 +576,66 @@ class PolicySqlGoldenTest(SimpleTestCase):
         finally:
             if connection.connection is None:
                 connection.connection = preserved
+
+    def test_along_forward_lockfile_is_portable_recursive_sql(self):
+        handle = _handle('documents.backends.FolderAlongBackend')
+        handle.register(
+            trust=FolderGrant,
+            user='user',
+            permission='permission',
+            content='folder',
+            along=('folder__parent', 2),
+        )
+        record = handle.registry.plan_for(Folder).records[0]
+        handles = (handle,)
+        content = {
+            'model': 'documents.Folder',
+            'permitted': _sql_row(_compile_permitted(
+                handle, 'default', (record,), Folder, handles,
+            )),
+            'has_perm': _sql_row(_compile_has_perm(
+                handle, 'default', (record,), Folder, handles,
+            )),
+            'get_all_permissions': _sql_row(_compile_get_all_permissions(
+                handle, 'default', (record,), Folder, handles,
+            )),
+        }
+        payload = dump_policy_yaml({
+            'schema_version': 1,
+            'database': {'engine': 'django.db.backends.sqlite3'},
+            'backends': [{
+                'path': 'documents.backends.FolderAlongBackend',
+                'contents': [content],
+            }],
+        })
+        self.assertEqual(payload, GOLDEN_ALONG)
+        text = payload.decode('utf-8')
+        self.assertNotIn('json_', text.lower())
+        self.assertNotIn('CYCLE', text)
+        self.assertIn('WITH RECURSIVE', text)
+        self.assertIn('UNION ALL', text)
+        self.assertIn('FROM "gen" AS "g"', text)
+        self.assertEqual(text.count('const: 2'), 3)
+        self.assertEqual(
+            _symbol_for_new_param(_IdentInReach('id', 'SELECT 1', (), 2)),
+            {'const': 2},
+        )
+        for key in ('permitted', 'has_perm', 'get_all_permissions'):
+            params = content[key]['params']
+            self.assertEqual(
+                [param for param in params if param == {'const': 2}],
+                [{'const': 2}],
+            )
+            self.assertEqual(
+                content[key]['sql'].count('%s'), len(params),
+            )
+
+    def test_unclassified_placeholder_fails_closed(self):
+        self.assertIsNone(_symbol_for_new_param(object()))
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            _classify_compiled(object(), 'SELECT %s', (1,))
+        self.assertIn('could not classify', str(ctx.exception))
+        self.assertIn('object', str(ctx.exception))
 
     def test_along_failure_does_not_return_a_partial_document(self):
         handle = _handle('documents.backends.FolderBackend')

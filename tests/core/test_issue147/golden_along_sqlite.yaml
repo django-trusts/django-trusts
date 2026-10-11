@@ -1,0 +1,19 @@
+schema_version: 1
+database:
+  engine: "django.db.backends.sqlite3"
+backends:
+  - path: "documents.backends.FolderAlongBackend"
+    contents:
+      - model: "documents.Folder"
+        permitted:
+          params: [{bind: "permission.id"}, {const: "documents"}, {const: "folder"}, {bind: "user.id"}, {const: 2}, {const: true}]
+          sql: |-
+            SELECT DISTINCT "documents_folder"."id", "documents_folder"."parent_id" FROM "documents_folder" WHERE "documents_folder"."id" IN (WITH RECURSIVE "gen"("ident", "depth") AS (SELECT "seed_rows"."ident", 0 FROM (SELECT DISTINCT "U0"."folder_id" AS "ident" FROM "documents_foldergrant" "U0" INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id") INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id") WHERE ("U0"."permission_id" = %s AND "U2"."app_label" = %s AND "U2"."model" = %s AND "U0"."user_id" = %s AND "U0"."folder_id" IS NOT NULL)) AS "seed_rows" UNION ALL SELECT "child"."id", "g"."depth" + 1 FROM "gen" AS "g" JOIN "documents_folder" AS "child" ON "child"."parent_id" = "g"."ident" WHERE "g"."depth" < %s AND "child"."id" IS NOT NULL) SELECT DISTINCT "s"."id" FROM "gen" JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident") = %s
+        has_perm:
+          params: [{const: 1}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "folder"}, {bind: "user.id"}, {const: 2}, {const: true}]
+          sql: |-
+            SELECT %s AS "a" FROM "documents_folder" WHERE ("documents_folder"."id" = %s AND "documents_folder"."id" IN (WITH RECURSIVE "gen"("ident", "depth") AS (SELECT "seed_rows"."ident", 0 FROM (SELECT DISTINCT "U0"."folder_id" AS "ident" FROM "documents_foldergrant" "U0" INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id") INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id") WHERE ("U0"."permission_id" = %s AND "U2"."app_label" = %s AND "U2"."model" = %s AND "U0"."user_id" = %s AND "U0"."folder_id" IS NOT NULL)) AS "seed_rows" UNION ALL SELECT "child"."id", "g"."depth" + 1 FROM "gen" AS "g" JOIN "documents_folder" AS "child" ON "child"."parent_id" = "g"."ident" WHERE "g"."depth" < %s AND "child"."id" IS NOT NULL) SELECT DISTINCT "s"."id" FROM "gen" JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident") = %s) LIMIT 1
+        get_all_permissions:
+          params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "folder"}, {bind: "user.id"}, {const: 2}, {const: true}]
+          sql: |-
+            SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model" FROM "auth_permission" INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id") WHERE (EXISTS(SELECT %s AS "a" FROM "documents_folder" "U0" WHERE "U0"."id" = %s LIMIT 1) AND NOT (EXISTS(SELECT %s AS "a" FROM "documents_folder" "V0" WHERE ("V0"."id" = %s AND NOT ("V0"."id" IN (WITH RECURSIVE "gen"("ident", "depth") AS (SELECT "seed_rows"."ident", 0 FROM (SELECT DISTINCT "U0"."folder_id" AS "ident" FROM "documents_foldergrant" "U0" INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id") INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id") WHERE ("U0"."permission_id" = ("auth_permission"."id") AND "U2"."app_label" = %s AND "U2"."model" = %s AND "U0"."user_id" = %s AND "U0"."folder_id" IS NOT NULL)) AS "seed_rows" UNION ALL SELECT "child"."id", "g"."depth" + 1 FROM "gen" AS "g" JOIN "documents_folder" AS "child" ON "child"."parent_id" = "g"."ident" WHERE "g"."depth" < %s AND "child"."id" IS NOT NULL) SELECT DISTINCT "s"."id" FROM "gen" JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident") = %s)) LIMIT 1))) ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC

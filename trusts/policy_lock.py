@@ -1086,6 +1086,12 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
+    from trusts.core import GrantReach, _IdentInReach
+
+    if isinstance(node, GrantReach):
+        return {'const': _json_const(node.record.along.bound)}
+    if isinstance(node, _IdentInReach):
+        return {'const': _json_const(node.bound)}
     if isinstance(node, Value):
         return {'const': _json_const(node.value)}
     record = getattr(_ctx, 'record', None)
