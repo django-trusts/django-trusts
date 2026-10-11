@@ -11,13 +11,13 @@ from trusts.policy_sql_format import (
 )
 
 
-def _texts(sql):
-    return [text for text, _spaced in _tokenize_policy_sql(sql)]
+def _texts(sql, vendor=None):
+    return [text for text, _spaced in _tokenize_policy_sql(sql, vendor)]
 
 
-def _rejected(test, sql, token):
+def _rejected(test, sql, token, vendor=None):
     with test.assertRaises(TrustsConfigurationError) as caught:
-        _format_policy_sql(sql)
+        _format_policy_sql(sql, vendor=vendor)
     message = str(caught.exception)
     test.assertIn(repr(token), message)
     test.assertIn(repr(sql), message)
@@ -163,6 +163,117 @@ class PolicySqlFormatTest(SimpleTestCase):
         raw = 'SELECT 1 # note'
         message = _rejected(self, raw, '# note')
         self.assertIn('hash comment', message)
+
+    def test_postgresql_literals_stay_one_token(self):
+        dollar = 'SELECT $$AND$$'
+        self.assertEqual(
+            _format_policy_sql(dollar, vendor='postgresql'),
+            'SELECT $$AND$$',
+        )
+        tagged = 'SELECT $tag$AND$tag$ FROM "t" WHERE "t"."id" = %s'
+        formatted = _format_policy_sql(tagged, vendor='postgresql')
+        self.assertIn('$tag$AND$tag$', formatted)
+        self.assertIn('\nFROM "t"', formatted)
+        self.assertNotIn('$tag$\n  AND', formatted)
+        self.assertEqual(
+            _texts(tagged, 'postgresql'), _texts(formatted, 'postgresql'),
+        )
+        escaped = "SELECT E'it\\'s AND text'"
+        formatted_escape = _format_policy_sql(escaped, vendor='postgresql')
+        self.assertIn("E'it\\'s AND text'", formatted_escape)
+        self.assertNotIn('\n  AND', formatted_escape)
+        continued = "SELECT 'a'\n'b' FROM \"t\""
+        formatted_continued = _format_policy_sql(
+            continued, vendor='postgresql',
+        )
+        self.assertIn("'a'\n'b'", formatted_continued)
+        self.assertIn('\nFROM "t"', formatted_continued)
+        self.assertEqual(
+            _texts(continued, 'postgresql'),
+            _texts(formatted_continued, 'postgresql'),
+        )
+        chained = "SELECT 'a'\n'b'\n'c'"
+        self.assertIn("'a'\n'b'\n'c'", _format_policy_sql(
+            chained, vendor='postgresql',
+        ))
+        escaped_next = "SELECT 'a'\nE'b'"
+        self.assertIn("'a'\nE'b'", _format_policy_sql(
+            escaped_next, vendor='postgresql',
+        ))
+        dollar_next = "SELECT 'a'\n$$b$$"
+        self.assertIn("'a'\n$$b$$", _format_policy_sql(
+            dollar_next, vendor='postgresql',
+        ))
+        tagged_next = "SELECT 'a'\n$tag$b$tag$"
+        self.assertIn("'a'\n$tag$b$tag$", _format_policy_sql(
+            tagged_next, vendor='postgresql',
+        ))
+        spaced = "SELECT 'a' 'b'"
+        self.assertEqual(
+            _format_policy_sql(spaced, vendor='postgresql'),
+            "SELECT 'a' 'b'",
+        )
+        doubled = "SELECT E'it''s'"
+        self.assertIn("E'it''s'", _format_policy_sql(
+            doubled, vendor='postgresql',
+        ))
+
+    def test_postgresql_literal_edges_are_rejected(self):
+        for raw, token in (
+            ('SELECT $$AND', '$$AND'),
+            ('SELECT $tag$AND', '$tag$AND'),
+            ('SELECT $1', '$1'),
+            ("SELECT E'open", "E'open"),
+            ("SELECT E'a\\", "E'a\\"),
+            ('SELECT 1 #>>> 2', '#>>>'),
+        ):
+            _rejected(self, raw, token, vendor='postgresql')
+
+    def test_mysql_hash_comment_keeps_its_newline(self):
+        raw = 'SELECT 1 # note\n+ 2'
+        formatted = _format_policy_sql(raw, vendor='mysql')
+        self.assertEqual(formatted, 'SELECT 1 # note\n+ 2')
+        self.assertEqual(
+            _texts(raw, 'mysql'), _texts(formatted, 'mysql'),
+        )
+        self.assertEqual(formatted, _format_policy_sql(formatted, vendor='mysql'))
+        followed = 'SELECT 1 # note\nFROM "t"'
+        formatted_from = _format_policy_sql(followed, vendor='mysql')
+        self.assertIn('# note\n', formatted_from)
+        self.assertIn('\nFROM "t"', formatted_from)
+        self.assertEqual(
+            _texts(followed, 'mysql'), _texts(formatted_from, 'mysql'),
+        )
+
+    def test_postgresql_hash_operators_stay_operators(self):
+        raw = "SELECT 5 # 1, \"data\" #> '{a}', \"data\" #>> '{a,b}'"
+        formatted = _format_policy_sql(raw, vendor='postgresql')
+        self.assertIn(' # ', formatted)
+        self.assertIn("#>", formatted)
+        self.assertIn("#>>", formatted)
+        self.assertNotIn('#\n', formatted)
+        self.assertEqual(
+            _texts(raw, 'postgresql'), _texts(formatted, 'postgresql'),
+        )
+        self.assertEqual(
+            formatted, _format_policy_sql(formatted, vendor='postgresql'),
+        )
+
+    def test_changed_literal_or_comment_fails_the_round_trip(self):
+        dollar = 'SELECT $$AND$$'
+        with patch(
+            'trusts.policy_sql_format._emit',
+            return_value='SELECT $$\n  AND$$',
+        ):
+            message = _rejected(self, dollar, dollar, vendor='postgresql')
+        self.assertIn('token stream', message)
+        commented = 'SELECT 1 # note\n+ 2'
+        with patch(
+            'trusts.policy_sql_format._emit',
+            return_value='SELECT 1 # note + 2',
+        ):
+            message = _rejected(self, commented, commented, vendor='mysql')
+        self.assertIn('token stream', message)
 
     def test_dollar_quoted_string_is_rejected(self):
         raw = 'SELECT $$AND$$'

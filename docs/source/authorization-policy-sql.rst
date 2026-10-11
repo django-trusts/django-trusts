@@ -202,13 +202,18 @@ The formatter accepts only tokens it fully understands: identifiers quoted
 the way SQLite, PostgreSQL, and MySQL quote them, plain single-quoted
 strings, numbers, ``%s`` and ``?`` placeholders, parentheses, commas, dots,
 and an explicit allowlist of operators and keywords those compilers and
-``along=`` SQL emit. A line comment, a block comment, a MySQL ``#`` comment,
-a dollar-quoted string, an ``E''`` string, a backslash escape, an unknown
-operator, or any other unrecognized token raises
+``along=`` SQL emit. PostgreSQL dollar quotes (``$$...$$`` and
+``$tag$...$tag$``), ``E''`` escape strings, and string literals continued
+across a newline stay one token, byte for byte, so a keyword inside the
+literal is not a clause break. On MySQL, a ``#`` comment keeps the newline
+that ends it. On PostgreSQL, ``#``, ``#>``, and ``#>>`` are operators.
+A ``--`` comment, a block comment, a backslash escape outside an ``E''``
+string, an unknown operator, or any other unrecognized token raises
 ``TrustsConfigurationError``. The error names the query and the token.
-Formatting does not strip comments, guess, or return the original text.
-After formatting, the token stream must match the original stream, or
-formatting raises. The formatted text is that same statement.
+Formatting does not guess or return the original text. After formatting,
+the token stream must match the original stream, with those literals and
+comments byte-identical. If it does not, formatting raises instead of
+emitting changed SQL. The formatted text is that same statement.
 
 Creating the lockfile
 ---------------------

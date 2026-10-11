@@ -1,10 +1,11 @@
 """Internal line breaks for policy-lock SQL.
 
 The formatter accepts only tokens that Django's SQLite, PostgreSQL, and
-MySQL compilers and ``along=`` SQL emit for policy queries. Anything else
-raises. Breaks are inserted only between accepted tokens. The formatted
-text must tokenize back to that same stream. No formatter library is
-involved. Schema version 1 is unchanged.
+MySQL compilers and ``along=`` SQL emit for policy queries, plus the
+PostgreSQL literal forms and the MySQL ``#`` comment that must stay
+byte-identical. Anything else raises. Breaks are inserted only between
+accepted tokens. The formatted text must tokenize back to that same
+stream. No formatter library is involved. Schema version 1 is unchanged.
 """
 
 from __future__ import annotations
@@ -37,27 +38,33 @@ _OPERATORS = ('<=', '>=', '=', '<', '>', '+')
 _STRUCTURAL = frozenset('(),.')
 
 
-def _format_policy_sql(sql):
+def _format_policy_sql(sql, *, vendor=None):
     """Return ``sql`` with predictable breaks between accepted tokens.
 
-    Whitespace between tokens is a single space, or a newline and indent
-    at a break. Spacing that Django omitted, such as ``EXISTS(``, stays
-    omitted. The result has no trailing newline. A comment, dollar quote,
-    E-string, backslash escape, unknown operator, or other unrecognized
-    token raises ``TrustsConfigurationError`` and names the query and the
-    token. The formatted text is checked against the original token stream.
+    ``vendor`` is Django's connection vendor (``postgresql``, ``mysql``,
+    or ``sqlite``). Whitespace between tokens is a single space, or a
+    newline and indent at a break, except where the backend's literal or
+    comment rules require the original bytes. Spacing that Django omitted,
+    such as ``EXISTS(``, stays omitted. PostgreSQL dollar quotes, ``E''``
+    strings, and newline-continued string literals stay one byte-identical
+    token. A MySQL ``#`` comment keeps the newline that ends it.
+    PostgreSQL ``#``, ``#>``, and ``#>>`` stay operators. Anything else
+    unrecognized raises ``TrustsConfigurationError`` and names the query
+    and the token. The formatted token stream must match the original
+    stream, with those literals and comments byte-identical, or formatting
+    raises instead of emitting changed SQL.
     """
     if not isinstance(sql, str):
         raise TrustsConfigurationError(
             'Policy SQL formatter expected text, not %s.'
             % type(sql).__name__
         )
-    tokens = _tokenize_policy_sql(sql)
+    tokens = _tokenize_policy_sql(sql, vendor)
     if not tokens:
         return ''
     formatted = _emit(tokens)
     try:
-        again = _tokenize_policy_sql(formatted)
+        again = _tokenize_policy_sql(formatted, vendor)
     except TrustsConfigurationError:
         _reject_round_trip(sql)
     if [text for text, _spaced in tokens] != [text for text, _spaced in again]:
@@ -79,7 +86,7 @@ def _reject_round_trip(sql):
     )
 
 
-def _tokenize_policy_sql(sql):
+def _tokenize_policy_sql(sql, vendor=None):
     """Return ``(text, spaced)`` pairs. ``spaced`` is whitespace before."""
     tokens = []
     length = len(sql)
@@ -91,12 +98,14 @@ def _tokenize_policy_sql(sql):
         if index >= length:
             break
         spaced = bool(tokens) and index > start
-        token, index = _one_token(sql, index)
+        token, index = _one_token(sql, index, vendor)
+        if vendor == 'postgresql' and _is_pg_literal(token):
+            token, index = _continue_pg_literals(sql, index, token)
         tokens.append((token, spaced))
     return tokens
 
 
-def _one_token(sql, index):
+def _one_token(sql, index, vendor):
     char = sql[index]
     if char == '-' and sql.startswith('--', index):
         _reject(sql, _until_newline(sql, index), 'line comment')
@@ -106,13 +115,21 @@ def _one_token(sql, index):
             _reject(sql, sql[index:], 'block comment')
         _reject(sql, sql[index:end + 2], 'block comment')
     if char == '#':
+        if vendor == 'mysql':
+            return _mysql_hash_comment(sql, index)
+        if vendor == 'postgresql':
+            return _postgres_hash_operator(sql, index)
         _reject(sql, _until_newline(sql, index), 'hash comment')
     if char == '\\':
         nxt = sql[index + 1] if index + 1 < len(sql) else ''
         _reject(sql, '\\' + nxt, 'backslash escape')
     if char == '$':
+        if vendor == 'postgresql':
+            return _dollar_literal(sql, index)
         _reject_dollar(sql, index)
     if char in 'eE' and index + 1 < len(sql) and sql[index + 1] == "'":
+        if vendor == 'postgresql':
+            return _e_string(sql, index)
         _reject_e_string(sql, index)
     if char == '"':
         return _quoted(sql, index, '"', 'identifier')
@@ -146,6 +163,115 @@ def _one_token(sql, index):
     if char in _STRUCTURAL:
         return char, index + 1
     return _operator(sql, index)
+
+
+def _is_pg_literal(token):
+    if token.startswith(("'", '$')):
+        return True
+    return len(token) >= 2 and token[0] in 'eE' and token[1] == "'"
+
+
+def _continue_pg_literals(sql, index, token):
+    """Keep newline-separated PostgreSQL literals in one byte-identical token."""
+    length = len(sql)
+    while True:
+        end = index
+        while end < length and sql[end] in ' \t\r\n':
+            end += 1
+        gap = sql[index:end]
+        if '\n' not in gap or end >= length:
+            return token, index
+        if not _pg_literal_starts(sql, end):
+            return token, index
+        nxt, index = _one_token(sql, end, 'postgresql')
+        token += gap + nxt
+
+
+def _pg_literal_starts(sql, index):
+    char = sql[index]
+    if char == "'":
+        return True
+    if char in 'eE' and index + 1 < len(sql) and sql[index + 1] == "'":
+        return True
+    if char != '$':
+        return False
+    if sql.startswith('$$', index):
+        return True
+    tag_end = index + 1
+    while tag_end < len(sql) and (sql[tag_end].isalnum() or sql[tag_end] == '_'):
+        tag_end += 1
+    return (
+        tag_end > index + 1
+        and tag_end < len(sql)
+        and sql[tag_end] == '$'
+    )
+
+
+def _mysql_hash_comment(sql, index):
+    """A MySQL ``#`` comment includes the newline that terminates it."""
+    end = sql.find('\n', index)
+    if end == -1:
+        return sql[index:], len(sql)
+    return sql[index:end + 1], end + 1
+
+
+def _postgres_hash_operator(sql, index):
+    """PostgreSQL ``#``, ``#>``, and ``#>>``. A longer run is rejected."""
+    if sql.startswith('#>>', index):
+        operator = '#>>'
+    elif sql.startswith('#>', index):
+        operator = '#>'
+    else:
+        operator = '#'
+    end = index + len(operator)
+    if end < len(sql) and _is_operator_char(sql[end]):
+        _reject(sql, _operator_run(sql, index), 'operator')
+    return operator, end
+
+
+def _dollar_literal(sql, index):
+    """One PostgreSQL dollar quote, bytes unchanged, including its body."""
+    if sql.startswith('$$', index):
+        end = sql.find('$$', index + 2)
+        if end == -1:
+            _reject(sql, sql[index:], 'dollar-quoted string')
+        return sql[index:end + 2], end + 2
+    tag_end = index + 1
+    while tag_end < len(sql) and (sql[tag_end].isalnum() or sql[tag_end] == '_'):
+        tag_end += 1
+    if (
+        tag_end > index + 1
+        and tag_end < len(sql)
+        and sql[tag_end] == '$'
+    ):
+        closer = sql[index:tag_end + 1]
+        end = sql.find(closer, tag_end + 1)
+        if end == -1:
+            _reject(sql, sql[index:], 'dollar-quoted string')
+        return sql[index:end + len(closer)], end + len(closer)
+    end = index + 1
+    while end < len(sql) and (sql[end].isalnum() or sql[end] in '_$'):
+        end += 1
+    _reject(sql, sql[index:end], 'token')
+
+
+def _e_string(sql, index):
+    """One PostgreSQL ``E''`` string. Backslash escapes do not end it."""
+    end = index + 2
+    length = len(sql)
+    while end < length:
+        if sql[end] == '\\':
+            if end + 1 >= length:
+                _reject(sql, sql[index:], 'E-string')
+            end += 2
+            continue
+        if sql[end] == "'":
+            if end + 1 < length and sql[end + 1] == "'":
+                end += 2
+                continue
+            return sql[index:end + 1], end + 1
+        end += 1
+    _reject(sql, sql[index:], 'E-string')
 
 
 def _until_newline(sql, index):
@@ -312,7 +438,12 @@ def _emit(tokens):
 
     def newline(extra):
         nonlocal parts
-        lines.append(''.join(parts).rstrip())
+        text = ''.join(parts).rstrip(' \t')
+        # A MySQL ``#`` comment already ends with its terminating newline.
+        # One line break is enough; a second would be an empty line.
+        if text.endswith('\n'):
+            text = text[:-1]
+        lines.append(text)
         stack[depth] = True
         parts = [' ' * (depth * 2 + extra)]
 
@@ -336,7 +467,7 @@ def _emit(tokens):
                 depth -= 1
                 if inner:
                     if line_open():
-                        lines.append(''.join(parts).rstrip())
+                        lines.append(''.join(parts).rstrip(' \t'))
                         stack[depth] = True
                     parts = [' ' * (depth * 2)]
                     emit(')', False)
@@ -355,5 +486,5 @@ def _emit(tokens):
         emit(text, spaced)
         prev_bare = bare
     if line_open():
-        lines.append(''.join(parts).rstrip())
+        lines.append(''.join(parts).rstrip(' \t'))
     return '\n'.join(lines)
