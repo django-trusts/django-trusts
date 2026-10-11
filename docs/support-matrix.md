@@ -38,21 +38,31 @@ install of the declared range.
 The provisional `along=` evaluator compiles one plain `WITH RECURSIVE`
 statement: `UNION ALL`, a depth column capped at the bound, and a join to
 the next hop. That shape is the shared subset for SQLite, PostgreSQL, and
-MySQL 8.4+ (Django 6.1's MySQL floor). It does not use JSON functions. The checked-in lockfile records
-that portable statement as Django's SQLite connection quotes it. MySQL
-quotes identifiers with backticks and does not otherwise change the
-statement. PostgreSQL uses the same quotes as SQLite and appends one
-clause, `CYCLE <ident> SET is_cycle USING path`, after the CTE. The depth
-cap stays. The outer query does not select `is_cycle` or `path`. There is
-no second lockfile and no per-backend fixture: a PostgreSQL rendering is
-the locked statement plus that clause.
+MySQL 8.4+ only (Django 6.1's MySQL floor). It does not use JSON functions.
+The depth cap guarantees termination. On SQLite and MySQL, `UNION ALL` can
+revisit a cycle and can multiply diamond paths up to that cap. The final
+`DISTINCT` keeps the reachable set correct. That growth is the accepted
+tradeoff for dropping the JSON seen-set. PostgreSQL appends
+`CYCLE <ident> SET is_cycle USING path`, which suppresses those repeats.
+The outer query does not select `is_cycle` or `path`.
+
+The checked-in lockfile records the portable statement as Django's SQLite
+connection quotes it. MySQL quotes identifiers with backticks and does not
+otherwise change the statement. A PostgreSQL rendering is the locked
+statement plus that one clause. There is no second lockfile.
+
+MariaDB is not supported yet. Django uses `django.db.backends.mysql` for
+MariaDB as well, so `connection.mysql_is_mariadb` fails closed at runtime
+and in `trusts.E005`, with the same error as any other unsupported engine,
+before the recursive-CTE probe.
 
 CI runs the along tests on SQLite in the kernel job, and on PostgreSQL and
-MySQL 8 service containers in dedicated jobs. Other engines still raise
-`TrustsConfigurationError` before walk SQL. `trusts.E005` checks the aliases
-Django supplies in `databases` and probes a plain recursive CTE. An absent
-or empty argument should not be read as a database all-clear. A closure
-table is not implemented; it remains a documented fallback only.
+MySQL 8.4 service containers in dedicated jobs. There is no MariaDB job.
+Other engines still raise `TrustsConfigurationError` before walk SQL.
+`trusts.E005` checks the aliases Django supplies in `databases` and probes
+a plain recursive CTE only after the engine is supported. An absent or
+empty argument should not be read as a database all-clear. A closure table
+is not implemented; it remains a documented fallback only.
 
 ## What is intentionally not declared
 

@@ -119,7 +119,7 @@ jobs:
       run: python -m tests.runtests tests.core.test_issue92
 
   along-mysql:
-    name: along tests (MySQL 8)
+    name: along tests (MySQL 8.4)
     runs-on: ubuntu-latest
     services:
       mysql:

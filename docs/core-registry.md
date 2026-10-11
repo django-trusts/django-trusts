@@ -190,17 +190,24 @@ before mutation.
 V1 compiles `GrantReach` for Django's sqlite3, postgresql, and mysql
 backends. The walk is uncorrelated with candidate rows: one plain
 `IN (WITH RECURSIVE …)` per recursive record. The recursive member is
-`UNION ALL` plus a join to the next hop. A depth column is the cycle
-guard and stops at `bound`. There is no JSON frontier or seen-array.
+`UNION ALL` plus a join to the next hop. A depth column capped at
+`bound` guarantees termination. It is not a seen-set. On SQLite and
+MySQL, `UNION ALL` can revisit a cycle and can multiply diamond paths
+up to that cap. The final `DISTINCT` keeps the reachable set correct.
+That growth is the accepted tradeoff for dropping the JSON seen-set.
+PostgreSQL's `CYCLE ident SET is_cycle USING path` clause suppresses
+those repeats. There is no JSON frontier or seen-array.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
 NULL and dangling steps deny. Direct and recursive registrations `OR`.
 The lockfile records that portable statement (SQLite identifier quotes).
-SQLite and MySQL execute it unchanged, aside from MySQL's backtick
-quotes. PostgreSQL keeps the depth cap and appends one clause,
-`CYCLE ident SET is_cycle USING path`. The outer query still selects
-only the walk identity, so `is_cycle` and `path` are not projected.
-That is not a second lockfile. A closure table is a documented fallback
-only and is not generated.
+SQLite and MySQL 8.4+ execute it unchanged, aside from MySQL's backtick
+quotes. PostgreSQL keeps the depth cap and appends that one clause.
+The outer query still selects only the walk identity, so `is_cycle`
+and `path` are not projected. That is not a second lockfile.
+MariaDB is not supported yet: `connection.mysql_is_mariadb` fails
+closed with the same error as any other unsupported engine, at runtime
+and in `trusts.E005`, before the probe. A closure table is a documented
+fallback only and is not generated.
 
 A non-empty content suffix compiles a walk-model-rooted `EXISTS` from the
 stored path names (`items__image`, `rows__content`, …). Every S5 suffix

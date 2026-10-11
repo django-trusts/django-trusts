@@ -652,8 +652,8 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertFalse(registry.has_permission(self.alice, other, self.read))
 
     def test_two_node_cycle_returns_the_same_nodes_on_every_backend(self):
-        # A -> B -> A. The depth cap stops the loop on every engine.
-        # PostgreSQL also appends CYCLE; the reachable set stays {A, B}.
+        # A -> B -> A. The depth cap guarantees termination. PostgreSQL
+        # also appends CYCLE. The reachable set stays {A, B}.
         a = self.Node.objects.create(title='cycle-a')
         b = self.Node.objects.create(title='cycle-b', parent=a)
         a.parent = b
@@ -1118,6 +1118,19 @@ class AlongRuntimeGateTest(TransactionTestCase):
             self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertIn('oracle', str(ctx.exception).lower())
             self.assertIn('legacy', str(ctx.exception))
+            maria = Stub('mysql', 'django.db.backends.mysql', 'maria')
+            maria.mysql_is_mariadb = True
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                expr.as_sql(compiler, maria)
+            self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
+            self.assertEqual(
+                str(ctx.exception),
+                'Along reachability requires a recursive CTE on Django '
+                'sqlite3, postgresql, or mysql; got ENGINE=%r vendor=%r '
+                'alias=%r.' % (
+                    'django.db.backends.mysql', 'mysql', 'maria',
+                ),
+            )
             rendered_qs = registry.filter_authorized(
                 Node.objects.all(), alice, read,
             )
@@ -1245,6 +1258,34 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
         self.assertIn("'other'", aliases)
         self.assertIn("'also'", aliases)
         self.assertTrue(all('default' not in m.msg.split('ENGINE')[0] for m in errors))
+
+    def test_mariadb_is_rejected_before_the_probe(self):
+        registry, Node, NodeGrant = self._along_registry()
+        isolate_live_registry(self.live, registry)
+
+        class Maria(object):
+            vendor = 'mysql'
+            alias = 'maria'
+            settings_dict = {'ENGINE': 'django.db.backends.mysql'}
+            mysql_is_mariadb = True
+
+            def cursor(self):
+                raise AssertionError('probe')
+
+        class _Conns(object):
+            def __getitem__(self, alias):
+                return Maria()
+
+        with patch('django.db.connections', _Conns()):
+            messages = check_along_renderer(None, databases=['maria'])
+        errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(
+            errors[0].msg,
+            "Database alias 'maria' (ENGINE=django.db.backends.mysql, "
+            'vendor=mysql) cannot render Along reachability: a recursive '
+            'CTE on Django sqlite3, postgresql, or mysql is required.',
+        )
 
     def test_failed_probe(self):
         registry, Node, NodeGrant = self._along_registry()

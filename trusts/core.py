@@ -2397,9 +2397,16 @@ _ALONG_ENGINES = frozenset((
 
 
 def along_connection_supported(connection):
-    """True for SQLite, PostgreSQL, or MySQL. No SQL."""
+    """True for SQLite, PostgreSQL, or MySQL 8.4+.
+
+    MariaDB uses Django's mysql backend and is not supported yet.
+    ``mysql_is_mariadb is True`` rejects it before walk SQL. Other
+    engines do not carry that flag.
+    """
     engine = (getattr(connection, 'settings_dict', None) or {}).get('ENGINE')
-    return engine in _ALONG_ENGINES
+    if engine not in _ALONG_ENGINES:
+        return False
+    return getattr(connection, 'mysql_is_mariadb', False) is not True
 
 
 def probe_along_capabilities(connection):
@@ -2486,8 +2493,9 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
 def _along_cycle_clause(connection, ident_col, qn):
     """One PostgreSQL cycle suffix. SQLite and MySQL stay plain.
 
-    ``CYCLE ident SET is_cycle USING path`` is appended after the CTE.
-    The outer query does not select those columns. The depth cap stays.
+    ``CYCLE ident SET is_cycle USING path`` is appended after the CTE
+    and suppresses cycle and diamond repeats. The outer query does not
+    select those columns. The depth cap still guarantees termination.
     """
     if getattr(connection, 'vendor', None) != 'postgresql':
         return ''
@@ -2499,11 +2507,15 @@ def _along_cycle_clause(connection, ident_col, qn):
 def _render_reach_sql(walk, seed_sql, seed_params, connection):
     """Return ``(sql, params)`` for the uncorrelated W membership list.
 
-    SQLite, PostgreSQL, and MySQL share one plain ``WITH RECURSIVE``:
+    SQLite, PostgreSQL, and MySQL 8.4+ share one plain ``WITH RECURSIVE``:
     ``UNION ALL``, a depth column capped at the ``along`` bound, and one
-    join to the next hop. There is no JSON frontier or seen-array.
-    PostgreSQL appends ``CYCLE ident SET is_cycle USING path`` and keeps
-    that depth cap. The lockfile records the plain statement.
+    join to the next hop. The cap guarantees termination. ``UNION ALL``
+    can revisit cycles and multiply diamond paths up to that cap; the
+    outer ``DISTINCT`` keeps the reachable set correct. That growth is
+    the accepted tradeoff for dropping the JSON seen-set. PostgreSQL
+    appends ``CYCLE ident SET is_cycle USING path``, which suppresses
+    those repeats, and does not project the added columns. The lockfile
+    records the plain statement. MariaDB is rejected before this SQL.
     """
     qn = connection.ops.quote_name
     gen = qn('gen')
@@ -2562,9 +2574,10 @@ class GrantReach(Expression):
 
     The walk is uncorrelated with candidate rows. One plain
     ``IN (WITH RECURSIVE …)`` per recursive record, with a depth counter
-    capped at the bound. SQLite and MySQL use that statement. PostgreSQL
-    appends ``CYCLE ident SET is_cycle USING path`` and does not project
-    those columns. Other engines raise before walk SQL.
+    capped at the bound. SQLite and MySQL 8.4+ use that statement.
+    PostgreSQL appends ``CYCLE ident SET is_cycle USING path`` and does
+    not project those columns. MariaDB and other engines raise before
+    walk SQL.
     """
 
     filterable = True
