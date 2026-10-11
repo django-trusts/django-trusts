@@ -361,7 +361,7 @@ class PolicyCompositionTest(SimpleTestCase):
         combined = document['backends'][1]['contents'][0]
         self.assertIs(combined['trusts'][0]['or_group'], True)
         self.assertIs(combined['trusts'][1]['or_group'], True)
-        self.assertIn(' OR ', combined['permitted']['sql'])
+        self.assertRegex(combined['permitted']['sql'], r'\bOR\b')
         self.assertIn('documents_documentpermission', combined['permitted']['sql'])
         self.assertIn('"documents_team"', combined['permitted']['sql'])
         self.assertNotIn('named_filters', combined)

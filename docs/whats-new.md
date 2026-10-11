@@ -15,6 +15,13 @@ log.
   support bounded provisional `along=` registrations on SQLite, PostgreSQL,
   and MySQL 8.4+. See the [core registry](core-registry.md) and [#286].
 
+- **Readable policy-lock SQL.** Each lockfile statement is broken between
+  tokens onto predictable lines, including a `WITH RECURSIVE` walk and
+  PostgreSQL's `CYCLE` clause. The token sequence is unchanged, and schema
+  version stays 1. See the
+  [authorization-policy SQL guide](source/authorization-policy-sql.rst)
+  and [#291].
+
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
   use a sponsor's live ordinary permissions within delegation scope; an
   inactive delegate or sponsor fails closed. See the
@@ -58,3 +65,4 @@ log.
 [#271]: https://github.com/django-trusts/django-trusts/pull/271
 [#279]: https://github.com/django-trusts/django-trusts/pull/279
 [#286]: https://github.com/django-trusts/django-trusts/pull/286
+[#291]: https://github.com/django-trusts/django-trusts/issues/291

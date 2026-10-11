@@ -522,7 +522,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(trusts[1]['user']['path'], 'team__members')
         self.assertEqual(trusts[0]['content']['target'], 'id')
         permitted = content['permitted']
-        self.assertIn(' OR ', permitted['sql'])
+        self.assertRegex(permitted['sql'], r'\bOR\b')
         self.assertIn('documents_documentpermission', permitted['sql'])
         self.assertIn('"documents_team"', permitted['sql'])
         self.assertNotIn('{{', permitted['sql'])

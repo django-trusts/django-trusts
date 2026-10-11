@@ -20,6 +20,10 @@ from django.test.utils import isolate_apps
 
 from tests.apps import forget_models, isolate_live_registry, live_config
 from trusts.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
+from trusts.policy_sql_format import (
+    _tokenize_policy_sql,
+    format_policy_sql,
+)
 from trusts.reverse import lock_permitted_users_queryset
 from trusts.core import (
     Along,
@@ -755,6 +759,82 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             handle, content, self.read,
         )
         return queryset, list(queryset.order_by('pk').values_list('pk', flat=True))
+
+    def test_formatted_sql_matches_unformatted_results_on_every_backend(self):
+        # Issue #291. Line breaks are between tokens. The same statement
+        # returns the same rows on SQLite, PostgreSQL, and MySQL, including
+        # PostgreSQL's CYCLE clause.
+        a = self.Node.objects.create(title='fmt-a')
+        b = self.Node.objects.create(title='fmt-b', parent=a)
+        a.parent = b
+        a.save()
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent, bound=16),
+        )
+        forward = registry.filter_authorized(
+            self.Node.objects.order_by('pk'), self.alice, self.read,
+        )
+        reverse, reverse_pks = self._locked_user_pks(registry, b)
+        self.assertEqual(reverse_pks, [self.alice.pk])
+        for queryset in (forward, reverse.order_by('pk')):
+            self._assert_formatted_executes_like(queryset)
+        self._assert_formatted_join_and_literal()
+
+    def _assert_formatted_executes_like(self, queryset):
+        raw, params = queryset.query.sql_with_params()
+        formatted = format_policy_sql(raw)
+        self.assertEqual(
+            [text for text, _spaced in _tokenize_policy_sql(raw)],
+            [text for text, _spaced in _tokenize_policy_sql(formatted)],
+        )
+        self.assertEqual(formatted, format_policy_sql(formatted))
+        self.assertIn('\n', formatted)
+        self.assertIn('WITH RECURSIVE', formatted)
+        self.assertIn('UNION ALL', formatted)
+        if connection.vendor == 'postgresql':
+            self.assertIn(
+                'CYCLE "ident" SET "is_cycle" USING "path"', formatted,
+            )
+        else:
+            self.assertNotIn('CYCLE', formatted.upper())
+        self.assertEqual(
+            self._sql_rows(raw, params),
+            self._sql_rows(formatted, params),
+        )
+
+    def _assert_formatted_join_and_literal(self):
+        quote = connection.ops.quote_name
+        table = quote('t')
+        other = quote('u')
+        column = quote('n')
+        raw = (
+            'SELECT {table}.{column}, \'it\'\'s AND\' '
+            'FROM (SELECT %s AS {column}) AS {table} '
+            'LEFT OUTER JOIN (SELECT %s AS {column}) AS {other} '
+            'ON {table}.{column} = {other}.{column} '
+            'WHERE {table}.{column} = %s AND \'it\'\'s AND\' = %s'
+        ).format(table=table, other=other, column=column)
+        params = ('keep', 'keep', 'keep', "it's AND")
+        formatted = format_policy_sql(raw)
+        self.assertIn('LEFT OUTER JOIN', formatted)
+        self.assertIn("'it''s AND'", formatted)
+        self.assertEqual(
+            [text for text, _spaced in _tokenize_policy_sql(raw)],
+            [text for text, _spaced in _tokenize_policy_sql(formatted)],
+        )
+        self.assertEqual(
+            self._sql_rows(raw, params),
+            self._sql_rows(formatted, params),
+        )
+
+    def _sql_rows(self, sql, params):
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchall()
 
     def test_reverse_cycle_returns_the_same_users_on_every_backend(self):
         # A -> B -> A. Reverse walks ancestors from the content. The

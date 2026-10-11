@@ -189,6 +189,16 @@ string values, ``|-`` SQL blocks, does not emit YAML tags or aliases, and ends
 with one trailing newline. ``trusts.E009`` compares raw bytes; it does not
 parse the document.
 
+Each SQL block is broken between tokens onto predictable lines: before
+``FROM``, ``JOIN`` (including ``LEFT OUTER JOIN`` and ``INNER JOIN``),
+``WHERE``, ``AND``, ``OR``, ``UNION``, ``UNION ALL``, ``EXISTS``, and the
+other clause keywords (``ORDER BY``, ``GROUP BY``, ``HAVING``, ``LIMIT``,
+``OFFSET``, ``CYCLE``, and a ``SELECT`` or ``WITH`` that continues the
+statement). The seed and recursive member of ``WITH RECURSIVE``, and the
+subqueries inside them, are indented. A break never falls inside a quoted
+identifier, a string literal, or a comment. The token sequence is the
+statement Django compiled, so the formatted text is the same statement.
+
 Creating the lockfile
 ---------------------
 

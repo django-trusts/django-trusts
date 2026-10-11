@@ -6,6 +6,7 @@ candidate user queryset. Construction is zero SQL. Evaluation is one
 statement. Core does not add a blanket ``is_active`` exclusion.
 """
 
+import re
 import uuid
 from contextlib import contextmanager
 
@@ -194,7 +195,9 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn({'bind': 'permission.id'}, row['params'])
         self.assertIn('EXISTS', row['sql'])
         self.assertIn('auth_user', row['sql'])
-        where = row['sql'].split(' WHERE ', 1)[1]
+        where_at = row['sql'].upper().find('WHERE')
+        self.assertGreaterEqual(where_at, 0)
+        where = row['sql'][where_at:]
         self.assertIn('is_active', where)
         self.assertNotIn('is_superuser', where)
 
@@ -335,7 +338,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertEqual(reverse['sql'].count('%s'), len(reverse['params']))
         self.assertEqual(reverse['sql'].count('WITH RECURSIVE'), 2)
         for part in reverse['sql'].split('WITH RECURSIVE')[1:]:
-            body = part.split(') SELECT DISTINCT', 1)[0]
+            body = re.split(r'\)\s*SELECT DISTINCT', part, maxsplit=1)[0]
             self.assertNotIn('auth_user', body.lower())
             self.assertNotIn('json_', body.lower())
         self.assertIn('"user_id" = ("auth_user"."id")', reverse['sql'])
@@ -1264,7 +1267,7 @@ def _assert_along_lock(test, handle, specs, *, group=False):
     test.assertIn({'bind': 'content.id'}, users['params'])
     test.assertIn('("auth_user"."id")', users['sql'])
     if len(specs) > 1:
-        test.assertIn(' OR ', users['sql'])
+        test.assertRegex(users['sql'], r'\bOR\b')
     return content
 
 

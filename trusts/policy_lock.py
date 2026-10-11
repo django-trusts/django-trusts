@@ -10,6 +10,8 @@ content-and-permission-to-users predicate for that backend, not
 Django's outer superuser rule and not other backends.
 ``permitted`` is the artifact name for today's ``.authorized()`` list
 query. The runtime API is not renamed. The alias is not stored.
+Each ``sql`` value is broken between tokens onto predictable lines.
+The token sequence is the statement Django compiled.
 ``trusts.E009`` compares the rendered bytes to the committed file and
 does not parse them. It is the only lockfile enforcement.
 """
@@ -34,6 +36,7 @@ from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
 from trusts.core import TrustsConfigurationError
+from trusts.policy_sql_format import format_policy_sql
 from trusts.policy_yaml import (
     PolicyYamlError,
     dump_policy_yaml,
@@ -422,13 +425,13 @@ def _named_filter_row(row):
     return {
         'id': row['id'],
         'params': row['params'],
-        'sql': row['sql'],
+        'sql': format_policy_sql(row['sql']),
     }
 
 
 def _sql_row(compiled):
     sql, params = compiled
-    return {'params': params, 'sql': sql}
+    return {'params': params, 'sql': format_policy_sql(sql)}
 
 
 def _require_shared_terminals(records, label):
