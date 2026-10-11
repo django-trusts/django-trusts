@@ -38,10 +38,14 @@ install of the declared range.
 The provisional `along=` evaluator compiles one plain `WITH RECURSIVE`
 statement: `UNION ALL`, a depth column capped at the bound, and a join to
 the next hop. That shape is the shared subset for SQLite, PostgreSQL, and
-MySQL 8.4+ (Django 6.1's MySQL floor). It does not use JSON functions. The checked-in lockfile is that
-statement as Django's SQLite connection quotes it; PostgreSQL uses the same
-quotes and MySQL quotes identifiers with backticks. The walk SQL itself
-stays the shared subset.
+MySQL 8.4+ (Django 6.1's MySQL floor). It does not use JSON functions. The checked-in lockfile records
+that portable statement as Django's SQLite connection quotes it. MySQL
+quotes identifiers with backticks and does not otherwise change the
+statement. PostgreSQL uses the same quotes as SQLite and appends one
+clause, `CYCLE <ident> SET is_cycle USING path`, after the CTE. The depth
+cap stays. The outer query does not select `is_cycle` or `path`. There is
+no second lockfile and no per-backend fixture: a PostgreSQL rendering is
+the locked statement plus that clause.
 
 CI runs the along tests on SQLite in the kernel job, and on PostgreSQL and
 MySQL 8 service containers in dedicated jobs. Other engines still raise

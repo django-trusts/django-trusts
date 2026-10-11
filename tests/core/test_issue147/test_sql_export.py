@@ -611,6 +611,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(payload, GOLDEN_ALONG)
         text = payload.decode('utf-8')
         self.assertNotIn('json_', text.lower())
+        self.assertNotIn('CYCLE', text)
         self.assertIn('WITH RECURSIVE', text)
         self.assertIn('UNION ALL', text)
         self.assertIn('FROM "gen" AS "g"', text)

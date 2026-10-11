@@ -25,6 +25,7 @@ from trusts.core import (
     BackendHandle,
     GrantReach,
     PlanQueryCompiler,
+    _render_reach_sql,
     Ref,
     TrustsCompilerError,
     TrustsConfigurationError,
@@ -650,6 +651,44 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertTrue(registry.has_permission(self.alice, c, self.read))
         self.assertFalse(registry.has_permission(self.alice, other, self.read))
 
+    def test_two_node_cycle_returns_the_same_nodes_on_every_backend(self):
+        # A -> B -> A. The depth cap stops the loop on every engine.
+        # PostgreSQL also appends CYCLE; the reachable set stays {A, B}.
+        a = self.Node.objects.create(title='cycle-a')
+        b = self.Node.objects.create(title='cycle-b', parent=a)
+        a.parent = b
+        a.save()
+        other = self.Node.objects.create(title='cycle-other')
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent, bound=16),
+        )
+        qs = registry.filter_authorized(
+            self.Node.objects.order_by('pk'), self.alice, self.read,
+        )
+        self.assertEqual(_pks(qs), {a.pk, b.pk})
+        self.assertNotIn(other.pk, _pks(qs))
+        sql = str(qs.query)
+        compiled, params = qs.query.sql_with_params()
+        self.assertIn('WITH RECURSIVE', sql.upper())
+        self.assertIn('UNION ALL', sql.upper())
+        self.assertIn('< %s', compiled)
+        self.assertIn(16, params)
+        self.assertIn('depth', compiled.lower())
+        outer = sql.split('SELECT DISTINCT')[-1]
+        self.assertNotIn('is_cycle', outer.lower())
+        self.assertNotIn('"path"', outer.lower())
+        self.assertNotIn('`path`', outer.lower())
+        if connection.vendor == 'postgresql':
+            self.assertEqual(sql.count('CYCLE '), 1)
+            self.assertIn('CYCLE "ident" SET "is_cycle" USING "path"', sql)
+            self.assertLess(sql.index('CYCLE '), sql.rindex('SELECT DISTINCT'))
+        else:
+            self.assertNotIn('CYCLE', sql.upper())
+
     def test_self_link_two_node_cycle_diamond_duplicates_null_empty_bound(self):
         self_node = self.Node.objects.create(title='self')
         self_node.parent = self_node
@@ -1088,6 +1127,39 @@ class AlongRuntimeGateTest(TransactionTestCase):
             self.assertNotIn('json_', rendered.lower())
             _sql, params = rendered_qs.query.sql_with_params()
             self.assertIn(4, params)
+            if connection.vendor == 'postgresql':
+                self.assertIn('CYCLE "ident" SET "is_cycle" USING "path"', rendered)
+            else:
+                self.assertNotIn('CYCLE', rendered.upper())
+
+            class _Ops(object):
+                def quote_name(self, name):
+                    return '"%s"' % name
+
+            class _Conn(object):
+                def __init__(self, vendor):
+                    self.vendor = vendor
+                    self.ops = _Ops()
+
+            seed = 'SELECT 1 AS "ident"'
+            plain, plain_params = _render_reach_sql(record.along, seed, (), _Conn('sqlite'))
+            mysql, mysql_params = _render_reach_sql(record.along, seed, (), _Conn('mysql'))
+            pg, pg_params = _render_reach_sql(
+                record.along, seed, (), _Conn('postgresql'),
+            )
+            self.assertEqual(mysql, plain)
+            self.assertEqual(mysql_params, plain_params)
+            self.assertEqual(pg_params, plain_params)
+            self.assertNotIn('CYCLE', plain)
+            clause = 'CYCLE "ident" SET "is_cycle" USING "path" '
+            self.assertEqual(plain.count(') SELECT DISTINCT'), 1)
+            self.assertEqual(
+                pg,
+                plain.replace(') SELECT DISTINCT', ') ' + clause + 'SELECT DISTINCT', 1),
+            )
+            outer = pg.split('SELECT DISTINCT', 1)[1]
+            self.assertNotIn('is_cycle', outer)
+            self.assertNotIn('path', outer)
 
 
 class _LiveRegistryRestoreMixin(object):

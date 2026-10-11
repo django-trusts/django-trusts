@@ -2483,12 +2483,27 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     )
 
 
+def _along_cycle_clause(connection, ident_col, qn):
+    """One PostgreSQL cycle suffix. SQLite and MySQL stay plain.
+
+    ``CYCLE ident SET is_cycle USING path`` is appended after the CTE.
+    The outer query does not select those columns. The depth cap stays.
+    """
+    if getattr(connection, 'vendor', None) != 'postgresql':
+        return ''
+    return 'CYCLE %s SET %s USING %s ' % (
+        ident_col, qn('is_cycle'), qn('path'),
+    )
+
+
 def _render_reach_sql(walk, seed_sql, seed_params, connection):
     """Return ``(sql, params)`` for the uncorrelated W membership list.
 
-    One plain ``WITH RECURSIVE`` shared by SQLite, PostgreSQL, and MySQL 8+.
-    The depth column is the cycle guard: recursion stops at ``along`` bound.
-    There is no JSON frontier or seen-array.
+    SQLite, PostgreSQL, and MySQL share one plain ``WITH RECURSIVE``:
+    ``UNION ALL``, a depth column capped at the ``along`` bound, and one
+    join to the next hop. There is no JSON frontier or seen-array.
+    PostgreSQL appends ``CYCLE ident SET is_cycle USING path`` and keeps
+    that depth cap. The lockfile records the plain statement.
     """
     qn = connection.ops.quote_name
     gen = qn('gen')
@@ -2509,6 +2524,7 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection):
         '%(frm)s '
         'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
         ') '
+        '%(cycle)s'
         'SELECT DISTINCT %(site)s.%(ident)s '
         'FROM %(gen)s '
         'JOIN %(walk_table)s AS %(site)s '
@@ -2518,6 +2534,7 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection):
             'seed_alias': seed_alias, 'seed_sql': seed_sql,
             'project': project, 'g': g, 'frm': frm,
             'site': site, 'ident': ident, 'walk_table': walk_table,
+            'cycle': _along_cycle_clause(connection, ident_col, qn),
         }
     )
     return sql, tuple(seed_params) + (walk.bound,)
@@ -2545,8 +2562,9 @@ class GrantReach(Expression):
 
     The walk is uncorrelated with candidate rows. One plain
     ``IN (WITH RECURSIVE …)`` per recursive record, with a depth counter
-    capped at the bound. SQLite, PostgreSQL, and MySQL share that SQL.
-    Other engines raise before walk SQL.
+    capped at the bound. SQLite and MySQL use that statement. PostgreSQL
+    appends ``CYCLE ident SET is_cycle USING path`` and does not project
+    those columns. Other engines raise before walk SQL.
     """
 
     filterable = True

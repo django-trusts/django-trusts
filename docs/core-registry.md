@@ -194,8 +194,12 @@ backends. The walk is uncorrelated with candidate rows: one plain
 guard and stops at `bound`. There is no JSON frontier or seen-array.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
 NULL and dangling steps deny. Direct and recursive registrations `OR`.
-The same statement shape is the lockfile's shared subset. Identifier
-quotes follow the connection. A closure table is a documented fallback
+The lockfile records that portable statement (SQLite identifier quotes).
+SQLite and MySQL execute it unchanged, aside from MySQL's backtick
+quotes. PostgreSQL keeps the depth cap and appends one clause,
+`CYCLE ident SET is_cycle USING path`. The outer query still selects
+only the walk identity, so `is_cycle` and `path` are not projected.
+That is not a second lockfile. A closure table is a documented fallback
 only and is not generated.
 
 A non-empty content suffix compiles a walk-model-rooted `EXISTS` from the
