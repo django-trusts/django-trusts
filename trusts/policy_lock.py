@@ -1186,10 +1186,11 @@ def _bind_name(node, record):
                 or getattr(target, 'attname', None) == candidate.content_target
             )
         ):
-            # An Along reverse row binds only the comparison
-            # ``_bound_content_sql`` emitted. A condition literal on that
-            # same column, including ``folder__pk=<n>`` after Django
-            # collapses it to the foreign key, stays a constant.
+            # An Along reverse row binds only the content-identity
+            # comparison on the uncorrelated walk seed. A condition
+            # literal on that same column, including ``folder__pk=<n>``
+            # after Django collapses it to the foreign key, stays a
+            # constant.
             if (
                 getattr(candidate, 'along', None) is not None
                 and not getattr(node, 'trusts_content_bind', False)

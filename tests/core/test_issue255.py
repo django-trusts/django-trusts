@@ -301,25 +301,26 @@ class Issue255PolicySqlTest(SimpleTestCase):
             {'const': 2},
             {'const': True},
         ])
-        # One ordered list for the ORed reverse statement. Each walk
-        # contributes is_active, the EXISTS sentinel, content and
-        # permission binds, the content-type pair, then the depth
-        # ceiling. That ceiling is the only ``const: 2``.
+        # One ordered list for the ORed reverse statement. is_active is
+        # once, outside both walks. Each walk then contributes the EXISTS
+        # sentinel, the permission bind, the content-type pair, the
+        # content bind from the uncorrelated seed, and the depth ceiling.
+        # That ceiling is the only ``const: 2``.
         self.assertEqual(reverse['params'], [
             {'const': True},
             {'const': 1},
-            {'bind': 'content.id'},
             {'bind': 'permission.id'},
             {'const': 'documents'},
             {'const': 'folder'},
+            {'bind': 'content.id'},
             {'const': 2},
             {'const': True},
             {'const': True},
             {'const': 1},
-            {'bind': 'content.id'},
             {'bind': 'permission.id'},
             {'const': 'documents'},
             {'const': 'folder'},
+            {'bind': 'content.id'},
             {'const': 2},
             {'const': True},
             {'const': True},
@@ -333,6 +334,11 @@ class Issue255PolicySqlTest(SimpleTestCase):
         )
         self.assertEqual(reverse['sql'].count('%s'), len(reverse['params']))
         self.assertEqual(reverse['sql'].count('WITH RECURSIVE'), 2)
+        for part in reverse['sql'].split('WITH RECURSIVE')[1:]:
+            body = part.split(') SELECT DISTINCT', 1)[0]
+            self.assertNotIn('auth_user', body.lower())
+            self.assertNotIn('json_', body.lower())
+        self.assertIn('"user_id" = ("auth_user"."id")', reverse['sql'])
         self.assertEqual(document['schema_version'], 1)
 
     def test_two_self_fk_along_edges_keep_distinct_walks(self):
@@ -457,10 +463,10 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertEqual(reverse['params'], [
             {'const': True},
             {'const': 1},
-            {'bind': 'content.ident'},
             {'bind': 'permission.id'},
             {'const': 'documents'},
             {'const': 'uuidnode'},
+            {'bind': 'content.ident'},
             {'const': 2},
             {'const': True},
             {'const': True},

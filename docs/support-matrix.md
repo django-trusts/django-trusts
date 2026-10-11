@@ -53,6 +53,11 @@ connection quotes it. MySQL quotes identifiers with backticks and does not
 otherwise change the statement. A PostgreSQL rendering is the locked
 statement plus that one clause. There is no second lockfile.
 
+Reverse `along=` is one uncorrelated inverse walk from the content
+identity, then a join to users and grants. The recursive member does not
+reference the outer user. The same depth cap, `DISTINCT`, PostgreSQL
+`CYCLE` clause, and MariaDB rejection apply.
+
 MariaDB is not supported yet. Django uses `django.db.backends.mysql` for
 MariaDB as well, so `connection.mysql_is_mariadb` fails closed at runtime
 and in `trusts.E005`, with the same error as any other unsupported engine,

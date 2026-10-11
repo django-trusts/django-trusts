@@ -33,6 +33,7 @@ from trusts.policy_lock import (
     _Symbol,
     _classify_compiled,
     _compile_get_all_permissions,
+    _compile_get_permitted_users,
     _compile_has_perm,
     _compile_permitted,
     _const_from_json,
@@ -599,6 +600,9 @@ class PolicySqlGoldenTest(SimpleTestCase):
             'get_all_permissions': _sql_row(_compile_get_all_permissions(
                 handle, 'default', (record,), Folder, handles,
             )),
+            'get_permitted_users': _sql_row(_compile_get_permitted_users(
+                handle, 'default', (record,), Folder, handles,
+            )),
         }
         payload = dump_policy_yaml({
             'schema_version': 1,
@@ -615,12 +619,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertIn('WITH RECURSIVE', text)
         self.assertIn('UNION ALL', text)
         self.assertIn('FROM "gen" AS "g"', text)
-        self.assertEqual(text.count('const: 2'), 3)
+        self.assertEqual(text.count('const: 2'), 4)
         self.assertEqual(
             _symbol_for_new_param(_IdentInReach('id', 'SELECT 1', (), 2)),
             {'const': 2},
         )
-        for key in ('permitted', 'has_perm', 'get_all_permissions'):
+        for key in (
+            'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
+        ):
             params = content[key]['params']
             self.assertEqual(
                 [param for param in params if param == {'const': 2}],
