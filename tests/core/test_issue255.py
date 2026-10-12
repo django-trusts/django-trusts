@@ -1,11 +1,11 @@
 """Reverse permission inquiry (#255).
 
 One saved content object and one permission. The private compiler and
-both public adapters return the same rows for the candidate user queryset.
-Construction is zero SQL. Evaluation is one statement. Default mode applies
-``is_active`` over the whole result, including a custom reverse predicate.
-Audit mode lifts that outer check only for hooks that accept
-``allow_inactive``.
+both public adapters return the same rows as ``user.has_perm`` for the
+candidate user queryset. Construction is zero SQL. Evaluation is one
+statement. Core does not add a blanket ``is_active`` exclusion around a
+custom reverse predicate. Audit mode raises when a reverse hook does not
+accept ``allow_inactive``.
 """
 
 import re
@@ -788,11 +788,12 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.alice.pk, found)
 
     def test_inactive_grant_backend_is_not_removed_by_a_core_is_active_filter(self):
-        """Default mode excludes the inactive custom grant.
+        """A custom predicate is not wrapped in ``is_active``.
 
-        Review 5486816841 settled the stricter reading. Stock ``has_perm``
-        still grants this user; the reverse inquiry does not, unless audit
-        mode can pass ``allow_inactive`` into every contributing hook.
+        Thomas decided Trusts guarantees activity only for its own backend.
+        The inactive custom grant stays, in agreement with ``has_perm``.
+        The inactive Trusts-owned grant does not. Audit mode still raises
+        when this hook does not accept ``allow_inactive``.
         """
         backends = settings.AUTHENTICATION_BACKENDS + (
             'tests.core.test_issue255.InactiveGrantBackend',
@@ -807,15 +808,20 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
                 chosen = self.document.get_permitted_users(self.change)
             with self.assertNumQueries(1):
                 found = _pks(chosen)
-            self.assertTrue(granted.has_perm(PERM, self.document))
+            candidates = get_user_model()._default_manager.get_queryset()
+            expected = {
+                user.pk for user in candidates
+                if user.has_perm(PERM, self.document)
+            }
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
                     self.document.get_permitted_users(
                         self.change, allow_inactive=True,
                     )
+        self.assertEqual(found, expected)
         self.assertIn('InactiveGrantBackend', str(ctx.exception))
         self.assertIn('allow_inactive', str(ctx.exception))
-        self.assertNotIn(granted.pk, found)
+        self.assertIn(granted.pk, found)
         self.assertIn(self.alice.pk, found)
         self.assertNotIn(self.inactive.pk, found)
 
@@ -854,7 +860,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn('StarInactiveGrantBackend', str(star.exception))
         self.assertEqual(StarInactiveGrantBackend.calls, 1)
         found = _pks(chosen)
-        self.assertNotIn(star_user.pk, found)
+        self.assertIn(star_user.pk, found)
         self.assertIn(self.alice.pk, found)
 
     def test_mode_aware_reverse_hook_receives_audit_and_keeps_candidates(self):
@@ -892,7 +898,9 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertEqual(default_qs.marker, 'issue255-audit')
         default_names = set(default_qs.values_list('username', flat=True))
         audited_names = set(audited_qs.values_list('username', flat=True))
-        self.assertEqual(default_names, {'mode-aware-active'})
+        self.assertEqual(
+            default_names, {'mode-aware-inactive', 'mode-aware-active'},
+        )
         self.assertEqual(
             audited_names, {'mode-aware-inactive', 'mode-aware-active'},
         )

@@ -2,9 +2,9 @@
 
 Date: 2026-10-12. Status: S2 runtime propagation is in review on the
 along= train. The public keywords and the three activity change points are
-implemented. Review 5486816841 settled the stricter aggregate `has_perm`
-reading. Lockfile mode representation and the remaining non-reverse
-custom-backend dispatch stay flagged.
+implemented. Thomas settled the aggregate `has_perm` question: Trusts
+guarantees activity only for its own backend. Lockfile mode representation
+and the remaining non-reverse custom-backend dispatch stay flagged.
 The contract is [in the built documentation](../source/index.rst#user-is-active-checks).
 Chat owns documentation/design coordination.
 
@@ -30,12 +30,16 @@ did not reach 13, so it was not split.
    participation: audit mode raises `TrustsConfigurationError` before SQL
    and does not call the hook. Singular and enumeration dispatch for a
    custom backend that is not that reverse hook remains a flagged follow-up.
-3. Settled by review 5486816841, in favor of the stricter reading #294
-   documents. Thomas can still object. Default `get_permitted_users` applies
-   `is_active` over the whole OR, including a custom
-   `permitted_users_predicate`. An inactive user admitted only by stock
-   `has_perm` is excluded. `allow_inactive=True` lifts that outer check.
-   The active-superuser contributor is unchanged.
+3. Settled by Thomas: Trusts cannot guarantee anything outside its own
+   backend. The activity check applies only to Trusts-owned grants. Default
+   `get_permitted_users` agrees with `has_perm` for a custom backend,
+   including an inactive user that only that backend admits. There is no
+   `is_active` AND around the combined OR. `#294`'s
+   `docs/reverse-permission-inquiry.md` lines 158–160 and 179–180 still
+   describe the stricter wrapper and need to change to this decision.
+   Audit participation does not conflict with it: a reverse hook that does
+   not name `allow_inactive` raises before SQL, and Trusts does not rewrite
+   that hook's predicate. The active-superuser contributor is unchanged.
 
 ## Reported, not settled
 
@@ -50,10 +54,11 @@ lockfile follow-up above.
 
 ## Sizing history
 
-S2 was provisional 8 before coding and stayed 8. Review 5486816841 kept
-the stricter gate and reverse-hook participation on this same unit. It did
-not reach 13. Lockfile representation and non-reverse custom-backend
-dispatch remain the flagged remainder.
+S2 was provisional 8 before coding and stayed 8. Thomas's decision keeps
+the activity check on the Trusts-owned branch and keeps reverse-hook audit
+participation on this same unit. It did not reach 13. Lockfile
+representation and non-reverse custom-backend dispatch remain the flagged
+remainder.
 
 ## Source inventory on `dev` at `eeab800`
 
@@ -143,10 +148,13 @@ gate for the existing train remain unchanged.
 Chat agrees with the activity-mode direction. Thomas later authorized the
 bounded runtime unit and asked that lockfile mode representation, custom
 backend dispatch, and a global gate stricter than stock `has_perm` be flagged
-rather than decided in that unit. Review 5486816841 then settled the stricter
-gate. The lockfile representation and the remaining non-reverse dispatch
-details stay flagged. Reverse-hook audit participation is the explicit
-`allow_inactive` parameter described above.
+rather than decided in that unit. Thomas then settled the gate: Trusts
+guarantees activity only for its own backend, and default
+`get_permitted_users` keeps agreeing with `has_perm` for a custom backend.
+The lockfile representation and the remaining non-reverse dispatch details
+stay flagged. Reverse-hook audit participation is the explicit
+`allow_inactive` parameter described above. It does not add an activity
+filter outside the Trusts branch.
 
 ## Thomas's wording review, 2026-10-11
 

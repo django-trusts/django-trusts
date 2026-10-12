@@ -29,10 +29,9 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     The candidate rows are ``user_queryset`` when given (the optional
     manager adapter) and otherwise ``AUTH_USER_MODEL``'s default manager.
     Django's active-superuser rule is OR-ed with each configured backend
-    that can contribute an exact reverse predicate. Default mode then
-    requires ``is_active`` on that whole OR, including a custom
-    predicate. ``allow_inactive`` lifts only that outer check. The
-    superuser contributor still requires an active superuser. An
+    that can contribute an exact reverse predicate. ``is_active`` applies
+    inside the Trusts-owned branch only. A custom predicate is not wrapped.
+    The superuser contributor still requires an active superuser. An
     unsupported object-permission backend raises before SQL. Audit mode
     raises before SQL when a contributing reverse hook does not accept
     ``allow_inactive``.
@@ -80,8 +79,6 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     combined = parts[0]
     for part in parts[1:]:
         combined |= part
-    if not allow_inactive:
-        combined &= Q(is_active=True)
     return user_queryset.filter(combined).distinct()
 
 

@@ -521,9 +521,10 @@ user.is_active checks
 
 All Trusts permission inquiries check ``user.is_active`` by default, including
 ordinary and delegated grants, permission enumeration, and reverse user
-listing. Anonymous and unauthenticated users cannot supply persisted grants
-and receive no positive permission result. Input and configuration errors
-still raise before a denied result is returned.
+listing of Trusts-owned grants. Anonymous and unauthenticated users cannot
+supply persisted grants and receive no positive permission result. Input and
+configuration errors still raise before a denied result is returned. Trusts
+does not wrap another backend's reverse predicate in ``is_active``.
 
 Auditing inactive users
 ~~~~~~~~~~~~~~~~~~~~~~~
