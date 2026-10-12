@@ -29,12 +29,12 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     The candidate rows are ``user_queryset`` when given (the optional
     manager adapter) and otherwise ``AUTH_USER_MODEL``'s default manager.
     Django's active-superuser rule is OR-ed with each configured backend
-    that can contribute an exact reverse predicate. ``is_active`` applies
-    inside the Trusts-owned branch only. A custom predicate is not wrapped.
-    The superuser contributor still requires an active superuser. An
-    unsupported object-permission backend raises before SQL. Audit mode
-    raises before SQL when a contributing reverse hook does not accept
-    ``allow_inactive``.
+    that can contribute an exact reverse predicate. The ``is_active``
+    check applies inside the Trusts-owned branch only. A custom predicate
+    is not wrapped. ``allow_inactive=True`` is forwarded only to the
+    Trusts-owned mixin method. The superuser contributor still requires an
+    active superuser. An unsupported object-permission backend raises
+    before SQL.
     """
     from django.contrib.auth import get_backends, get_user_model
 
@@ -245,25 +245,21 @@ def _object_blind_backends():
     return _OBJECT_BLIND_BACKENDS
 
 
-def _hook_accepts_allow_inactive(backend):
-    """Whether the reverse hook names an ``allow_inactive`` parameter.
+def _trusts_owned_reverse_hook(backend):
+    """True when the reverse hook is the mixin method, not an override.
 
-    ``**kwargs`` alone is not audit participation. Audit mode raises
-    before calling a hook that cannot accept the flag.
+    ``allow_inactive=True`` is passed only through that Trusts-owned
+    method. Other hooks are called as
+    ``permitted_users_predicate(content, perm)``. Trusts does not require
+    them to accept ``allow_inactive`` and does not raise when they do not.
     """
-    import inspect
+    from trusts.backends import TrustModelBackendMixin
 
-    hook = getattr(type(backend), 'permitted_users_predicate', None)
-    try:
-        parameters = inspect.signature(hook).parameters
-    except (TypeError, ValueError):
+    if not isinstance(backend, TrustModelBackendMixin):
         return False
-    parameter = parameters.get('allow_inactive')
-    if parameter is None:
-        return False
-    return parameter.kind in (
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        inspect.Parameter.KEYWORD_ONLY,
+    return (
+        type(backend).permitted_users_predicate
+        is TrustModelBackendMixin.permitted_users_predicate
     )
 
 
@@ -271,14 +267,7 @@ def _backend_predicate(backend, content, perm, *, allow_inactive=False):
     if getattr(backend, 'trusts_object_permissions', None) is False:
         return None
     if _declares_reverse_hook(backend):
-        if allow_inactive and not _hook_accepts_allow_inactive(backend):
-            raise TrustsConfigurationError(
-                '%s.permitted_users_predicate does not accept '
-                'allow_inactive, so get_permitted_users cannot audit it. '
-                'Audit mode will not call the hook or return a partial '
-                'result.' % type(backend).__name__
-            )
-        if allow_inactive:
+        if allow_inactive and _trusts_owned_reverse_hook(backend):
             return backend.permitted_users_predicate(
                 content, perm, allow_inactive=True,
             )
@@ -636,7 +625,7 @@ def _trusts_eligibility_q(model, *, allow_inactive=False):
     """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
 
     ``is_active_principal`` denies anonymous, unauthenticated, and inactive
-    principals. A missing ``is_active`` uses the same default as
+    users. A missing ``is_active`` uses the same default as
     ``getattr(user, 'is_active', False)`` and contributes no users.
     ``allow_inactive`` omits the ``is_active`` equality and does not fail
     closed when that column is absent. Persisted rows use the stock

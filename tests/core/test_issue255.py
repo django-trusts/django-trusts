@@ -3,9 +3,9 @@
 One saved content object and one permission. The private compiler and
 both public adapters return the same rows as ``user.has_perm`` for the
 candidate user queryset. Construction is zero SQL. Evaluation is one
-statement. Core does not add a blanket ``is_active`` exclusion around a
-custom reverse predicate. Audit mode raises when a reverse hook does not
-accept ``allow_inactive``.
+statement. Core does not add an ``is_active`` exclusion around a custom
+reverse predicate. ``allow_inactive=True`` is passed only to the
+Trusts-owned mixin method.
 """
 
 import re
@@ -139,7 +139,7 @@ class ModeAwareGrantBackend(object):
 
 
 class ModeAwareQuerySet(models.QuerySet):
-    marker = 'issue255-audit'
+    marker = 'issue255-candidates'
 
 
 class ModeAwareManager(PermittedUsersManagerMixin, models.Manager):
@@ -790,10 +790,11 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
     def test_inactive_grant_backend_is_not_removed_by_a_core_is_active_filter(self):
         """A custom predicate is not wrapped in ``is_active``.
 
-        Thomas decided Trusts guarantees activity only for its own backend.
+        Trusts guarantees the ``is_active`` check only for its own grants.
         The inactive custom grant stays, in agreement with ``has_perm``.
-        The inactive Trusts-owned grant does not. Audit mode still raises
-        when this hook does not accept ``allow_inactive``.
+        The inactive Trusts-owned grant is included only with
+        ``allow_inactive=True``. The custom hook is not required to accept
+        that keyword, and the call does not raise.
         """
         backends = settings.AUTHENTICATION_BACKENDS + (
             'tests.core.test_issue255.InactiveGrantBackend',
@@ -803,29 +804,38 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         )
         granted.is_active = False
         granted.save(update_fields=['is_active'])
+        InactiveGrantBackend.calls = 0
         with override_settings(AUTHENTICATION_BACKENDS=backends):
             with self.assertNumQueries(0):
                 chosen = self.document.get_permitted_users(self.change)
+                widened = self.document.get_permitted_users(
+                    self.change, allow_inactive=True,
+                )
             with self.assertNumQueries(1):
                 found = _pks(chosen)
+            with self.assertNumQueries(1):
+                widened_pks = _pks(widened)
             candidates = get_user_model()._default_manager.get_queryset()
             expected = {
                 user.pk for user in candidates
                 if user.has_perm(PERM, self.document)
             }
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    self.document.get_permitted_users(
-                        self.change, allow_inactive=True,
-                    )
         self.assertEqual(found, expected)
-        self.assertIn('InactiveGrantBackend', str(ctx.exception))
-        self.assertIn('allow_inactive', str(ctx.exception))
+        self.assertEqual(InactiveGrantBackend.calls, 2)
         self.assertIn(granted.pk, found)
         self.assertIn(self.alice.pk, found)
         self.assertNotIn(self.inactive.pk, found)
+        self.assertIn(granted.pk, widened_pks)
+        self.assertIn(self.alice.pk, widened_pks)
+        self.assertIn(self.inactive.pk, widened_pks)
 
-    def test_legacy_reverse_hook_is_not_called_when_auditing(self):
+    def test_legacy_reverse_hook_is_called_without_allow_inactive(self):
+        """A custom hook is called without ``allow_inactive``.
+
+        ``allow_inactive=True`` does not raise and does not pass the
+        keyword. The inactive user named by the predicate stays in the
+        result.
+        """
         InactiveGrantBackend.calls = 0
         StarInactiveGrantBackend.calls = 0
         star_user = get_user_model().objects.create_user(
@@ -839,31 +849,35 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         )
         with override_settings(AUTHENTICATION_BACKENDS=backends):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as legacy:
-                    self.document.get_permitted_users(
-                        self.change, allow_inactive=True,
-                    )
-        self.assertIn('InactiveGrantBackend', str(legacy.exception))
-        self.assertEqual(InactiveGrantBackend.calls, 0)
-        self.assertEqual(StarInactiveGrantBackend.calls, 0)
+                self.document.get_permitted_users(
+                    self.change, allow_inactive=True,
+                )
+        self.assertEqual(InactiveGrantBackend.calls, 1)
+        self.assertEqual(StarInactiveGrantBackend.calls, 1)
         star_only = settings.AUTHENTICATION_BACKENDS + (
             'tests.core.test_issue255.StarInactiveGrantBackend',
         )
         with override_settings(AUTHENTICATION_BACKENDS=star_only):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as star:
-                    self.document.get_permitted_users(
-                        self.change, allow_inactive=True,
-                    )
+                widened = self.document.get_permitted_users(
+                    self.change, allow_inactive=True,
+                )
             with self.assertNumQueries(0):
                 chosen = self.document.get_permitted_users(self.change)
-        self.assertIn('StarInactiveGrantBackend', str(star.exception))
-        self.assertEqual(StarInactiveGrantBackend.calls, 1)
+        self.assertEqual(StarInactiveGrantBackend.calls, 3)
         found = _pks(chosen)
+        widened_pks = _pks(widened)
         self.assertIn(star_user.pk, found)
+        self.assertIn(star_user.pk, widened_pks)
         self.assertIn(self.alice.pk, found)
 
-    def test_mode_aware_reverse_hook_receives_audit_and_keeps_candidates(self):
+    def test_mode_aware_reverse_hook_is_called_without_allow_inactive(self):
+        """A custom hook is called without ``allow_inactive``.
+
+        Naming the parameter does not make Trusts pass it. The candidate
+        queryset filter still applies. The Trusts-owned grant uses
+        ``allow_inactive=True`` on its own branch.
+        """
         User = get_user_model()
         inactive = User.objects.create_user('mode-aware-inactive', password='x')
         inactive.is_active = False
@@ -885,17 +899,18 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             with self.assertNumQueries(0):
                 default_qs = listing.permitted(self.document, self.change)
             self.assertIs(ModeAwareGrantBackend.received, False)
+            ModeAwareGrantBackend.received = 'unset'
             with self.assertNumQueries(0):
                 audited_qs = listing.permitted(
                     self.document, self.change, allow_inactive=True,
                 )
-            self.assertIs(ModeAwareGrantBackend.received, True)
+            self.assertIs(ModeAwareGrantBackend.received, False)
             unfiltered = self.document.get_permitted_users(
                 self.change, allow_inactive=True,
             )
         self.assertIsInstance(default_qs, ModeAwareQuerySet)
         self.assertIsInstance(audited_qs, ModeAwareQuerySet)
-        self.assertEqual(default_qs.marker, 'issue255-audit')
+        self.assertEqual(default_qs.marker, 'issue255-candidates')
         default_names = set(default_qs.values_list('username', flat=True))
         audited_names = set(audited_qs.values_list('username', flat=True))
         self.assertEqual(
@@ -908,6 +923,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertNotIn(outside.pk, _pks(audited_qs))
         self.assertNotIn(other.pk, _pks(audited_qs))
         self.assertIn(outside.pk, _pks(unfiltered))
+        self.assertIn(self.inactive.pk, _pks(unfiltered))
 
     def test_cross_database_router_fails_before_sql(self):
         databases = dict(settings.DATABASES)

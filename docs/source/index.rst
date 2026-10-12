@@ -526,14 +526,15 @@ supply persisted grants and receive no positive permission result. Input and
 configuration errors still raise before a denied result is returned. Trusts
 does not wrap another backend's reverse predicate in ``is_active``.
 
-Auditing inactive users
-~~~~~~~~~~~~~~~~~~~~~~~
+Including inactive users
+~~~~~~~~~~~~~~~~~~~~~~
 
-To inspect a suspended user's grants, use the keyword-only audit option
-(default ``False``). Inquiries returning content, permissions, or a boolean
-use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
-It skips only the built-in ``is_active`` checks for the user, delegate, and
-sponsor. Explicit conditions and candidate-queryset filters still apply.
+``allow_inactive_user=True`` and ``allow_inactive=True`` skip only the
+built-in ``is_active`` check for the user, delegate, and sponsor.
+Inquiries returning content, permissions, or a boolean use
+``allow_inactive_user``. Inquiries returning users use ``allow_inactive``.
+Reactivation review is one use case. Explicit conditions and
+candidate-queryset filters still apply.
 
 .. code-block:: python
 
@@ -545,10 +546,9 @@ sponsor. Explicit conditions and candidate-queryset filters still apply.
    )
 
 Stock Django user methods do not forward either keyword. Use the Trusts
-adapters for audits; view guards and login behavior are unchanged. A custom
-backend that contributes users to an audit must accept ``allow_inactive``
-on its reverse hook, or that inquiry raises before SQL instead of returning
-a partial result.
+adapters when ``allow_inactive_user=True`` or ``allow_inactive=True`` is
+required. View guards and login behavior are unchanged. Trusts does not
+define a public flag contract for a custom backend.
 
 Protect a view with the Trusts-only primary-key guard:
 

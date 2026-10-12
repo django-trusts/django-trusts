@@ -4,7 +4,7 @@ from django.db.models import Manager, Model, QuerySet
 
 
 def is_active_principal(user, *, allow_inactive=False):
-    """Match ``User.has_perm``: anonymous and inactive principals are denied.
+    """Match ``User.has_perm``: anonymous and inactive users are denied.
 
     Superuser short-circuit on ``has_perm`` is a Django ``ModelBackend``
     behavior and is not duplicated in SQL list filters. ``allow_inactive``
@@ -22,7 +22,7 @@ def is_active_principal(user, *, allow_inactive=False):
 
 
 def require_mode_flag(value, name):
-    """Public audit flags are real booleans, not other truthy values."""
+    """``allow_inactive`` and ``allow_inactive_user`` must be real booleans."""
     if not isinstance(value, bool):
         raise TypeError('%s must be a bool, not %r.' % (name, value))
     return value
@@ -31,22 +31,23 @@ def require_mode_flag(value, name):
 def stored_user_is_inactive(user, *, allow_inactive=False):
     """Whether a stored user's built-in ``is_active`` rejects the inquiry.
 
-    Audit mode skips the check. A principal with no ``is_active`` attribute
-    is not inactive, so schema-neutral terminals keep their current results.
-    Anonymous and unauthenticated denial stays with the caller.
+    ``allow_inactive=True`` skips the check. A user with no ``is_active``
+    attribute is not inactive, so schema-neutral terminals keep their
+    current results. Anonymous and unauthenticated denial stays with the
+    caller.
     """
     if allow_inactive or user is None or not hasattr(user, 'is_active'):
         return False
     return not bool(user.is_active)
 
 
-def principal_identity_denied(user):
-    """Anonymous and unauthenticated principals are denied in both modes.
+def user_identity_denied(user):
+    """Anonymous and unauthenticated users are denied even when
+    ``allow_inactive_user`` is true.
 
-    Missing attributes keep the schema-neutral defaults used by
-    ``is_active_principal``: not anonymous, and authenticated. ``None`` is
-    not an identity denial; callers that require an instance still raise.
-    Audit mode does not lift this check.
+    Missing attributes keep the same defaults as ``is_active_principal``:
+    not anonymous, and authenticated. ``None`` is not this denial; callers
+    that require an instance still raise.
     """
     if getattr(user, 'is_anonymous', False):
         return True
@@ -65,9 +66,10 @@ class AuthorizedQuerySet(QuerySet):
 
     An authenticated user whose ``is_active`` is false receives an empty
     queryset unless ``allow_inactive_user`` is true. Anonymous and
-    unauthenticated principals receive an empty queryset in both modes,
-    before ``granted()``. ``None`` still fails at the grant binding, which
-    is not a positive result. The public content-list inquiry is
+    unauthenticated users receive an empty queryset even when
+    ``allow_inactive_user`` is true, before ``granted()``. ``None`` still
+    fails at the grant binding, which is not a positive result. The public
+    content-list inquiry is
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
     ``.authorized`` stays this lower-level projection: it does not use
     that permitted-input validation. Core ``.authorized`` includes
@@ -85,7 +87,7 @@ class AuthorizedQuerySet(QuerySet):
                 'permission must be a model instance, not %r.' % (permission,)
             )
         require_mode_flag(allow_inactive_user, 'allow_inactive_user')
-        if principal_identity_denied(user):
+        if user_identity_denied(user):
             return self.none()
         if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
             return self.none()

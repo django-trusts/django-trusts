@@ -145,8 +145,8 @@ may supply the sponsor's authority on the same content and permission.
 Reviewers should verify the delegate/sponsor direction, the relationship's
 explicit conditions, the default :ref:`user.is_active checks <user-is-active-checks>`,
 and the sponsor's ordinary-grant predicate in the document and generated SQL.
-The lockfile records that default mode. How an audit-mode inquiry would be
-represented in the same document is unresolved.
+The lockfile records `allow_inactive` left false. How an inquiry with
+`allow_inactive=True` would be represented in the same document is unresolved.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.

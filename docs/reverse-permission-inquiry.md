@@ -5,7 +5,7 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the `Along` failure boundary below.
 
-Both adapters use the [shared user.is_active rule and audit option](source/index.rst#user-is-active-checks).
+Both adapters use the [shared user.is_active rule](source/index.rst#user-is-active-checks), including ``allow_inactive=True``.
 
 ## Decision
 
@@ -144,7 +144,7 @@ backend contribution is compared with that backend's mode-aware singular
 inquiry for the normalized permission identity, then composed with the same
 candidate eligibility and Django active-superuser contributor.
 
-For eligible users in default mode, the comparison with stock Django remains:
+For eligible users when ``allow_inactive`` is left false, the comparison with stock Django remains:
 
 ```python
 normalized_perm = normalize_permission_for_singular_check(perm)
@@ -155,15 +155,17 @@ user.has_perm(normalized_perm, content)
 second public API. It leaves supported strings and explicitly supported custom
 permission instances unchanged, and uses `user_perm_str` for an
 `auth.Permission` instance. Reverse compilation still uses the canonical row.
-Default mode agrees with stock `has_perm` for a custom backend, including an
-inactive user that only that backend grants. Trusts does not guarantee
-activity outside its own backend and does not wrap that predicate in
-`is_active`. Audit mode lifts `is_active` only on Trusts-owned grants. Stock
-`user.has_perm()` cannot forward `allow_inactive`. A reverse hook participates
-in an audit only by naming `allow_inactive` (`**kwargs` alone does not).
-Otherwise `get_permitted_users` raises `TrustsConfigurationError` before SQL
-and does not call the hook. That raise does not rewrite the hook's predicate.
-The reverse result must retain every supported contributor under that mode.
+With `allow_inactive` left false, the result agrees with stock `has_perm` for
+a custom backend, including an inactive user that only that backend grants.
+Trusts guarantees `is_active` only for its own grants and does not wrap a
+custom predicate in `is_active`. `allow_inactive=True` skips that check only
+on Trusts-owned grants. Stock `user.has_perm()` cannot forward
+`allow_inactive`. A custom reverse hook is still called as
+`permitted_users_predicate(content, perm)`. Trusts does not require that hook
+to accept `allow_inactive` and does not raise when it does not. If the hook's
+own predicate excludes inactive users, `allow_inactive=True` cannot include
+them. That limit is recorded in the implementation notes, not as a public
+hook contract. The reverse result must retain every supported contributor.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not
@@ -183,8 +185,8 @@ backend's own eligibility rules:
 
 Django's outer superuser contributor is unchanged. Other backends keep the
 predicates they already contribute. Trusts does not add an `is_active`
-wrapper around that whole OR. A custom hook that participates in an audit
-must accept `allow_inactive`; otherwise the inquiry raises before SQL.
+wrapper around that whole OR. `allow_inactive=True` is passed only to the
+Trusts-owned mixin method. A custom hook keeps its existing call.
 Arbitrary Python-only state is unsupported and fails loudly.
 
 The invariant is over candidate rows supplied by the application's existing
@@ -252,7 +254,7 @@ WHERE
 
 `trusts_eligibility_predicate` includes `user.is_active` unless
 `allow_inactive` is true. Sponsor `is_active` inside a delegated grant uses
-the same mode. The superuser predicate still requires an active superuser.
+the same value. The superuser predicate still requires an active superuser.
 Other backend predicates are not rewritten. The named predicates are
 conceptual SQL placeholders, not Python callbacks.
 

@@ -29,14 +29,16 @@ default results change for an inactive user:
 | Before #284 | After #284 |
 | --- | --- |
 | Ordinary `.authorized()`, `permissions_for`, `has_permission`, `filter_authorized`, and `filter_authorized_scopes` can produce a positive result for an inactive user | The same default inquiry returns false/empty |
-| `.authorized()`, those registry inquiries, and `filter_authorized_scopes` can reach grant compilation for an anonymous or unauthenticated principal | Empty or false in both modes, before SQL. `None` still raises. A principal with neither `is_anonymous` nor `is_authenticated` keeps the schema-neutral default |
-| An aggregate reverse inquiry can include an inactive user through a custom backend | Unchanged. Trusts applies `is_active` only to its own grants, so default `get_permitted_users` still agrees with `has_perm` for that custom backend. Audit mode raises before SQL when the hook does not accept `allow_inactive` |
+| `.authorized()`, those registry inquiries, and `filter_authorized_scopes` can reach grant compilation for an anonymous or unauthenticated user | Empty or false even when `allow_inactive_user=True`, before SQL. `None` still raises. A user with neither `is_anonymous` nor `is_authenticated` keeps the schema-neutral default |
+| An aggregate reverse inquiry can include an inactive user through a custom backend | Unchanged. Trusts applies the `is_active` check only to its own grants, so `get_permitted_users` with `allow_inactive` left false still agrees with `has_perm` for that custom backend. `allow_inactive=True` is passed only to the Trusts-owned mixin method |
 
-Use the audit option in the usage guide when those calls intentionally inspect
-stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;
+Pass `allow_inactive_user=True` or `allow_inactive=True` when those calls
+intentionally include inactive users. Reactivation review is one use case.
+Content/permission/boolean inquiries use `allow_inactive_user`;
 user-list inquiries use `allow_inactive`.
 Existing permission inputs, query shapes, and positional arguments remain.
-A principal with no `is_active` attribute is not treated as inactive.
+A user with no `is_active` attribute is not treated as inactive by
+`.authorized()` or the registry projections.
 Review affected Trusts inquiry call sites. Default-mode policy lock bytes are
 unchanged. An audit-mode lockfile representation is unresolved.
 

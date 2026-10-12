@@ -1,9 +1,10 @@
-"""Inactive-user activity checks (#284).
+"""Inactive users on Trusts inquiries (#284).
 
 Default Trusts inquiries deny a user whose ``is_active`` is false.
-``allow_inactive_user`` and ``allow_inactive`` skip only that built-in
-check. Anonymous and unauthenticated principals are denied in both modes.
-Superuser shortcuts and explicit conditions stay in place.
+``allow_inactive_user=True`` and ``allow_inactive=True`` skip only that
+built-in check. Anonymous and unauthenticated users stay denied when
+either keyword is true. Superuser shortcuts and explicit conditions stay
+in place.
 """
 
 from unittest.mock import patch
@@ -101,7 +102,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         user.is_active = False
         user.save(update_fields=['is_active'])
 
-    def test_content_enumeration_and_boolean_default_and_audit(self):
+    def test_content_enumeration_and_boolean_with_allow_inactive_user(self):
         self._deactivate(self.alice)
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
         with self.assertNumQueries(0):
@@ -155,7 +156,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         with self.assertRaises(TypeError):
             self.alice.has_perm(PERM, self.open_doc, allow_inactive_user=True)
 
-    def test_anonymous_stays_denied_when_auditing(self):
+    def test_anonymous_stays_denied_with_allow_inactive_user(self):
         anonymous = AnonymousUser()
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
         with self.assertNumQueries(0):
@@ -192,7 +193,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
             ).exists()
         )
 
-    def test_user_list_includes_inactive_grant_only_when_auditing(self):
+    def test_user_list_includes_inactive_grant_only_with_allow_inactive(self):
         self._deactivate(self.alice)
 
         class Listing(PermittedUsersManagerMixin, type(get_user_model().objects)):
@@ -215,7 +216,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         self.assertNotIn(self.inactive_super.pk, default_users)
         self.assertNotIn(self.inactive_super.pk, audited_users)
 
-    def test_inactive_delegate_and_sponsor_fail_closed_unless_auditing(self):
+    def test_inactive_delegate_and_sponsor_fail_closed_unless_allow_inactive(self):
         self._deactivate(self.delegate)
         self.assertFalse(self.delegate.has_perm(PERM, self.open_doc))
         self.assertTrue(self.backend.has_perm(
@@ -249,7 +250,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
             )),
         )
 
-    def test_audit_flag_must_be_a_bool_before_sql(self):
+    def test_allow_inactive_flag_must_be_a_bool_before_sql(self):
         with self.assertNumQueries(0):
             with self.assertRaises(TypeError):
                 Document.objects.authorized(
@@ -265,7 +266,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class InactiveRegistryInquiryTest(TransactionTestCase):
-    def test_registry_and_scopes_deny_inactive_users_and_keep_schemaless_principals(self):
+    def test_registry_and_scopes_deny_inactive_users_and_keep_schemaless_holders(self):
         User = get_user_model()
 
         class Note(models.Model):
@@ -464,7 +465,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        class Principal(models.Model):
+        class LocalUser(models.Model):
             name = models.CharField(max_length=40)
             is_anonymous = models.BooleanField(default=False)
             is_authenticated = models.BooleanField(default=True)
@@ -479,9 +480,9 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        class PrincipalGrant(models.Model):
+        class LocalUserGrant(models.Model):
             note = models.ForeignKey(Note, on_delete=models.CASCADE)
-            principal = models.ForeignKey(Principal, on_delete=models.CASCADE)
+            holder = models.ForeignKey(LocalUser, on_delete=models.CASCADE)
             action = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
             class Meta:
@@ -489,14 +490,14 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
 
         class FolderGrant(models.Model):
             folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
-            principal = models.ForeignKey(Principal, on_delete=models.CASCADE)
+            holder = models.ForeignKey(LocalUser, on_delete=models.CASCADE)
             permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
 
         models_ = (
-            Note, Folder, Row, Principal, Bare, PrincipalGrant, FolderGrant,
+            Note, Folder, Row, LocalUser, Bare, LocalUserGrant, FolderGrant,
         )
         with connection.schema_editor() as editor:
             for model in models_:
@@ -506,20 +507,20 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             note = Note.objects.create(title='n')
             folder = Folder.objects.create(title='f')
             Row.objects.create(folder=folder, note=note)
-            visible = Principal.objects.create(name='visible')
-            anonymous = Principal.objects.create(
+            visible = LocalUser.objects.create(name='visible')
+            anonymous = LocalUser.objects.create(
                 name='anonymous', is_anonymous=True,
             )
-            guest = Principal.objects.create(
+            guest = LocalUser.objects.create(
                 name='guest', is_authenticated=False,
             )
             bare = Bare.objects.create(name='bare')
-            for principal in (visible, anonymous, guest):
-                PrincipalGrant.objects.create(
-                    note=note, principal=principal, action=read,
+            for holder in (visible, anonymous, guest):
+                LocalUserGrant.objects.create(
+                    note=note, holder=holder, action=read,
                 )
                 FolderGrant.objects.create(
-                    folder=folder, principal=principal, permission=read,
+                    folder=folder, holder=holder, permission=read,
                 )
 
             with patch('trusts.core.granted', return_value=Q(pk=note.pk)) as compiled:
@@ -528,19 +529,19 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             compiled.assert_called()
             with patch('trusts.core.granted') as compiled:
                 with self.assertNumQueries(0):
-                    for principal in (anonymous, guest):
-                        for audit in (False, True):
+                    for holder in (anonymous, guest):
+                        for include_inactive in (False, True):
                             rows = AuthorizedQuerySet(Note).authorized(
-                                principal, read, allow_inactive_user=audit,
+                                holder, read, allow_inactive_user=include_inactive,
                             )
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
 
             registry = TrustsRegistry()
-            grant = Ref(PrincipalGrant)
+            grant = Ref(LocalUserGrant)
             registry.register(
                 content=grant.note,
-                user=grant.principal,
+                user=grant.holder,
                 permission=grant.action,
             )
             self.assertEqual(
@@ -551,7 +552,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             scope_grant = Ref(FolderGrant)
             scope_registry.register(
                 content=scope_grant.folder.identity_rows.note,
-                user=scope_grant.principal,
+                user=scope_grant.holder,
                 permission=scope_grant.permission,
             )
             handle = _Handle(scope_registry)
@@ -563,40 +564,40 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 {folder.pk},
             )
             backend = DocumentBackend()
-            for principal in (anonymous, guest):
+            for holder in (anonymous, guest):
                 with self.assertNumQueries(0):
-                    for audit in (False, True):
+                    for include_inactive in (False, True):
                         self.assertEqual(
                             list(registry.permissions_for(
-                                principal, note, allow_inactive_user=audit,
+                                holder, note, allow_inactive_user=include_inactive,
                             )),
                             [],
                         )
                         self.assertFalse(registry.has_permission(
-                            principal, note, read, allow_inactive_user=audit,
+                            holder, note, read, allow_inactive_user=include_inactive,
                         ))
                         self.assertFalse(registry.filter_authorized(
-                            Note.objects.all(), principal, read,
-                            allow_inactive_user=audit,
+                            Note.objects.all(), holder, read,
+                            allow_inactive_user=include_inactive,
                         ).exists())
                         self.assertFalse(filter_authorized_scopes(
-                            Folder.objects.all(), principal, read,
+                            Folder.objects.all(), holder, read,
                             content=Note, handles=(handle,),
-                            allow_inactive_user=audit,
+                            allow_inactive_user=include_inactive,
                         ).exists())
                         self.assertFalse(backend.has_perm(
-                            principal, 'myapp.change_document', note,
-                            allow_inactive_user=audit,
+                            holder, 'myapp.change_document', note,
+                            allow_inactive_user=include_inactive,
                         ))
                         self.assertEqual(
                             backend.get_all_permissions(
-                                principal, note, allow_inactive_user=audit,
+                                holder, note, allow_inactive_user=include_inactive,
                             ),
                             set(),
                         )
                         self.assertEqual(
                             backend.get_group_permissions(
-                                principal, note, allow_inactive_user=audit,
+                                holder, note, allow_inactive_user=include_inactive,
                             ),
                             set(),
                         )
@@ -606,10 +607,10 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                     model=Document, using=Document.objects.db,
                 )
                 with self.assertNumQueries(0):
-                    for principal in (anonymous, guest):
+                    for holder in (anonymous, guest):
                         self.assertEqual(
                             list(permitted.permitted(
-                                change, principal, allow_inactive_user=True,
+                                change, holder, allow_inactive_user=True,
                             )),
                             [],
                         )

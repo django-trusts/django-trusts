@@ -3,7 +3,7 @@
 Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)`
 is implemented on `PermittedQuerySet`.
 
-The [shared user.is_active rule and audit examples](source/index.rst#user-is-active-checks)
+The [shared user.is_active rule](source/index.rst#user-is-active-checks)
 apply to this inquiry.
 
 ## Question
@@ -199,7 +199,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
-- the user is anonymous, unauthenticated, or inactive without audit mode; or
+- the user is anonymous, unauthenticated, or inactive with `allow_inactive_user` left false; or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another
   application label.

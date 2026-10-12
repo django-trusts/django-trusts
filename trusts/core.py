@@ -389,14 +389,14 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
     from trusts.query import (
-        principal_identity_denied,
+        user_identity_denied,
         require_mode_flag,
         stored_user_is_inactive,
     )
     require_mode_flag(allow_inactive_user, 'allow_inactive_user')
     if not handles:
         return queryset.none()
-    if principal_identity_denied(user) or stored_user_is_inactive(
+    if user_identity_denied(user) or stored_user_is_inactive(
         user, allow_inactive=allow_inactive_user,
     ):
         return queryset.none()
@@ -3574,13 +3574,13 @@ class TrustsRegistry(object):
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         from trusts.query import (
-            principal_identity_denied,
+            user_identity_denied,
             require_mode_flag,
             stored_user_is_inactive,
         )
         require_mode_flag(allow_inactive_user, 'allow_inactive_user')
         plan = self.plan_for(content, user=user)
-        if principal_identity_denied(user) or stored_user_is_inactive(
+        if user_identity_denied(user) or stored_user_is_inactive(
             user, allow_inactive=allow_inactive_user,
         ):
             if not plan.records or plan.permission_model is None:
@@ -3595,7 +3595,7 @@ class TrustsRegistry(object):
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
         from trusts.query import (
-            principal_identity_denied,
+            user_identity_denied,
             require_mode_flag,
             stored_user_is_inactive,
         )
@@ -3603,7 +3603,7 @@ class TrustsRegistry(object):
         plan = self.plan_for(
             content, user=user, permission=permission,
         )
-        if principal_identity_denied(user) or stored_user_is_inactive(
+        if user_identity_denied(user) or stored_user_is_inactive(
             user, allow_inactive=allow_inactive_user,
         ):
             return False
@@ -3622,7 +3622,7 @@ class TrustsRegistry(object):
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
         from trusts.query import (
-            principal_identity_denied,
+            user_identity_denied,
             require_mode_flag,
             stored_user_is_inactive,
         )
@@ -3630,7 +3630,7 @@ class TrustsRegistry(object):
         plan = self.plan_for(
             queryset, user=user, permission=permission,
         )
-        if principal_identity_denied(user) or stored_user_is_inactive(
+        if user_identity_denied(user) or stored_user_is_inactive(
             user, allow_inactive=allow_inactive_user,
         ):
             return queryset.none()
