@@ -128,10 +128,10 @@ user is the outer row. ``content.get_permitted_users(perm)`` and optional
 ``User.objects.permitted(content, perm)`` share this one policy entry
 because they use the same reverse compiler; the document does not duplicate
 their SQL. The lockfile key stays ``get_permitted_users``. For an ``Along``
-registration, the candidate user is correlated into the recursive grant seed
-and the supplied content is tested against that user's bounded reach. The same
-terminal ``condition=`` overlay and active-principal eligibility predicate are
-part of the reverse branch. The locked reverse statement must therefore agree
+registration, the recursive query walks the inverse graph from the supplied
+content without the outer candidate user, then joins eligible grants and users.
+The same terminal ``condition=`` overlay and user eligibility check apply
+outside the recursive query. The locked reverse statement must therefore agree
 with the complete forward object check. An unsupported renderer or unrenderable
 recursive predicate raises before a partial document is returned.
 
