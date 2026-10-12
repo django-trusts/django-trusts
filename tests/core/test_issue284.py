@@ -30,7 +30,7 @@ from trusts.core import (
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    filter_authorized_scopes,
+    filter_by_permitted_content,
 )
 from trusts.query import (
     AuthorizedQuerySet,
@@ -420,19 +420,19 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             )
             handle = _Handle(scope_registry)
             self.assertEqual(
-                _pks(filter_authorized_scopes(
+                _pks(filter_by_permitted_content(
                     Folder.objects.all(), alice, read,
                     content=Note, handles=(handle,),
                 )),
                 {folder.pk},
             )
             with self.assertNumQueries(0):
-                self.assertFalse(filter_authorized_scopes(
+                self.assertFalse(filter_by_permitted_content(
                     Folder.objects.all(), inactive, read,
                     content=Note, handles=(handle,),
                 ).exists())
             self.assertEqual(
-                _pks(filter_authorized_scopes(
+                _pks(filter_by_permitted_content(
                     Folder.objects.all(), inactive, read,
                     content=Note, handles=(handle,),
                     allow_inactive_user=True,
@@ -562,7 +562,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             )
             handle = _Handle(scope_registry)
             self.assertEqual(
-                _pks(filter_authorized_scopes(
+                _pks(filter_by_permitted_content(
                     Folder.objects.all(), visible, read,
                     content=Note, handles=(handle,),
                 )),
@@ -585,7 +585,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                             Note.objects.all(), holder, read,
                             allow_inactive_user=include_inactive,
                         ).exists())
-                        self.assertFalse(filter_authorized_scopes(
+                        self.assertFalse(filter_by_permitted_content(
                             Folder.objects.all(), holder, read,
                             content=Note, handles=(handle,),
                             allow_inactive_user=include_inactive,
@@ -804,7 +804,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         ))
 
     def _scope_pks(self, user, **kwargs):
-        return set(filter_authorized_scopes(
+        return set(filter_by_permitted_content(
             self.Cabinet.objects.all(), user, self.read,
             content=self.Sheet, handles=(self.handle,), **kwargs,
         ).values_list('pk', flat=True))

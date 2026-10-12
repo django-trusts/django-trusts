@@ -31,7 +31,7 @@ from trusts.core import (
     TrustsRegistry,
     all_match,
     common_permissions,
-    filter_authorized_scopes,
+    filter_by_permitted_content,
     granted,
     instance_match,
     permission_in,
@@ -963,7 +963,7 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.assertEqual(record.content_path, ('node', 'children'))
         self.assertIs(record.content_model, self.Node)
         with self.assertNumQueries(0):
-            qs = filter_authorized_scopes(
+            qs = filter_by_permitted_content(
                 self.Node.objects.all(),
                 self.holder,
                 self.add,
@@ -975,7 +975,7 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.parent.pk})
         self.assertFalse(
-            filter_authorized_scopes(
+            filter_by_permitted_content(
                 self.Node.objects.all(),
                 self.stranger,
                 self.add,
@@ -995,7 +995,7 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
             registry=registry,
             compiler=PlanQueryCompiler(),
         )
-        qs = filter_authorized_scopes(
+        qs = filter_by_permitted_content(
             self.Node.objects.all(),
             self.holder,
             self.add,
@@ -1028,7 +1028,7 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
             )
         with self.assertNumQueries(1):
             self.assertEqual(
-                _pks(filter_authorized_scopes(
+                _pks(filter_by_permitted_content(
                     self.Node.objects.all(),
                     self.holder,
                     self.add,

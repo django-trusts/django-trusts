@@ -23,6 +23,20 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## `filter_authorized_scopes` renamed (#302)
+
+`filter_authorized_scopes` is deprecated. Call `filter_by_permitted_content`.
+The signature and behavior are the same. The old function remains and calls
+the new one.
+
+| | Old | New |
+| --- | --- | --- |
+| Rows with permitted content under them | `filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` | `filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` |
+
+Migration-bot checklist:
+
+- search `filter_authorized_scopes(` and replace with `filter_by_permitted_content(`
+
 ## user.is_active checks (#284)
 
 The shared [user.is_active rule](docs/source/index.rst#user-is-active-checks)

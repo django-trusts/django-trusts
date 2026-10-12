@@ -33,7 +33,7 @@ from trusts.core import (
     TrustsRegistry,
     _compiler_applies,
     common_permissions,
-    filter_authorized_scopes,
+    filter_by_permitted_content,
     granted,
 )
 from trusts.decorators import (
@@ -275,11 +275,11 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
                 set(mixed_perms.values_list('codename', flat=True)),
             )
 
-            rel_scopes = filter_authorized_scopes(
+            rel_scopes = filter_by_permitted_content(
                 Document.objects.all(), self.alice, self.change,
                 content=self.rel_doc, handles=(self.rel_handle,),
             )
-            fold_scopes = filter_authorized_scopes(
+            fold_scopes = filter_by_permitted_content(
                 Document.objects.all(), self.alice, self.change,
                 content=self.fold_doc, handles=(self.fold_handle,),
             )

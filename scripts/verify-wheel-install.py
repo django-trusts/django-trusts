@@ -191,6 +191,7 @@ def main() -> int:
         RelationPlan,
         TrustsRegistry,
         filter_authorized_scopes,
+        filter_by_permitted_content,
     )
     from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
@@ -304,6 +305,7 @@ def main() -> int:
     print('TrustsImplementationConfig', TrustsImplementationConfig)
     print('implementation_configs', implementation_configs())
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
+    print('filter_by_permitted_content', filter_by_permitted_content)
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
     standalone = TrustsRegistry()

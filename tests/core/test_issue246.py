@@ -27,7 +27,7 @@ from trusts.core import (
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    filter_authorized_scopes,
+    filter_by_permitted_content,
 )
 from trusts.policy_lock import (
     _load_policy_sql_document,
@@ -545,7 +545,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
                 key=lambda row: row.pk,
             )
         self.assertEqual(listed, [self.paper_a, self.paper_c, self.paper_d])
-        folders = filter_authorized_scopes(
+        folders = filter_by_permitted_content(
             self.Folder.objects.order_by('pk'),
             self.alice,
             self.change,
@@ -827,14 +827,14 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                     self.assertEqual(
                         len(_group_permission_aliases(sql)), 1, sql,
                     )
-        read_folders = filter_authorized_scopes(
+        read_folders = filter_by_permitted_content(
             self.Folder.objects.order_by('pk'),
             self.alice,
             self.read,
             content=self.Paper,
             handles=(self.handle,),
         )
-        change_folders = filter_authorized_scopes(
+        change_folders = filter_by_permitted_content(
             self.Folder.objects.order_by('pk'),
             self.alice,
             self.change,

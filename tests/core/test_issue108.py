@@ -108,11 +108,11 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
 
     def test_generic_declarations_import_without_kernel_config(self):
         import trusts.apps as apps_mod
-        from trusts.core import Ref, TrustsRegistry, filter_authorized_scopes
+        from trusts.core import Ref, TrustsRegistry, filter_by_permitted_content
         from trusts.query import AuthorizedManager, AuthorizedQuerySet
 
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
-        self.assertTrue(callable(filter_authorized_scopes))
+        self.assertTrue(callable(filter_by_permitted_content))
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(issubclass(AuthorizedManager, object))
         registry = TrustsRegistry()
