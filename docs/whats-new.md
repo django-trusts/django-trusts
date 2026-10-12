@@ -41,7 +41,8 @@ log.
   toward a delegation, and a delegated registration may use the same
   `along=` walk. The delegate is allowed only on objects both sides reach.
   One delegation level is unchanged. See the
-  [user guide](source/index.rst).
+  [user guide](source/index.rst) and the
+  [migration record](../migrates.md#delegation-along-282).
 
 - **Permitted content querysets.**
   `QuerySet.permitted(permission, user, conditions=())` lazily filters an
