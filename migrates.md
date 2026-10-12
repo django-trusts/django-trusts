@@ -19,47 +19,6 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
-## Delegation along= (#282)
-
-A sponsor's ordinary `along=` grant now counts for a delegation. A delegated
-`register(..., along=)` is accepted. Before this, that call raised
-`TrustsConfigurationError` (`delegated register does not support along=.`),
-and the sponsor check matched only the exact object.
-
-| | Before | After |
-| --- | --- | --- |
-| Sponsor grant uses `along=` and the delegation names a child object | `has_perm` matches the sponsor grant only on the exact object. The delegate is denied on the child | The walked grant counts. The delegate is allowed on the child when the walk reaches it |
-| `register(delegate=..., sponsor=..., along=...)` | Raises `TrustsConfigurationError` | The registration is stored. The delegate is allowed only where the delegation walk and the sponsor's ordinary permission both reach the object |
-| Sponsor grant and delegation both use `along=` | Not available, because delegated `along=` was rejected | The delegate gets only the objects both walks reach |
-| `get_permitted_users`, `.permitted()`, `.authorized()`, and `get_all_permissions` | Same exact-object sponsor match | They agree with `has_perm` |
-| A delegate sponsoring a further delegation | Denied | Still denied |
-| Inactive sponsor or delegate | Denied unless the inquiry passes `allow_inactive_user` or `allow_inactive` | Unchanged |
-
-No schema migration. A delegation check that uses a walk now includes
-`WITH RECURSIVE` in the policy SQL. Regenerate `trusts-policy.lock.yaml`.
-
-```python
-# Old: the sponsor walk did not count for the delegation
-delegate.has_perm("issues.change_issue", child)  # False
-
-# New: the sponsor's along= grant on the parent counts
-delegate.has_perm("issues.change_issue", child)  # True
-```
-
-Migration-bot checklist:
-
-- `along=`
-- `delegate=`
-- `sponsor=`
-- `register(`
-- `has_perm(`
-- `get_permitted_users(`
-- `.permitted(`
-- `.authorized(`
-- `get_all_permissions(`
-- `trusts_policy_sql`
-- `trusts-policy.lock.yaml`
-
 ## user.is_active checks (#284)
 
 The shared [user.is_active rule](docs/source/index.rst#user-is-active-checks)

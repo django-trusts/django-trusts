@@ -11,9 +11,10 @@ log.
 
 ## 1.1.0
 
-- **Provisional `along=` reachability.** Reverse inquiry and policy SQL
-  support bounded provisional `along=` registrations on SQLite, PostgreSQL,
-  and MySQL 8.4+. See the [core registry](core-registry.md) and [#286].
+- **Provisional `along=` reachability.** Reverse inquiry, policy SQL, and
+  delegation support bounded provisional `along=` on SQLite, PostgreSQL,
+  and MySQL 8.4+. `along=` is improved and remains provisional. See the
+  [core registry](core-registry.md) and [#286].
 
 - **Readable policy-lock SQL.** Each lockfile statement is broken between
   tokens onto predictable lines, including a `WITH RECURSIVE` walk and
@@ -36,13 +37,6 @@ log.
   inactive delegate or sponsor fails closed. See the
   [user guide](source/index.rst), [driver contract](dev/delegation-registration.md),
   and [#279].
-
-- **Delegation with `along=`.** A sponsor's ordinary `along=` grant counts
-  toward a delegation, and a delegated registration may use the same
-  `along=` walk. The delegate is allowed only on objects both sides reach.
-  One delegation level is unchanged. See the
-  [user guide](source/index.rst) and the
-  [migration record](../migrates.md#delegation-along-282).
 
 - **Permitted content querysets.**
   `QuerySet.permitted(permission, user, conditions=())` lazily filters an

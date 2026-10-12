@@ -654,7 +654,8 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Inherited relationships are provisional. A bounded hierarchical walk may be
+Inherited relationships are provisional. ``along=`` works with delegated
+registrations. A bounded hierarchical walk may be
 declared with ``along=("parent", 8)`` on ``backend.register``.
 django-trusts evaluates the walk with a recursive common table expression
 rather than traversing the hierarchy in Python. The database combinations
@@ -662,9 +663,7 @@ currently exercised by CI are recorded in the `support matrix
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 The same bounded walk participates in object checks, permitted-content
 querysets, permission enumeration, reverse permitted-user inquiry, and
-authorization-policy SQL. A delegated ``register()`` accepts the same
-``along=`` argument. The delegate is allowed only where that walk and the
-sponsor's ordinary permission both reach the object. For one content and
+authorization-policy SQL. For one content and
 permission, reverse inquiry returns exactly the users whose complete
 forward object check succeeds, including the terminal condition and user
 checks.
