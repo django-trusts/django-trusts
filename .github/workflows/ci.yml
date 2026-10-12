@@ -321,12 +321,7 @@ jobs:
       working-directory: companion
       env:
         TRUSTS_FOLLOW_CORE: "1"
-      run: |
-        if [ "${{ matrix.companion }}" = "gh-permissions" ]; then
-          echo "Temporary forced failure to prove lockfile upload after a failed suite." >&2
-          exit 1
-        fi
-        python -m tests.runtests
+      run: python -m tests.runtests
 
     - name: Generate SQLite policy lockfile
       id: policy-lock
