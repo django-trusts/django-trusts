@@ -68,24 +68,24 @@ The following abridged example shows the schema:
                permission: {path: "permission", model: "auth.Permission", target: "id"}
                content: {path: "document", model: "documents.Document", target: "id"}
            permitted:
-             params: [{const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
+             params: [{const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
              sql: |-
                SELECT DISTINCT ...
            has_perm:
-             params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
+             params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
              sql: |-
                SELECT ... WHERE candidate-primary-key AND grant-exists
            get_all_permissions:
-             params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
+             params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
-             params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
+             params: [{const: true, hint: "active"}, {const: 1, hint: "exists marker"}, {bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
              - id: "documents__Document__non_confidential"
-               params: [{const: true}]
+               params: [{const: true, hint: "confidential"}]
                sql: |-
                  SELECT ... WHERE non-confidential-predicate
 
@@ -169,11 +169,14 @@ Artifact IDs use portable ``_`` and ``__`` segments. A trust ID folds model-name
 dots to ``__`` and adds the content field, for example
 ``documents__DocumentPermission__document``. Conditions append ``__cond``
 because the registration stored a condition (``record.condition`` is not
-``None``). That entry then includes the condition in a fixed shape:
-``equal`` with ``left`` and ``right`` paths, ``permission_in`` as a
-one-line list of paths, ``inquiry_permission`` as one path, and ``all``
-as an ordered list of those nodes. A registration without a condition
-omits the key. ``Along`` adds ``__along_{shape}_{bound}``. For repeated
+``None``). That entry then includes the condition as one double-quoted
+Python-like line. Field paths stay bare. ``permission in <collection>``
+uses the registered permission column as its member. ``==`` compares two
+columns. ``and`` joins them, with parentheses only around a nested
+group. The delegated inquiry permission is the request-time value
+``$permission`` (``permissions == $permission``). A registration without
+a condition omits the key. ``Along`` adds ``__along_{shape}_{bound}``.
+For repeated
 bases, the first ID keeps the unsuffixed base and the second and later IDs
 add ``__2``, ``__3``, and so on. Named-filter IDs combine the content-model label and filter code. Filter
 codes must match ``[A-Za-z0-9_]+`` or export fails.
@@ -187,9 +190,16 @@ order.
 Constants and generated YAML
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``bind`` entries name runtime values without storing them. Constants are
-mapped between Python and SQL types so their values and type information are
-available for inspection. These mappings are data, not YAML object tags.
+``bind`` entries name runtime values without storing them. Each parameter
+also carries a ``hint``: ``$user``, ``$permission``, ``$content``, or
+``$user.<target>`` when the bind is a request-time role, and a short label
+for a constant (``exists marker``, ``content type app``, ``content type
+model``, ``content pk``, ``along bound``, ``active``, or the compared
+field, or ``along match``). ``bind`` and ``const`` values and their
+order are unchanged.
+Constants are mapped between Python and SQL types so their values and type
+information are available for inspection. These mappings are data, not YAML
+object tags.
 
 The writer uses the installed supported ``PyYAML`` release. Output is UTF-8
 without a byte-order mark, uses LF endings, fixed key order, double-quoted
