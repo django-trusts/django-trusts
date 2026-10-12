@@ -645,8 +645,10 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
     ``unexpired`` is ``content.expires_on == content.as_of``. Both are named
     filters. The relationship condition stays
     ``allowed_permissions.contains(permission)``. Scope listing follows the
-    ordinary cabinet grant. ``has_perm`` and ``get_permitted_users`` also
-    follow the relationship.
+    ordinary cabinet grant and a one-level delegation of that grant.
+    ``has_perm`` and ``get_permitted_users`` follow the same relationship.
+    A named filter applies to those two inquiries. ``filter_by_permitted_content``
+    receives the permission instance, so it follows the unfiltered grant.
     """
 
     def setUp(self):
@@ -836,7 +838,8 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self.assertIn(self.sponsor.pk, included)
         self.assertEqual(self._scope_pks(self.delegate), set())
         self.assertEqual(
-            self._scope_pks(self.delegate, allow_inactive_user=True), set(),
+            self._scope_pks(self.delegate, allow_inactive_user=True),
+            {self.cabinet.pk},
         )
         self.assertEqual(self._scope_pks(self.sponsor), set())
         self.assertEqual(
@@ -912,8 +915,12 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self.assertTrue(self.backend.has_perm(
             self.sponsor, self.code, self.sheet,
         ))
+        self.assertTrue(self.backend.has_perm(
+            self.delegate, self.code, self.sheet,
+        ))
         self.assertIn(self.sponsor.pk, self._user_pks(self.code))
-        self.assertEqual(self._scope_pks(self.delegate), set())
+        self.assertIn(self.delegate.pk, self._user_pks(self.code))
+        self.assertEqual(self._scope_pks(self.delegate), {self.cabinet.pk})
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
         self._deactivate(self.delegate)
         self._deactivate(self.sponsor)
