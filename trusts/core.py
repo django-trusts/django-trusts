@@ -388,11 +388,17 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
-    from trusts.query import require_mode_flag, stored_user_is_inactive
+    from trusts.query import (
+        principal_identity_denied,
+        require_mode_flag,
+        stored_user_is_inactive,
+    )
     require_mode_flag(allow_inactive_user, 'allow_inactive_user')
     if not handles:
         return queryset.none()
-    if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+    if principal_identity_denied(user) or stored_user_is_inactive(
+        user, allow_inactive=allow_inactive_user,
+    ):
         return queryset.none()
 
     scope_model = queryset.model._meta.concrete_model
@@ -3567,10 +3573,16 @@ class TrustsRegistry(object):
         """Distinct permission rows granted to ``user`` on ``content``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
-        from trusts.query import require_mode_flag, stored_user_is_inactive
+        from trusts.query import (
+            principal_identity_denied,
+            require_mode_flag,
+            stored_user_is_inactive,
+        )
         require_mode_flag(allow_inactive_user, 'allow_inactive_user')
         plan = self.plan_for(content, user=user)
-        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+        if principal_identity_denied(user) or stored_user_is_inactive(
+            user, allow_inactive=allow_inactive_user,
+        ):
             if not plan.records or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
@@ -3582,12 +3594,18 @@ class TrustsRegistry(object):
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
-        from trusts.query import require_mode_flag, stored_user_is_inactive
+        from trusts.query import (
+            principal_identity_denied,
+            require_mode_flag,
+            stored_user_is_inactive,
+        )
         require_mode_flag(allow_inactive_user, 'allow_inactive_user')
         plan = self.plan_for(
             content, user=user, permission=permission,
         )
-        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+        if principal_identity_denied(user) or stored_user_is_inactive(
+            user, allow_inactive=allow_inactive_user,
+        ):
             return False
         return plan.has_permission(user, content, permission)
 
@@ -3603,12 +3621,18 @@ class TrustsRegistry(object):
             )
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
-        from trusts.query import require_mode_flag, stored_user_is_inactive
+        from trusts.query import (
+            principal_identity_denied,
+            require_mode_flag,
+            stored_user_is_inactive,
+        )
         require_mode_flag(allow_inactive_user, 'allow_inactive_user')
         plan = self.plan_for(
             queryset, user=user, permission=permission,
         )
-        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+        if principal_identity_denied(user) or stored_user_is_inactive(
+            user, allow_inactive=allow_inactive_user,
+        ):
             return queryset.none()
         return plan.filter_content(queryset, user, permission)
 

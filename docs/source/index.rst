@@ -544,7 +544,10 @@ sponsor. Explicit conditions and candidate-queryset filters still apply.
    )
 
 Stock Django user methods do not forward either keyword. Use the Trusts
-adapters for audits; view guards and login behavior are unchanged.
+adapters for audits; view guards and login behavior are unchanged. A custom
+backend that contributes users to an audit must accept ``allow_inactive``
+on its reverse hook, or that inquiry raises before SQL instead of returning
+a partial result.
 
 Protect a view with the Trusts-only primary-key guard:
 

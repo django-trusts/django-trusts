@@ -2,18 +2,21 @@
 
 Default Trusts inquiries deny a user whose ``is_active`` is false.
 ``allow_inactive_user`` and ``allow_inactive`` skip only that built-in
-check. Superuser shortcuts, anonymous denial, and explicit conditions
-stay in place.
+check. Anonymous and unauthenticated principals are denied in both modes.
+Superuser shortcuts and explicit conditions stay in place.
 """
+
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
+from django.db.models import Q
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from tests.core import KernelHostRequiredMixin
+from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
@@ -25,6 +28,7 @@ from trusts.core import (
     filter_authorized_scopes,
 )
 from trusts.query import (
+    AuthorizedQuerySet,
     PermittedQuerySet,
     PermittedUsersManagerMixin,
 )
@@ -164,10 +168,14 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
             self.assertFalse(self.backend.has_perm(
                 anonymous, PERM, self.open_doc, allow_inactive_user=True,
             ))
-            with self.assertRaises((TrustsConfigurationError, TypeError, AttributeError)):
-                Document.objects.authorized(
+            with patch('trusts.core.granted') as compiled:
+                denied = Document.objects.authorized(anonymous, self.change)
+                audited = Document.objects.authorized(
                     anonymous, self.change, allow_inactive_user=True,
                 )
+                self.assertEqual(_pks(denied), set())
+                self.assertEqual(_pks(audited), set())
+            compiled.assert_not_called()
 
     def test_superuser_shortcut_is_unchanged(self):
         self.assertTrue(self.superuser.has_perm(PERM, self.open_doc))
@@ -430,4 +438,182 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 for model in (
                     FolderGrant, AccountGrant, NoteGrant, Account, Row, Folder, Note,
                 ):
+                    editor.delete_model(model)
+
+    def test_model_backed_anonymous_and_unauthenticated_are_denied_in_both_modes(self):
+        class Note(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Folder(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Row(models.Model):
+            folder = models.ForeignKey(
+                'Folder', related_name='identity_rows', on_delete=models.CASCADE,
+            )
+            note = models.ForeignKey(
+                'Note', related_name='identity_rows', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Principal(models.Model):
+            name = models.CharField(max_length=40)
+            is_anonymous = models.BooleanField(default=False)
+            is_authenticated = models.BooleanField(default=True)
+            is_active = models.BooleanField(default=True)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Bare(models.Model):
+            name = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PrincipalGrant(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            principal = models.ForeignKey(Principal, on_delete=models.CASCADE)
+            action = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class FolderGrant(models.Model):
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+            principal = models.ForeignKey(Principal, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        models_ = (
+            Note, Folder, Row, Principal, Bare, PrincipalGrant, FolderGrant,
+        )
+        with connection.schema_editor() as editor:
+            for model in models_:
+                editor.create_model(model)
+        try:
+            read = _permission(Note, 'read_note_identity_284')
+            note = Note.objects.create(title='n')
+            folder = Folder.objects.create(title='f')
+            Row.objects.create(folder=folder, note=note)
+            visible = Principal.objects.create(name='visible')
+            anonymous = Principal.objects.create(
+                name='anonymous', is_anonymous=True,
+            )
+            guest = Principal.objects.create(
+                name='guest', is_authenticated=False,
+            )
+            bare = Bare.objects.create(name='bare')
+            for principal in (visible, anonymous, guest):
+                PrincipalGrant.objects.create(
+                    note=note, principal=principal, action=read,
+                )
+                FolderGrant.objects.create(
+                    folder=folder, principal=principal, permission=read,
+                )
+
+            with patch('trusts.core.granted', return_value=Q(pk=note.pk)) as compiled:
+                kept = AuthorizedQuerySet(Note).authorized(bare, read)
+                self.assertEqual(_pks(kept), {note.pk})
+            compiled.assert_called()
+            with patch('trusts.core.granted') as compiled:
+                with self.assertNumQueries(0):
+                    for principal in (anonymous, guest):
+                        for audit in (False, True):
+                            rows = AuthorizedQuerySet(Note).authorized(
+                                principal, read, allow_inactive_user=audit,
+                            )
+                            self.assertEqual(list(rows), [])
+            compiled.assert_not_called()
+
+            registry = TrustsRegistry()
+            grant = Ref(PrincipalGrant)
+            registry.register(
+                content=grant.note,
+                user=grant.principal,
+                permission=grant.action,
+            )
+            self.assertEqual(
+                _pks(registry.permissions_for(visible, note)), {read.pk},
+            )
+            self.assertTrue(registry.has_permission(visible, note, read))
+            scope_registry = TrustsRegistry()
+            scope_grant = Ref(FolderGrant)
+            scope_registry.register(
+                content=scope_grant.folder.identity_rows.note,
+                user=scope_grant.principal,
+                permission=scope_grant.permission,
+            )
+            handle = _Handle(scope_registry)
+            self.assertEqual(
+                _pks(filter_authorized_scopes(
+                    Folder.objects.all(), visible, read,
+                    content=Note, handles=(handle,),
+                )),
+                {folder.pk},
+            )
+            backend = DocumentBackend()
+            for principal in (anonymous, guest):
+                with self.assertNumQueries(0):
+                    for audit in (False, True):
+                        self.assertEqual(
+                            list(registry.permissions_for(
+                                principal, note, allow_inactive_user=audit,
+                            )),
+                            [],
+                        )
+                        self.assertFalse(registry.has_permission(
+                            principal, note, read, allow_inactive_user=audit,
+                        ))
+                        self.assertFalse(registry.filter_authorized(
+                            Note.objects.all(), principal, read,
+                            allow_inactive_user=audit,
+                        ).exists())
+                        self.assertFalse(filter_authorized_scopes(
+                            Folder.objects.all(), principal, read,
+                            content=Note, handles=(handle,),
+                            allow_inactive_user=audit,
+                        ).exists())
+                        self.assertFalse(backend.has_perm(
+                            principal, 'myapp.change_document', note,
+                            allow_inactive_user=audit,
+                        ))
+                        self.assertEqual(
+                            backend.get_all_permissions(
+                                principal, note, allow_inactive_user=audit,
+                            ),
+                            set(),
+                        )
+                        self.assertEqual(
+                            backend.get_group_permissions(
+                                principal, note, allow_inactive_user=audit,
+                            ),
+                            set(),
+                        )
+            if kernel_host_listed():
+                change = _permission(Document, 'change_document')
+                permitted = PermittedQuerySet(
+                    model=Document, using=Document.objects.db,
+                )
+                with self.assertNumQueries(0):
+                    for principal in (anonymous, guest):
+                        self.assertEqual(
+                            list(permitted.permitted(
+                                change, principal, allow_inactive_user=True,
+                            )),
+                            [],
+                        )
+        finally:
+            with connection.schema_editor() as editor:
+                for model in reversed(models_):
                     editor.delete_model(model)

@@ -139,9 +139,12 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must agree when called with the same `allow_inactive` mode.
+must agree when called with the same `allow_inactive` mode. Each supported
+backend contribution is compared with that backend's mode-aware singular
+inquiry for the normalized permission identity, then composed with the same
+candidate eligibility and Django active-superuser contributor.
 
-For the default mode, the comparison with stock Django remains:
+For eligible users in default mode, the comparison with stock Django remains:
 
 ```python
 normalized_perm = normalize_permission_for_singular_check(perm)
@@ -152,10 +155,13 @@ user.has_perm(normalized_perm, content)
 second public API. It leaves supported strings and explicitly supported custom
 permission instances unchanged, and uses `user_perm_str` for an
 `auth.Permission` instance. Reverse compilation still uses the canonical row.
-Stock `user.has_perm()` cannot forward `allow_inactive`. Audit comparisons use
-the Trusts inquiries that accept the flag. How a custom backend receives that
-mode, and whether a global activity gate may be stricter than stock
-`has_perm`, are unresolved.
+Default mode denies an inactive candidate even when a custom stock-Django
+backend would grant. Audit mode is compared with explicit mode-aware backend
+inquiries, not stock `user.has_perm()`, which cannot forward `allow_inactive`.
+A reverse hook participates in that audit only by naming `allow_inactive`
+(`**kwargs` alone does not). Otherwise `get_permitted_users` raises
+`TrustsConfigurationError` before SQL and does not call the hook. The reverse
+result must retain every supported contributor under that mode.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not
@@ -169,13 +175,15 @@ backend's own eligibility rules:
 
 - an active superuser is included for every accepted permission/content pair;
 - an inactive superuser does not receive Django's outer superuser shortcut;
-- an inactive ordinary user is excluded from the Trusts branch by default
-  and can be included with `allow_inactive=True` when that branch grants;
-- the Trusts branch applies the shared user checks to its candidate users.
+- an inactive ordinary user is excluded by default and can be included with
+  `allow_inactive=True` when a supported audit contributor grants that permission;
+- the shared user checks apply to the candidate users.
 
-Django's outer superuser contributor is unchanged. Other backends keep the
-predicates they already contribute. A global `is_active` wrapper around that
-whole OR is not part of this runtime unit.
+The shared user checks apply across the combined result, even if a custom
+Django backend would grant an inactive user. Each audit contributor must
+support the selected mode and express its remaining conditions in SQL.
+Arbitrary Python-only state is unsupported and fails loudly. Django's outer
+superuser contributor is unchanged.
 
 The invariant is over candidate rows supplied by the application's existing
 default user manager. A custom default manager may intentionally exclude rows.
@@ -232,18 +240,20 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    django_outer_superuser_predicate(user)
-    OR (
-        trusts_eligibility_predicate(user)
-        AND trusts_complete_grant_predicate(user, permission, content)
+    (allow_inactive OR user.is_active)
+    AND (
+        django_outer_superuser_predicate(user)
+        OR (
+            trusts_eligibility_predicate(user)
+            AND trusts_complete_grant_predicate(user, permission, content)
+        )
+        OR other_backend_predicate(user, permission, content)
     )
-    OR other_backend_predicate(user, permission, content)
 ```
 
-`trusts_eligibility_predicate` includes `user.is_active` unless
-`allow_inactive` is true. Sponsor `is_active` inside a delegated grant uses
-the same mode. The superuser predicate still requires an active superuser.
-Other backend predicates are not rewritten. The named predicates are
+`allow_inactive` lifts only the outer `user.is_active` check. Sponsor
+`is_active` inside a delegated grant uses the same mode. The superuser
+predicate still requires an active superuser. The named predicates are
 conceptual SQL placeholders, not Python callbacks.
 
 Permission strings use a SQL binding/subquery rather than a preliminary

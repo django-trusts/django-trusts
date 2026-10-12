@@ -29,7 +29,8 @@ default results change for an inactive user:
 | Before #284 | After #284 |
 | --- | --- |
 | Ordinary `.authorized()`, `permissions_for`, `has_permission`, `filter_authorized`, and `filter_authorized_scopes` can produce a positive result for an inactive user | The same default inquiry returns false/empty |
-| An aggregate reverse inquiry can include an inactive user through a custom backend | Unchanged in this unit. Whether a global activity gate may be stricter than stock `has_perm` is unresolved |
+| `.authorized()`, those registry inquiries, and `filter_authorized_scopes` can reach grant compilation for an anonymous or unauthenticated principal | Empty or false in both modes, before SQL. `None` still raises. A principal with neither `is_anonymous` nor `is_authenticated` keeps the schema-neutral default |
+| An aggregate reverse inquiry can include an inactive user through a custom backend | Default `get_permitted_users` excludes that inactive user, even when stock `has_perm` would grant. `allow_inactive=True` includes the user only when every contributing reverse hook accepts `allow_inactive`; otherwise the inquiry raises before SQL |
 
 Use the audit option in the usage guide when those calls intentionally inspect
 stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;

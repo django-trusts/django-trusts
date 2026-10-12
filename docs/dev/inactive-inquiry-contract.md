@@ -1,9 +1,10 @@
 # #284 activity inquiries: implementation review driver
 
-Date: 2026-10-12. Status: S2 runtime propagation is in progress on the
+Date: 2026-10-12. Status: S2 runtime propagation is in review on the
 along= train. The public keywords and the three activity change points are
-implemented. Three representation questions stay open for Thomas; this unit
-does not decide them.
+implemented. Review 5486816841 settled the stricter aggregate `has_perm`
+reading. Lockfile mode representation and the remaining non-reverse
+custom-backend dispatch stay flagged.
 The contract is [in the built documentation](../source/index.rst#user-is-active-checks).
 Chat owns documentation/design coordination.
 
@@ -16,23 +17,43 @@ agreement, companion, cache, and lockfile proof: provisional 5. Lockfile
 representation and external overrides can widen the envelope. This S2 unit
 did not reach 13, so it was not split.
 
-## Open questions (not decided here)
+## Open questions
 
 1. How the lockfile/policy SQL represents normal versus audit mode. Export
    still records the default mode only. Schema version stays 1. No audit
-   document and no byte change for the default lock.
-2. How custom backends receive the mode. Trusts-owned mixin methods take the
-   flag. Other reverse hooks are called exactly as before. Audit mode does
-   not raise for an unaware contributor.
-3. Whether the global activity gate may be stricter than stock Django
-   `has_perm`. Default `get_permitted_users` still agrees with `has_perm`,
-   including an inactive user admitted only by a custom backend. There is no
-   new `is_active` AND around that OR.
+   document and no byte change for the default lock. This remains a flagged
+   follow-up.
+2. How custom backends receive the mode outside the reverse hook. Trusts-owned
+   mixin methods take the flag. A reverse `permitted_users_predicate`
+   participates in audit only by naming `allow_inactive`
+   (`POSITIONAL_OR_KEYWORD` or `KEYWORD_ONLY`). `**kwargs` alone is not
+   participation: audit mode raises `TrustsConfigurationError` before SQL
+   and does not call the hook. Singular and enumeration dispatch for a
+   custom backend that is not that reverse hook remains a flagged follow-up.
+3. Settled by review 5486816841, in favor of the stricter reading #294
+   documents. Thomas can still object. Default `get_permitted_users` applies
+   `is_active` over the whole OR, including a custom
+   `permitted_users_predicate`. An inactive user admitted only by stock
+   `has_perm` is excluded. `allow_inactive=True` lifts that outer check.
+   The active-superuser contributor is unchanged.
+
+## Reported, not settled
+
+Registry projections and `.authorized()` treat a principal with no
+`is_active` attribute as not inactive (`stored_user_is_inactive`). Backend
+and forward public helpers deny that shape through
+`getattr(user, 'is_active', False)`. This patch does not unify those
+readings. Explicit activity conditions, expiry and revocation, group
+positives, and both the delegate and the sponsor being inactive together
+remain unproven matrices. SQL-mode export representation stays the flagged
+lockfile follow-up above.
 
 ## Sizing history
 
-S2 was provisional 8 before coding and stayed 8. The three questions above
-are the remainder, not extra behavior hidden inside this patch.
+S2 was provisional 8 before coding and stayed 8. Review 5486816841 kept
+the stricter gate and reverse-hook participation on this same unit. It did
+not reach 13. Lockfile representation and non-reverse custom-backend
+dispatch remain the flagged remainder.
 
 ## Source inventory on `dev` at `eeab800`
 
@@ -122,7 +143,10 @@ gate for the existing train remain unchanged.
 Chat agrees with the activity-mode direction. Thomas later authorized the
 bounded runtime unit and asked that lockfile mode representation, custom
 backend dispatch, and a global gate stricter than stock `has_perm` be flagged
-rather than decided in that unit.
+rather than decided in that unit. Review 5486816841 then settled the stricter
+gate. The lockfile representation and the remaining non-reverse dispatch
+details stay flagged. Reverse-hook audit participation is the explicit
+`allow_inactive` parameter described above.
 
 ## Thomas's wording review, 2026-10-11
 

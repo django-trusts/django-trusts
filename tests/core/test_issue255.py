@@ -1,9 +1,11 @@
 """Reverse permission inquiry (#255).
 
 One saved content object and one permission. The private compiler and
-both public adapters return the same rows as ``user.has_perm`` for the
-candidate user queryset. Construction is zero SQL. Evaluation is one
-statement. Core does not add a blanket ``is_active`` exclusion.
+both public adapters return the same rows for the candidate user queryset.
+Construction is zero SQL. Evaluation is one statement. Default mode applies
+``is_active`` over the whole result, including a custom reverse predicate.
+Audit mode lifts that outer check only for hooks that accept
+``allow_inactive``.
 """
 
 import re
@@ -77,6 +79,8 @@ class AuthenticationOnlyBackend(object):
 class InactiveGrantBackend(object):
     """Grants one inactive username. No ``is_active`` SQL of its own."""
 
+    calls = 0
+
     def authenticate(self, request, **kwargs):
         return None
 
@@ -86,11 +90,67 @@ class InactiveGrantBackend(object):
         return getattr(user_obj, 'username', None) == 'inactive-granted-255'
 
     def permitted_users_predicate(self, content, perm):
+        type(self).calls += 1
         from django.db.models import Q
         return Q(username='inactive-granted-255')
 
     def singular_permission_accepted(self, perm):
         return isinstance(perm, Permission)
+
+
+class StarInactiveGrantBackend(object):
+    """``**kwargs`` is not an explicit audit parameter."""
+
+    calls = 0
+
+    def authenticate(self, request, **kwargs):
+        return None
+
+    def has_perm(self, user_obj, perm, obj=None):
+        return False
+
+    def permitted_users_predicate(self, content, perm, **kwargs):
+        type(self).calls += 1
+        from django.db.models import Q
+        return Q(username='star-granted-255')
+
+    def singular_permission_accepted(self, perm):
+        return isinstance(perm, Permission)
+
+
+class ModeAwareGrantBackend(object):
+    """Names ``allow_inactive`` and records the value it receives."""
+
+    received = 'unset'
+
+    def authenticate(self, request, **kwargs):
+        return None
+
+    def has_perm(self, user_obj, perm, obj=None):
+        return False
+
+    def permitted_users_predicate(self, content, perm, *, allow_inactive=False):
+        type(self).received = allow_inactive
+        from django.db.models import Q
+        return Q(username__startswith='mode-aware-')
+
+    def singular_permission_accepted(self, perm):
+        return isinstance(perm, Permission)
+
+
+class ModeAwareQuerySet(models.QuerySet):
+    marker = 'issue255-audit'
+
+
+class ModeAwareManager(PermittedUsersManagerMixin, models.Manager):
+    def get_queryset(self):
+        return ModeAwareQuerySet(self.model, using=self._db).filter(
+            username__in=(
+                'mode-aware-inactive',
+                'mode-aware-active',
+                'other-inactive',
+            ),
+        )
 
 
 class SplitUserRouter(object):
@@ -728,6 +788,12 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.alice.pk, found)
 
     def test_inactive_grant_backend_is_not_removed_by_a_core_is_active_filter(self):
+        """Default mode excludes the inactive custom grant.
+
+        Review 5486816841 settled the stricter reading. Stock ``has_perm``
+        still grants this user; the reverse inquiry does not, unless audit
+        mode can pass ``allow_inactive`` into every contributing hook.
+        """
         backends = settings.AUTHENTICATION_BACKENDS + (
             'tests.core.test_issue255.InactiveGrantBackend',
         )
@@ -741,15 +807,99 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
                 chosen = self.document.get_permitted_users(self.change)
             with self.assertNumQueries(1):
                 found = _pks(chosen)
-            candidates = get_user_model()._default_manager.get_queryset()
-            expected = {
-                user.pk for user in candidates
-                if user.has_perm(PERM, self.document)
-            }
-        self.assertEqual(found, expected)
-        self.assertIn(granted.pk, found)
+            self.assertTrue(granted.has_perm(PERM, self.document))
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    self.document.get_permitted_users(
+                        self.change, allow_inactive=True,
+                    )
+        self.assertIn('InactiveGrantBackend', str(ctx.exception))
+        self.assertIn('allow_inactive', str(ctx.exception))
+        self.assertNotIn(granted.pk, found)
         self.assertIn(self.alice.pk, found)
         self.assertNotIn(self.inactive.pk, found)
+
+    def test_legacy_reverse_hook_is_not_called_when_auditing(self):
+        InactiveGrantBackend.calls = 0
+        StarInactiveGrantBackend.calls = 0
+        star_user = get_user_model().objects.create_user(
+            'star-granted-255', password='x',
+        )
+        star_user.is_active = False
+        star_user.save(update_fields=['is_active'])
+        backends = settings.AUTHENTICATION_BACKENDS + (
+            'tests.core.test_issue255.InactiveGrantBackend',
+            'tests.core.test_issue255.StarInactiveGrantBackend',
+        )
+        with override_settings(AUTHENTICATION_BACKENDS=backends):
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError) as legacy:
+                    self.document.get_permitted_users(
+                        self.change, allow_inactive=True,
+                    )
+        self.assertIn('InactiveGrantBackend', str(legacy.exception))
+        self.assertEqual(InactiveGrantBackend.calls, 0)
+        self.assertEqual(StarInactiveGrantBackend.calls, 0)
+        star_only = settings.AUTHENTICATION_BACKENDS + (
+            'tests.core.test_issue255.StarInactiveGrantBackend',
+        )
+        with override_settings(AUTHENTICATION_BACKENDS=star_only):
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError) as star:
+                    self.document.get_permitted_users(
+                        self.change, allow_inactive=True,
+                    )
+            with self.assertNumQueries(0):
+                chosen = self.document.get_permitted_users(self.change)
+        self.assertIn('StarInactiveGrantBackend', str(star.exception))
+        self.assertEqual(StarInactiveGrantBackend.calls, 1)
+        found = _pks(chosen)
+        self.assertNotIn(star_user.pk, found)
+        self.assertIn(self.alice.pk, found)
+
+    def test_mode_aware_reverse_hook_receives_audit_and_keeps_candidates(self):
+        User = get_user_model()
+        inactive = User.objects.create_user('mode-aware-inactive', password='x')
+        inactive.is_active = False
+        inactive.save(update_fields=['is_active'])
+        active = User.objects.create_user('mode-aware-active', password='x')
+        outside = User.objects.create_user('mode-aware-outside', password='x')
+        outside.is_active = False
+        outside.save(update_fields=['is_active'])
+        other = User.objects.create_user('other-inactive', password='x')
+        other.is_active = False
+        other.save(update_fields=['is_active'])
+        ModeAwareGrantBackend.received = 'unset'
+        backends = settings.AUTHENTICATION_BACKENDS + (
+            'tests.core.test_issue255.ModeAwareGrantBackend',
+        )
+        listing = ModeAwareManager()
+        listing.model = User
+        with override_settings(AUTHENTICATION_BACKENDS=backends):
+            with self.assertNumQueries(0):
+                default_qs = listing.permitted(self.document, self.change)
+            self.assertIs(ModeAwareGrantBackend.received, False)
+            with self.assertNumQueries(0):
+                audited_qs = listing.permitted(
+                    self.document, self.change, allow_inactive=True,
+                )
+            self.assertIs(ModeAwareGrantBackend.received, True)
+            unfiltered = self.document.get_permitted_users(
+                self.change, allow_inactive=True,
+            )
+        self.assertIsInstance(default_qs, ModeAwareQuerySet)
+        self.assertIsInstance(audited_qs, ModeAwareQuerySet)
+        self.assertEqual(default_qs.marker, 'issue255-audit')
+        default_names = set(default_qs.values_list('username', flat=True))
+        audited_names = set(audited_qs.values_list('username', flat=True))
+        self.assertEqual(default_names, {'mode-aware-active'})
+        self.assertEqual(
+            audited_names, {'mode-aware-inactive', 'mode-aware-active'},
+        )
+        self.assertIn(active.pk, _pks(audited_qs))
+        self.assertNotIn(outside.pk, _pks(audited_qs))
+        self.assertNotIn(other.pk, _pks(audited_qs))
+        self.assertIn(outside.pk, _pks(unfiltered))
 
     def test_cross_database_router_fails_before_sql(self):
         databases = dict(settings.DATABASES)

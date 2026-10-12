@@ -334,8 +334,14 @@ class AuthorizedQuerySetLiveTest(TestCase):
 
     def test_non_instance_user_is_configuration_error(self):
         with self.assertNumQueries(0):
-            with self.assertRaises((TrustsConfigurationError, TypeError, AttributeError)):
-                Document.objects.authorized(AnonymousUser(), self.change)
+            with patch('trusts.core.granted') as compiled:
+                denied = Document.objects.authorized(AnonymousUser(), self.change)
+                audited = Document.objects.authorized(
+                    AnonymousUser(), self.change, allow_inactive_user=True,
+                )
+                self.assertFalse(denied.exists())
+                self.assertFalse(audited.exists())
+            compiled.assert_not_called()
             with self.assertRaises((TrustsConfigurationError, TypeError, AttributeError)):
                 Document.objects.authorized(None, self.change)
 

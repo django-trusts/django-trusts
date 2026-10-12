@@ -40,6 +40,21 @@ def stored_user_is_inactive(user, *, allow_inactive=False):
     return not bool(user.is_active)
 
 
+def principal_identity_denied(user):
+    """Anonymous and unauthenticated principals are denied in both modes.
+
+    Missing attributes keep the schema-neutral defaults used by
+    ``is_active_principal``: not anonymous, and authenticated. ``None`` is
+    not an identity denial; callers that require an instance still raise.
+    Audit mode does not lift this check.
+    """
+    if getattr(user, 'is_anonymous', False):
+        return True
+    if not getattr(user, 'is_authenticated', True):
+        return True
+    return False
+
+
 class AuthorizedQuerySet(QuerySet):
     """Instance-only authorized-row filter. No Django permission codec.
 
@@ -49,9 +64,10 @@ class AuthorizedQuerySet(QuerySet):
     ``is_active_principal``, and does not call ``get_permission``.
 
     An authenticated user whose ``is_active`` is false receives an empty
-    queryset unless ``allow_inactive_user`` is true. Anonymous users and
-    ``None`` still fail at the grant binding, which is not a positive
-    result. The public content-list inquiry is
+    queryset unless ``allow_inactive_user`` is true. Anonymous and
+    unauthenticated principals receive an empty queryset in both modes,
+    before ``granted()``. ``None`` still fails at the grant binding, which
+    is not a positive result. The public content-list inquiry is
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
     ``.authorized`` stays this lower-level projection: it does not use
     that permitted-input validation. Core ``.authorized`` includes
@@ -69,13 +85,9 @@ class AuthorizedQuerySet(QuerySet):
                 'permission must be a model instance, not %r.' % (permission,)
             )
         require_mode_flag(allow_inactive_user, 'allow_inactive_user')
-        if (
-            not getattr(user, 'is_anonymous', False)
-            and getattr(user, 'is_authenticated', True)
-            and stored_user_is_inactive(
-                user, allow_inactive=allow_inactive_user,
-            )
-        ):
+        if principal_identity_denied(user):
+            return self.none()
+        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
             return self.none()
         granted_q = granted(
             _relationship_implementation_handles(),
