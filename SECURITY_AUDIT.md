@@ -299,7 +299,7 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; Shared user checks; relationship-family SQL before pagination; not Django backend OR or a superuser shortcut |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Shared user checks; relationship-family SQL before pagination; not Django backend OR or a superuser shortcut |
 | Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; shared user checks over candidate users |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
