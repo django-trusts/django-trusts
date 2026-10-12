@@ -853,6 +853,14 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self.assertIn(self.sponsor.pk, self._user_pks(self.code))
         self.assertEqual(self._scope_pks(self.delegate), set())
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
+        self._deactivate(self.delegate)
+        self._deactivate(self.sponsor)
+        self.assertFalse(self.backend.has_perm(
+            self.delegate, self.code, self.sheet, allow_inactive_user=True,
+        ))
+        included = self._user_pks(self.code, allow_inactive=True)
+        self.assertNotIn(self.delegate.pk, included)
+        self.assertIn(self.sponsor.pk, included)
 
     def test_revoking_the_sponsor_grant_denies_the_delegate(self):
         self.Grant.objects.filter(user=self.sponsor).delete()
@@ -867,6 +875,15 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self.assertNotIn(self.sponsor.pk, users)
         self.assertEqual(self._scope_pks(self.delegate), set())
         self.assertEqual(self._scope_pks(self.sponsor), set())
+        self._deactivate(self.delegate)
+        self._deactivate(self.sponsor)
+        for user in (self.delegate, self.sponsor):
+            self.assertFalse(self.backend.has_perm(
+                user, self.code, self.sheet, allow_inactive_user=True,
+            ))
+            self.assertNotIn(
+                user.pk, self._user_pks(self.code, allow_inactive=True),
+            )
 
     def test_unexpired_named_filter_denies_when_the_dates_differ(self):
         filtered = self.code + ':unexpired'
@@ -875,6 +892,12 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         ))
         self.assertIn(self.delegate.pk, self._user_pks(filtered))
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
+        self.assertTrue(self.backend.has_perm(
+            self.delegate, filtered, self.sheet, allow_inactive_user=True,
+        ))
+        self.assertIn(
+            self.delegate.pk, self._user_pks(filtered, allow_inactive=True),
+        )
         self.sheet.expires_on = self.earlier
         self.sheet.save(update_fields=['expires_on'])
         self.assertFalse(self.backend.has_perm(
@@ -892,6 +915,18 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self.assertIn(self.sponsor.pk, self._user_pks(self.code))
         self.assertEqual(self._scope_pks(self.delegate), set())
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
+        self._deactivate(self.delegate)
+        self._deactivate(self.sponsor)
+        for user in (self.delegate, self.sponsor):
+            self.assertFalse(self.backend.has_perm(
+                user, filtered, self.sheet, allow_inactive_user=True,
+            ))
+            self.assertNotIn(
+                user.pk, self._user_pks(filtered, allow_inactive=True),
+            )
+        self.assertTrue(self.backend.has_perm(
+            self.sponsor, self.code, self.sheet, allow_inactive_user=True,
+        ))
 
     def test_active_only_named_filter_keeps_an_inactive_user_denied(self):
         self._deactivate(self.cara)
