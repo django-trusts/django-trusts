@@ -2051,6 +2051,7 @@ class All(object):
 class AlongWalk:
     """Immutable walk metadata resolved from ``Along`` at ``register()``."""
 
+    path: tuple
     bound: int
     shape: str
     walk_path: tuple
@@ -2372,6 +2373,7 @@ def _build_along_walk(root, content_path, content_model, along):
         walk_model, suffix_path, content_model, walk_ident,
     )
     return AlongWalk(
+        path=tuple(along_ref._path),
         bound=bound,
         shape=shape,
         walk_path=tuple(walk_path),
@@ -2490,6 +2492,60 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     )
 
 
+def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
+    """Walk one hop backward. The CTE is still referenced once.
+
+    Shape S forward visits children, so the inverse projects the parent.
+    Shape C forward visits parents, so the inverse visits children.
+    Shape E forward follows parent to child, so the inverse follows
+    child to parent.
+    """
+    source = 'FROM %(gen)s AS %(g)s ' % {'gen': gen, 'g': g}
+    if walk.shape == 'S':
+        cur = qn('cur')
+        parent_col = qn(walk.parent_attname)
+        walk_table = qn(walk.walk_model._meta.db_table)
+        frm = source + (
+            'JOIN %(walk_table)s AS %(cur)s '
+            'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s'
+            % {
+                'g': g, 'walk_table': walk_table, 'cur': cur,
+                'ident': ident_sql, 'ident_col': ident_col,
+            }
+        )
+        return frm, '%s.%s' % (cur, parent_col)
+    if walk.shape == 'C':
+        child = qn('child')
+        parent_col = qn(walk.parent_attname)
+        walk_table = qn(walk.walk_model._meta.db_table)
+        frm = source + (
+            'JOIN %(walk_table)s AS %(child)s '
+            'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s'
+            % {
+                'g': g, 'walk_table': walk_table, 'child': child,
+                'parent_col': parent_col, 'ident_col': ident_col,
+            }
+        )
+        return frm, '%s.%s' % (child, ident_sql)
+    if walk.shape == 'E':
+        link = qn('link')
+        edge_table = qn(walk.edge_model._meta.db_table)
+        parent_col = qn(walk.edge_parent_attname)
+        child_col = qn(walk.edge_child_attname)
+        frm = source + (
+            'JOIN %(edge_table)s AS %(link)s '
+            'ON %(link)s.%(child_col)s = %(g)s.%(ident_col)s'
+            % {
+                'g': g, 'edge_table': edge_table, 'link': link,
+                'child_col': child_col, 'ident_col': ident_col,
+            }
+        )
+        return frm, '%s.%s' % (link, parent_col)
+    raise TrustsConfigurationError(
+        'Unsupported Along shape %r.' % (walk.shape,)
+    )
+
+
 def _along_cycle_clause(connection, ident_col, qn):
     """One PostgreSQL cycle suffix. SQLite and MySQL stay plain.
 
@@ -2505,7 +2561,7 @@ def _along_cycle_clause(connection, ident_col, qn):
     )
 
 
-def _render_reach_sql(walk, seed_sql, seed_params, connection):
+def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
     """Return ``(sql, params)`` for the uncorrelated W membership list.
 
     SQLite, PostgreSQL, and MySQL 8.4+ share one plain ``WITH RECURSIVE``:
@@ -2530,7 +2586,9 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection):
     walk_table = qn(walk.walk_model._meta.db_table)
     site = qn('s')
     seed_alias = qn('seed_rows')
-    frm, project = _neighbor_sql(walk, qn, gen, g, ident_col, ident)
+    if neighbor is None:
+        neighbor = _neighbor_sql
+    frm, project = neighbor(walk, qn, gen, g, ident_col, ident)
     sql = (
         'WITH RECURSIVE %(gen)s(%(ident_col)s, %(depth)s) AS ('
         'SELECT %(seed_alias)s.%(ident_col)s, 0 '
@@ -2573,12 +2631,58 @@ class _IdentInReach(Expression):
         return sql, tuple(self.w_params)
 
 
+def _content_walk_seed(walk, content):
+    """Walk-site identities derived from the bound content.
+
+    No user and no grant table. An empty suffix selects that content's
+    walk-site identity. A suffix selects the related walk-site rows,
+    such as the Cabinet identities for a Sheet.
+    """
+    if not walk.suffix_path:
+        qs = walk.walk_model._default_manager.filter(
+            **{walk.walk_ident: getattr(content, walk.walk_ident)},
+        )
+    else:
+        qs = walk.walk_model._default_manager.filter(
+            **{walk.suffix_field: content},
+        )
+    # ``values(ident=...)`` collides when the walk identity column is
+    # already named ``ident`` (a UUID ``to_field``). Selecting that
+    # column keeps the seed alias the walk template reads.
+    if walk.walk_ident == 'ident':
+        seed = qs.values(walk.walk_ident).distinct()
+    else:
+        seed = qs.values(ident=F(walk.walk_ident)).distinct()
+    query = seed.query.clone()
+    query.subquery = True
+    # Policy SQL binds content.<target> only for this comparison.
+    query.where.children[0].trusts_content_bind = True
+    return query
+
+
+def _grant_walk_attname(record):
+    """Grant-root column that stores the walk identity.
+
+    The walk site is one hop from the grant root in every Along
+    registration this compiler renders. That hop's column is the join
+    key outside the recursive CTE.
+    """
+    walk = record.along
+    field = record.root._meta.get_field(walk.walk_path[0])
+    return field.attname
+
+
 class GrantReach(Expression):
     """Grant-anchored bounded reachability predicate for one recursive record.
 
-    The walk is uncorrelated with candidate rows. One plain
+    The forward walk is uncorrelated with candidate rows. One plain
     ``IN (WITH RECURSIVE …)`` per recursive record, with a depth counter
-    capped at the bound. SQLite and MySQL 8.4+ use that statement.
+    capped at the bound. The reverse walk is also uncorrelated. It
+    derives walk-site identities from the bound content, walks the
+    inverse edges once without the outer user, then joins eligible
+    grants and candidate users outside the CTE. The grant query is
+    correlated to the outer candidate user only after the walk. SQLite
+    and MySQL 8.4+ use that statement.
     PostgreSQL appends ``CYCLE ident SET is_cycle USING path`` and does
     not project those columns. MariaDB and other engines raise before
     walk SQL.
@@ -2592,6 +2696,20 @@ class GrantReach(Expression):
         self.record = record
         self.content = content
         walk = record.along
+        self.lhs = None
+        self.suffix_query = None
+        self.grant_query = None
+        if content is not None:
+            self.seed_query = _content_walk_seed(walk, content)
+            grant = _bind_record_qs(
+                record,
+                user=user,
+                permission=permission,
+                content_identity=content_identity,
+            )
+            self.grant_query = grant.query.clone()
+            self.grant_query.subquery = True
+            return
         seed = _bind_record_qs(
             record,
             user=user,
@@ -2601,28 +2719,29 @@ class GrantReach(Expression):
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
-        self.lhs = None
-        self.suffix_query = None
-        if content is None:
-            if walk.rewrite_attname:
-                self.lhs = F(walk.rewrite_attname)
-            elif not walk.suffix_path:
-                self.lhs = F(walk.walk_ident)
-            else:
-                self.suffix_query = walk.walk_model._default_manager.filter(
-                    **{walk.suffix_field: OuterRef(record.content_target)}
-                ).query.clone()
-                self.suffix_query.subquery = True
+        if walk.rewrite_attname:
+            self.lhs = F(walk.rewrite_attname)
+        elif not walk.suffix_path:
+            self.lhs = F(walk.walk_ident)
+        else:
+            self.suffix_query = walk.walk_model._default_manager.filter(
+                **{walk.suffix_field: OuterRef(record.content_target)}
+            ).query.clone()
+            self.suffix_query.subquery = True
 
     def copy(self):
         clone = super().copy()
         clone.seed_query = clone.seed_query.clone()
+        if clone.grant_query is not None:
+            clone.grant_query = clone.grant_query.clone()
         if clone.suffix_query is not None:
             clone.suffix_query = clone.suffix_query.clone()
         return clone
 
     def get_source_expressions(self):
         exprs = [self.seed_query]
+        if self.grant_query is not None:
+            exprs.append(self.grant_query)
         if self.lhs is not None:
             exprs.append(self.lhs)
         if self.suffix_query is not None:
@@ -2632,6 +2751,8 @@ class GrantReach(Expression):
     def set_source_expressions(self, exprs):
         exprs = list(exprs)
         self.seed_query = exprs.pop(0)
+        if self.grant_query is not None:
+            self.grant_query = exprs.pop(0)
         if self.lhs is not None:
             self.lhs = exprs.pop(0)
         if self.suffix_query is not None:
@@ -2639,16 +2760,12 @@ class GrantReach(Expression):
 
     def as_sql(self, compiler, connection):
         _require_along_renderer(connection)
-        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
-        if seed_sql.startswith('(') and seed_sql.endswith(')'):
-            seed_sql = seed_sql[1:-1]
+        if self.content is not None:
+            return self._reverse_sql(compiler, connection)
+        seed_sql, seed_params = self._seed_sql(compiler, connection)
         w_sql, w_params = _render_reach_sql(
             self.record.along, seed_sql, seed_params, connection,
         )
-        if self.content is not None:
-            return self._bound_content_sql(
-                compiler, connection, w_sql, w_params,
-            )
         if self.lhs is not None:
             lhs_sql, lhs_params = compiler.compile(self.lhs)
             return '%s IN (%s)' % (lhs_sql, w_sql), tuple(lhs_params) + tuple(w_params)
@@ -2659,20 +2776,24 @@ class GrantReach(Expression):
         )))
         return Exists(inner).as_sql(compiler, connection)
 
-    def _bound_content_sql(self, compiler, connection, w_sql, w_params):
-        walk = self.record.along
-        content = self.content
-        if not walk.suffix_path:
-            inner = walk.walk_model._default_manager.filter(
-                pk=content.pk,
-            ).query.clone()
-        else:
-            inner = walk.walk_model._default_manager.filter(
-                **{walk.suffix_field: content},
-            ).query.clone()
-        inner.subquery = True
+    def _seed_sql(self, compiler, connection):
+        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
+        if seed_sql.startswith('(') and seed_sql.endswith(')'):
+            seed_sql = seed_sql[1:-1]
+        return seed_sql, seed_params
+
+    def _reverse_sql(self, compiler, connection):
+        # Resolve may clone the seed. Keep the content comparison marked.
+        self.seed_query.where.children[0].trusts_content_bind = True
+        seed_sql, seed_params = self._seed_sql(compiler, connection)
+        w_sql, w_params = _render_reach_sql(
+            self.record.along, seed_sql, seed_params, connection,
+            neighbor=_inverse_neighbor_sql,
+        )
+        inner = self.grant_query.clone()
         inner.add_q(Q(_IdentInReach(
-            walk.walk_ident, w_sql, w_params, walk.bound,
+            _grant_walk_attname(self.record),
+            w_sql, w_params, self.record.along.bound,
         )))
         return Exists(inner).as_sql(compiler, connection)
 
@@ -2848,16 +2969,21 @@ class RelationPlan:
         parts = []
         for record in self.records:
             if record.along is not None:
-                user = bindings['user']
                 if terminal_field_attr == 'content_field':
                     parts.append(GrantReach(
-                        record, user, bindings['permission'],
+                        record, bindings['user'], bindings['permission'],
+                        content_identity=self.content_identity,
+                    ))
+                elif terminal_field_attr == 'user_field':
+                    parts.append(GrantReach(
+                        record, OuterRef(record.user_target),
+                        bindings['permission'], content=bindings['content'],
                         content_identity=self.content_identity,
                     ))
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
                     parts.append(GrantReach(
-                        record, user, OuterRef(target),
+                        record, bindings['user'], OuterRef(target),
                         content=bindings['content'],
                         content_identity=self.content_identity,
                     ))
@@ -2900,8 +3026,10 @@ class RelationPlan:
 
         Inverse of ``content_exists``: content and permission are bound,
         and the user terminal is ``OuterRef`` of the resolved user target.
-        Complete records OR together. An ``Along`` record has no exact
-        reverse of its user-seeded walk and raises before SQL.
+        Complete records OR together. For ``Along``, walk-site identities
+        are derived from the bound content. The inverse walk runs once
+        without the outer user. Eligible grants and candidate users join
+        outside the recursive CTE.
         """
         content = _require_instance(content, 'content')
         if content.pk is None:
@@ -2912,13 +3040,6 @@ class RelationPlan:
         permission = _bind_terminal(permission, 'permission')
         if not self.records:
             return None
-        for record in self.records:
-            if record.along is not None:
-                raise TrustsConfigurationError(
-                    'Reverse permission inquiry cannot compile an exact '
-                    'user predicate for Along registration on %s.'
-                    % record.root._meta.label
-                )
         return self._correlated_exists(
             'user_field', content=content, permission=permission,
         )

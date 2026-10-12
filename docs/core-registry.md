@@ -211,6 +211,19 @@ closed with the same error as any other unsupported engine, at runtime
 and in `trusts.E005`, before the probe. A closure table is a documented
 fallback only and is not generated.
 
+Reverse inquiry uses the same statement in the inverse direction. The
+seed is the content-derived walk-site identity or identities. A
+non-empty suffix selects the walk-site rows related to the bound
+content, such as Cabinet identities for a Sheet. The recursive member
+does not reference the outer user. Shape S walks to parents, shape C
+walks to children, and shape E walks from child to parent. Eligible
+grants and candidate users join that walk outside the CTE, and the
+grant query is correlated to the outer candidate user only after the
+walk. PostgreSQL still appends the one `CYCLE` clause. SQLite and MySQL
+8.4+ keep the plain statement. MariaDB still fails closed before that
+SQL. The lockfile records the plain reverse statement with the forward
+statements.
+
 A non-empty content suffix compiles a walk-model-rooted `EXISTS` from the
 stored path names (`items__image`, `rows__content`, …). Every S5 suffix
 already accepted by ordinary `register()` is supported; there is no quieter

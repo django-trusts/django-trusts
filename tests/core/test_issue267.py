@@ -573,8 +573,14 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 params = content[key]['params']
                 with self.subTest(model=model_name, key=key):
                     self.assertIn('django_content_type', sql)
-                    self.assertIn({'const': 'trusts_tests'}, params)
-                    self.assertIn({'const': model_name}, params)
+                    self.assertIn(
+                        {'const': 'trusts_tests', 'hint': 'content type app'},
+                        params,
+                    )
+                    self.assertIn(
+                        {'const': model_name, 'hint': 'content type model'},
+                        params,
+                    )
                     self.assertEqual(
                         sql.lower().count('join "auth_group_permissions"'),
                         1,

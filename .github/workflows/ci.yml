@@ -113,7 +113,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install "Django>=6.1,<6.2" "psycopg[binary]>=3.1"
         python -m pip install -e .
-    - name: Along tests
+    - name: Along forward and reverse tests
       env:
         DJANGO_SETTINGS_MODULE: tests.along_db_settings
       run: python -m tests.runtests tests.core.test_issue92
@@ -153,7 +153,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install "Django>=6.1,<6.2" mysqlclient
         python -m pip install -e .
-    - name: Along tests
+    - name: Along forward and reverse tests
       env:
         DJANGO_SETTINGS_MODULE: tests.along_db_settings
       run: python -m tests.runtests tests.core.test_issue92

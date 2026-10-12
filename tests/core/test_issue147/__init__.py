@@ -9,6 +9,7 @@ SLICE_MODULES = (
     'tests.core.test_issue147.test_suite_wiring',
     'tests.core.test_issue147.test_yaml_lock',
     'tests.core.test_issue147.test_issue258',
+    'tests.core.test_issue147.test_sql_format',
 )
 
 

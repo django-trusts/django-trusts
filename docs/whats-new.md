@@ -11,6 +11,26 @@ log.
 
 ## 1.1.0
 
+- **Provisional `along=` reachability.** Reverse inquiry and policy SQL
+  support bounded provisional `along=` registrations on SQLite, PostgreSQL,
+  and MySQL 8.4+. See the [core registry](core-registry.md) and [#286].
+
+- **Readable policy-lock SQL.** Each lockfile statement is broken between
+  tokens onto predictable lines, including a `WITH RECURSIVE` walk and
+  PostgreSQL's `CYCLE` clause. `AND` and `OR` keep an `EXISTS (` or
+  `NOT EXISTS (` operand on the same line, at the sibling operand's
+  indent, and `EXISTS (` is spaced the same way throughout. Delegation
+  `delegate` and `sponsor`
+  are one-line flow maps. A `__cond` id includes the stored condition
+  as one double-quoted Python expression, with `$permission` only for
+  the requested permission. Each SQL param keeps its `bind` or `const`
+  and adds a `hint`. The formatter accepts only the tokens those
+  statements use
+  and fails closed on anything else. Schema version stays 1.
+  See the
+  [authorization-policy SQL guide](source/authorization-policy-sql.rst)
+  and [#292].
+
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
   use a sponsor's live ordinary permissions within delegation scope; an
   inactive delegate or sponsor fails closed. See the
@@ -53,3 +73,5 @@ log.
 [#269]: https://github.com/django-trusts/django-trusts/pull/269
 [#271]: https://github.com/django-trusts/django-trusts/pull/271
 [#279]: https://github.com/django-trusts/django-trusts/pull/279
+[#286]: https://github.com/django-trusts/django-trusts/pull/286
+[#292]: https://github.com/django-trusts/django-trusts/pull/292
