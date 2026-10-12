@@ -598,13 +598,15 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             team=team, permission=permission, note=note,
         )
 
-    def _authorized(self, handle, user, permission):
+    def _authorized(self, handle, user, permission, *, allow_inactive_user=False):
         with patch(
             'trusts.apps._relationship_implementation_handles',
             return_value=(handle,),
         ):
             return list(
-                self.Repository.objects.authorized(user, permission).order_by('pk'),
+                self.Repository.objects.authorized(
+                    user, permission, allow_inactive_user=allow_inactive_user,
+                ).order_by('pk'),
             )
 
     def _assert_unique(self, rows, expected):
@@ -720,6 +722,12 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         )
         self._assert_unique(
             self._authorized(handle, self.inactive, self.read),
+            [],
+        )
+        self._assert_unique(
+            self._authorized(
+                handle, self.inactive, self.read, allow_inactive_user=True,
+            ),
             [self.spec, self.notes],
         )
         granted_sql = str(

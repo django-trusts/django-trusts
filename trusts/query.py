@@ -3,11 +3,12 @@
 from django.db.models import Manager, Model, QuerySet
 
 
-def is_active_principal(user):
-    """Match ``User.has_perm``: anonymous and inactive principals are denied.
+def is_active_principal(user, *, allow_inactive=False):
+    """Match ``User.has_perm``: anonymous and inactive users are denied.
 
     Superuser short-circuit on ``has_perm`` is a Django ``ModelBackend``
-    behavior and is not duplicated in SQL list filters.
+    behavior and is not duplicated in SQL list filters. ``allow_inactive``
+    skips only the built-in ``is_active`` check.
     """
     if user is None:
         return False
@@ -15,9 +16,44 @@ def is_active_principal(user):
         return False
     if not getattr(user, 'is_authenticated', True):
         return False
-    if not getattr(user, 'is_active', False):
+    if not allow_inactive and not getattr(user, 'is_active', False):
         return False
     return True
+
+
+def require_mode_flag(value, name):
+    """``allow_inactive`` and ``allow_inactive_user`` must be real booleans."""
+    if not isinstance(value, bool):
+        raise TypeError('%s must be a bool, not %r.' % (name, value))
+    return value
+
+
+def stored_user_is_inactive(user, *, allow_inactive=False):
+    """Whether a stored user's built-in ``is_active`` rejects the inquiry.
+
+    ``allow_inactive=True`` skips the check. A user with no ``is_active``
+    attribute is not inactive, so schema-neutral terminals keep their
+    current results. Anonymous and unauthenticated denial stays with the
+    caller.
+    """
+    if allow_inactive or user is None or not hasattr(user, 'is_active'):
+        return False
+    return not bool(user.is_active)
+
+
+def user_identity_denied(user):
+    """Anonymous and unauthenticated users are denied even when
+    ``allow_inactive_user`` is true.
+
+    Missing attributes keep the same defaults as ``is_active_principal``:
+    not anonymous, and authenticated. ``None`` is not this denial; callers
+    that require an instance still raise.
+    """
+    if getattr(user, 'is_anonymous', False):
+        return True
+    if not getattr(user, 'is_authenticated', True):
+        return True
+    return False
 
 
 class AuthorizedQuerySet(QuerySet):
@@ -28,15 +64,21 @@ class AuthorizedQuerySet(QuerySet):
     method does not parse ``:condition``, does not call
     ``is_active_principal``, and does not call ``get_permission``.
 
-    The public content-list inquiry is
+    An authenticated user whose ``is_active`` is false receives an empty
+    queryset unless ``allow_inactive_user`` is true. Anonymous and
+    unauthenticated users receive an empty queryset even when
+    ``allow_inactive_user`` is true, before ``granted()``. ``None`` still
+    fails at the grant binding, which is not a positive result. The public
+    content-list inquiry is
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
     ``.authorized`` stays this lower-level projection: it does not use
-    that principal check or that input validation. Core ``.authorized``
-    includes relationship-family handles only; it is not Django's
-    object-level backend OR.
+    that permitted-input validation. Core ``.authorized`` includes
+    relationship-family handles only; it is not Django's object-level
+    backend OR.
     """
 
-    def authorized(self, user, permission, extra_q=None):
+    def authorized(self, user, permission, extra_q=None, *,
+                   allow_inactive_user=False):
         from trusts.apps import _relationship_implementation_handles
         from trusts.core import TrustsConfigurationError, granted
 
@@ -44,9 +86,15 @@ class AuthorizedQuerySet(QuerySet):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
             )
+        require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+        if user_identity_denied(user):
+            return self.none()
+        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+            return self.none()
         granted_q = granted(
             _relationship_implementation_handles(),
             self, user, permission, kind='complete',
+            allow_inactive=allow_inactive_user,
         )
         if granted_q is None:
             return self.none()
@@ -58,9 +106,11 @@ class AuthorizedQuerySet(QuerySet):
 class AuthorizedManagerMixin:
     """Add ``authorized()`` without replacing an application's manager."""
 
-    def authorized(self, user, permission, extra_q=None):
+    def authorized(self, user, permission, extra_q=None, *,
+                   allow_inactive_user=False):
         return AuthorizedQuerySet.authorized(
             self.get_queryset(), user, permission, extra_q=extra_q,
+            allow_inactive_user=allow_inactive_user,
         )
 
 
@@ -72,16 +122,17 @@ class PermittedQuerySetMixin:
     cannot serve ``filter(...).permitted(...)``.
     """
 
-    def permitted(self, permission, user, conditions=()):
+    def permitted(self, permission, user, conditions=(), *,
+                  allow_inactive_user=False):
         """Rows in this queryset ``user`` may access for ``permission``.
 
         ``permission`` is one full ``app_label.codename`` string or one
         saved ``auth.Permission`` instance. The protected model is
         ``self.model``. The codename is not parsed to guess a model.
         ``conditions`` is an exact tuple of queryable names, ANDed.
-        Anonymous and inactive principals receive an empty queryset.
-        Malformed input and incomplete configuration raise before that
-        shortcut and before SQL.
+        Anonymous users, and inactive users unless ``allow_inactive_user``,
+        receive an empty queryset. Malformed input and incomplete
+        configuration raise before that shortcut and before SQL.
 
         A relationship-family backend participates only when it has an
         applicable ``auth.Permission`` plan and owns every selected
@@ -98,6 +149,7 @@ class PermittedQuerySetMixin:
             user,
             conditions,
             handles=_relationship_implementation_handles(),
+            allow_inactive=allow_inactive_user,
         )
 
 
@@ -116,10 +168,12 @@ class PermittedUsersMixin:
     method: ``Content.objects`` keeps returning content rows.
     """
 
-    def get_permitted_users(self, perm):
+    def get_permitted_users(self, perm, *, allow_inactive=False):
         from trusts.reverse import compile_permitted_users
 
-        return compile_permitted_users(self, perm)
+        return compile_permitted_users(
+            self, perm, allow_inactive=allow_inactive,
+        )
 
 
 class PermittedUsersManagerMixin:
@@ -134,11 +188,12 @@ class PermittedUsersManagerMixin:
     user-manager change.
     """
 
-    def permitted(self, content, perm):
+    def permitted(self, content, perm, *, allow_inactive=False):
         from trusts.reverse import compile_permitted_users
 
         return compile_permitted_users(
             content, perm, user_queryset=self.get_queryset(),
+            allow_inactive=allow_inactive,
         )
 
 

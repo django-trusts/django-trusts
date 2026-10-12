@@ -224,7 +224,8 @@ def _relationship_handles(handles):
 
 
 def _compile_granted(handles, candidates, user, permission, *, kind='complete',
-                     sponsor_handles=None, permission_model=None):
+                     sponsor_handles=None, permission_model=None,
+                     allow_inactive=False):
     """OR ordinary predicates and one-level delegated predicates.
 
     ``handles`` owns the direct and delegation branches being projected.
@@ -256,6 +257,7 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
         delegated = _delegated_content_exists(
             tuple(delegations), sponsor_records, user, permission,
             content_identity=content_identity,
+            allow_inactive=allow_inactive,
         )
         if delegated is not None:
             parts.append(delegated)
@@ -267,7 +269,8 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
 
 
 def granted(handles, candidates, user, permission, *, kind='complete',
-            sponsor_handles=None, permission_model=None):
+            sponsor_handles=None, permission_model=None,
+            allow_inactive=False):
     """OR each applicable relationship-family handle's complete (or group) predicate.
 
     Core-owned aggregate: fold-family handles are omitted. Noun-blind
@@ -295,6 +298,7 @@ def granted(handles, candidates, user, permission, *, kind='complete',
             else _relationship_handles(sponsor_handles)
         ),
         permission_model=permission_model,
+        allow_inactive=allow_inactive,
     )
 
 
@@ -345,7 +349,8 @@ def _scope_prefix_lookups(record, scope_model):
     return tuple(lookups)
 
 
-def filter_authorized_scopes(queryset, user, permission, *, content, handles=None):
+def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
+                             allow_inactive_user=False):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -383,7 +388,17 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
+    from trusts.query import (
+        user_identity_denied,
+        require_mode_flag,
+        stored_user_is_inactive,
+    )
+    require_mode_flag(allow_inactive_user, 'allow_inactive_user')
     if not handles:
+        return queryset.none()
+    if user_identity_denied(user) or stored_user_is_inactive(
+        user, allow_inactive=allow_inactive_user,
+    ):
         return queryset.none()
 
     scope_model = queryset.model._meta.concrete_model
@@ -410,7 +425,8 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete',
-              extra_q=None, sponsor_handles=None, permission_model=None):
+              extra_q=None, sponsor_handles=None, permission_model=None,
+              allow_inactive=False):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
     One SQL. ``None`` when no handle applies so the caller may use the
@@ -422,6 +438,7 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
         handles, candidates, user, permission, kind=kind,
         sponsor_handles=sponsor_handles,
         permission_model=permission_model,
+        allow_inactive=allow_inactive,
     )
     if granted_q is None:
         return None
@@ -436,7 +453,8 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
 
 
 def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None,
-                   sponsor_handles=None, permission_model=None):
+                   sponsor_handles=None, permission_model=None,
+                   allow_inactive=False):
     """One grant EXISTS for ``obj`` through ``handle`` only.
 
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
@@ -446,6 +464,7 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
         (handle,), obj, user, permission, kind=kind,
         sponsor_handles=sponsor_handles,
         permission_model=permission_model,
+        allow_inactive=allow_inactive,
     )
     if granted_q is None:
         return None
@@ -457,7 +476,7 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
 
 
 def _compile_common_permissions(handles, candidates, user, *, kind='complete',
-                                sponsor_handles=None):
+                                sponsor_handles=None, allow_inactive=False):
     """Permission queryset for the given handles. No family filter."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
@@ -500,6 +519,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
             delegated = _delegated_content_exists(
                 plan.delegations, compatible_records, user, perm_expr,
                 content_identity=_candidate_model(candidates),
+                allow_inactive=allow_inactive,
             )
             if delegated is not None:
                 parts.append(delegated)
@@ -1630,20 +1650,23 @@ def _shift_outer_ref(value):
     return value
 
 
-def _principal_eligibility_q(model, path):
+def _principal_eligibility_q(model, path, *, allow_inactive=False):
     """SQL equivalent of ``is_active_principal`` through ``path``.
 
     Missing ``is_active`` fails closed because the runtime helper's default is
-    false. Anonymous/authenticated attributes use their runtime defaults when
+    false. ``allow_inactive`` omits that predicate and does not require the
+    column. Anonymous/authenticated attributes use their runtime defaults when
     they are not concrete fields. Any concrete eligibility field must be
-    boolean.
+    boolean. Standard SQL only: equality against the boolean column.
     """
     lookups = {}
-    for name, expected, required in (
-        ('is_active', True, True),
+    checks = [
         ('is_anonymous', False, False),
         ('is_authenticated', True, False),
-    ):
+    ]
+    if not allow_inactive:
+        checks.insert(0, ('is_active', True, True))
+    for name, expected, required in checks:
         try:
             field = model._meta.get_field(name)
         except FieldDoesNotExist:
@@ -1659,6 +1682,8 @@ def _principal_eligibility_q(model, path):
                 'principal eligibility.' % (model._meta.label, name)
             )
         lookups['%s__%s' % (path, name)] = expected
+    if not lookups:
+        return Q()
     return Q(**lookups)
 
 
@@ -1729,13 +1754,16 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity)
 
 
 def _delegated_content_exists(delegations, sponsor_records, user, permission,
-                              *, content_identity=None):
+                              *, content_identity=None, allow_inactive=False):
     """Candidate-content predicate for one-level delegated authority."""
     if (
         user is None
         or getattr(user, 'is_anonymous', False)
         or not getattr(user, 'is_authenticated', True)
-        or not getattr(user, 'is_active', False)
+        or (
+            not allow_inactive
+            and not getattr(user, 'is_active', False)
+        )
     ):
         return None
     parts = []
@@ -1747,6 +1775,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
             continue
         eligibility = _principal_eligibility_q(
             record.sponsor_model, record.sponsor_field,
+            allow_inactive=allow_inactive,
         )
         if eligibility is None:
             continue
@@ -1768,7 +1797,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
 
 
 def _delegated_user_exists(delegations, sponsor_records, content, permission,
-                           *, content_identity=None):
+                           *, content_identity=None, allow_inactive=False):
     """Candidate-user predicate for one-level delegated authority."""
     content = _require_instance(content, 'content')
     parts = []
@@ -1780,6 +1809,7 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
             continue
         eligibility = _principal_eligibility_q(
             record.sponsor_model, record.sponsor_field,
+            allow_inactive=allow_inactive,
         )
         if eligibility is None:
             continue
@@ -2051,6 +2081,7 @@ class All(object):
 class AlongWalk:
     """Immutable walk metadata resolved from ``Along`` at ``register()``."""
 
+    path: tuple
     bound: int
     shape: str
     walk_path: tuple
@@ -2372,6 +2403,7 @@ def _build_along_walk(root, content_path, content_model, along):
         walk_model, suffix_path, content_model, walk_ident,
     )
     return AlongWalk(
+        path=tuple(along_ref._path),
         bound=bound,
         shape=shape,
         walk_path=tuple(walk_path),
@@ -2490,6 +2522,60 @@ def _neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
     )
 
 
+def _inverse_neighbor_sql(walk, qn, gen, g, ident_col, ident_sql):
+    """Walk one hop backward. The CTE is still referenced once.
+
+    Shape S forward visits children, so the inverse projects the parent.
+    Shape C forward visits parents, so the inverse visits children.
+    Shape E forward follows parent to child, so the inverse follows
+    child to parent.
+    """
+    source = 'FROM %(gen)s AS %(g)s ' % {'gen': gen, 'g': g}
+    if walk.shape == 'S':
+        cur = qn('cur')
+        parent_col = qn(walk.parent_attname)
+        walk_table = qn(walk.walk_model._meta.db_table)
+        frm = source + (
+            'JOIN %(walk_table)s AS %(cur)s '
+            'ON %(cur)s.%(ident)s = %(g)s.%(ident_col)s'
+            % {
+                'g': g, 'walk_table': walk_table, 'cur': cur,
+                'ident': ident_sql, 'ident_col': ident_col,
+            }
+        )
+        return frm, '%s.%s' % (cur, parent_col)
+    if walk.shape == 'C':
+        child = qn('child')
+        parent_col = qn(walk.parent_attname)
+        walk_table = qn(walk.walk_model._meta.db_table)
+        frm = source + (
+            'JOIN %(walk_table)s AS %(child)s '
+            'ON %(child)s.%(parent_col)s = %(g)s.%(ident_col)s'
+            % {
+                'g': g, 'walk_table': walk_table, 'child': child,
+                'parent_col': parent_col, 'ident_col': ident_col,
+            }
+        )
+        return frm, '%s.%s' % (child, ident_sql)
+    if walk.shape == 'E':
+        link = qn('link')
+        edge_table = qn(walk.edge_model._meta.db_table)
+        parent_col = qn(walk.edge_parent_attname)
+        child_col = qn(walk.edge_child_attname)
+        frm = source + (
+            'JOIN %(edge_table)s AS %(link)s '
+            'ON %(link)s.%(child_col)s = %(g)s.%(ident_col)s'
+            % {
+                'g': g, 'edge_table': edge_table, 'link': link,
+                'child_col': child_col, 'ident_col': ident_col,
+            }
+        )
+        return frm, '%s.%s' % (link, parent_col)
+    raise TrustsConfigurationError(
+        'Unsupported Along shape %r.' % (walk.shape,)
+    )
+
+
 def _along_cycle_clause(connection, ident_col, qn):
     """One PostgreSQL cycle suffix. SQLite and MySQL stay plain.
 
@@ -2505,7 +2591,7 @@ def _along_cycle_clause(connection, ident_col, qn):
     )
 
 
-def _render_reach_sql(walk, seed_sql, seed_params, connection):
+def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
     """Return ``(sql, params)`` for the uncorrelated W membership list.
 
     SQLite, PostgreSQL, and MySQL 8.4+ share one plain ``WITH RECURSIVE``:
@@ -2530,7 +2616,9 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection):
     walk_table = qn(walk.walk_model._meta.db_table)
     site = qn('s')
     seed_alias = qn('seed_rows')
-    frm, project = _neighbor_sql(walk, qn, gen, g, ident_col, ident)
+    if neighbor is None:
+        neighbor = _neighbor_sql
+    frm, project = neighbor(walk, qn, gen, g, ident_col, ident)
     sql = (
         'WITH RECURSIVE %(gen)s(%(ident_col)s, %(depth)s) AS ('
         'SELECT %(seed_alias)s.%(ident_col)s, 0 '
@@ -2573,12 +2661,58 @@ class _IdentInReach(Expression):
         return sql, tuple(self.w_params)
 
 
+def _content_walk_seed(walk, content):
+    """Walk-site identities derived from the bound content.
+
+    No user and no grant table. An empty suffix selects that content's
+    walk-site identity. A suffix selects the related walk-site rows,
+    such as the Cabinet identities for a Sheet.
+    """
+    if not walk.suffix_path:
+        qs = walk.walk_model._default_manager.filter(
+            **{walk.walk_ident: getattr(content, walk.walk_ident)},
+        )
+    else:
+        qs = walk.walk_model._default_manager.filter(
+            **{walk.suffix_field: content},
+        )
+    # ``values(ident=...)`` collides when the walk identity column is
+    # already named ``ident`` (a UUID ``to_field``). Selecting that
+    # column keeps the seed alias the walk template reads.
+    if walk.walk_ident == 'ident':
+        seed = qs.values(walk.walk_ident).distinct()
+    else:
+        seed = qs.values(ident=F(walk.walk_ident)).distinct()
+    query = seed.query.clone()
+    query.subquery = True
+    # Policy SQL binds content.<target> only for this comparison.
+    query.where.children[0].trusts_content_bind = True
+    return query
+
+
+def _grant_walk_attname(record):
+    """Grant-root column that stores the walk identity.
+
+    The walk site is one hop from the grant root in every Along
+    registration this compiler renders. That hop's column is the join
+    key outside the recursive CTE.
+    """
+    walk = record.along
+    field = record.root._meta.get_field(walk.walk_path[0])
+    return field.attname
+
+
 class GrantReach(Expression):
     """Grant-anchored bounded reachability predicate for one recursive record.
 
-    The walk is uncorrelated with candidate rows. One plain
+    The forward walk is uncorrelated with candidate rows. One plain
     ``IN (WITH RECURSIVE …)`` per recursive record, with a depth counter
-    capped at the bound. SQLite and MySQL 8.4+ use that statement.
+    capped at the bound. The reverse walk is also uncorrelated. It
+    derives walk-site identities from the bound content, walks the
+    inverse edges once without the outer user, then joins eligible
+    grants and candidate users outside the CTE. The grant query is
+    correlated to the outer candidate user only after the walk. SQLite
+    and MySQL 8.4+ use that statement.
     PostgreSQL appends ``CYCLE ident SET is_cycle USING path`` and does
     not project those columns. MariaDB and other engines raise before
     walk SQL.
@@ -2592,6 +2726,20 @@ class GrantReach(Expression):
         self.record = record
         self.content = content
         walk = record.along
+        self.lhs = None
+        self.suffix_query = None
+        self.grant_query = None
+        if content is not None:
+            self.seed_query = _content_walk_seed(walk, content)
+            grant = _bind_record_qs(
+                record,
+                user=user,
+                permission=permission,
+                content_identity=content_identity,
+            )
+            self.grant_query = grant.query.clone()
+            self.grant_query.subquery = True
+            return
         seed = _bind_record_qs(
             record,
             user=user,
@@ -2601,28 +2749,29 @@ class GrantReach(Expression):
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
-        self.lhs = None
-        self.suffix_query = None
-        if content is None:
-            if walk.rewrite_attname:
-                self.lhs = F(walk.rewrite_attname)
-            elif not walk.suffix_path:
-                self.lhs = F(walk.walk_ident)
-            else:
-                self.suffix_query = walk.walk_model._default_manager.filter(
-                    **{walk.suffix_field: OuterRef(record.content_target)}
-                ).query.clone()
-                self.suffix_query.subquery = True
+        if walk.rewrite_attname:
+            self.lhs = F(walk.rewrite_attname)
+        elif not walk.suffix_path:
+            self.lhs = F(walk.walk_ident)
+        else:
+            self.suffix_query = walk.walk_model._default_manager.filter(
+                **{walk.suffix_field: OuterRef(record.content_target)}
+            ).query.clone()
+            self.suffix_query.subquery = True
 
     def copy(self):
         clone = super().copy()
         clone.seed_query = clone.seed_query.clone()
+        if clone.grant_query is not None:
+            clone.grant_query = clone.grant_query.clone()
         if clone.suffix_query is not None:
             clone.suffix_query = clone.suffix_query.clone()
         return clone
 
     def get_source_expressions(self):
         exprs = [self.seed_query]
+        if self.grant_query is not None:
+            exprs.append(self.grant_query)
         if self.lhs is not None:
             exprs.append(self.lhs)
         if self.suffix_query is not None:
@@ -2632,6 +2781,8 @@ class GrantReach(Expression):
     def set_source_expressions(self, exprs):
         exprs = list(exprs)
         self.seed_query = exprs.pop(0)
+        if self.grant_query is not None:
+            self.grant_query = exprs.pop(0)
         if self.lhs is not None:
             self.lhs = exprs.pop(0)
         if self.suffix_query is not None:
@@ -2639,16 +2790,12 @@ class GrantReach(Expression):
 
     def as_sql(self, compiler, connection):
         _require_along_renderer(connection)
-        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
-        if seed_sql.startswith('(') and seed_sql.endswith(')'):
-            seed_sql = seed_sql[1:-1]
+        if self.content is not None:
+            return self._reverse_sql(compiler, connection)
+        seed_sql, seed_params = self._seed_sql(compiler, connection)
         w_sql, w_params = _render_reach_sql(
             self.record.along, seed_sql, seed_params, connection,
         )
-        if self.content is not None:
-            return self._bound_content_sql(
-                compiler, connection, w_sql, w_params,
-            )
         if self.lhs is not None:
             lhs_sql, lhs_params = compiler.compile(self.lhs)
             return '%s IN (%s)' % (lhs_sql, w_sql), tuple(lhs_params) + tuple(w_params)
@@ -2659,20 +2806,24 @@ class GrantReach(Expression):
         )))
         return Exists(inner).as_sql(compiler, connection)
 
-    def _bound_content_sql(self, compiler, connection, w_sql, w_params):
-        walk = self.record.along
-        content = self.content
-        if not walk.suffix_path:
-            inner = walk.walk_model._default_manager.filter(
-                pk=content.pk,
-            ).query.clone()
-        else:
-            inner = walk.walk_model._default_manager.filter(
-                **{walk.suffix_field: content},
-            ).query.clone()
-        inner.subquery = True
+    def _seed_sql(self, compiler, connection):
+        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
+        if seed_sql.startswith('(') and seed_sql.endswith(')'):
+            seed_sql = seed_sql[1:-1]
+        return seed_sql, seed_params
+
+    def _reverse_sql(self, compiler, connection):
+        # Resolve may clone the seed. Keep the content comparison marked.
+        self.seed_query.where.children[0].trusts_content_bind = True
+        seed_sql, seed_params = self._seed_sql(compiler, connection)
+        w_sql, w_params = _render_reach_sql(
+            self.record.along, seed_sql, seed_params, connection,
+            neighbor=_inverse_neighbor_sql,
+        )
+        inner = self.grant_query.clone()
         inner.add_q(Q(_IdentInReach(
-            walk.walk_ident, w_sql, w_params, walk.bound,
+            _grant_walk_attname(self.record),
+            w_sql, w_params, self.record.along.bound,
         )))
         return Exists(inner).as_sql(compiler, connection)
 
@@ -2848,16 +2999,21 @@ class RelationPlan:
         parts = []
         for record in self.records:
             if record.along is not None:
-                user = bindings['user']
                 if terminal_field_attr == 'content_field':
                     parts.append(GrantReach(
-                        record, user, bindings['permission'],
+                        record, bindings['user'], bindings['permission'],
+                        content_identity=self.content_identity,
+                    ))
+                elif terminal_field_attr == 'user_field':
+                    parts.append(GrantReach(
+                        record, OuterRef(record.user_target),
+                        bindings['permission'], content=bindings['content'],
                         content_identity=self.content_identity,
                     ))
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
                     parts.append(GrantReach(
-                        record, user, OuterRef(target),
+                        record, bindings['user'], OuterRef(target),
                         content=bindings['content'],
                         content_identity=self.content_identity,
                     ))
@@ -2900,8 +3056,10 @@ class RelationPlan:
 
         Inverse of ``content_exists``: content and permission are bound,
         and the user terminal is ``OuterRef`` of the resolved user target.
-        Complete records OR together. An ``Along`` record has no exact
-        reverse of its user-seeded walk and raises before SQL.
+        Complete records OR together. For ``Along``, walk-site identities
+        are derived from the bound content. The inverse walk runs once
+        without the outer user. Eligible grants and candidate users join
+        outside the recursive CTE.
         """
         content = _require_instance(content, 'content')
         if content.pk is None:
@@ -2912,13 +3070,6 @@ class RelationPlan:
         permission = _bind_terminal(permission, 'permission')
         if not self.records:
             return None
-        for record in self.records:
-            if record.along is not None:
-                raise TrustsConfigurationError(
-                    'Reverse permission inquiry cannot compile an exact '
-                    'user predicate for Along registration on %s.'
-                    % record.root._meta.label
-                )
         return self._correlated_exists(
             'user_field', content=content, permission=permission,
         )
@@ -3418,22 +3569,48 @@ class TrustsRegistry(object):
             content_identity=_candidate_model(content),
         )
 
-    def permissions_for(self, user, content):
+    def permissions_for(self, user, content, *, allow_inactive_user=False):
         """Distinct permission rows granted to ``user`` on ``content``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
-        return self.plan_for(content, user=user).permissions(user, content)
+        from trusts.query import (
+            user_identity_denied,
+            require_mode_flag,
+            stored_user_is_inactive,
+        )
+        require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+        plan = self.plan_for(content, user=user)
+        if user_identity_denied(user) or stored_user_is_inactive(
+            user, allow_inactive=allow_inactive_user,
+        ):
+            if not plan.records or plan.permission_model is None:
+                return ()
+            return plan.permission_model._default_manager.none()
+        return plan.permissions(user, content)
 
-    def has_permission(self, user, content, permission):
+    def has_permission(self, user, content, permission, *,
+                       allow_inactive_user=False):
         """Whether ``permission`` exists in the common plan for this pair."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
-        return self.plan_for(
+        from trusts.query import (
+            user_identity_denied,
+            require_mode_flag,
+            stored_user_is_inactive,
+        )
+        require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+        plan = self.plan_for(
             content, user=user, permission=permission,
-        ).has_permission(user, content, permission)
+        )
+        if user_identity_denied(user) or stored_user_is_inactive(
+            user, allow_inactive=allow_inactive_user,
+        ):
+            return False
+        return plan.has_permission(user, content, permission)
 
-    def filter_authorized(self, queryset, user, permission):
+    def filter_authorized(self, queryset, user, permission, *,
+                          allow_inactive_user=False):
         """Lazy queryset of rows ``user`` holds ``permission`` on.
 
         Consumes ``RelationPlan.content_exists`` through ``filter_content``.
@@ -3444,9 +3621,20 @@ class TrustsRegistry(object):
             )
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
-        return self.plan_for(
+        from trusts.query import (
+            user_identity_denied,
+            require_mode_flag,
+            stored_user_is_inactive,
+        )
+        require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+        plan = self.plan_for(
             queryset, user=user, permission=permission,
-        ).filter_content(queryset, user, permission)
+        )
+        if user_identity_denied(user) or stored_user_is_inactive(
+            user, allow_inactive=allow_inactive_user,
+        ):
+            return queryset.none()
+        return plan.filter_content(queryset, user, permission)
 
 
 class _PathBuilder(object):
