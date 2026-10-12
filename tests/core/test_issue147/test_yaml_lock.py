@@ -345,10 +345,16 @@ class PolicyCompositionTest(SimpleTestCase):
         self.assertNotIn('{{', payload.decode('utf-8'))
         self.assertNotIn('change_document', payload.decode('utf-8'))
         self.assertEqual(list(guide['has_perm']), ['params', 'sql'])
-        self.assertIn('EXISTS(', guide['has_perm']['sql'])
+        self.assertIn('EXISTS (', guide['has_perm']['sql'])
         self.assertIn('documents_documentpermission', guide['has_perm']['sql'])
-        self.assertIn({'bind': 'permission.id'}, guide['has_perm']['params'])
-        self.assertIn({'bind': 'user.id'}, guide['has_perm']['params'])
+        self.assertIn(
+            {'bind': 'permission.id', 'hint': '$permission'},
+            guide['has_perm']['params'],
+        )
+        self.assertIn(
+            {'bind': 'user.id', 'hint': '$user'},
+            guide['has_perm']['params'],
+        )
         self.assertEqual(list(guide['permitted']), ['params', 'sql'])
         self.assertIn('documents_documentpermission', guide['permitted']['sql'])
         self.assertNotIn('confidential" IS NULL', guide['permitted']['sql'])
