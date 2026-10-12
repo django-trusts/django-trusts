@@ -224,7 +224,8 @@ def _relationship_handles(handles):
 
 
 def _compile_granted(handles, candidates, user, permission, *, kind='complete',
-                     sponsor_handles=None, permission_model=None):
+                     sponsor_handles=None, permission_model=None,
+                     allow_inactive=False):
     """OR ordinary predicates and one-level delegated predicates.
 
     ``handles`` owns the direct and delegation branches being projected.
@@ -256,6 +257,7 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
         delegated = _delegated_content_exists(
             tuple(delegations), sponsor_records, user, permission,
             content_identity=content_identity,
+            allow_inactive=allow_inactive,
         )
         if delegated is not None:
             parts.append(delegated)
@@ -267,7 +269,8 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
 
 
 def granted(handles, candidates, user, permission, *, kind='complete',
-            sponsor_handles=None, permission_model=None):
+            sponsor_handles=None, permission_model=None,
+            allow_inactive=False):
     """OR each applicable relationship-family handle's complete (or group) predicate.
 
     Core-owned aggregate: fold-family handles are omitted. Noun-blind
@@ -295,6 +298,7 @@ def granted(handles, candidates, user, permission, *, kind='complete',
             else _relationship_handles(sponsor_handles)
         ),
         permission_model=permission_model,
+        allow_inactive=allow_inactive,
     )
 
 
@@ -345,7 +349,8 @@ def _scope_prefix_lookups(record, scope_model):
     return tuple(lookups)
 
 
-def filter_authorized_scopes(queryset, user, permission, *, content, handles=None):
+def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
+                             allow_inactive_user=False):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -383,7 +388,11 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
+    from trusts.query import require_mode_flag, stored_user_is_inactive
+    require_mode_flag(allow_inactive_user, 'allow_inactive_user')
     if not handles:
+        return queryset.none()
+    if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
         return queryset.none()
 
     scope_model = queryset.model._meta.concrete_model
@@ -410,7 +419,8 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete',
-              extra_q=None, sponsor_handles=None, permission_model=None):
+              extra_q=None, sponsor_handles=None, permission_model=None,
+              allow_inactive=False):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
     One SQL. ``None`` when no handle applies so the caller may use the
@@ -422,6 +432,7 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
         handles, candidates, user, permission, kind=kind,
         sponsor_handles=sponsor_handles,
         permission_model=permission_model,
+        allow_inactive=allow_inactive,
     )
     if granted_q is None:
         return None
@@ -436,7 +447,8 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
 
 
 def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None,
-                   sponsor_handles=None, permission_model=None):
+                   sponsor_handles=None, permission_model=None,
+                   allow_inactive=False):
     """One grant EXISTS for ``obj`` through ``handle`` only.
 
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
@@ -446,6 +458,7 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
         (handle,), obj, user, permission, kind=kind,
         sponsor_handles=sponsor_handles,
         permission_model=permission_model,
+        allow_inactive=allow_inactive,
     )
     if granted_q is None:
         return None
@@ -457,7 +470,7 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
 
 
 def _compile_common_permissions(handles, candidates, user, *, kind='complete',
-                                sponsor_handles=None):
+                                sponsor_handles=None, allow_inactive=False):
     """Permission queryset for the given handles. No family filter."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
@@ -500,6 +513,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
             delegated = _delegated_content_exists(
                 plan.delegations, compatible_records, user, perm_expr,
                 content_identity=_candidate_model(candidates),
+                allow_inactive=allow_inactive,
             )
             if delegated is not None:
                 parts.append(delegated)
@@ -1630,20 +1644,23 @@ def _shift_outer_ref(value):
     return value
 
 
-def _principal_eligibility_q(model, path):
+def _principal_eligibility_q(model, path, *, allow_inactive=False):
     """SQL equivalent of ``is_active_principal`` through ``path``.
 
     Missing ``is_active`` fails closed because the runtime helper's default is
-    false. Anonymous/authenticated attributes use their runtime defaults when
+    false. ``allow_inactive`` omits that predicate and does not require the
+    column. Anonymous/authenticated attributes use their runtime defaults when
     they are not concrete fields. Any concrete eligibility field must be
-    boolean.
+    boolean. Standard SQL only: equality against the boolean column.
     """
     lookups = {}
-    for name, expected, required in (
-        ('is_active', True, True),
+    checks = [
         ('is_anonymous', False, False),
         ('is_authenticated', True, False),
-    ):
+    ]
+    if not allow_inactive:
+        checks.insert(0, ('is_active', True, True))
+    for name, expected, required in checks:
         try:
             field = model._meta.get_field(name)
         except FieldDoesNotExist:
@@ -1659,6 +1676,8 @@ def _principal_eligibility_q(model, path):
                 'principal eligibility.' % (model._meta.label, name)
             )
         lookups['%s__%s' % (path, name)] = expected
+    if not lookups:
+        return Q()
     return Q(**lookups)
 
 
@@ -1729,13 +1748,16 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity)
 
 
 def _delegated_content_exists(delegations, sponsor_records, user, permission,
-                              *, content_identity=None):
+                              *, content_identity=None, allow_inactive=False):
     """Candidate-content predicate for one-level delegated authority."""
     if (
         user is None
         or getattr(user, 'is_anonymous', False)
         or not getattr(user, 'is_authenticated', True)
-        or not getattr(user, 'is_active', False)
+        or (
+            not allow_inactive
+            and not getattr(user, 'is_active', False)
+        )
     ):
         return None
     parts = []
@@ -1747,6 +1769,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
             continue
         eligibility = _principal_eligibility_q(
             record.sponsor_model, record.sponsor_field,
+            allow_inactive=allow_inactive,
         )
         if eligibility is None:
             continue
@@ -1768,7 +1791,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
 
 
 def _delegated_user_exists(delegations, sponsor_records, content, permission,
-                           *, content_identity=None):
+                           *, content_identity=None, allow_inactive=False):
     """Candidate-user predicate for one-level delegated authority."""
     content = _require_instance(content, 'content')
     parts = []
@@ -1780,6 +1803,7 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
             continue
         eligibility = _principal_eligibility_q(
             record.sponsor_model, record.sponsor_field,
+            allow_inactive=allow_inactive,
         )
         if eligibility is None:
             continue
@@ -3539,22 +3563,36 @@ class TrustsRegistry(object):
             content_identity=_candidate_model(content),
         )
 
-    def permissions_for(self, user, content):
+    def permissions_for(self, user, content, *, allow_inactive_user=False):
         """Distinct permission rows granted to ``user`` on ``content``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
-        return self.plan_for(content, user=user).permissions(user, content)
+        from trusts.query import require_mode_flag, stored_user_is_inactive
+        require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+        plan = self.plan_for(content, user=user)
+        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+            if not plan.records or plan.permission_model is None:
+                return ()
+            return plan.permission_model._default_manager.none()
+        return plan.permissions(user, content)
 
-    def has_permission(self, user, content, permission):
+    def has_permission(self, user, content, permission, *,
+                       allow_inactive_user=False):
         """Whether ``permission`` exists in the common plan for this pair."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
-        return self.plan_for(
+        from trusts.query import require_mode_flag, stored_user_is_inactive
+        require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+        plan = self.plan_for(
             content, user=user, permission=permission,
-        ).has_permission(user, content, permission)
+        )
+        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+            return False
+        return plan.has_permission(user, content, permission)
 
-    def filter_authorized(self, queryset, user, permission):
+    def filter_authorized(self, queryset, user, permission, *,
+                          allow_inactive_user=False):
         """Lazy queryset of rows ``user`` holds ``permission`` on.
 
         Consumes ``RelationPlan.content_exists`` through ``filter_content``.
@@ -3565,9 +3603,14 @@ class TrustsRegistry(object):
             )
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
-        return self.plan_for(
+        from trusts.query import require_mode_flag, stored_user_is_inactive
+        require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+        plan = self.plan_for(
             queryset, user=user, permission=permission,
-        ).filter_content(queryset, user, permission)
+        )
+        if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
+            return queryset.none()
+        return plan.filter_content(queryset, user, permission)
 
 
 class _PathBuilder(object):

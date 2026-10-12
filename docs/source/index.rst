@@ -309,9 +309,8 @@ django-trusts requires the same delegation row, its selected content and
 condition, and an ordinary sponsor grant on that content. The actor's own
 ordinary grants remain available as independent alternatives.
 
-Both principals must remain eligible. A delegate or sponsor that fails the
-same active-principal rule used by django-trusts receives no delegated access,
-even if its ordinary grants and delegation rows remain in the database.
+By default, both sponsoring and delegated users must have ``is_active=True``.
+See :ref:`user-is-active-checks` for the shared inquiry rule.
 
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
@@ -457,11 +456,9 @@ own the full set, the call raises ``TrustsConfigurationError`` before SQL.
 declarations only. A runtime ``.permitted()`` call is not one of those
 declarations; it still validates and raises on first use.
 
-Malformed permissions and conditions raise before SQL, including when the
-principal is anonymous. Anonymous and inactive principals, and a
-well-formed permission for another content type, produce an empty
-queryset. There is no active-superuser shortcut. Named conditions remain
-explicit:
+Malformed permissions and conditions raise before SQL. A well-formed
+permission for another content type produces an empty queryset. There is no
+active-superuser shortcut. Named conditions remain explicit:
 
 .. code-block:: python
 
@@ -486,8 +483,7 @@ The permission may also use Django's string form:
    )
 
 The result is a lazy queryset of the configured user model. Normal queryset
-operations remain available, for example
-``document.get_permitted_users(change_document).filter(is_active=True)``.
+operations remain available.
 
 Applications that own their user model may expose the same inquiry on their
 existing user manager:
@@ -517,6 +513,38 @@ This method returns a lazy queryset. Both spellings return the same rows.
 The user-manager mixin is optional; an application that cannot change its
 user manager uses ``content.get_permitted_users(perm)``. Stock ``auth.User``
 does not grow ``permitted``.
+
+.. _user-is-active-checks:
+
+user.is_active checks
+~~~~~~~~~~~~~~~~~~~~~
+
+All Trusts permission inquiries check ``user.is_active`` by default, including
+ordinary and delegated grants, permission enumeration, and reverse user
+listing. Anonymous and unauthenticated users cannot supply persisted grants
+and receive no positive permission result. Input and configuration errors
+still raise before a denied result is returned.
+
+Auditing inactive users
+~~~~~~~~~~~~~~~~~~~~~~~
+
+To inspect a suspended user's grants, use the keyword-only audit option
+(default ``False``). Inquiries returning content, permissions, or a boolean
+use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
+It skips only the built-in ``is_active`` checks for the user, delegate, and
+sponsor. Explicit conditions and candidate-queryset filters still apply.
+
+.. code-block:: python
+
+   documents = Document.objects.permitted(
+       "documents.change_document", suspended_user, allow_inactive_user=True,
+   )
+   users = document.get_permitted_users(
+       "documents.change_document", allow_inactive=True,
+   )
+
+Stock Django user methods do not forward either keyword. Use the Trusts
+adapters for audits; view guards and login behavior are unchanged.
 
 Protect a view with the Trusts-only primary-key guard:
 

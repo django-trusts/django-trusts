@@ -19,6 +19,34 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## user.is_active checks (#284)
+
+The shared [user.is_active rule](docs/source/index.rst#user-is-active-checks)
+also applies to `.authorized()` and ordinary registry/intermediate-model
+inquiries, superseding their earlier ungated behavior described below. Their
+default results change for an inactive user:
+
+| Before #284 | After #284 |
+| --- | --- |
+| Ordinary `.authorized()`, `permissions_for`, `has_permission`, `filter_authorized`, and `filter_authorized_scopes` can produce a positive result for an inactive user | The same default inquiry returns false/empty |
+| An aggregate reverse inquiry can include an inactive user through a custom backend | Unchanged in this unit. Whether a global activity gate may be stricter than stock `has_perm` is unresolved |
+
+Use the audit option in the usage guide when those calls intentionally inspect
+stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;
+user-list inquiries use `allow_inactive`.
+Existing permission inputs, query shapes, and positional arguments remain.
+A principal with no `is_active` attribute is not treated as inactive.
+Review affected Trusts inquiry call sites. Default-mode policy lock bytes are
+unchanged. An audit-mode lockfile representation is unresolved.
+
+Migration-bot checklist:
+
+- `.authorized(`, `permissions_for(`, `has_permission(`, and `filter_authorized(`
+- `filter_authorized_scopes(` and its `allow_inactive_user` keyword
+- `.permitted(`, `get_permitted_users(`, and backend inquiry overrides
+- custom reverse/compiler hooks and candidate-manager `is_active` filters
+- permission-result caches, if present, and `trusts_policy_sql`
+
 ## Permission content type must match the object (#267)
 
 `1.0.0 → 1.1.0`. Crossed `auth.Permission.content_type` positives are

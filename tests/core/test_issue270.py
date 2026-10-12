@@ -103,9 +103,14 @@ class PermittedQuerySetSurfaceTest(SimpleTestCase):
         parameters = inspect.signature(AuthorizedQuerySet.authorized).parameters
         self.assertEqual(
             list(parameters),
-            ['self', 'user', 'permission', 'extra_q'],
+            ['self', 'user', 'permission', 'extra_q', 'allow_inactive_user'],
         )
         self.assertIsNone(parameters['extra_q'].default)
+        self.assertEqual(parameters['allow_inactive_user'].default, False)
+        self.assertEqual(
+            parameters['allow_inactive_user'].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
 
 
 class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
@@ -243,6 +248,12 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         self.assertEqual(list(inactive_qs), [])
         self.assertEqual(
             _pks(Document.objects.authorized(self.inactive, self.change)),
+            set(),
+        )
+        self.assertEqual(
+            _pks(Document.objects.authorized(
+                self.inactive, self.change, allow_inactive_user=True,
+            )),
             {self.open_doc.pk},
         )
         with self.assertNumQueries(0):

@@ -249,6 +249,7 @@ class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
             )
         authorized.assert_called_once_with(
             queryset, 'user', 'permission', extra_q='extra',
+            allow_inactive_user=False,
         )
         self.assertEqual(manager.application_method(), 'application-owned')
 
@@ -297,13 +298,18 @@ class AuthorizedQuerySetLiveTest(TestCase):
         self.assertNotIn(self.doc_b.pk, pks)
         self.assertFalse(Document.objects.authorized(self.bob, self.change).exists())
 
-    def test_does_not_call_is_active_principal(self):
+    def test_inactive_user_is_empty_unless_auditing(self):
         self.alice.is_active = False
         self.alice.save()
         with patch('trusts.query.is_active_principal') as active:
-            pks = _pks(Document.objects.authorized(self.alice, self.change))
+            with self.assertNumQueries(0):
+                denied = Document.objects.authorized(self.alice, self.change)
+                self.assertFalse(denied.exists())
+            audited = Document.objects.authorized(
+                self.alice, self.change, allow_inactive_user=True,
+            )
         active.assert_not_called()
-        self.assertEqual(pks, {self.doc_a.pk})
+        self.assertEqual(_pks(audited), {self.doc_a.pk})
 
     def test_extra_q_is_and_overlay(self):
         extra = Q(pk=self.doc_a.pk)

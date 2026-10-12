@@ -142,13 +142,11 @@ SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
 combines all applicable ordinary grants with OR: any matching ordinary grant
 may supply the sponsor's authority on the same content and permission.
-Reviewers should verify the delegate/sponsor direction, the
-relationship-owned scope predicate, the delegate and sponsor eligibility
-predicates, and the sponsor's ordinary-authority predicate in both the policy
-document and generated SQL. A delegate or sponsor that fails the principal
-eligibility rule
-equivalent to ``is_active_principal`` must contribute no delegated authority,
-even while its grants and delegation rows remain stored.
+Reviewers should verify the delegate/sponsor direction, the relationship's
+explicit conditions, the default :ref:`user.is_active checks <user-is-active-checks>`,
+and the sponsor's ordinary-grant predicate in the document and generated SQL.
+The lockfile records that default mode. How an audit-mode inquiry would be
+represented in the same document is unresolved.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.

@@ -89,7 +89,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'one-argument symbolic predicate',
             'collection-rooted `.contains(member)`',
             'Discrepancies must be surfaced in the PR',
-            'does not apply that principal check',
+            'Both use the shared user checks.',
             'issue #268',
         ):
             with self.subTest(needle=needle):

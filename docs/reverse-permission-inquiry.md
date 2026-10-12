@@ -5,6 +5,8 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the `Along` failure boundary below.
 
+Both adapters use the [shared user.is_active rule and audit option](source/index.rst#user-is-active-checks).
+
 ## Decision
 
 Core exposes two public adapters for the same reverse inquiry:
@@ -14,7 +16,8 @@ users = document.get_permitted_users(perm)
 users = User.objects.permitted(document, perm)
 ```
 
-Both accept exactly one saved content object and one permission, call one
+Both accept exactly one saved content object, one permission, and the
+keyword-only `allow_inactive=False` mode, call one
 internal reverse-query compiler, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
@@ -136,7 +139,9 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must both equal the singular check for the normalized permission identity:
+must agree when called with the same `allow_inactive` mode.
+
+For the default mode, the comparison with stock Django remains:
 
 ```python
 normalized_perm = normalize_permission_for_singular_check(perm)
@@ -145,11 +150,12 @@ user.has_perm(normalized_perm, content)
 
 `normalize_permission_for_singular_check()` is explanatory notation, not a
 second public API. It leaves supported strings and explicitly supported custom
-permission instances unchanged, and reads
-`django_permission_instance.user_perm_str` for a Django
-`auth.Permission` instance. Reverse compilation still uses the canonical
-permission row. The comparison uses the same configured Django authentication
-backends.
+permission instances unchanged, and uses `user_perm_str` for an
+`auth.Permission` instance. Reverse compilation still uses the canonical row.
+Stock `user.has_perm()` cannot forward `allow_inactive`. Audit comparisons use
+the Trusts inquiries that accept the flag. How a custom backend receives that
+mode, and whether a global activity gate may be stricter than stock
+`has_perm`, are unresolved.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not
@@ -158,20 +164,18 @@ complete.
 
 ### Django outer rules
 
-The reverse query reproduces Django's outer principal rules and each supported
+The reverse query reproduces Django's outer user rules and each supported
 backend's own eligibility rules:
 
 - an active superuser is included for every accepted permission/content pair;
 - an inactive superuser does not receive Django's outer superuser shortcut;
-- an inactive ordinary user is included only if a configured supported backend
-  would grant that same singular object permission;
-- an anonymous principal is not a persisted user row and cannot appear.
+- an inactive ordinary user is excluded from the Trusts branch by default
+  and can be included with `allow_inactive=True` when that branch grants;
+- the Trusts branch applies the shared user checks to its candidate users.
 
-Core must not impose a blanket `is_active` exclusion that disagrees with a
-custom backend. Each reverse-query contributor reproduces the active-state
-behavior of its singular `has_perm` path. The implementation must prove that
-the configured user model exposes every required principal condition as SQL.
-Arbitrary Python-only state is unsupported and fails loudly.
+Django's outer superuser contributor is unchanged. Other backends keep the
+predicates they already contribute. A global `is_active` wrapper around that
+whole OR is not part of this runtime unit.
 
 The invariant is over candidate rows supplied by the application's existing
 default user manager. A custom default manager may intentionally exclude rows.
@@ -230,21 +234,17 @@ FROM user
 WHERE
     django_outer_superuser_predicate(user)
     OR (
-        backend_1_eligibility_predicate(user)
-        AND backend_1_complete_grant_predicate(user, permission, content)
+        trusts_eligibility_predicate(user)
+        AND trusts_complete_grant_predicate(user, permission, content)
     )
-    OR (
-        backend_2_eligibility_predicate(user)
-        AND backend_2_complete_grant_predicate(user, permission, content)
-    )
-    OR ...
+    OR other_backend_predicate(user, permission, content)
 ```
 
-The named predicates are conceptual SQL placeholders, not Python callbacks.
-Django's outer superuser contributor includes its active-state rule. Each
-backend branch includes that backend's own eligibility behavior, including any
-active-state rule it applies in the singular check. Core adds no global
-`is_active` exclusion across all branches.
+`trusts_eligibility_predicate` includes `user.is_active` unless
+`allow_inactive` is true. Sponsor `is_active` inside a delegated grant uses
+the same mode. The superuser predicate still requires an active superuser.
+Other backend predicates are not rewritten. The named predicates are
+conceptual SQL placeholders, not Python callbacks.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain
@@ -315,9 +315,9 @@ Implementation must cover:
 - preservation of an application's existing user manager and queryset class;
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
-The result set must be compared row-for-row with singular
-`user.has_perm(normalized_perm, content)` across the candidate users in every
-behavioral fixture, using the normalization rule above.
+The result set must be compared row-for-row with the mode-aware contributors
+in the agreement invariant, using the same candidate users and normalization
+rule in every behavioral fixture.
 
 ## Non-goals
 
@@ -348,7 +348,7 @@ estimate.
   **8**
 - Phase B2, public content and optional user-manager adapters,
   permission-string/named-filter codec, backend-completeness preflight,
-  principal rules, routing, lockfile, and migration record: **8**
+  user rules, routing, lockfile, and migration record: **8**
 - GH adoption: separate consumer issue, not included
 
 Phase B1 ships no public application method. Phase B2 exposes

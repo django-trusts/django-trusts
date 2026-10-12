@@ -391,20 +391,22 @@ These additive APIs are the instance-only / metadata-driven surfaces that
 later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `filter_by_user_content_perm`, the app label, or the historical compiler.
 
-`AuthorizedQuerySet.authorized(user, permission, extra_q=None)` and
+`AuthorizedQuerySet.authorized(user, permission, extra_q=None, *, allow_inactive_user=False)` and
 `AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse
-`:condition`, does not call `is_active_principal`, and does not call
-`get_permission`. `extra_q` is the same AND overlay as `all_match` /
+`:condition` or call `get_permission`. It uses the
+[shared user.is_active checks](source/index.rst#user-is-active-checks).
+`extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
-`.authorized` does not call it and does not apply its principal check.
+`.authorized` does not call it; both inquiries apply the activity mode without
+sharing permission-input validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
-`filter_authorized_scopes(queryset, user, permission, *, content, handles=None)`
+`filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
 in `trusts.core` filters rows of an intermediate scope model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. It compiles `EXISTS` of root rows
