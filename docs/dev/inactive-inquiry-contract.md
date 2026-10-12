@@ -40,7 +40,7 @@ The list is a source-based starting inventory. Grok must verify completeness,
 especially companion overrides. Stock Django async methods remain outside
 the flag-forwarding contract; no new Trusts async API is added. Ordinary plan
 primitives are not assumed to gain delegation behavior merely because this
-ticket propagates an flag value.
+ticket propagates a flag value.
 
 ## Review gates
 
@@ -68,7 +68,7 @@ ticket propagates an flag value.
 
 Grok's agreement should name any unexpressible or unsupported surface before
 S2. Existing superuser/codecs/backend-OR differences must be retained as
-documented differences, not concealed by an inflag value. Thomas's
+documented differences, not concealed by the optional flag. Thomas's
 future superuser preference is no special treatment by default and explicit
 opt-in; its design belongs to #273, not this implementation.
 
@@ -101,9 +101,8 @@ Do not publish user documentation that outpaces the implementation on `dev`.
 The `dev` to `master` release gate and Thomas's separate manual lockfile-review
 gate for the existing train remain unchanged.
 
-Chat agrees with the optional-flag direction. Grok must confirm the revised
-contract and resolve SQL flag representation
-before runtime coding; this review did not settle those remaining decisions.
+Runtime implementation is under review in #296. SQL representation remains
+subject to review; the backend boundary is settled below.
 
 ## Thomas's wording review, 2026-10-11
 
@@ -140,7 +139,7 @@ human authorization is required for the already agreed bounded feature work.
 ## Backend boundary clarification, 2026-10-11
 
 Thomas's decision, relayed in #296 comment 6118712403: Trusts guarantees only
-its own backend. Activity predicates stay inside Trusts-owned grant branches;
+its own backend. `is_active` predicates stay inside Trusts-owned grant branches;
 custom backend predicates are not wrapped with a global `is_active` filter.
 Neither keyword is forwarded to custom backends, and no new hook capability
 or flag support is required from them. This supersedes the earlier review
