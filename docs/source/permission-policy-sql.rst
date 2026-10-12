@@ -152,6 +152,12 @@ may supply the sponsor's authority on the same content and permission.
 Reviewers should verify the delegate/sponsor direction, the relationship's
 explicit conditions, the :ref:`user.is_active checks <user-is-active-checks>`,
 and the sponsor's ordinary-grant predicate in the document and generated SQL.
+A delegated row records the same ``along`` path, shape, and bound, and the
+same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
+used ``along=``. The depth cap stays a ``const`` with hint ``along bound``.
+The delegate is allowed only where the delegation walk and the sponsor's
+ordinary authority both reach the requested object. When only one side uses
+``along=``, the other side matches that object exactly.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.

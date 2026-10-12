@@ -355,8 +355,13 @@ One or more reverse one-to-one relations may be chained as single-valued
 prefix hops before that gateway. A reverse one-to-one is not itself a
 supported content terminal or gateway.
 
-Ordinary sponsor grants may use ``along=``; their effective bounded reach
-participates in the sponsor's live authority ceiling.
+A sponsor's ordinary grant may use ``along=``. That bounded walk is part of
+the sponsor's live authority on every object it reaches, including when the
+check is a delegation. A delegated registration may use ``along=`` on the
+same call. The delegate is allowed on an object only when the delegation
+walk and the sponsor's ordinary permission both reach that object. If only
+one side uses ``along=``, the other side still has to match the object. A
+delegate cannot sponsor a further delegation.
 
 
 Configure Django
@@ -657,9 +662,12 @@ currently exercised by CI are recorded in the `support matrix
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 The same bounded walk participates in object checks, permitted-content
 querysets, permission enumeration, reverse permitted-user inquiry, and
-authorization-policy SQL. For one content and permission, reverse inquiry
-returns exactly the users whose complete forward object check succeeds,
-including the terminal condition and user checks.
+authorization-policy SQL. A delegated ``register()`` accepts the same
+``along=`` argument. The delegate is allowed only where that walk and the
+sponsor's ordinary permission both reach the object. For one content and
+permission, reverse inquiry returns exactly the users whose complete
+forward object check succeeds, including the terminal condition and user
+checks.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~

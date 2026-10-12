@@ -37,6 +37,12 @@ log.
   [user guide](source/index.rst), [driver contract](dev/delegation-registration.md),
   and [#279].
 
+- **Delegation with `along=`.** A sponsor's ordinary `along=` grant counts
+  toward a delegation, and a delegated registration may use the same
+  `along=` walk. The delegate is allowed only on objects both sides reach.
+  One delegation level is unchanged. See the
+  [user guide](source/index.rst).
+
 - **Permitted content querysets.**
   `QuerySet.permitted(permission, user, conditions=())` lazily filters an
   application queryset before pagination. See the
