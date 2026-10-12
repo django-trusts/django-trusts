@@ -156,6 +156,12 @@ content model, the document records each backend separately.
 Permission inquiries and named filters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+The :doc:`proposed activity-inquiry contract <inactive-permission-inquiries>`
+requires runtime and exported eligibility predicates to agree under normal
+and audit modes. ``allow_inactive`` is not implemented. This guide describes
+the current export; no audit variant or lockfile-schema change is introduced
+by that proposal. Its representation must be agreed before implementation.
+
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. Named filters are listed in ``add_named_filter()`` order.
 

@@ -293,6 +293,12 @@ rejecting Trusts branch as a global deny.
 
 ## Ask permission questions
 
+The [proposed activity-inquiry contract](docs/source/inactive-permission-inquiries.rst)
+for #284 distinguishes normal inquiries from an explicit inactive-user audit.
+Its `allow_inactive` option and consistent default activity gate are not
+implemented. The behavior below is the current audit baseline; the proposal
+does not change enforcement guards or superuser policy.
+
 The supported projections consume the same normalized registration:
 
 | Question | Public shape | Expected database behavior |

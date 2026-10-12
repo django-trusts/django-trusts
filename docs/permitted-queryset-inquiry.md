@@ -3,6 +3,10 @@
 Public contract for issue #270. `queryset.permitted(permission, user, conditions=())`
 is implemented on `PermittedQuerySet`.
 
+The proposed [activity-inquiry contract](source/inactive-permission-inquiries.rst)
+for #284 adds a keyword-only `allow_inactive=False` audit mode. That option is
+not implemented; this document records the current behavior.
+
 ## Question
 
 Given one user and one permission, which rows in this content queryset may the

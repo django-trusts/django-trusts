@@ -169,7 +169,9 @@ concrete forms when no custom queryset is required. Plain
 either one. ``.authorized()`` remains the lower-level instance
 projection. The `permitted queryset inquiry contract
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/permitted-queryset-inquiry.md>`_
-records that split.
+records the implemented surface. The proposed
+:doc:`activity and inactive-user audit contract <inactive-permission-inquiries>`
+describes issue #284; its ``allow_inactive`` option is not implemented.
 
 ``PermittedUsersMixin`` adds
 ``document.get_permitted_users(permission)``, the reverse inquiry that
@@ -792,5 +794,6 @@ in the `support matrix
    :hidden:
 
    authorization-policy-sql
+   inactive-permission-inquiries
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.

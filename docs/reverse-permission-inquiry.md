@@ -5,6 +5,11 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the `Along` failure boundary below.
 
+The proposed [activity-inquiry contract](source/inactive-permission-inquiries.rst)
+for #284 would add a global default activity gate and an explicit
+`allow_inactive=True` audit mode. Neither change is implemented. The current
+backend-OR and active-superuser behavior described here remains the baseline.
+
 ## Decision
 
 Core exposes two public adapters for the same reverse inquiry:
