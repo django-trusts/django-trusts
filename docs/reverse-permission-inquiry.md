@@ -141,7 +141,12 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must both equal the singular check for the normalized permission identity:
+must agree when called with the same `allow_inactive` mode. Each supported
+backend contribution is compared with that backend's mode-aware singular
+inquiry for the normalized permission identity, then composed with the same
+candidate eligibility and Django active-superuser contributor.
+
+For eligible users in default mode, the comparison with stock Django remains:
 
 ```python
 normalized_perm = normalize_permission_for_singular_check(perm)
@@ -150,11 +155,12 @@ user.has_perm(normalized_perm, content)
 
 `normalize_permission_for_singular_check()` is explanatory notation, not a
 second public API. It leaves supported strings and explicitly supported custom
-permission instances unchanged, and reads
-`django_permission_instance.user_perm_str` for a Django
-`auth.Permission` instance. Reverse compilation still uses the canonical
-permission row. The comparison uses the same configured Django authentication
-backends.
+permission instances unchanged, and uses `user_perm_str` for an
+`auth.Permission` instance. Reverse compilation still uses the canonical row.
+Default mode denies an inactive candidate even when a custom stock-Django
+backend would grant. Audit mode is compared with explicit mode-aware backend
+inquiries, not stock `user.has_perm()`, which cannot forward `allow_inactive`.
+The reverse result must retain every supported contributor under that mode.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not
