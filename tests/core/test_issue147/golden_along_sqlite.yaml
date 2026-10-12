@@ -6,7 +6,7 @@ backends:
     contents:
       - model: "documents.Folder"
         permitted:
-          params: [{bind: "permission.id"}, {const: "documents"}, {const: "folder"}, {bind: "user.id"}, {const: 2}, {const: true}]
+          params: [{bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
           sql: |-
             SELECT DISTINCT "documents_folder"."id", "documents_folder"."parent_id"
             FROM "documents_folder"
@@ -37,7 +37,7 @@ backends:
               JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
             ) = %s
         has_perm:
-          params: [{const: 1}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "folder"}, {bind: "user.id"}, {const: 2}, {const: true}]
+          params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
           sql: |-
             SELECT %s AS "a"
             FROM "documents_folder"
@@ -71,7 +71,7 @@ backends:
             )
             LIMIT 1
         get_all_permissions:
-          params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "folder"}, {bind: "user.id"}, {const: 2}, {const: true}]
+          params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
@@ -119,7 +119,7 @@ backends:
                 ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
-          params: [{const: true}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "folder"}, {bind: "content.id"}, {const: 2}, {const: true}, {const: true}]
+          params: [{const: true, hint: "active"}, {const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "content.id", hint: "$content"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}, {const: true, hint: "along match"}]
           sql: |-
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"

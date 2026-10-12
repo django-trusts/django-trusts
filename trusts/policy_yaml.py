@@ -48,9 +48,9 @@ _ALLOWED_TAGS = frozenset((
 ))
 _LITERAL_KEYS = frozenset(('sql',))
 _FLOW_MAP_KEYS = frozenset((
-    'user', 'group', 'permission', 'content', 'delegate', 'sponsor', 'equal',
+    'user', 'group', 'permission', 'content', 'delegate', 'sponsor',
 ))
-_FLOW_SEQ_KEYS = frozenset(('params', 'permission_in'))
+_FLOW_SEQ_KEYS = frozenset(('params',))
 
 
 class PolicyYamlError(ValueError):
@@ -299,6 +299,13 @@ def _assert_canonical_text(text):
         if stripped.startswith('sql:') and stripped != 'sql: |-':
             raise PolicyYamlError(
                 'SQL must be a strip literal (`sql: |-`), not %r.' % (stripped,)
+            )
+        if stripped.startswith('condition:') and not (
+            stripped.startswith('condition: "') and stripped.endswith('"')
+        ):
+            raise PolicyYamlError(
+                'condition must be one double-quoted line, not %r.'
+                % (stripped,)
             )
         if stripped.startswith('params:') and not (
             stripped.startswith('params: [') and stripped.endswith(']')
