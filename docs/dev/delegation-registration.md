@@ -99,7 +99,10 @@ object. If the sponsor's ordinary grant has no `along=`, that grant must
 name that object. When both sides walk, the delegate gets only the objects
 both walks reach. A longer content suffix than one reverse hop is not one
 column on the content row; compiling that delegated walk raises
-`TrustsConfigurationError` before a grant. One delegation cannot sponsor
+`TrustsConfigurationError` before a grant, on a forward check and on
+reverse inquiry. The sponsor comparison keeps the full root-relative
+sponsor path, so `sponsor_link__user` uses `sponsor_link__user_id` and
+not a bare `user_id` on the delegation row. One delegation cannot sponsor
 another; that chain stays rejected.
 
 For example, a delegation row with an `allowed_permissions` relation may

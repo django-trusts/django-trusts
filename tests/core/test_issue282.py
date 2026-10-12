@@ -365,6 +365,10 @@ class DelegatedAlongTest(TransactionTestCase):
                 set(self.Issue.objects.permitted(self.change, self.delegate)),
                 {self.root, self.child},
             )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                {self.root, self.child},
+            )
         self._agree(handle, (
             self.root, self.child, self.grandchild, self.beyond,
         ))
@@ -388,6 +392,18 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertTrue(self.delegate.has_perm(self.code, self.child))
             self.assertFalse(self.delegate.has_perm(self.code, self.grandchild))
             self.assertFalse(self.delegate.has_perm(self.code, self.beyond))
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.delegate)),
+                {self.root, self.child},
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                {self.root, self.child},
+            )
+            self.assertIn(self.code, self.delegate.get_all_permissions(self.child))
+            self.assertNotIn(
+                self.code, self.delegate.get_all_permissions(self.grandchild),
+            )
         self._agree(handle, (
             self.root, self.child, self.grandchild, self.beyond,
         ))
@@ -406,7 +422,19 @@ class DelegatedAlongTest(TransactionTestCase):
         with _listed(handle):
             self.assertTrue(self.delegate.has_perm(self.code, self.child))
             self.assertFalse(self.delegate.has_perm(self.code, self.grandchild))
+            self.assertFalse(self.outsider.has_perm(self.code, self.child))
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.delegate)),
+                {self.child},
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                {self.child},
+            )
             self.assertIn(self.code, self.delegate.get_all_permissions(self.child))
+            self.assertNotIn(
+                self.code, self.delegate.get_all_permissions(self.grandchild),
+            )
         editors.user_set.remove(self.sponsor)
         with _listed(handle):
             self.assertFalse(self.delegate.has_perm(self.code, self.child))
@@ -431,6 +459,19 @@ class DelegatedAlongTest(TransactionTestCase):
                 self.delegate.get_all_permissions(self.child),
                 {self.code},
             )
+            self.assertNotIn(
+                self.code, self.delegate.get_all_permissions(self.grandchild),
+            )
+            self.assertFalse(self.outsider.has_perm(self.code, self.child))
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.delegate)),
+                {self.child},
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                {self.child},
+            )
+        self._agree(handle, (self.root, self.child, self.grandchild))
         grant.permissions.clear()
         with _listed(handle):
             self.assertFalse(self.delegate.has_perm(self.code, self.child))
@@ -450,6 +491,17 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertFalse(self.delegate.has_perm(self.code, self.child))
             self.assertFalse(
                 backend.has_perm(self.delegate, self.code, self.child),
+            )
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.delegate)),
+                set(),
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                set(),
+            )
+            self.assertNotIn(
+                self.code, self.delegate.get_all_permissions(self.child),
             )
             self.assertTrue(backend.has_perm(
                 self.delegate, self.code, self.child,
@@ -473,6 +525,17 @@ class DelegatedAlongTest(TransactionTestCase):
         self.delegate.save(update_fields=['is_active'])
         with _listed(handle):
             self.assertFalse(self.delegate.has_perm(self.code, self.child))
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.delegate)),
+                set(),
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                set(),
+            )
+            self.assertNotIn(
+                self.code, self.delegate.get_all_permissions(self.child),
+            )
             self.assertTrue(backend.has_perm(
                 self.delegate, self.code, self.child,
                 allow_inactive_user=True,
@@ -502,6 +565,17 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertTrue(self.delegate.has_perm(self.code, self.grandchild))
             self.assertFalse(self.second.has_perm(self.code, self.child))
             self.assertFalse(self.second.has_perm(self.code, self.grandchild))
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.second)),
+                set(),
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.second, self.change)),
+                set(),
+            )
+            self.assertNotIn(
+                self.code, self.second.get_all_permissions(self.grandchild),
+            )
             self.assertNotIn(
                 self.second.pk,
                 set(self.child.get_permitted_users(self.change).values_list(
@@ -545,3 +619,386 @@ class DelegatedAlongTest(TransactionTestCase):
                 operation,
             )
             self.assertNotIn('json_', row['sql'].lower())
+
+    def _assert_content_walk_sql(self, handle, bounds, table=None):
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        self.assertEqual(document['schema_version'], 1)
+        content = document['backends'][0]['contents'][0]
+        for operation in (
+            'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
+        ):
+            row = content[operation]
+            self.assertEqual(row['sql'].count('%s'), len(row['params']), operation)
+            self.assertIn('WITH RECURSIVE', row['sql'])
+            found = [
+                param for param in row['params']
+                if param.get('hint') == 'along bound'
+            ]
+            self.assertTrue(found, operation)
+            self.assertTrue(
+                all(param.get('const') in bounds for param in found),
+                operation,
+            )
+            self.assertNotIn('json_', row['sql'].lower())
+            if table is not None:
+                self.assertIn(table, row['sql'])
+        return content
+
+    def test_lockfile_records_each_content_walk(self):
+        self._assert_content_walk_sql(
+            self._register(sponsor_along=('issue__parent', 2)),
+            bounds=(2,),
+        )
+        self._assert_content_walk_sql(
+            self._register(delegation_along=('issue__parent', 3)),
+            bounds=(3,),
+        )
+        self._assert_content_walk_sql(
+            self._register(sponsor='group', sponsor_along=('issue__parent', 2)),
+            bounds=(2,),
+            table='issue282_group_grant',
+        )
+        self._assert_content_walk_sql(
+            self._register(
+                sponsor='collection', sponsor_along=('issue__parent', 2),
+            ),
+            bounds=(2,),
+            table='issue282_collection_grant',
+        )
+        self._assert_content_walk_sql(
+            self._register(
+                sponsor_along=('issue__parent', 1),
+                delegation_along=('issue__children', 2),
+            ),
+            bounds=(1, 2),
+        )
+        self._assert_content_walk_sql(
+            self._register(
+                sponsor='group', delegation_along=('issue__parent', 3),
+            ),
+            bounds=(3,),
+            table='issue282_group_grant',
+        )
+        self._assert_content_walk_sql(
+            self._register(
+                sponsor='collection', delegation_along=('issue__parent', 3),
+            ),
+            bounds=(3,),
+            table='issue282_collection_grant',
+        )
+
+    def test_group_sponsor_grant_with_delegation_walk(self):
+        editors = Group.objects.create(name='i282-editors-leaf')
+        editors.user_set.add(self.sponsor)
+        editors.permissions.add(self.change)
+        self.GroupGrant.objects.create(group=editors, issue=self.grandchild)
+        self.Delegation.objects.create(
+            delegate=self.delegate, sponsor=self.sponsor, issue=self.root,
+        )
+        handle = self._register(
+            sponsor='group', delegation_along=('issue__parent', 3),
+        )
+        with _listed(handle):
+            self.assertFalse(self.delegate.has_perm(self.code, self.root))
+            self.assertFalse(self.delegate.has_perm(self.code, self.child))
+            self.assertTrue(self.delegate.has_perm(self.code, self.grandchild))
+            self.assertFalse(self.delegate.has_perm(self.code, self.beyond))
+            self.assertFalse(self.outsider.has_perm(self.code, self.grandchild))
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.delegate)),
+                {self.grandchild},
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                {self.grandchild},
+            )
+            self.assertEqual(
+                self.delegate.get_all_permissions(self.grandchild),
+                {self.code},
+            )
+        self._agree(handle, (
+            self.root, self.child, self.grandchild, self.beyond,
+        ))
+        editors.user_set.remove(self.sponsor)
+        with _listed(handle):
+            self.assertFalse(self.delegate.has_perm(self.code, self.grandchild))
+
+    def test_collection_permission_with_delegation_walk(self):
+        grant = self.CollectionGrant.objects.create(
+            user=self.sponsor, issue=self.grandchild,
+        )
+        grant.permissions.add(self.change)
+        self.Delegation.objects.create(
+            delegate=self.delegate, sponsor=self.sponsor, issue=self.root,
+        )
+        handle = self._register(
+            sponsor='collection', delegation_along=('issue__parent', 3),
+        )
+        with _listed(handle):
+            self.assertFalse(self.delegate.has_perm(self.code, self.child))
+            self.assertTrue(self.delegate.has_perm(self.code, self.grandchild))
+            self.assertFalse(self.delegate.has_perm(self.add_code, self.grandchild))
+            self.assertFalse(self.outsider.has_perm(self.code, self.grandchild))
+            self.assertEqual(
+                set(self.Issue.objects.permitted(self.code, self.delegate)),
+                {self.grandchild},
+            )
+            self.assertEqual(
+                set(self.Issue.objects.authorized(self.delegate, self.change)),
+                {self.grandchild},
+            )
+            self.assertEqual(
+                self.delegate.get_all_permissions(self.grandchild),
+                {self.code},
+            )
+        self._agree(handle, (
+            self.root, self.child, self.grandchild, self.beyond,
+        ))
+        grant.permissions.clear()
+        with _listed(handle):
+            self.assertFalse(self.delegate.has_perm(self.code, self.grandchild))
+
+    def _sponsor_link_pair(self, suffix, colliding):
+        user_model = self.User
+        issue_model = self.Issue
+        link_meta = type('Meta', (), {
+            'app_label': 'trusts_tests',
+            'db_table': 'issue282_sl_%s' % suffix,
+        })
+        sponsor_link = type('SponsorLink_%s' % suffix, (models.Model,), {
+            '__module__': self.__class__.__module__,
+            'user': models.ForeignKey(
+                user_model, on_delete=models.CASCADE, related_name='+',
+            ),
+            'Meta': link_meta,
+        })
+        fields = {
+            '__module__': self.__class__.__module__,
+            'delegate': models.ForeignKey(
+                user_model, on_delete=models.CASCADE, related_name='+',
+            ),
+            'sponsor_link': models.ForeignKey(
+                sponsor_link, on_delete=models.CASCADE,
+            ),
+            'issue': models.ForeignKey(issue_model, on_delete=models.CASCADE),
+            'Meta': type('Meta', (), {
+                'app_label': 'trusts_tests',
+                'db_table': 'issue282_ld_%s' % suffix,
+            }),
+        }
+        if colliding:
+            fields['user'] = models.ForeignKey(
+                user_model, on_delete=models.CASCADE, related_name='+',
+            )
+        delegation = type('LinkedDelegation_%s' % suffix, (models.Model,), fields)
+        return sponsor_link, delegation
+
+    def _register_linked(self, delegation):
+        handle = _handle()
+        handle.register(
+            trust=self.Grant,
+            user='user',
+            permission='permission',
+            content='issue',
+            along=('issue__parent', 1),
+        )
+        handle.register(
+            trust=delegation,
+            delegate='delegate',
+            sponsor='sponsor_link__user',
+            content='issue',
+        )
+        return handle
+
+    def _assert_linked_agreement(self, handle, issue, allowed):
+        users = (self.sponsor, self.delegate, self.second, self.outsider)
+        with _listed(handle):
+            for user in users:
+                self.assertEqual(
+                    user.has_perm(self.code, issue),
+                    user in allowed,
+                    user.get_username(),
+                )
+            found = set(issue.get_permitted_users(self.change).values_list(
+                'pk', flat=True,
+            )) & {user.pk for user in users}
+            self.assertEqual(found, {user.pk for user in allowed})
+            named = set(issue.get_permitted_users(self.code).values_list(
+                'pk', flat=True,
+            )) & {user.pk for user in users}
+            self.assertEqual(named, {user.pk for user in allowed})
+
+    def test_nested_sponsor_path_without_a_colliding_column(self):
+        sponsor_link, delegation = self._sponsor_link_pair('plain', colliding=False)
+        with _tables(sponsor_link, delegation):
+            link = sponsor_link.objects.create(user=self.sponsor)
+            delegation.objects.create(
+                delegate=self.delegate, sponsor_link=link, issue=self.child,
+            )
+            self.Grant.objects.create(
+                user=self.sponsor, issue=self.root, permission=self.change,
+            )
+            handle = self._register_linked(delegation)
+            # The sponsor walk reaches the child. The outsider has no grant.
+            self._assert_linked_agreement(
+                handle, self.child, (self.sponsor, self.delegate),
+            )
+            self._assert_linked_agreement(handle, self.grandchild, ())
+            with _listed(handle):
+                self.assertEqual(
+                    set(self.Issue.objects.permitted(self.code, self.delegate)),
+                    {self.child},
+                )
+                self.assertEqual(
+                    set(self.Issue.objects.authorized(
+                        self.delegate, self.change,
+                    )),
+                    {self.child},
+                )
+                self.assertIn(
+                    self.code, self.delegate.get_all_permissions(self.child),
+                )
+            sql = self._assert_content_walk_sql(handle, bounds=(1,))
+            self.assertIn('issue282_sl_plain', sql['has_perm']['sql'])
+
+    def test_nested_sponsor_path_with_a_colliding_column(self):
+        sponsor_link, delegation = self._sponsor_link_pair('hit', colliding=True)
+        with _tables(sponsor_link, delegation):
+            self.Grant.objects.create(
+                user=self.sponsor, issue=self.root, permission=self.change,
+            )
+            outsider_link = sponsor_link.objects.create(user=self.outsider)
+            delegation.objects.create(
+                delegate=self.delegate,
+                sponsor_link=outsider_link,
+                user=self.sponsor,
+                issue=self.child,
+            )
+            handle = self._register_linked(delegation)
+            # The grant belongs to sponsor. The delegation's sponsor is the
+            # outsider. The local user column must not satisfy the walk.
+            self._assert_linked_agreement(handle, self.child, (self.sponsor,))
+            with _listed(handle):
+                self.assertNotIn(
+                    self.child,
+                    set(self.Issue.objects.permitted(self.code, self.delegate)),
+                )
+                self.assertNotIn(
+                    self.child,
+                    set(self.Issue.objects.authorized(
+                        self.delegate, self.change,
+                    )),
+                )
+                self.assertNotIn(
+                    self.code, self.delegate.get_all_permissions(self.child),
+                )
+            holder_link = sponsor_link.objects.create(user=self.sponsor)
+            delegation.objects.create(
+                delegate=self.second,
+                sponsor_link=holder_link,
+                user=self.outsider,
+                issue=self.child,
+            )
+            self._assert_linked_agreement(
+                handle, self.child, (self.sponsor, self.second),
+            )
+
+    def test_longer_content_suffix_fails_closed(self):
+        issue_model = self.Issue
+        user_model = self.User
+
+        class AttachmentQuerySet(PermittedQuerySetMixin, AuthorizedQuerySet):
+            pass
+
+        class Attachment(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=40)
+            objects = models.Manager.from_queryset(AttachmentQuerySet)()
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'issue282_attachment'
+
+        class Note(models.Model):
+            issue = models.ForeignKey(
+                issue_model, related_name='notes', on_delete=models.CASCADE,
+            )
+            attachment = models.ForeignKey(
+                Attachment, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'issue282_note'
+
+        class AttachmentGrant(models.Model):
+            user = models.ForeignKey(
+                user_model, on_delete=models.CASCADE, related_name='+',
+            )
+            attachment = models.ForeignKey(
+                Attachment, on_delete=models.CASCADE,
+            )
+            permission = models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'issue282_attachment_grant'
+
+        class SuffixDelegation(models.Model):
+            delegate = models.ForeignKey(
+                user_model, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                user_model, on_delete=models.CASCADE, related_name='+',
+            )
+            issue = models.ForeignKey(issue_model, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'issue282_suffix_delegation'
+
+        change = _permission(Attachment, 'change_attachment')
+        code = '%s.%s' % (change.content_type.app_label, change.codename)
+        with _tables(Attachment, Note, AttachmentGrant, SuffixDelegation):
+            attachment = Attachment.objects.create(title='sheet')
+            Note.objects.create(issue=self.child, attachment=attachment)
+            AttachmentGrant.objects.create(
+                user=self.sponsor, attachment=attachment, permission=change,
+            )
+            SuffixDelegation.objects.create(
+                delegate=self.delegate, sponsor=self.sponsor, issue=self.child,
+            )
+            handle = _handle()
+            handle.register(
+                trust=AttachmentGrant,
+                user='user',
+                permission='permission',
+                content='attachment',
+            )
+            handle.register(
+                trust=SuffixDelegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='issue__notes__attachment',
+                along=('issue__parent', 2),
+            )
+            with _listed(handle):
+                with self.assertRaises(TrustsConfigurationError) as raised:
+                    self.delegate.has_perm(code, attachment)
+                self.assertIn('notes.attachment', str(raised.exception))
+                with self.assertRaises(TrustsConfigurationError):
+                    self.sponsor.has_perm(code, attachment)
+                for call in (
+                    lambda: set(Attachment.objects.permitted(code, self.delegate)),
+                    lambda: set(Attachment.objects.authorized(
+                        self.delegate, change,
+                    )),
+                    lambda: self.delegate.get_all_permissions(attachment),
+                    lambda: set(attachment.get_permitted_users(change)),
+                    lambda: render_policy_sql_bytes(handles=[handle]),
+                ):
+                    with self.assertRaises(TrustsConfigurationError):
+                        call()

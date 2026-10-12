@@ -1725,21 +1725,43 @@ def _compatible_sponsor_records(delegations, sponsor_records):
     return tuple(compatible)
 
 
-def _concrete_path_attname(model, path):
-    """Local column at the end of a root-relative ``__`` path."""
+def _root_relative_column(model, path):
+    """Concrete column lookup for a forward single-valued path.
+
+    ``sponsor`` becomes ``sponsor_id``. ``sponsor_link__user`` becomes
+    ``sponsor_link__user_id``. Every prefix stays on the path, so ``F()``
+    cannot bind a bare ``user_id`` on the delegation root. The last
+    component is that field's attname: the column that stores the
+    comparison identity, including a non-PK ``to_field``. The path was
+    already resolved at registration.
+    """
+    parts = str(path).split('__')
     current = model
+    prefix = []
     field = None
-    for name in str(path).split('__'):
+    for index, name in enumerate(parts):
         field = current._meta.get_field(name)
-        related = getattr(field, 'related_model', None)
-        if related is not None and getattr(field, 'concrete', False):
-            current = related
-    if field is None:
-        raise TrustsConfigurationError(
-            'Cannot resolve a column for %r on %s.'
-            % (path, model._meta.label)
-        )
-    return field.attname
+        if index == len(parts) - 1:
+            break
+        prefix.append(name)
+        current = field.related_model
+    return '__'.join(prefix + [field.attname])
+
+
+def _reject_unsupported_delegated_suffix(walk):
+    """Longer than one reverse content hop is not one content column.
+
+    One reverse hop rewrites onto ``rewrite_attname``. A longer suffix
+    is fail-closed on both the forward and reverse checks. This does
+    not implement that walk.
+    """
+    if walk is None or not walk.suffix_path or walk.rewrite_attname:
+        return
+    raise TrustsConfigurationError(
+        'Delegated along= cannot compile suffix path %r; the walk '
+        'identity is not one column of the content row.'
+        % _path_text(walk.suffix_path)
+    )
 
 
 def _candidate_outer_ref(walk):
@@ -1752,12 +1774,7 @@ def _candidate_outer_ref(walk):
     """
     if walk.rewrite_attname:
         return OuterRef(walk.rewrite_attname)
-    if walk.suffix_path:
-        raise TrustsConfigurationError(
-            'Delegated along= cannot compile suffix path %r; the walk '
-            'identity is not one column of the content row.'
-            % _path_text(walk.suffix_path)
-        )
+    _reject_unsupported_delegated_suffix(walk)
     return OuterRef(walk.walk_ident)
 
 
@@ -1850,7 +1867,7 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
                 _sponsor_walk_seed(
                     ordinary, _shift_outer_ref(permission), content_identity,
                 ),
-                F(_concrete_path_attname(record.root, record.sponsor_field)),
+                F(_root_relative_column(record.root, record.sponsor_field)),
                 _candidate_outer_ref(ordinary.along),
             ))
             continue
@@ -1868,6 +1885,7 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
 
 def _delegation_reaches(record, *, forward, user=None, content=None):
     """Equality, or the delegation row's own bounded walk, to the object."""
+    _reject_unsupported_delegated_suffix(record.along)
     if record.along is None:
         if forward:
             return Q(**{record.content_field: OuterRef(record.content_target)})
