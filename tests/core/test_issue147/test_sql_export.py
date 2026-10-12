@@ -393,7 +393,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('sql', trust)
         self.assertNotIn('kind', trust)
         self.assertNotIn('kind', named)
-        self.assertIn('EXISTS(', content['has_perm']['sql'])
+        self.assertIn('EXISTS (', content['has_perm']['sql'])
         self.assertIn({'bind': 'permission.id'}, content['has_perm']['params'])
         self.assertIn('auth_permission', content['get_all_permissions']['sql'])
         for token in ('change_document', 'codename'):

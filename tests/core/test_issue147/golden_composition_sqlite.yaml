@@ -17,7 +17,7 @@ backends:
             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
             FROM "documents_document"
             WHERE
-            EXISTS(
+            EXISTS (
               SELECT %s AS "a"
               FROM "documents_documentpermission" "U0"
               INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -36,8 +36,7 @@ backends:
             SELECT %s AS "a"
             FROM "documents_document"
             WHERE ("documents_document"."id" = %s
-                AND
-              EXISTS(
+              AND EXISTS (
                 SELECT %s AS "a"
                 FROM "documents_documentpermission" "U0"
                 INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -49,8 +48,7 @@ backends:
                     AND "U0"."document_id" = ("documents_document"."id")
                 )
                 LIMIT 1
-              )
-            )
+              ) )
             LIMIT 1
         get_all_permissions:
           params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
@@ -59,19 +57,17 @@ backends:
             FROM "auth_permission"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
-              EXISTS(
+              EXISTS (
                 SELECT %s AS "a"
                 FROM "documents_document" "U0"
                 WHERE "U0"."id" = %s
                 LIMIT 1
               )
-                AND NOT (
-                EXISTS(
+              AND NOT ( EXISTS (
                   SELECT %s AS "a"
                   FROM "documents_document" "V0"
                   WHERE ("V0"."id" = %s
-                      AND NOT (
-                      EXISTS(
+                      AND NOT ( EXISTS (
                         SELECT %s AS "a"
                         FROM "documents_documentpermission" "U0"
                         INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -83,13 +79,9 @@ backends:
                             AND "U0"."document_id" = ("V0"."id")
                         )
                         LIMIT 1
-                      )
-                    )
-                  )
+                      ) ) )
                   LIMIT 1
-                )
-              )
-            )
+                ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
           params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
@@ -97,8 +89,7 @@ backends:
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"
             WHERE ("auth_user"."is_active" = %s
-                AND
-              EXISTS(
+              AND EXISTS (
                 SELECT %s AS "a"
                 FROM "documents_documentpermission" "U0"
                 INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
@@ -110,8 +101,7 @@ backends:
                     AND "U0"."user_id" = ("auth_user"."id")
                 )
                 LIMIT 1
-              )
-            )
+              ) )
         named_filters:
           - id: "documents__Document__non_confidential"
             params: [{const: true}]
@@ -143,7 +133,7 @@ backends:
             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
             FROM "documents_document"
             WHERE (
-              EXISTS(
+              EXISTS (
                 SELECT %s AS "a"
                 FROM "documents_documentpermission" "U0"
                 INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -156,8 +146,7 @@ backends:
                 )
                 LIMIT 1
               )
-                OR
-              EXISTS(
+              OR EXISTS (
                 SELECT %s AS "a"
                 FROM "documents_teamdocumentpermission" "U0"
                 INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -171,8 +160,7 @@ backends:
                     AND "U0"."document_id" = ("documents_document"."id")
                 )
                 LIMIT 1
-              )
-            )
+              ) )
         has_perm:
           params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
           sql: |-
@@ -192,8 +180,7 @@ backends:
                   )
                   LIMIT 1
                 )
-                  OR
-                EXISTS(
+                OR EXISTS (
                   SELECT %s AS "a"
                   FROM "documents_teamdocumentpermission" "U0"
                   INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -207,8 +194,7 @@ backends:
                       AND "U0"."document_id" = ("documents_document"."id")
                   )
                   LIMIT 1
-                )
-              ) )
+                ) ) )
             LIMIT 1
         get_all_permissions:
           params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
@@ -217,19 +203,17 @@ backends:
             FROM "auth_permission"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
-              EXISTS(
+              EXISTS (
                 SELECT %s AS "a"
                 FROM "documents_document" "U0"
                 WHERE "U0"."id" = %s
                 LIMIT 1
               )
-                AND NOT (
-                EXISTS(
+              AND NOT ( EXISTS (
                   SELECT %s AS "a"
                   FROM "documents_document" "V0"
                   WHERE ("V0"."id" = %s
-                      AND NOT (
-                      EXISTS(
+                      AND NOT ( EXISTS (
                         SELECT %s AS "a"
                         FROM "documents_documentpermission" "U0"
                         INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -242,8 +226,7 @@ backends:
                         )
                         LIMIT 1
                       )
-                        OR
-                      EXISTS(
+                      OR EXISTS (
                         SELECT %s AS "a"
                         FROM "documents_teamdocumentpermission" "U0"
                         INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -257,13 +240,9 @@ backends:
                             AND "U0"."document_id" = ("V0"."id")
                         )
                         LIMIT 1
-                      )
-                    )
-                  )
+                      ) ) )
                   LIMIT 1
-                )
-              )
-            )
+                ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
           params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
@@ -284,8 +263,7 @@ backends:
                   )
                   LIMIT 1
                 )
-                  OR
-                EXISTS(
+                OR EXISTS (
                   SELECT %s AS "a"
                   FROM "documents_teamdocumentpermission" "U0"
                   INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
@@ -299,5 +277,4 @@ backends:
                       AND "U5"."user_id" = ("auth_user"."id")
                   )
                   LIMIT 1
-                )
-              ) )
+                ) ) )

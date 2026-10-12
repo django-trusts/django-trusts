@@ -202,16 +202,23 @@ Each SQL block is broken between tokens onto predictable lines: before
 ``WHERE``, ``AND``, ``OR``, ``UNION``, ``UNION ALL``, ``EXISTS``, and the
 other clause keywords (``ORDER BY``, ``GROUP BY``, ``HAVING``, ``LIMIT``,
 ``OFFSET``, ``CYCLE``, and a ``SELECT`` or ``WITH`` that continues the
-statement). ``AND`` and ``OR`` use that same break: each starts a new
-line, indented two spaces past the group that contains it. A comparison
-stays on the connective's line (``AND "t"."id" = %s``). A following
-clause keyword starts its own line, so a disjunction of bare ``EXISTS``
-predicates is ``OR`` on one line and ``EXISTS(`` on the next. ``NOT
-EXISTS`` stays one unit, which is why ``AND NOT (`` still breaks before
-``EXISTS``. A parenthesized group that opens with ``EXISTS`` is the
-exception: ``AND ( EXISTS (`` and ``OR ( EXISTS (`` are one line, with
-those spaces, and the closing parens that finish that group share one
-line (``) )``). The seed and recursive member of ``WITH RECURSIVE``, and
+statement). ``AND`` and ``OR`` use that same break. A comparison stays
+on the connective's line (``AND "t"."id" = %s``), indented two spaces
+past the group that contains it. An ``EXISTS`` operand stays on that
+line too, including ``EXISTS (``, ``NOT EXISTS (``, and ``( EXISTS (``,
+at the same indent as the sibling operand::
+
+    AND ( EXISTS (
+      ...
+    )
+    OR EXISTS (
+      ...
+    ) )
+
+``EXISTS (`` always has that space. ``NOT EXISTS`` stays one unit, so
+``AND NOT ( EXISTS (`` is one line as well. A run of closing parens that
+finishes the group shares one line (``) )``). The seed and recursive
+member of ``WITH RECURSIVE``, and
 the subqueries inside them, are indented. A break never falls inside a
 quoted identifier or a plain single-quoted string.
 

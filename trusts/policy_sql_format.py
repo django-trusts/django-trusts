@@ -41,11 +41,12 @@ def _format_policy_sql(sql):
     """Return ``sql`` with predictable breaks between accepted tokens.
 
     Whitespace between tokens is a single space, or a newline and indent
-    at a break. Spacing that Django omitted, such as ``EXISTS(``, stays
-    omitted, except one readability pattern: ``AND ( EXISTS (`` and
-    ``OR ( EXISTS (`` are written on one line with those spaces, and a
-    run of closing parens that finishes that group is ``) )`` on one
-    line. Token texts are unchanged. The result has no trailing newline.
+    at a break. ``EXISTS (`` is always written with that space. ``AND``
+    and ``OR`` keep their operand on the same line, including
+    ``EXISTS (``, ``NOT EXISTS (``, and ``( EXISTS (``, at the same indent
+    as the sibling operand. A run of closing parens that finishes that
+    group is ``) )`` on one line. Token texts are unchanged. The result
+    has no trailing newline.
     A comment, dollar quote,
     E-string, backslash escape, adjacent string literals, unknown operator,
     or other unrecognized token raises ``TrustsConfigurationError`` and
@@ -307,20 +308,44 @@ def _bare_upper(text):
     return text.upper()
 
 
-def _opens_parenthesized_exists(tokens, index):
-    """True when ``AND`` or ``OR`` is followed by ``( EXISTS (``."""
-    if index + 3 >= len(tokens):
-        return False
-    paren, exists, inner = (
-        tokens[index + 1][0],
-        tokens[index + 2][0],
-        tokens[index + 3][0],
-    )
+def _group_opens_exists(tokens, index):
+    """True when this ``(`` group's first word is ``EXISTS`` or ``NOT EXISTS``."""
+    rest = tokens[index + 1:]
+    cursor = 0
+    if cursor < len(rest) and _bare_upper(rest[cursor][0]) == 'NOT':
+        cursor += 1
     return (
-        paren == '('
-        and _bare_upper(exists) == 'EXISTS'
-        and inner == '('
+        cursor < len(rest) and _bare_upper(rest[cursor][0]) == 'EXISTS'
     )
+
+
+def _exists_operand(tokens, index):
+    """Return ``(count, parenthesized)`` when ``AND``/``OR`` owns an EXISTS.
+
+    ``count`` is how many following tokens stay on the connective's line:
+    an optional ``NOT``, an optional opening parenthesis, ``EXISTS``, and
+    its parenthesis. ``parenthesized`` is true when that opening
+    parenthesis is present (``AND ( EXISTS (``). ``(0, False)`` means the
+    operand is not an EXISTS form.
+    """
+    rest = tokens[index + 1:]
+    cursor = 0
+    parenthesized = False
+    if cursor < len(rest) and _bare_upper(rest[cursor][0]) == 'NOT':
+        cursor += 1
+    if cursor < len(rest) and rest[cursor][0] == '(':
+        parenthesized = True
+        cursor += 1
+        if cursor < len(rest) and _bare_upper(rest[cursor][0]) == 'NOT':
+            cursor += 1
+    if (
+        cursor < len(rest)
+        and _bare_upper(rest[cursor][0]) == 'EXISTS'
+        and cursor + 1 < len(rest)
+        and rest[cursor + 1][0] == '('
+    ):
+        return cursor + 2, parenthesized
+    return 0, False
 
 
 def _wants_break(bare, prev_bare, next_bare, line_open):
@@ -355,6 +380,9 @@ def _emit(tokens):
     # Depths of the ``(`` tokens in ``AND ( EXISTS (`` / ``OR ( EXISTS (``.
     # Their closing parens share one line when they are adjacent.
     join_close = set()
+    # Depths whose first word is EXISTS, so a sibling OR EXISTS lines up
+    # with that EXISTS instead of taking the comparison indent.
+    exists_group = set()
     skip = 0
     stick = 0
 
@@ -381,19 +409,25 @@ def _emit(tokens):
                 depth += 1
                 stack.append(False)
                 join_close.add(depth)
+                if _group_opens_exists(tokens, index):
+                    exists_group.add(depth)
                 prev_bare = None
                 stick -= 1
                 continue
-            if _bare_upper(text) == 'EXISTS':
+            if _bare_upper(text) in ('EXISTS', 'NOT'):
                 emit(text, True)
-                prev_bare = 'EXISTS'
+                prev_bare = _bare_upper(text)
                 stick -= 1
                 continue
             stick = 0
         if text == '(':
+            if prev_bare == 'EXISTS':
+                spaced = True
             emit('(', spaced)
             depth += 1
             stack.append(False)
+            if _group_opens_exists(tokens, index):
+                exists_group.add(depth)
             prev_bare = None
             continue
         if text == ')':
@@ -417,6 +451,7 @@ def _emit(tokens):
                     lines.append(''.join(parts).rstrip())
                 for _step in range(run):
                     join_close.discard(depth)
+                    exists_group.discard(depth)
                     stack.pop()
                     depth -= 1
                 stack[depth] = True
@@ -432,6 +467,7 @@ def _emit(tokens):
                 emit(')', spaced)
             else:
                 join_close.discard(depth)
+                exists_group.discard(depth)
                 inner = stack.pop()
                 depth -= 1
                 if inner:
@@ -449,11 +485,30 @@ def _emit(tokens):
         if index + 1 < len(tokens):
             next_bare = _bare_upper(tokens[index + 1][0])
         should, extra = _wants_break(bare, prev_bare, next_bare, line_open())
+        if bare in ('AND', 'OR') and line_open():
+            count, parenthesized = _exists_operand(tokens, index)
+            if count:
+                # ``AND ( EXISTS (`` keeps the comparison indent. A bare
+                # ``EXISTS (`` / ``NOT EXISTS (`` operand, and any sibling
+                # already inside that group, uses the group's own indent
+                # so the EXISTS body stays nested under the connective.
+                if (
+                    not parenthesized
+                    or depth in join_close
+                    or depth in exists_group
+                ):
+                    extra = 0
+                stick = count
+        elif (
+            bare == 'NOT' and next_bare == 'EXISTS'
+            and depth in exists_group and not stack[depth]
+        ):
+            # ``WHERE (NOT EXISTS (`` opens the group. Put NOT EXISTS on
+            # the group's line so a sibling OR EXISTS can share it.
+            should = True
         if should:
             newline(extra)
             spaced = False
-        if bare in ('AND', 'OR') and _opens_parenthesized_exists(tokens, index):
-            stick = 3
         emit(text, spaced)
         prev_bare = bare
     if line_open():
