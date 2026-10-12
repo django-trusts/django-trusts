@@ -40,7 +40,7 @@ the model.
 Import from ``trusts.core``. This slice does not re-export a process-global
 registry from ``trusts``. Generic compiler protocol, the default plan
 compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
-``common_permissions()``, ``filter_authorized_scopes()``,
+``common_permissions()``, ``filter_by_permitted_content()``,
 ``ConditionLookup``, and configuration/compiler exceptions live here.
 Permission-condition *records* live on each ``TrustsRegistry`` via
 ``trusts.conditions._ir.ConditionRegistry``. Construction self-binds
@@ -349,8 +349,8 @@ def _scope_prefix_lookups(record, scope_model):
     return tuple(lookups)
 
 
-def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
-                             allow_inactive_user=False):
+def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
+                                allow_inactive_user=False):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -378,7 +378,7 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     """
     if not isinstance(queryset, QuerySet):
         raise TrustsConfigurationError(
-            'filter_authorized_scopes requires a QuerySet, not %r.'
+            'filter_by_permitted_content requires a QuerySet, not %r.'
             % (queryset,)
         )
     if handles is None:
@@ -422,6 +422,11 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
     return queryset.filter(granted_q).distinct()
+
+
+def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
+                             allow_inactive_user=False):
+    return filter_by_permitted_content(queryset, user, permission, content=content, handles=handles, allow_inactive_user=allow_inactive_user)
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete',

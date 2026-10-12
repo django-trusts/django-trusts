@@ -26,7 +26,7 @@ from trusts.core import (
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    filter_authorized_scopes,
+    filter_by_permitted_content,
 )
 from trusts.query import (
     AuthorizedManager,
@@ -140,7 +140,37 @@ class KernelConfigTest(SimpleTestCase):
         self.assertFalse(hasattr(query, 'historical_group_grant_exists'))
         self.assertFalse(hasattr(query, 'group_local_grant_exists'))
         self.assertFalse(hasattr(query, 'permission_granted_via_group_exists'))
-        self.assertTrue(callable(filter_authorized_scopes))
+        self.assertTrue(callable(filter_by_permitted_content))
+
+
+class FilterAuthorizedScopesAliasTest(SimpleTestCase):
+    def test_old_name_delegates_to_filter_by_permitted_content(self):
+        import inspect
+
+        from trusts.core import filter_authorized_scopes
+
+        self.assertEqual(
+            inspect.signature(filter_authorized_scopes),
+            inspect.signature(filter_by_permitted_content),
+        )
+        sentinel = object()
+        queryset, user, permission, content = (
+            object(), object(), object(), object(),
+        )
+        handles = (object(),)
+        with patch(
+            'trusts.core.filter_by_permitted_content',
+            return_value=sentinel,
+        ) as called:
+            result = filter_authorized_scopes(
+                queryset, user, permission, content=content,
+                handles=handles, allow_inactive_user=True,
+            )
+        self.assertIs(result, sentinel)
+        called.assert_called_once_with(
+            queryset, user, permission, content=content,
+            handles=handles, allow_inactive_user=True,
+        )
 
 
 class ConditionLookupBindTest(TestCase):
@@ -397,7 +427,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
     def _filter(self, queryset, user=None, permission=None, content=None, handles=None):
         if handles is None:
             handles = (self.handle,)
-        return filter_authorized_scopes(
+        return filter_by_permitted_content(
             queryset,
             self.alice if user is None else user,
             self.add if permission is None else permission,
@@ -442,7 +472,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
     def test_wrong_permission_type_is_zero_sql(self):
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
-                filter_authorized_scopes(
+                filter_by_permitted_content(
                     self.Folder.objects.all(),
                     self.alice,
                     'add_payload',
@@ -450,7 +480,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     handles=(self.handle,),
                 )
             with self.assertRaises(TrustsConfigurationError):
-                filter_authorized_scopes(
+                filter_by_permitted_content(
                     self.Folder.objects.all(),
                     self.alice,
                     None,
@@ -541,7 +571,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             Grant.objects.create(scope=scope_a, user=alice, permission=add)
 
             handle = _Handle(registry)
-            qs = filter_authorized_scopes(
+            qs = filter_by_permitted_content(
                 Scope.objects.order_by('pk'), alice, add,
                 content=Payload, handles=(handle,),
             )
@@ -555,7 +585,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             self.assertEqual(pks, {scope_a.pk})
             self.assertNotIn(scope_b.pk, pks)
             self.assertFalse(
-                filter_authorized_scopes(
+                filter_by_permitted_content(
                     Scope.objects.all(), bob, add,
                     content=Payload, handles=(handle,),
                 ).exists()

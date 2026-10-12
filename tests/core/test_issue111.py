@@ -139,14 +139,14 @@ class OwnerResolutionTest(SimpleTestCase):
         self.assertIn(owner, implementation_configs())
 
     def test_authorized_and_filter_scopes_use_owners(self):
-        from trusts.core import filter_authorized_scopes
+        from trusts.core import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
         handles = configured_implementation_handles()
         self.assertTrue(handles)
         self.assertEqual(handles[0].path, HOST_BACKEND)
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
-        self.assertTrue(callable(filter_authorized_scopes))
+        self.assertTrue(callable(filter_by_permitted_content))
 
     def test_missing_owner_is_configuration_error(self):
         backend = MixinOnlyBackend()

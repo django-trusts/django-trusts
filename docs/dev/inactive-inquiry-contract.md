@@ -28,7 +28,7 @@ split and sized before implementation.
 | Registry inquiries | `TrustsRegistry.permissions_for`, `has_permission`, `filter_authorized` | Current ordinary projections have no user check; require old/new migration and explicit flag |
 | Plan/compiler projections | `RelationPlan.content_exists`, `user_exists`, `permissions`, `common_permissions`, `has_permission`, `filter_content`; `PlanQueryCompiler` | Propagate the flag without treating correlated SQL bindings as runtime users; verify each supported query shape |
 | Aggregate inquiries | `granted`, `all_match`, `instance_match`, `common_permissions`, `_compile_common_permissions` | Keep grants/conditions composed per handle and preserve validation and query budget |
-| Scope listing | `filter_authorized_scopes` | Ordinary-prefix projection currently has no `is_active` check; review support boundaries rather than silently adding delegated scopes |
+| Scope listing | `filter_by_permitted_content` | Ordinary-prefix projection currently has no `is_active` check; review support boundaries rather than silently adding delegated scopes |
 | Delegate and sponsor eligibility | `_delegated_content_exists`, `_delegated_user_exists`, `_principal_eligibility_q` | Skip only built-in `is_active` checks when the flag is true; ordinary sponsor ceiling stays intact; actor's ordinary branch remains OR |
 | Named conditions | `trusts/conditions`, `_permitted`, backend/reverse overlays | An explicit `is_active` condition is not bypassed; queryable names retain their current AND/OR ownership |
 | Enforcement guards | `trusts/decorators.py` | No audit keyword; retain current guard, validation, and superuser behavior |
@@ -64,7 +64,7 @@ ticket propagates a flag value.
    implementation. The docs-first entry records current
    ordinary inactive positives versus new denial, optional-flag replacements,
    companion effects, and searches for `.authorized(`, registry inquiries,
-   `filter_authorized_scopes(`, reverse adapters, enumeration, and policy SQL.
+   `filter_by_permitted_content(`, reverse adapters, enumeration, and policy SQL.
 
 Grok's agreement should name any unexpressible or unsupported surface before
 S2. Existing superuser/codecs/backend-OR differences must be retained as
@@ -116,14 +116,14 @@ Thomas clarified the public keyword by the returned answer (review
 5486296327): content, permission enumeration, and boolean inquiries use
 `allow_inactive_user`; user-list inquiries use `allow_inactive`. This
 supersedes the narrower exception that initially named only
-`filter_authorized_scopes`. Internal helpers can propagate one boolean flag;
+`filter_by_permitted_content`. Internal helpers can propagate one boolean flag;
 public adapters map their documented keyword explicitly.
 
 | Public inquiry | Keyword |
 | --- | --- |
 | Content `.permitted` and `.authorized`, and their manager adapters | `allow_inactive_user=False` |
 | Backend `has_perm`, `get_all_permissions`, `get_group_permissions` | `allow_inactive_user=False` |
-| Registry `permissions_for`, `has_permission`, `filter_authorized`; `filter_authorized_scopes` | `allow_inactive_user=False` |
+| Registry `permissions_for`, `has_permission`, `filter_authorized`; `filter_by_permitted_content` | `allow_inactive_user=False` |
 | Content `get_permitted_users`; optional user-manager `.permitted` | `allow_inactive=False` |
 
 Do not add an eligibility abstraction in anticipation of a superuser feature.

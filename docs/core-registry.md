@@ -425,7 +425,7 @@ validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
-`filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
+`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
 in `trusts.core` filters rows of an intermediate model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. It compiles `EXISTS` of root rows

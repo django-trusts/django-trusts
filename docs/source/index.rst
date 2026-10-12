@@ -23,8 +23,8 @@ model, or another relational structure owned by the application.
 
 ``django-trusts`` compiles these declarations into database queries via
 QuerySet, keeping permission decisions based on persisted truth. The same
-declarations support
-object checks, permitted querysets, permission enumeration, and decorators
+declarations support object checks, permitted querysets,
+``filter_by_permitted_content``, permission enumeration, and decorators
 for protecting views. The separate `security audit guide
 <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
 defines the boundary these APIs enforce and the responsibilities that remain
@@ -337,9 +337,9 @@ Permission checks keep the familiar Django spelling:
    )
 
 The same correlated policy drives object checks, permission enumeration,
-``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
-policy SQL. The sponsor's live ordinary permissions provide the authority
-ceiling.
+``QuerySet.permitted()``, ``filter_by_permitted_content()``, reverse
+permitted-user inquiry, and authorization policy SQL. The sponsor's live
+ordinary permissions provide the authority ceiling.
 
 Several delegated relationship models may target the same content model. Each
 relationship remains a complete alternative: its own delegate, content,
@@ -473,6 +473,44 @@ active-superuser shortcut. Named conditions remain explicit:
        conditions=("non_confidential",),
    )
 
+Filter by permitted content
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``filter_by_permitted_content`` keeps rows of the queryset you pass when
+permitted content sits under those rows. The result is a lazy queryset of
+the same model.
+
+.. code-block:: python
+
+   def filter_by_permitted_content(
+       queryset, user, permission, *, content, handles=None,
+       allow_inactive_user=False,
+   ):
+       ...
+
+``permission`` is a saved permission row. ``content`` is the protected
+model. ``handles`` is optional and defaults to the installed relationship
+backends. ``allow_inactive_user`` is the same option as the other content
+inquiries.
+
+A cabinet holds sheets. This call keeps the cabinets that have a sheet
+the user may read:
+
+.. code-block:: python
+
+   from trusts.core import filter_by_permitted_content
+
+   cabinets = filter_by_permitted_content(
+       Cabinet.objects.all(),
+       user,
+       read_sheet,
+       content=Sheet,
+   )
+
+The same call follows ``along=`` and delegation. A cabinet stays when the
+bounded walk reaches a permitted sheet under it, and when a delegate may
+open that sheet through the sponsor's ordinary permission.
+
 List the users who may perform one permission on one saved object:
 
 .. code-block:: python
@@ -525,8 +563,9 @@ user.is_active checks
 ~~~~~~~~~~~~~~~~~~~~~
 
 All Trusts permission inquiries check ``user.is_active`` for Trusts-owned grants
-by default, including ordinary and delegated grants, permission enumeration, and reverse user
-listing. Anonymous and unauthenticated users cannot supply persisted grants
+by default, including ordinary and delegated grants, permission enumeration,
+reverse user listing, and ``filter_by_permitted_content``. Anonymous and
+unauthenticated users cannot supply persisted grants
 and receive no positive permission result. Input and configuration errors
 still raise before a denied result is returned.
 
@@ -662,8 +701,8 @@ rather than traversing the hierarchy in Python. The database combinations
 currently exercised by CI are recorded in the `support matrix
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 The same bounded walk participates in object checks, permitted-content
-querysets, permission enumeration, reverse permitted-user inquiry, and
-authorization-policy SQL. For one content and
+querysets, ``filter_by_permitted_content``, permission enumeration,
+reverse permitted-user inquiry, and authorization-policy SQL. For one content and
 permission, reverse inquiry returns exactly the users whose complete
 forward object check succeeds, including the terminal condition and user
 checks.
