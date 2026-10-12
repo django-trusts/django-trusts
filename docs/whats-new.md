@@ -18,7 +18,7 @@ log.
 
 - **Scope listings follow `along=`.** `filter_by_permitted_content` uses the
   same bounded walk and the same one-level delegation as the object
-  check. See the [user guide](source/index.rst).
+  check. See the [user guide](source/index.rst) and [#304].
 
 - **Readable policy-lock SQL.** Each lockfile statement is broken between
   tokens onto predictable lines, including a `WITH RECURSIVE` walk and
@@ -80,3 +80,4 @@ log.
 [#279]: https://github.com/django-trusts/django-trusts/pull/279
 [#286]: https://github.com/django-trusts/django-trusts/pull/286
 [#292]: https://github.com/django-trusts/django-trusts/pull/292
+[#304]: https://github.com/django-trusts/django-trusts/pull/304
