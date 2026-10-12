@@ -207,3 +207,134 @@ jobs:
         python -m build --wheel --outdir .deps/django-trusts-zero/dist .deps/django-trusts-zero
         python scripts/verify-companion-wheels.py
 
+  # Zero and GH Permissions against this Core commit, without editing
+  # their pins. A failure is reported and does not block the workflow.
+  # This job does not comment on the pull request.
+  follow-companions:
+    name: follow Core (${{ matrix.companion }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - companion: zero
+            repository: django-trusts/django-trusts-zero
+            lockfile: false
+          - companion: gh-permissions
+            repository: django-trusts/django-trusts-gh-permissions
+            lockfile: true
+    steps:
+    - name: Check out Core
+      uses: actions/checkout@v4
+      with:
+        path: core
+
+    - name: Select companion ref
+      id: companion
+      env:
+        REPOSITORY: ${{ matrix.repository }}
+      run: |
+        set -euo pipefail
+        url="https://github.com/${REPOSITORY}.git"
+        core_branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+        if [ -z "${core_branch}" ]; then
+          echo "Core branch name is empty" >&2
+          exit 1
+        fi
+        echo "Core branch: ${core_branch}"
+
+        # Stable branch is the companion's GitHub default branch.
+        # Admins must keep that default on master or main, not dev.
+        symref="$(git ls-remote --symref "${url}" HEAD)"
+        stable="$(printf '%s\n' "${symref}" | awk '/^ref: refs\/heads\// { sub(/^refs\/heads\//, "", $2); print $2; exit }')"
+        if [ -z "${stable}" ]; then
+          echo "Could not read the GitHub default branch of ${REPOSITORY}" >&2
+          printf '%s\n' "${symref}" >&2
+          exit 1
+        fi
+        echo "Stable branch (GitHub default): ${stable}"
+        if [ "${stable}" = "dev" ]; then
+          echo "The GitHub default branch of ${REPOSITORY} is dev." >&2
+          echo "CI uses that default as the stable branch. It must be master or main." >&2
+          exit 1
+        fi
+
+        heads="$(git ls-remote --heads "${url}")"
+        branch_exists() {
+          printf '%s\n' "${heads}" | awk -v ref="refs/heads/${1}" '$2 == ref { found = 1 } END { exit (found ? 0 : 1) }'
+        }
+        if branch_exists "${core_branch}"; then
+          ref="${core_branch}"
+        elif branch_exists "dev"; then
+          ref="dev"
+        elif branch_exists "${stable}"; then
+          ref="${stable}"
+        else
+          echo "No branch named ${core_branch}, dev, or ${stable} in ${REPOSITORY}" >&2
+          exit 1
+        fi
+        echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+        echo "stable=${stable}" >> "${GITHUB_OUTPUT}"
+        echo "Companion ref: ${ref}"
+
+    - name: Check out companion
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ matrix.repository }}
+        ref: ${{ steps.companion.outputs.ref }}
+        path: companion
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install companion requirements, then this Core commit
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -r companion/requirements.txt
+        python -m pip install --no-deps --force-reinstall ./core
+
+    - name: Log tested revisions
+      run: |
+        echo "Core SHA: $(git -C core rev-parse HEAD)"
+        echo "Companion ref: ${{ steps.companion.outputs.ref }}"
+        echo "Companion stable branch: ${{ steps.companion.outputs.stable }}"
+        echo "Companion SHA: $(git -C companion rev-parse HEAD)"
+
+    # Zero's runner puts KERNEL_CHECKOUT first and drops every other
+    # directory that contains a trusts package. A normal install of Core
+    # places that package in site-packages, so the runner would drop
+    # Django too. Point it at this checkout and keep Django beside it.
+    - name: Keep Django importable for Zero's test runner
+      if: matrix.companion == 'zero'
+      run: |
+        target="${RUNNER_TEMP}/zero-runner-deps"
+        python -m pip install --target "${target}" "Django>=6.1,<6.2" "PyYAML>=6.0.3"
+        echo "KERNEL_CHECKOUT=${GITHUB_WORKSPACE}/core" >> "${GITHUB_ENV}"
+        echo "PYTHONPATH=${target}" >> "${GITHUB_ENV}"
+
+    - name: Companion test suite
+      working-directory: companion
+      env:
+        TRUSTS_FOLLOW_CORE: "1"
+      run: python -m tests.runtests
+
+    - name: Generate SQLite policy lockfile
+      id: policy-lock
+      if: ${{ matrix.lockfile == true && !cancelled() }}
+      working-directory: companion
+      run: python manage.py trusts_policy_sql --lock
+
+    - name: Upload SQLite policy lockfile
+      if: ${{ matrix.lockfile == true && steps.policy-lock.outcome == 'success' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: gh-permissions-sqlite-policy-lock
+        path: companion/trusts-policy.lock.yaml
+        retention-days: 7
+        if-no-files-found: error
+
