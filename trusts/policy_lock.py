@@ -362,6 +362,9 @@ def _project_content(handle, alias, group, filters, handles):
                 'sponsor': _delegation_relation(record, 'sponsor'),
                 'content': _relation(record, 'content'),
             }
+            condition = _render_condition(record.condition)
+            if condition is not None:
+                row['condition'] = condition
             if multi:
                 row['or_group'] = True
             delegated_rows.append(row)
@@ -382,6 +385,12 @@ def _project_content(handle, alias, group, filters, handles):
                 'shape': along.shape,
                 'bound': along.bound,
             }
+        condition = _render_condition(
+            record.condition,
+            member=getattr(record, 'permission_field', None),
+        )
+        if condition is not None:
+            row['condition'] = condition
         if multi:
             row['or_group'] = True
         trusts.append(row)
@@ -664,6 +673,81 @@ def _relation(record, role):
         'model': _model_label(getattr(record, '%s_model' % role)),
         'target': getattr(record, '%s_target' % role),
     }
+
+
+def _render_condition(condition, *, member=None):
+    """One Python-like condition line, or ``None`` when none is stored.
+
+    A trust id ending in ``__cond`` means ``record.condition`` is set.
+    Field paths stay bare. ``Equal`` compares two columns.
+    ``permission_in`` is ``<permission field> in <collection>``: the
+    member is the registered permission column, not the inquiry's
+    requested permission. Only ``_InquiryPermissionMatch`` binds that
+    requested permission, written ``$permission``. ``member`` is the
+    ordinary record's ``permission_field`` and is required for
+    membership. The line is a double-quoted YAML string.
+    """
+    if condition is None:
+        return None
+    return _condition_expr(condition, member=member, grouped=False)
+
+
+def _condition_path(operand):
+    from trusts.core import Ref
+
+    if isinstance(operand, Ref):
+        if not operand._path:
+            raise TrustsConfigurationError(
+                'Policy SQL condition path is empty.'
+            )
+        return '__'.join(operand._path)
+    if isinstance(operand, str) and operand:
+        return operand
+    raise TrustsConfigurationError(
+        'Policy SQL condition path is not a relationship path.'
+    )
+
+
+def _condition_expr(node, *, member, grouped):
+    from trusts.core import All, Equal, PermissionIn, _InquiryPermissionMatch
+
+    if isinstance(node, All):
+        if len(node.predicates) == 1:
+            return _condition_expr(
+                node.predicates[0], member=member, grouped=grouped,
+            )
+        parts = [
+            _condition_expr(part, member=member, grouped=True)
+            for part in node.predicates
+        ]
+        text = ' and '.join(parts)
+        if grouped:
+            return '(%s)' % text
+        return text
+    if isinstance(node, Equal):
+        return '%s == %s' % (
+            _condition_path(node.left),
+            _condition_path(node.right),
+        )
+    if isinstance(node, PermissionIn):
+        if not member:
+            raise TrustsConfigurationError(
+                'Policy SQL condition membership has no permission field.'
+            )
+        parts = [
+            '%s in %s' % (member, _condition_path(ref))
+            for ref in node.refs
+        ]
+        text = ' and '.join(parts)
+        if grouped and len(node.refs) > 1:
+            return '(%s)' % text
+        return text
+    if isinstance(node, _InquiryPermissionMatch):
+        return '%s == $permission' % _condition_path(node.ref)
+    raise TrustsConfigurationError(
+        'Policy SQL cannot render condition node %s.'
+        % type(node).__name__
+    )
 
 
 def _assign_ids(records):
@@ -1029,15 +1113,19 @@ def _comparison_symbol(node):
         return None
     path = '__'.join(object_ref.path)
     if isinstance(other, _ir.Const):
-        return path, {'const': _json_const(other.value)}
+        return path, _with_hint(
+            {'const': _json_const(other.value)}, path or 'literal',
+        )
     if isinstance(other, _ir.Ref) and other.source == 'principal':
         if other.path:
             bind = 'user.%s' % '__'.join(other.path)
         else:
             bind = 'user.id'
-        return path, {'bind': bind}
+        return path, _with_hint({'bind': bind}, _request_hint(bind))
     if isinstance(other, _ir.Ref) and other.source == 'permission':
-        return path, {'bind': 'permission.id'}
+        return path, _with_hint(
+            {'bind': 'permission.id'}, _request_hint('permission.id'),
+        )
     return None
 
 
@@ -1121,16 +1209,23 @@ def _symbol_for_new_param(node):
     from trusts.core import GrantReach, _IdentInReach
 
     if isinstance(node, GrantReach):
-        return {'const': _json_const(node.record.along.bound)}
+        return _with_hint(
+            {'const': _json_const(node.record.along.bound)}, 'along bound',
+        )
     if isinstance(node, _IdentInReach):
-        return {'const': _json_const(node.bound)}
+        return _with_hint(
+            {'const': _json_const(node.bound)}, 'along bound',
+        )
     if isinstance(node, Value):
-        return {'const': _json_const(node.value)}
+        return _with_hint(
+            {'const': _json_const(node.value)},
+            _const_hint(node, node.value),
+        )
     record = getattr(_ctx, 'record', None)
     if record is not None and isinstance(node, Lookup):
         bind = _bind_name(node, record)
         if bind is not None:
-            return {'bind': bind}
+            return _with_hint({'bind': bind}, _request_hint(bind))
     queues = getattr(_ctx, 'filter_queues', None)
     if queues and isinstance(node, Lookup):
         path = _lookup_field_name(node)
@@ -1140,8 +1235,71 @@ def _symbol_for_new_param(node):
     if isinstance(node, Lookup):
         rhs = getattr(node, 'rhs', None)
         if rhs is not None and not hasattr(rhs, 'as_sql'):
-            return {'const': _json_const(rhs)}
+            return _with_hint(
+                {'const': _json_const(rhs)}, _const_hint(node, rhs),
+            )
     return None
+
+
+_REQUEST_ROLES = frozenset((
+    'user', 'permission', 'content', 'sponsor', 'delegate',
+))
+
+
+def _request_hint(bind):
+    """``$user`` / ``$permission`` / ``$content`` for a request-time bind.
+
+    A non-id target stays on the marker (``$user.code``) so the column
+    is still visible. Field paths are not rewritten here.
+    """
+    role, _dot, rest = bind.partition('.')
+    if role not in _REQUEST_ROLES:
+        return '$' + bind
+    if rest in ('', 'id', 'pk'):
+        return '$' + role
+    return '$%s.%s' % (role, rest)
+
+
+def _with_hint(symbol, hint):
+    annotated = dict(symbol)
+    annotated['hint'] = hint
+    return annotated
+
+
+def _const_hint(node, value):
+    """Readable label for one constant placeholder."""
+    from trusts.core import GrantReach, _IdentInReach
+
+    if isinstance(node, Value):
+        if value == 1:
+            return 'exists marker'
+        return 'literal'
+    if isinstance(node, Lookup):
+        lhs = getattr(node, 'lhs', None)
+        if isinstance(lhs, (GrantReach, _IdentInReach)) and value is True:
+            return 'along match'
+        name = _lookup_field_name(node)
+        label = _lookup_model_label(node)
+        if name == 'app_label' and label == 'contenttypes.ContentType':
+            return 'content type app'
+        if name == 'model' and label == 'contenttypes.ContentType':
+            return 'content type model'
+        if name == 'is_active':
+            return 'active'
+        target = getattr(getattr(node, 'lhs', None), 'target', None)
+        if target is not None and getattr(target, 'primary_key', False):
+            return 'content pk'
+        if name:
+            return name
+    return 'literal'
+
+
+def _lookup_model_label(node):
+    lhs = getattr(node, 'lhs', None)
+    target = getattr(lhs, 'target', None)
+    model = getattr(target, 'model', None)
+    meta = getattr(model, '_meta', None)
+    return getattr(meta, 'label', None)
 
 
 def _bind_name(node, record):
