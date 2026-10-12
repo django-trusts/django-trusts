@@ -172,7 +172,7 @@ E := reverse O2M onto an edge model, then one forward
 
 The same resolved identity field (`get_path_info()[0].target_fields[0]`,
 including non-PK `to_field`) must appear on the grant walk step and both
-Along edge ends. V1 then admits only one JSON identity family per record:
+Along edge ends. V1 then admits only one identity family per record:
 
 | Family | `get_internal_type()` |
 | --- | --- |
@@ -180,20 +180,49 @@ Along edge ends. V1 then admits only one JSON identity family per record:
 | text | `CharField`, `TextField`, `SlugField` (and subclasses that report `CharField`, such as `EmailField`) |
 | uuid | `UUIDField` |
 
-`UUIDField` is a JSON-string carrier but a distinct family from
+`UUIDField` is a distinct family from
 `CharField` / `SlugField` / `TextField` (hyphenation collision). Mixed
 families, BLOB/date/decimal/float/boolean/JSON/IP identities, unsupported
 S/C/E edges, empty walk-site/edge, and suffixes that cannot be re-resolved
 from the walk-site via stored names all raise `TrustsConfigurationError`
 before mutation.
 
-V1 compiles `GrantReach` only for Django's `django.db.backends.sqlite3`
-backend with JSON functions and recursive CTEs. The walk is uncorrelated
-with candidate rows: one `IN (WITH RECURSIVE …)` per recursive record,
-generation-level `frontier`/`seen`, identity-level cycle suppression, and a
-final join of JSON values back to the typed walk-model identity column.
+V1 compiles `GrantReach` for Django's sqlite3, postgresql, and mysql
+backends. The walk is uncorrelated with candidate rows: one plain
+`IN (WITH RECURSIVE …)` per recursive record. The recursive member is
+`UNION ALL` plus a join to the next hop. A depth column capped at
+`bound` guarantees termination. It is not a seen-set. On SQLite and
+MySQL, `UNION ALL` can revisit a cycle. PostgreSQL's
+`CYCLE ident SET is_cycle USING path` clause prunes only a path that
+revisits an ident already on that same path. A diamond is not such a
+path, so fan-out to the same node by two routes multiplies on all three
+engines, bounded by the cap. The final `DISTINCT` keeps the reachable
+set correct. That growth is the accepted tradeoff for dropping the JSON
+seen-set. There is no JSON frontier or seen-array.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
 NULL and dangling steps deny. Direct and recursive registrations `OR`.
+The lockfile records that portable statement (SQLite identifier quotes).
+SQLite and MySQL 8.4+ execute it unchanged, aside from MySQL's backtick
+quotes. PostgreSQL keeps the depth cap and appends that one clause.
+The outer query still selects only the walk identity, so `is_cycle`
+and `path` are not projected. That is not a second lockfile.
+MariaDB is not supported yet: `connection.mysql_is_mariadb` fails
+closed with the same error as any other unsupported engine, at runtime
+and in `trusts.E005`, before the probe. A closure table is a documented
+fallback only and is not generated.
+
+Reverse inquiry uses the same statement in the inverse direction. The
+seed is the content-derived walk-site identity or identities. A
+non-empty suffix selects the walk-site rows related to the bound
+content, such as Cabinet identities for a Sheet. The recursive member
+does not reference the outer user. Shape S walks to parents, shape C
+walks to children, and shape E walks from child to parent. Eligible
+grants and candidate users join that walk outside the CTE, and the
+grant query is correlated to the outer candidate user only after the
+walk. PostgreSQL still appends the one `CYCLE` clause. SQLite and MySQL
+8.4+ keep the plain statement. MariaDB still fails closed before that
+SQL. The lockfile records the plain reverse statement with the forward
+statements.
 
 A non-empty content suffix compiles a walk-model-rooted `EXISTS` from the
 stored path names (`items__image`, `rows__content`, …). Every S5 suffix
@@ -206,17 +235,14 @@ Conditions remain an AND overlay on a complete proof and never run on
 intermediate walk nodes. The same expression drives instance
 authorization, lazy `filter_authorized` before pagination, `all_match`,
 and `permissions` / `common_permissions` (including nested permission
-`OuterRef`). Reverse permission inquiry correlates each candidate user into
-the same grant seed and tests whether the supplied content is in that
-candidate's bounded reach. The reverse branch carries the same terminal
-`condition=` overlay and active-principal eligibility predicate as the forward
-proof; conditions still do not apply to intermediate walk nodes. It must
-return exactly the users whose forward check succeeds; it may not drop the
-recursive branch or widen it to every user. Unsupported vendors raise
-`TrustsConfigurationError` before walk SQL.
-Residual database errors stay loud and are not remapped to
-`TrustsCompilerError`. Runtime authorization does not repeat the JSON/CTE
-capability probe.
+`OuterRef`). Reverse inquiry derives walk-site identities from the bound
+content, traverses the inverse graph without the outer candidate user, and
+joins eligible grants and users outside the CTE. It preserves the terminal
+condition and user checks from the forward proof; conditions do not apply to
+intermediate walk nodes. Unsupported vendors raise `TrustsConfigurationError`
+before walk SQL. Residual database errors stay loud and are not remapped to
+`TrustsCompilerError`. Runtime authorization does not repeat the recursive
+CTE capability probe.
 
 Policy SQL exports the same recursive predicate for every supported inquiry,
 including reverse users. Each trust row records the complete public `along`

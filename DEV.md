@@ -182,12 +182,77 @@ Only that Zero replay should authorize deleting this django-trusts evidence.
 
 CI is GitHub Actions (`.github/workflows/ci.yml`): kernel-only
 authorization tests, a fresh migrate, `manage.py check`, pair proofs
-against the supported Zero companion, and a `package` job that builds
+against the supported Zero companion, a non-blocking companion follow
+job described below, and a `package` job that builds
 an sdist/wheel, checks that the long description comes from the user
 `README.md` (not this file), verifies BeeDesk 2015-2026 / BSD-2-Clause
 `LICENSE` metadata, and imports the wheel from a temporary directory so
 the source tree cannot satisfy the import. Do not treat a removed Travis check
 as a stand-in green status.
+
+## Companions on the Core commit under test
+
+The exact Zero pair job is unchanged. It still installs one pinned Zero
+commit and runs the pair proofs.
+
+A second job runs the Zero test suite and the GH Permissions test suite
+against the Core commit the workflow is testing. It does not edit either
+companion's pin. The job is `continue-on-error`, so a failure shows on
+the workflow and the other jobs still count. It does not post a pull
+request comment.
+
+For every pull request and every push, each companion is chosen the
+same way:
+
+1. The branch with the same name as the Core branch under test. On a
+   pull request that name is the head branch. On a push it is the
+   branch that was pushed.
+2. `dev`, when the companion has no branch of that name.
+3. The companion's stable branch, when it also has no `dev`.
+
+The stable branch is that repository's GitHub default branch. The job
+reads it with `git ls-remote --symref` from `HEAD`. The workflow does
+not list `main` or `master`. Core's default branch is `master`. CI
+relies on each repository's GitHub default branch being its stable
+branch (`master` or `main`). An admin must not set that default to
+`dev`. If a repository renames its stable branch, point the GitHub
+default at the new name.
+
+Core leads. Core's `dev` and Core's `master` are tested against the
+companion `dev` branch. Core changes land in Core first, and a companion
+pins that commit afterwards, so the companion stable branch does not yet
+have the pieces those Core changes need. A companion has no branch
+named `master`, so a Core `master` run misses the same-name step and
+uses companion `dev`. It uses the stable branch only when `dev` is
+missing too. A same-name branch wins when the companion has one,
+including a pull request branch that exists on both repositories.
+
+The job checks out Core and the companion. It installs the companion's
+requirements, then installs this Core checkout with
+`pip install --no-deps --force-reinstall` so the requirements pin stays
+as written and the installed Core library is the commit under test. It
+logs that Core commit, the companion ref, and the companion commit. It
+sets `TRUSTS_FOLLOW_CORE=1` and runs the companion test suite.
+
+Zero's test runner puts the Core checkout on the Python path and drops
+any other directory that contains the `trusts` package. Installing Core
+into the environment's package directory would drop Django as well,
+because that package lives in the same directory. For Zero, the job
+points the runner at the Core checkout it just installed and leaves
+Django on a separate path. GH Permissions imports the reinstalled Core
+library from the environment.
+
+The companions do not read `TRUSTS_FOLLOW_CORE` yet. Their pin checks
+still run: they read the pin stored in the companion tree, and this job
+leaves that pin in place. A later companion change can skip a check that
+the installed Core commit equals the pin when `TRUSTS_FOLLOW_CORE` is
+set. That change belongs in the companion.
+
+For GH Permissions the job also writes the SQLite policy lockfile. The
+companion's test settings use SQLite, and the command is
+`manage.py trusts_policy_sql --lock`. If that command fails, the job
+fails. The file is uploaded as the artifact
+`gh-permissions-sqlite-policy-lock` and kept for 7 days.
 
 ## Legacy baseline
 

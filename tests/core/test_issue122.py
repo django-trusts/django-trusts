@@ -73,11 +73,12 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('django-trusts-windows-acl', rst)
         self.assertIn('django-trusts-zero-example', rst)
 
-    def test_security_audit_records_the_frozen_boundary(self):
+    def test_security_audit_records_the_current_boundary(self):
         guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
         for needle in (
             'security boundary that implementation and',
-            'register(*, trust, user, permission, content, condition=None, along=None)',
+            'register(*, trust, user=None, permission=None, content, group=None, '
+            'delegate=None, sponsor=None, condition=None, along=None)',
             'add_named_filter(...)',
             'Named filters are outer restrictions',
             'Runtime callbacks are unsupported',

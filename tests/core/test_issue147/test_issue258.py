@@ -587,19 +587,19 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         self.assertIn(' AND ', both_row['sql'])
         self.assertIn(' OR ', either_row['sql'])
         self.assertEqual(both_row['params'], [
-            {'const': 'alpha'},
-            {'const': 1.5},
+            {'const': 'alpha', 'hint': 'label'},
+            {'const': 1.5, 'hint': 'amount'},
         ])
         self.assertEqual(either_row['params'], both_row['params'])
         self.assertEqual(filters[prefix + 'owner']['params'], [
-            {'bind': 'user.id'},
+            {'bind': 'user.id', 'hint': '$user'},
         ])
         self.assertEqual(filters[prefix + 'username']['params'], [
-            {'bind': 'user.username'},
+            {'bind': 'user.username', 'hint': '$user.username'},
         ])
         self.assertNotIn('alpha', filters[prefix + 'owner']['sql'])
         self.assertEqual(filters[prefix + 'differs']['params'], [
-            {'const': 'nope'},
+            {'const': 'nope', 'hint': 'label'},
         ])
         self.assertIn('NOT', filters[prefix + 'differs']['sql'])
 

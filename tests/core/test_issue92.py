@@ -1,4 +1,4 @@
-"""Bounded SQLite Along reachability (issue #92 / #91 r2+r3).
+"""Bounded Along reachability (issue #92 / #91 r2+r3, #288).
 
 Isolated noun-neutral models only. Structural and behavioral tests —
 no source-token or frozen-SQL-string assertions.
@@ -20,11 +20,17 @@ from django.test.utils import isolate_apps
 
 from tests.apps import forget_models, isolate_live_registry, live_config
 from trusts.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
+from trusts.policy_sql_format import (
+    _format_policy_sql,
+    _tokenize_policy_sql,
+)
+from trusts.reverse import lock_permitted_users_queryset
 from trusts.core import (
     Along,
     BackendHandle,
     GrantReach,
     PlanQueryCompiler,
+    _render_reach_sql,
     Ref,
     TrustsCompilerError,
     TrustsConfigurationError,
@@ -222,6 +228,7 @@ class AlongRegistrationTest(SimpleTestCase):
             along=Along(j.node.parent, bound=16),
         )
         self.assertEqual(rec_s.along.shape, 'S')
+        self.assertEqual(rec_s.along.path, ('node', 'parent'))
         self.assertEqual(rec_s.along.walk_path, ('node',))
         self.assertIs(rec_s.along.walk_model, Node)
         self.assertEqual(rec_s.along.walk_ident, Node._meta.pk.attname)
@@ -603,11 +610,16 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         qs = registry.filter_authorized(
             self.Node.objects.order_by('pk'), self.alice, self.read,
         )
-        plan = _plan_text(qs)
-        self.assertIn('LIST SUBQUERY', plan)
-        self.assertIn('MATERIALIZE', plan)
-        self.assertEqual(plan.count('MATERIALIZE'), 1)
-        self.assertIn('SCAN trusts_tests_node', plan.split('\n')[0])
+        sql = str(qs.query)
+        self.assertIn('WITH RECURSIVE', sql.upper())
+        self.assertIn('UNION ALL', sql.upper())
+        self.assertNotIn('json_', sql.lower())
+        if connection.vendor == 'sqlite':
+            plan = _plan_text(qs)
+            self.assertIn('LIST SUBQUERY', plan)
+            self.assertIn('MATERIALIZE', plan)
+            self.assertEqual(plan.count('MATERIALIZE'), 1)
+            self.assertIn('SCAN trusts_tests_node', plan.split('\n')[0])
 
     def test_shape_c_grant_on_descendant_authorizes_ancestors(self):
         root = self.Node.objects.create(title='root')
@@ -644,6 +656,250 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertTrue(registry.has_permission(self.alice, b, self.read))
         self.assertTrue(registry.has_permission(self.alice, c, self.read))
         self.assertFalse(registry.has_permission(self.alice, other, self.read))
+
+    def test_two_node_cycle_returns_the_same_nodes_on_every_backend(self):
+        # A -> B -> A. The depth cap guarantees termination. PostgreSQL
+        # also appends CYCLE. The reachable set stays {A, B}.
+        a = self.Node.objects.create(title='cycle-a')
+        b = self.Node.objects.create(title='cycle-b', parent=a)
+        a.parent = b
+        a.save()
+        other = self.Node.objects.create(title='cycle-other')
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent, bound=16),
+        )
+        qs = registry.filter_authorized(
+            self.Node.objects.order_by('pk'), self.alice, self.read,
+        )
+        self.assertEqual(_pks(qs), {a.pk, b.pk})
+        self.assertNotIn(other.pk, _pks(qs))
+        sql = str(qs.query)
+        compiled, params = qs.query.sql_with_params()
+        self.assertIn('WITH RECURSIVE', sql.upper())
+        self.assertIn('UNION ALL', sql.upper())
+        self.assertIn('< %s', compiled)
+        self.assertIn(16, params)
+        self.assertIn('depth', compiled.lower())
+        outer = sql.split('SELECT DISTINCT')[-1]
+        self.assertNotIn('is_cycle', outer.lower())
+        self.assertNotIn('"path"', outer.lower())
+        self.assertNotIn('`path`', outer.lower())
+        if connection.vendor == 'postgresql':
+            self.assertEqual(sql.count('CYCLE '), 1)
+            self.assertIn('CYCLE "ident" SET "is_cycle" USING "path"', sql)
+            self.assertLess(sql.index('CYCLE '), sql.rindex('SELECT DISTINCT'))
+        else:
+            self.assertNotIn('CYCLE', sql.upper())
+
+    def test_diamond_returns_d_once_on_every_backend(self):
+        # A -> B -> D and A -> C -> D. CYCLE does not prune either path.
+        # Both emit D. DISTINCT returns D once on every engine.
+        a = self.Node.objects.create(title='dia-a')
+        b = self.Node.objects.create(title='dia-b')
+        c = self.Node.objects.create(title='dia-c')
+        d = self.Node.objects.create(title='dia-d')
+        other = self.Node.objects.create(title='dia-other')
+        self.Link.objects.create(child=b, parent=a)
+        self.Link.objects.create(child=c, parent=a)
+        self.Link.objects.create(child=d, parent=b)
+        self.Link.objects.create(child=d, parent=c)
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent_links.parent, bound=4),
+        )
+        rows = list(registry.filter_authorized(
+            self.Node.objects.order_by('pk'), self.alice, self.read,
+        ))
+        pks = [row.pk for row in rows]
+        self.assertEqual(pks.count(d.pk), 1)
+        self.assertEqual(pks, sorted((a.pk, b.pk, c.pk, d.pk)))
+        self.assertNotIn(other.pk, pks)
+
+    def _assert_uncorrelated_reverse(self, queryset, bound):
+        sql = str(queryset.query)
+        compiled, params = queryset.query.sql_with_params()
+        upper = sql.upper()
+        at = upper.find('WITH RECURSIVE')
+        self.assertGreaterEqual(at, 0)
+        rest = sql[at:]
+        cycle_at = rest.find('CYCLE ')
+        distinct_at = rest.upper().find(') SELECT DISTINCT')
+        if cycle_at != -1 and (distinct_at == -1 or cycle_at < distinct_at):
+            body = rest[:cycle_at]
+        else:
+            body = rest[:distinct_at]
+        self.assertNotIn('auth_user', body.lower())
+        self.assertNotIn('json_', sql.lower())
+        self.assertIn('UNION ALL', upper)
+        self.assertIn('< %s', compiled)
+        self.assertIn(bound, params)
+        self.assertIn(connection.ops.quote_name('auth_user'), sql)
+        outer = sql.split('SELECT DISTINCT')[-1]
+        self.assertNotIn('is_cycle', outer.lower())
+        self.assertNotIn('"path"', outer.lower())
+        self.assertNotIn('`path`', outer.lower())
+        if connection.vendor == 'postgresql':
+            self.assertEqual(sql.count('CYCLE '), 1)
+            self.assertIn('CYCLE "ident" SET "is_cycle" USING "path"', sql)
+            self.assertLess(sql.index('CYCLE '), sql.rindex('SELECT DISTINCT'))
+        else:
+            self.assertNotIn('CYCLE', upper)
+        return sql
+
+    def _locked_user_pks(self, registry, content):
+        handle = _direct_handle(registry)
+        queryset = lock_permitted_users_queryset(
+            handle, content, self.read,
+        )
+        return queryset, list(queryset.order_by('pk').values_list('pk', flat=True))
+
+    def test_formatted_sql_matches_unformatted_results_on_every_backend(self):
+        # Issue #291. Line breaks are between tokens. The same statement
+        # returns the same rows on SQLite, PostgreSQL, and MySQL, including
+        # PostgreSQL's CYCLE clause.
+        a = self.Node.objects.create(title='fmt-a')
+        b = self.Node.objects.create(title='fmt-b', parent=a)
+        a.parent = b
+        a.save()
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent, bound=16),
+        )
+        forward = registry.filter_authorized(
+            self.Node.objects.order_by('pk'), self.alice, self.read,
+        )
+        reverse, reverse_pks = self._locked_user_pks(registry, b)
+        self.assertEqual(reverse_pks, [self.alice.pk])
+        for queryset in (forward, reverse.order_by('pk')):
+            self._assert_formatted_executes_like(queryset)
+        self._assert_formatted_join_and_literal()
+
+    def _assert_formatted_executes_like(self, queryset):
+        raw, params = queryset.query.sql_with_params()
+        formatted = _format_policy_sql(raw)
+        self.assertEqual(
+            [text for text, _spaced in _tokenize_policy_sql(raw)],
+            [text for text, _spaced in _tokenize_policy_sql(formatted)],
+        )
+        self.assertEqual(formatted, _format_policy_sql(formatted))
+        self.assertIn('\n', formatted)
+        self.assertIn('WITH RECURSIVE', formatted)
+        self.assertIn('UNION ALL', formatted)
+        if connection.vendor == 'postgresql':
+            self.assertIn(
+                'CYCLE "ident" SET "is_cycle" USING "path"', formatted,
+            )
+        else:
+            self.assertNotIn('CYCLE', formatted.upper())
+        self.assertEqual(
+            self._sql_rows(raw, params),
+            self._sql_rows(formatted, params),
+        )
+
+    def _assert_formatted_join_and_literal(self):
+        quote = connection.ops.quote_name
+        table = quote('t')
+        other = quote('u')
+        column = quote('n')
+        raw = (
+            'SELECT {table}.{column}, \'it\'\'s AND\' '
+            'FROM (SELECT %s AS {column}) AS {table} '
+            'LEFT OUTER JOIN (SELECT %s AS {column}) AS {other} '
+            'ON {table}.{column} = {other}.{column} '
+            'WHERE {table}.{column} = %s AND \'it\'\'s AND\' = %s'
+        ).format(table=table, other=other, column=column)
+        params = ('keep', 'keep', 'keep', "it's AND")
+        formatted = _format_policy_sql(raw)
+        self.assertIn('LEFT OUTER JOIN', formatted)
+        self.assertIn("'it''s AND'", formatted)
+        self.assertEqual(
+            [text for text, _spaced in _tokenize_policy_sql(raw)],
+            [text for text, _spaced in _tokenize_policy_sql(formatted)],
+        )
+        self.assertEqual(
+            self._sql_rows(raw, params),
+            self._sql_rows(formatted, params),
+        )
+
+    def _sql_rows(self, sql, params):
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+
+    def test_reverse_cycle_returns_the_same_users_on_every_backend(self):
+        # A -> B -> A. Reverse walks ancestors from the content. The
+        # user correlation stays outside the CTE on every engine.
+        User = get_user_model()
+        a = self.Node.objects.create(title='rev-cycle-a')
+        b = self.Node.objects.create(title='rev-cycle-b', parent=a)
+        a.parent = b
+        a.save()
+        other = self.Node.objects.create(title='rev-cycle-other')
+        inactive = User.objects.create_user(
+            username='rev-cycle-inactive', password='x', is_active=False,
+        )
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        self.Grant.objects.create(node=a, user=inactive, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent, bound=16),
+        )
+        for node in (a, b):
+            queryset, pks = self._locked_user_pks(registry, node)
+            self.assertEqual(pks, [self.alice.pk])
+            self.assertEqual(pks.count(self.alice.pk), 1)
+            self.assertNotIn(inactive.pk, pks)
+            self.assertNotIn(self.bob.pk, pks)
+            self.assertTrue(registry.has_permission(self.alice, node, self.read))
+            self._assert_uncorrelated_reverse(queryset, 16)
+        other_qs, other_pks = self._locked_user_pks(registry, other)
+        self.assertEqual(other_pks, [])
+        self.assertFalse(registry.has_permission(self.alice, other, self.read))
+        self._assert_uncorrelated_reverse(other_qs, 16)
+
+    def test_reverse_diamond_returns_the_user_once_on_every_backend(self):
+        # A -> B -> D and A -> C -> D. Inverse edges still fan out.
+        # The grant join returns the user on A once.
+        a = self.Node.objects.create(title='rev-dia-a')
+        b = self.Node.objects.create(title='rev-dia-b')
+        c = self.Node.objects.create(title='rev-dia-c')
+        d = self.Node.objects.create(title='rev-dia-d')
+        other = self.Node.objects.create(title='rev-dia-other')
+        self.Link.objects.create(child=b, parent=a)
+        self.Link.objects.create(child=c, parent=a)
+        self.Link.objects.create(child=d, parent=b)
+        self.Link.objects.create(child=d, parent=c)
+        self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
+        self.Grant.objects.create(node=c, user=self.bob, permission=self.read)
+        registry = TrustsRegistry()
+        j = Ref(self.Grant)
+        registry.register(
+            content=j.node, user=j.user, permission=j.permission,
+            along=Along(j.node.parent_links.parent, bound=4),
+        )
+        queryset, pks = self._locked_user_pks(registry, d)
+        self.assertEqual(pks.count(self.alice.pk), 1)
+        self.assertEqual(pks.count(self.bob.pk), 1)
+        self.assertEqual(pks, sorted((self.alice.pk, self.bob.pk)))
+        self.assertTrue(registry.has_permission(self.alice, d, self.read))
+        self.assertTrue(registry.has_permission(self.bob, d, self.read))
+        self._assert_uncorrelated_reverse(queryset, 4)
+        _queryset, on_b = self._locked_user_pks(registry, b)
+        self.assertEqual(on_b, [self.alice.pk])
+        _queryset, on_other = self._locked_user_pks(registry, other)
+        self.assertEqual(on_other, [])
 
     def test_self_link_two_node_cycle_diamond_duplicates_null_empty_bound(self):
         self_node = self.Node.objects.create(title='self')
@@ -1025,7 +1281,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongRuntimeGateTest(TransactionTestCase):
-    def test_as_sql_rejects_non_sqlite_before_walk_sql(self):
+    def test_as_sql_renders_portable_sql_and_rejects_other_engines(self):
         User = get_user_model()
 
         class Node(models.Model):
@@ -1060,23 +1316,75 @@ class AlongRuntimeGateTest(TransactionTestCase):
             compiler = Node.objects.filter(pk=node.pk).query.get_compiler('default')
 
             class Stub(object):
-                vendor = 'mysql'
-                alias = 'replica'
-                settings_dict = {'ENGINE': 'django.db.backends.mysql'}
+                def __init__(self, vendor, engine, alias):
+                    self.vendor = vendor
+                    self.alias = alias
+                    self.settings_dict = {'ENGINE': engine}
 
-            executed = []
-            stub = Stub()
-            stub.cursor = lambda: (_ for _ in ()).throw(AssertionError('probe'))
+                def cursor(self):
+                    raise AssertionError('probe')
+
+            oracle = Stub('oracle', 'django.db.backends.oracle', 'legacy')
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                expr.as_sql(compiler, stub)
+                expr.as_sql(compiler, oracle)
             self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
-            self.assertIn('mysql', str(ctx.exception).lower())
-            self.assertIn('replica', str(ctx.exception))
-            self.assertEqual(executed, [])
-            sql = str(registry.filter_authorized(
+            self.assertIn('oracle', str(ctx.exception).lower())
+            self.assertIn('legacy', str(ctx.exception))
+            maria = Stub('mysql', 'django.db.backends.mysql', 'maria')
+            maria.mysql_is_mariadb = True
+            with self.assertRaises(TrustsConfigurationError) as ctx:
+                expr.as_sql(compiler, maria)
+            self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
+            self.assertEqual(
+                str(ctx.exception),
+                'Along reachability requires a recursive CTE on Django '
+                'sqlite3, postgresql, or mysql; got ENGINE=%r vendor=%r '
+                'alias=%r.' % (
+                    'django.db.backends.mysql', 'mysql', 'maria',
+                ),
+            )
+            rendered_qs = registry.filter_authorized(
                 Node.objects.all(), alice, read,
-            ).query).upper()
-            self.assertIn('WITH RECURSIVE', sql)
+            )
+            rendered = str(rendered_qs.query)
+            self.assertIn('WITH RECURSIVE', rendered.upper())
+            self.assertIn('UNION ALL', rendered.upper())
+            self.assertNotIn('json_', rendered.lower())
+            _sql, params = rendered_qs.query.sql_with_params()
+            self.assertIn(4, params)
+            if connection.vendor == 'postgresql':
+                self.assertIn('CYCLE "ident" SET "is_cycle" USING "path"', rendered)
+            else:
+                self.assertNotIn('CYCLE', rendered.upper())
+
+            class _Ops(object):
+                def quote_name(self, name):
+                    return '"%s"' % name
+
+            class _Conn(object):
+                def __init__(self, vendor):
+                    self.vendor = vendor
+                    self.ops = _Ops()
+
+            seed = 'SELECT 1 AS "ident"'
+            plain, plain_params = _render_reach_sql(record.along, seed, (), _Conn('sqlite'))
+            mysql, mysql_params = _render_reach_sql(record.along, seed, (), _Conn('mysql'))
+            pg, pg_params = _render_reach_sql(
+                record.along, seed, (), _Conn('postgresql'),
+            )
+            self.assertEqual(mysql, plain)
+            self.assertEqual(mysql_params, plain_params)
+            self.assertEqual(pg_params, plain_params)
+            self.assertNotIn('CYCLE', plain)
+            clause = 'CYCLE "ident" SET "is_cycle" USING "path" '
+            self.assertEqual(plain.count(') SELECT DISTINCT'), 1)
+            self.assertEqual(
+                pg,
+                plain.replace(') SELECT DISTINCT', ') ' + clause + 'SELECT DISTINCT', 1),
+            )
+            outer = pg.split('SELECT DISTINCT', 1)[1]
+            self.assertNotIn('is_cycle', outer)
+            self.assertNotIn('path', outer)
 
 
 class _LiveRegistryRestoreMixin(object):
@@ -1139,8 +1447,8 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
         registry, Node, NodeGrant = self._along_registry()
         isolate_live_registry(self.live, registry)
         fake = MagicMock()
-        fake.settings_dict = {'ENGINE': 'django.db.backends.postgresql'}
-        fake.vendor = 'postgresql'
+        fake.settings_dict = {'ENGINE': 'django.db.backends.oracle'}
+        fake.vendor = 'oracle'
         fake.alias = 'other'
         mapping = {
             'default': connections['default'],
@@ -1163,6 +1471,34 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
         self.assertIn("'also'", aliases)
         self.assertTrue(all('default' not in m.msg.split('ENGINE')[0] for m in errors))
 
+    def test_mariadb_is_rejected_before_the_probe(self):
+        registry, Node, NodeGrant = self._along_registry()
+        isolate_live_registry(self.live, registry)
+
+        class Maria(object):
+            vendor = 'mysql'
+            alias = 'maria'
+            settings_dict = {'ENGINE': 'django.db.backends.mysql'}
+            mysql_is_mariadb = True
+
+            def cursor(self):
+                raise AssertionError('probe')
+
+        class _Conns(object):
+            def __getitem__(self, alias):
+                return Maria()
+
+        with patch('django.db.connections', _Conns()):
+            messages = check_along_renderer(None, databases=['maria'])
+        errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(
+            errors[0].msg,
+            "Database alias 'maria' (ENGINE=django.db.backends.mysql, "
+            'vendor=mysql) cannot render Along reachability: a recursive '
+            'CTE on Django sqlite3, postgresql, or mysql is required.',
+        )
+
     def test_failed_probe(self):
         registry, Node, NodeGrant = self._along_registry()
         isolate_live_registry(self.live, registry)
@@ -1175,7 +1511,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
                 return False
 
             def execute(self, sql, params=None):
-                raise OperationalError('no such function: json_group_array')
+                raise OperationalError('recursive cte unavailable')
 
             def fetchone(self):
                 return None
@@ -1185,7 +1521,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 1)
         self.assertIn('default', errors[0].msg)
-        self.assertIn('json_group_array', errors[0].msg)
+        self.assertIn('recursive cte unavailable', errors[0].msg)
 
     def test_isolated_registry_is_not_scanned(self):
         self._along_registry()

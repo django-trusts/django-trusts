@@ -68,24 +68,24 @@ The following abridged example shows the schema:
                permission: {path: "permission", model: "auth.Permission", target: "id"}
                content: {path: "document", model: "documents.Document", target: "id"}
            permitted:
-             params: [{const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
+             params: [{const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
              sql: |-
                SELECT DISTINCT ...
            has_perm:
-             params: [{const: 1}, {const: 1}, {const: 1}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
+             params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
              sql: |-
                SELECT ... WHERE candidate-primary-key AND grant-exists
            get_all_permissions:
-             params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
+             params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
-             params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
+             params: [{const: true, hint: "active"}, {const: 1, hint: "exists marker"}, {bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
              - id: "documents__Document__non_confidential"
-               params: [{const: true}]
+               params: [{const: true, hint: "confidential"}]
                sql: |-
                  SELECT ... WHERE non-confidential-predicate
 
@@ -140,6 +140,23 @@ When more than one trust in that backend authorizes the same content model, the
 SQL combines those trusts with OR and each trust in the content row has
 ``or_group: true``. A sole trust omits ``or_group``.
 
+A delegated trust exposes its normalized ``delegate``, ``sponsor``,
+``content``, and condition relationships in the same content row.
+``delegate`` and ``sponsor`` are one-line flow maps, the same spelling
+``user`` and ``permission`` already use:
+``{path: "...", model: "...", target: "..."}``. Its inquiry
+SQL remains one statement: the actor's ordinary branch is ORed with a
+correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
+combines all applicable ordinary grants with OR: any matching ordinary grant
+may supply the sponsor's authority on the same content and permission.
+Reviewers should verify the delegate/sponsor direction, the
+relationship-owned scope predicate, the delegate and sponsor eligibility
+predicates, and the sponsor's ordinary-authority predicate in both the policy
+document and generated SQL. A delegate or sponsor that fails the principal
+eligibility rule
+equivalent to ``is_active_principal`` must contribute no delegated authority,
+even while its grants and delegation rows remain stored.
+
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
 
@@ -154,7 +171,16 @@ Identifiers and ordering
 
 Artifact IDs use portable ``_`` and ``__`` segments. A trust ID folds model-name
 dots to ``__`` and adds the content field, for example
-``documents__DocumentPermission__document``. Conditions append ``__cond``;
+``documents__DocumentPermission__document``. Conditions append ``__cond``
+because the registration stored a condition (``record.condition`` is not
+``None``). That entry then includes the condition as one double-quoted
+Python-like line. Field paths stay bare. ``permission in <collection>``
+uses the registered permission column as its member. ``==`` compares two
+columns. ``and`` joins them, with parentheses only around a nested group.
+The delegated inquiry permission is the request-time value ``$permission``
+(``permissions == $permission``). A registration without a condition omits
+that key.
+
 ``Along`` adds ``__along_{path}_{shape}_{bound}``, where ``path`` uses the
 registered Django relationship segments. Each recursive trust row also records
 ``along`` with the complete registered ``path``, resolved ``shape``, and
@@ -183,15 +209,60 @@ order.
 Constants and generated YAML
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``bind`` entries name runtime values without storing them. Constants are
-mapped between Python and SQL types so their values and type information are
-available for inspection. These mappings are data, not YAML object tags.
+``bind`` entries name runtime values without storing them. Each parameter
+also carries a ``hint``: ``$user``, ``$permission``, ``$content``, or
+``$user.<target>`` when the bind is a request-time role, and a short label
+for a constant (``exists marker``, ``content type app``, ``content type
+model``, ``content pk``, ``along bound``, ``active``, or the compared
+field, or ``along match``). ``bind`` and ``const`` values and their
+order are unchanged.
+Constants are mapped between Python and SQL types so their values and type
+information are available for inspection. These mappings are data, not YAML
+object tags.
 
 The writer uses the installed supported ``PyYAML`` release. Output is UTF-8
 without a byte-order mark, uses LF endings, fixed key order, double-quoted
 string values, ``|-`` SQL blocks, does not emit YAML tags or aliases, and ends
 with one trailing newline. ``trusts.E009`` compares raw bytes; it does not
 parse the document.
+
+Each SQL block is broken between tokens onto predictable lines: before
+``FROM``, ``JOIN`` (including ``LEFT OUTER JOIN`` and ``INNER JOIN``),
+``WHERE``, ``AND``, ``OR``, ``UNION``, ``UNION ALL``, ``EXISTS``, and the
+other clause keywords (``ORDER BY``, ``GROUP BY``, ``HAVING``, ``LIMIT``,
+``OFFSET``, ``CYCLE``, and a ``SELECT`` or ``WITH`` that continues the
+statement). ``AND`` and ``OR`` use that same break. A comparison stays
+on the connective's line (``AND "t"."id" = %s``), indented two spaces
+past the group that contains it. An ``EXISTS`` operand stays on that
+line too, including ``EXISTS (``, ``NOT EXISTS (``, and ``( EXISTS (``,
+at the same indent as the sibling operand::
+
+    AND ( EXISTS (
+      ...
+    )
+    OR EXISTS (
+      ...
+    ) )
+
+``EXISTS (`` always has that space. ``NOT EXISTS`` stays one unit, so
+``AND NOT ( EXISTS (`` is one line as well. A run of closing parens that
+finishes the group shares one line (``) )``). The seed and recursive
+member of ``WITH RECURSIVE``, and
+the subqueries inside them, are indented. A break never falls inside a
+quoted identifier or a plain single-quoted string.
+
+The formatter accepts only tokens it fully understands: identifiers quoted
+the way SQLite, PostgreSQL, and MySQL quote them, plain single-quoted
+strings, numbers, ``%s`` and ``?`` placeholders, parentheses, commas, dots,
+and an explicit allowlist of operators and keywords those compilers and
+``along=`` SQL emit. A line comment, a block comment, a MySQL ``#`` comment,
+a dollar-quoted string, an ``E''`` string, a backslash escape, adjacent
+string literals (including a newline between two ``'...'`` literals), an
+unknown operator, or any other unrecognized token raises
+``TrustsConfigurationError``. The error names the query and the token.
+Formatting does not strip comments, guess, or return the original text.
+After formatting, the token stream must match the original stream, or
+formatting raises. The formatted text is that same statement.
 
 Creating the lockfile
 ---------------------

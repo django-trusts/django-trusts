@@ -37,6 +37,7 @@ from trusts.core import (
     PermissionIn,
     PlanQueryCompiler,
     Ref,
+    RegisteredDelegation,
     RegisteredRelation,
     TrustsConfigurationError,
     TrustsRegistry,
@@ -108,12 +109,15 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
         callable_parts = [
             part for part in parts if get_origin(part) is Callable
         ]
-        self.assertEqual(len(callable_parts), 1)
-        self.assertEqual(
-            get_args(callable_parts[0]),
+        self.assertEqual(len(callable_parts), 2)
+        self.assertIn(
             ([type_args[0]], object),
+            [get_args(part) for part in callable_parts],
         )
-        self.assertIs(hints['return'], RegisteredRelation)
+        self.assertEqual(
+            set(get_args(hints['return'])),
+            {RegisteredRelation, RegisteredDelegation},
+        )
 
 
 class RegisterConditionGrammarTest(SimpleTestCase):

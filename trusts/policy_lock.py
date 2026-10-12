@@ -10,6 +10,8 @@ content-and-permission-to-users predicate for that backend, not
 Django's outer superuser rule and not other backends.
 ``permitted`` is the artifact name for today's ``.authorized()`` list
 query. The runtime API is not renamed. The alias is not stored.
+Each ``sql`` value is broken between tokens onto predictable lines.
+The token sequence is the statement Django compiled.
 ``trusts.E009`` compares the rendered bytes to the committed file and
 does not parse them. It is the only lockfile enforcement.
 """
@@ -34,6 +36,7 @@ from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
 from trusts.core import TrustsConfigurationError
+from trusts.policy_sql_format import _format_policy_sql
 from trusts.policy_yaml import (
     PolicyYamlError,
     dump_policy_yaml,
@@ -240,7 +243,7 @@ def _build_document(handles, alias):
         )
     projected = []
     for handle in handles:
-        projected.append(_project_backend(handle, alias))
+        projected.append(_project_backend(handle, alias, handles))
     projected.sort(key=lambda row: row['path'])
     paths = [row['path'] for row in projected]
     if len(paths) != len(set(paths)):
@@ -254,7 +257,7 @@ def _build_document(handles, alias):
     }
 
 
-def _project_backend(handle, alias):
+def _project_backend(handle, alias, handles):
     path = getattr(handle, 'path', None)
     if not isinstance(path, str) or path == '':
         raise TrustsConfigurationError(
@@ -277,17 +280,19 @@ def _project_backend(handle, alias):
             % (path,)
         )
     records = tuple(getattr(registry, 'records', ()) or ())
-    ids = _assign_ids(records)
+    delegations = tuple(getattr(registry, 'delegations', ()) or ())
+    all_records = records + delegations
+    ids = _assign_ids(all_records)
     named_filters = _project_named_filters(registry, alias)
     return {
         'path': path,
         'contents': _project_contents(
-            handle, alias, records, ids, named_filters,
+            handle, alias, all_records, ids, named_filters, handles,
         ),
     }
 
 
-def _project_contents(handle, alias, records, ids, named_filters):
+def _project_contents(handle, alias, records, ids, named_filters, handles):
     groups = []
     index = {}
     for record, trust_id in zip(records, ids):
@@ -317,6 +322,7 @@ def _project_contents(handle, alias, records, ids, named_filters):
         seen.add(group['label'])
         contents.append(_project_content(
             handle, alias, group, filters_by_model.get(group['label'], ()),
+            handles,
         ))
     for model in filter_order:
         if model in seen:
@@ -330,13 +336,39 @@ def _project_contents(handle, alias, records, ids, named_filters):
     return contents
 
 
-def _project_content(handle, alias, group, filters):
+def _project_content(handle, alias, group, filters, handles):
+    from trusts.core import RegisteredDelegation
+
     legs = group['legs']
-    records = tuple(record for record, _trust_id in legs)
-    _require_shared_terminals(records, group['label'])
+    records = tuple(
+        record for record, _trust_id in legs
+        if not isinstance(record, RegisteredDelegation)
+    )
+    delegations = tuple(
+        record for record, _trust_id in legs
+        if isinstance(record, RegisteredDelegation)
+    )
+    if records:
+        _require_shared_terminals(records, group['label'])
     multi = len(legs) > 1
     trusts = []
+    delegated_rows = []
     for record, trust_id in legs:
+        if isinstance(record, RegisteredDelegation):
+            row = {
+                'id': trust_id,
+                'root': _model_label(record.root),
+                'delegate': _delegation_relation(record, 'delegate'),
+                'sponsor': _delegation_relation(record, 'sponsor'),
+                'content': _relation(record, 'content'),
+            }
+            condition = _render_condition(record.condition)
+            if condition is not None:
+                row['condition'] = condition
+            if multi:
+                row['or_group'] = True
+            delegated_rows.append(row)
+            continue
         row = {
             'id': trust_id,
             'root': _model_label(record.root),
@@ -346,22 +378,44 @@ def _project_content(handle, alias, group, filters):
             row['group'] = _relation(record, 'group')
         row['permission'] = _relation(record, 'permission')
         row['content'] = _relation(record, 'content')
+        along = getattr(record, 'along', None)
+        if along is not None:
+            row['along'] = {
+                'path': '__'.join(along.path),
+                'shape': along.shape,
+                'bound': along.bound,
+            }
+        condition = _render_condition(
+            record.condition,
+            member=getattr(record, 'permission_field', None),
+        )
+        if condition is not None:
+            row['condition'] = condition
         if multi:
             row['or_group'] = True
         trusts.append(row)
+    classifier_records = _policy_classifier_records(
+        records, delegations, handles, group['model'],
+    )
+    _require_shared_terminals(classifier_records, group['label'])
     content = {
         'model': group['label'],
-        'trusts': trusts,
+    }
+    if trusts:
+        content['trusts'] = trusts
+    if delegated_rows:
+        content['delegations'] = delegated_rows
+    content.update({
         'permitted': _sql_row(_compile_permitted(
-            handle, alias, records, group['model'],
+            handle, alias, classifier_records, group['model'], handles,
         )),
         'has_perm': _sql_row(_compile_has_perm(
-            handle, alias, records, group['model'],
+            handle, alias, classifier_records, group['model'], handles,
         )),
         'get_all_permissions': _sql_row(_compile_get_all_permissions(
-            handle, alias, records, group['model'],
+            handle, alias, classifier_records, group['model'], handles,
         )),
-    }
+    })
     if any(getattr(record, 'via_group', False) for record in records):
         content['get_group_permissions'] = _sql_row(
             _compile_get_group_permissions(
@@ -369,7 +423,7 @@ def _project_content(handle, alias, group, filters):
             )
         )
     content['get_permitted_users'] = _sql_row(_compile_get_permitted_users(
-        handle, alias, records, group['model'],
+        handle, alias, classifier_records, group['model'], handles,
     ))
     if filters:
         content['named_filters'] = [_named_filter_row(row) for row in filters]
@@ -380,13 +434,13 @@ def _named_filter_row(row):
     return {
         'id': row['id'],
         'params': row['params'],
-        'sql': row['sql'],
+        'sql': _format_policy_sql(row['sql']),
     }
 
 
 def _sql_row(compiled):
     sql, params = compiled
-    return {'params': params, 'sql': sql}
+    return {'params': params, 'sql': _format_policy_sql(sql)}
 
 
 def _require_shared_terminals(records, label):
@@ -406,12 +460,99 @@ def _require_shared_terminals(records, label):
                 )
 
 
+def _delegation_relation(record, role):
+    return {
+        'path': getattr(record, '%s_field' % role),
+        'model': _model_label(getattr(record, '%s_model' % role)),
+        'target': getattr(record, '%s_target' % role),
+    }
+
+
+def _policy_classifier_records(records, delegations, handles, model):
+    """Ordinary records that classify policy-lock bind placeholders.
+
+    A delegation-only backend has no permission terminal of its own. Its
+    requested-permission and user sentinels therefore come from compatible
+    ordinary sponsor grants across the rendered relationship handles. This
+    is also the exact ordinary-only union used by the runtime compiler, so a
+    delegated row can never become a sponsor record here.
+    """
+    selected = list(records)
+    seen = {id(record) for record in selected}
+    for candidate_handle in handles:
+        registry = getattr(candidate_handle, 'registry', None)
+        if registry is None:
+            continue
+        plan = registry.plan_for(model)
+        for ordinary in plan.records:
+            if id(ordinary) in seen:
+                continue
+            for delegation in delegations:
+                if ordinary.content_model is not delegation.content_model:
+                    continue
+                if ordinary.user_model is not delegation.sponsor_model:
+                    continue
+                expected = delegation.condition_permission_model
+                if (
+                    expected is not None
+                    and ordinary.permission_model is not expected
+                ):
+                    continue
+                if (
+                    expected is not None
+                    and ordinary.permission_target
+                    != delegation.condition_permission_target
+                ):
+                    continue
+                selected.append(ordinary)
+                seen.add(id(ordinary))
+                break
+    if not selected:
+        raise TrustsConfigurationError(
+            'Policy SQL found no ordinary sponsor grant for delegated '
+            'content %s.' % _model_label(model)
+        )
+    for delegation in delegations:
+        first = selected[0]
+        if (
+            delegation.delegate_model._meta.concrete_model
+            is not first.user_model._meta.concrete_model
+            or delegation.delegate_target != first.user_target
+        ):
+            raise TrustsConfigurationError(
+                'Policy SQL on %s requires delegate and ordinary user '
+                'terminals to share one model and target.'
+                % _model_label(model)
+            )
+    return tuple(selected)
+
+
 def _content_manager(model):
     return model._meta.concrete_model._default_manager
 
 
 def _content_sentinel(model, alias):
     return _sentinel(model, model._meta.pk.attname, alias=alias)
+
+
+def _populate_reverse_along_identity(content, records, alias):
+    """Fill non-PK Along identities on the unsaved reverse sentinel.
+
+    ``_content_sentinel`` sets the primary key. A walk identity that is
+    a different column, such as a UUID ``to_field``, has to be present
+    so the reverse lookup classifies ``content.<target>``.
+    """
+    pk_attname = content._meta.pk.attname
+    for record in records:
+        along = getattr(record, 'along', None)
+        if along is None or along.suffix_path:
+            continue
+        if along.walk_ident == pk_attname:
+            continue
+        if getattr(content, along.walk_ident, None) is not None:
+            continue
+        field = _concrete_target_field(along.walk_model, along.walk_ident)
+        setattr(content, field.attname, _sentinel_value(field, alias))
 
 
 def _role_sentinel(record, role, alias):
@@ -422,18 +563,27 @@ def _role_sentinel(record, role, alias):
     )
 
 
-def _compile_permitted(handle, alias, records, model):
+def _compile_permitted(handle, alias, records, model, handles):
+    from trusts.core import _compile_granted
+
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
-    queryset = handle.registry.filter_authorized(
-        _content_manager(model).all(), user, permission,
+    queryset = _content_manager(model).all()
+    granted = _compile_granted(
+        (handle,), queryset, user, permission, kind='complete',
+        sponsor_handles=handles,
     )
+    if granted is None:
+        raise TrustsConfigurationError(
+            'Policy SQL found no grant for %s.' % _model_label(model)
+        )
+    queryset = queryset.filter(granted).distinct()
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
     )
 
 
-def _compile_has_perm(handle, alias, records, model):
+def _compile_has_perm(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
     user = _role_sentinel(records[0], 'user', alias)
@@ -441,6 +591,7 @@ def _compile_has_perm(handle, alias, records, model):
     instance = _content_sentinel(model, alias)
     granted = _compile_granted(
         (handle,), instance, user, permission, kind='complete',
+        sponsor_handles=handles,
     )
     if granted is None:
         raise TrustsConfigurationError(
@@ -453,14 +604,21 @@ def _compile_has_perm(handle, alias, records, model):
     )
 
 
-def _compile_get_all_permissions(handle, alias, records, model):
+def _compile_get_all_permissions(handle, alias, records, model, handles):
     from trusts.core import _compile_common_permissions
 
     user = _role_sentinel(records[0], 'user', alias)
     instance = _content_sentinel(model, alias)
-    queryset = _compile_common_permissions(
-        (handle,), instance, user, kind='complete',
-    )
+    plan = handle.registry.plan_for(model)
+    if plan.delegations:
+        queryset = _compile_common_permissions(
+            (handle,), instance, user, kind='complete',
+            sponsor_handles=handles,
+        )
+    else:
+        queryset = _compile_common_permissions(
+            (handle,), instance, user, kind='complete',
+        )
     if queryset is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permissions query for %s.'
@@ -471,12 +629,15 @@ def _compile_get_all_permissions(handle, alias, records, model):
     )
 
 
-def _compile_get_permitted_users(handle, alias, records, model):
+def _compile_get_permitted_users(handle, alias, records, model, handles):
     from trusts.reverse import lock_permitted_users_queryset
 
     content = _content_sentinel(model, alias)
+    _populate_reverse_along_identity(content, records, alias)
     permission = _role_sentinel(records[0], 'permission', alias)
-    queryset = lock_permitted_users_queryset(handle, content, permission)
+    queryset = lock_permitted_users_queryset(
+        handle, content, permission, handles=handles,
+    )
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
         reverse_users=True,
@@ -512,6 +673,81 @@ def _relation(record, role):
         'model': _model_label(getattr(record, '%s_model' % role)),
         'target': getattr(record, '%s_target' % role),
     }
+
+
+def _render_condition(condition, *, member=None):
+    """One Python-like condition line, or ``None`` when none is stored.
+
+    A trust id ending in ``__cond`` means ``record.condition`` is set.
+    Field paths stay bare. ``Equal`` compares two columns.
+    ``permission_in`` is ``<permission field> in <collection>``: the
+    member is the registered permission column, not the inquiry's
+    requested permission. Only ``_InquiryPermissionMatch`` binds that
+    requested permission, written ``$permission``. ``member`` is the
+    ordinary record's ``permission_field`` and is required for
+    membership. The line is a double-quoted YAML string.
+    """
+    if condition is None:
+        return None
+    return _condition_expr(condition, member=member, grouped=False)
+
+
+def _condition_path(operand):
+    from trusts.core import Ref
+
+    if isinstance(operand, Ref):
+        if not operand._path:
+            raise TrustsConfigurationError(
+                'Policy SQL condition path is empty.'
+            )
+        return '__'.join(operand._path)
+    if isinstance(operand, str) and operand:
+        return operand
+    raise TrustsConfigurationError(
+        'Policy SQL condition path is not a relationship path.'
+    )
+
+
+def _condition_expr(node, *, member, grouped):
+    from trusts.core import All, Equal, PermissionIn, _InquiryPermissionMatch
+
+    if isinstance(node, All):
+        if len(node.predicates) == 1:
+            return _condition_expr(
+                node.predicates[0], member=member, grouped=grouped,
+            )
+        parts = [
+            _condition_expr(part, member=member, grouped=True)
+            for part in node.predicates
+        ]
+        text = ' and '.join(parts)
+        if grouped:
+            return '(%s)' % text
+        return text
+    if isinstance(node, Equal):
+        return '%s == %s' % (
+            _condition_path(node.left),
+            _condition_path(node.right),
+        )
+    if isinstance(node, PermissionIn):
+        if not member:
+            raise TrustsConfigurationError(
+                'Policy SQL condition membership has no permission field.'
+            )
+        parts = [
+            '%s in %s' % (member, _condition_path(ref))
+            for ref in node.refs
+        ]
+        text = ' and '.join(parts)
+        if grouped and len(node.refs) > 1:
+            return '(%s)' % text
+        return text
+    if isinstance(node, _InquiryPermissionMatch):
+        return '%s == $permission' % _condition_path(node.ref)
+    raise TrustsConfigurationError(
+        'Policy SQL cannot render condition node %s.'
+        % type(node).__name__
+    )
 
 
 def _assign_ids(records):
@@ -552,7 +788,8 @@ def _base_id(record):
         label += '__cond'
     along = getattr(record, 'along', None)
     if along is not None:
-        label += '__along_%s_%s' % (
+        label += '__along_%s_%s_%s' % (
+            '__'.join(along.path),
             getattr(along, 'shape', None),
             getattr(along, 'bound', None),
         )
@@ -876,15 +1113,19 @@ def _comparison_symbol(node):
         return None
     path = '__'.join(object_ref.path)
     if isinstance(other, _ir.Const):
-        return path, {'const': _json_const(other.value)}
+        return path, _with_hint(
+            {'const': _json_const(other.value)}, path or 'literal',
+        )
     if isinstance(other, _ir.Ref) and other.source == 'principal':
         if other.path:
             bind = 'user.%s' % '__'.join(other.path)
         else:
             bind = 'user.id'
-        return path, {'bind': bind}
+        return path, _with_hint({'bind': bind}, _request_hint(bind))
     if isinstance(other, _ir.Ref) and other.source == 'permission':
-        return path, {'bind': 'permission.id'}
+        return path, _with_hint(
+            {'bind': 'permission.id'}, _request_hint('permission.id'),
+        )
     return None
 
 
@@ -965,13 +1206,26 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
+    from trusts.core import GrantReach, _IdentInReach
+
+    if isinstance(node, GrantReach):
+        return _with_hint(
+            {'const': _json_const(node.record.along.bound)}, 'along bound',
+        )
+    if isinstance(node, _IdentInReach):
+        return _with_hint(
+            {'const': _json_const(node.bound)}, 'along bound',
+        )
     if isinstance(node, Value):
-        return {'const': _json_const(node.value)}
+        return _with_hint(
+            {'const': _json_const(node.value)},
+            _const_hint(node, node.value),
+        )
     record = getattr(_ctx, 'record', None)
     if record is not None and isinstance(node, Lookup):
         bind = _bind_name(node, record)
         if bind is not None:
-            return {'bind': bind}
+            return _with_hint({'bind': bind}, _request_hint(bind))
     queues = getattr(_ctx, 'filter_queues', None)
     if queues and isinstance(node, Lookup):
         path = _lookup_field_name(node)
@@ -981,8 +1235,71 @@ def _symbol_for_new_param(node):
     if isinstance(node, Lookup):
         rhs = getattr(node, 'rhs', None)
         if rhs is not None and not hasattr(rhs, 'as_sql'):
-            return {'const': _json_const(rhs)}
+            return _with_hint(
+                {'const': _json_const(rhs)}, _const_hint(node, rhs),
+            )
     return None
+
+
+_REQUEST_ROLES = frozenset((
+    'user', 'permission', 'content', 'sponsor', 'delegate',
+))
+
+
+def _request_hint(bind):
+    """``$user`` / ``$permission`` / ``$content`` for a request-time bind.
+
+    A non-id target stays on the marker (``$user.code``) so the column
+    is still visible. Field paths are not rewritten here.
+    """
+    role, _dot, rest = bind.partition('.')
+    if role not in _REQUEST_ROLES:
+        return '$' + bind
+    if rest in ('', 'id', 'pk'):
+        return '$' + role
+    return '$%s.%s' % (role, rest)
+
+
+def _with_hint(symbol, hint):
+    annotated = dict(symbol)
+    annotated['hint'] = hint
+    return annotated
+
+
+def _const_hint(node, value):
+    """Readable label for one constant placeholder."""
+    from trusts.core import GrantReach, _IdentInReach
+
+    if isinstance(node, Value):
+        if value == 1:
+            return 'exists marker'
+        return 'literal'
+    if isinstance(node, Lookup):
+        lhs = getattr(node, 'lhs', None)
+        if isinstance(lhs, (GrantReach, _IdentInReach)) and value is True:
+            return 'along match'
+        name = _lookup_field_name(node)
+        label = _lookup_model_label(node)
+        if name == 'app_label' and label == 'contenttypes.ContentType':
+            return 'content type app'
+        if name == 'model' and label == 'contenttypes.ContentType':
+            return 'content type model'
+        if name == 'is_active':
+            return 'active'
+        target = getattr(getattr(node, 'lhs', None), 'target', None)
+        if target is not None and getattr(target, 'primary_key', False):
+            return 'content pk'
+        if name:
+            return name
+    return 'literal'
+
+
+def _lookup_model_label(node):
+    lhs = getattr(node, 'lhs', None)
+    target = getattr(lhs, 'target', None)
+    model = getattr(target, 'model', None)
+    meta = getattr(model, '_meta', None)
+    return getattr(meta, 'label', None)
 
 
 def _bind_name(node, record):
@@ -991,6 +1308,14 @@ def _bind_name(node, record):
         return None
     remote = getattr(target, 'remote_field', None)
     model = getattr(remote, 'model', None) if remote is not None else None
+    direct_content = False
+    if (
+        model is None
+        and getattr(_ctx, 'reverse_users', False)
+        and getattr(node, 'trusts_content_bind', False)
+    ):
+        model = getattr(target, 'model', None)
+        direct_content = model is not None
     if model is None:
         return None
     concrete = model._meta.concrete_model
@@ -1004,14 +1329,34 @@ def _bind_name(node, record):
                 candidates.append(item)
     labels = []
     for candidate in candidates:
-        if concrete is candidate.user_model._meta.concrete_model:
+        if (
+            not direct_content
+            and concrete is candidate.user_model._meta.concrete_model
+        ):
             labels.append('user.%s' % candidate.user_target)
-        elif concrete is candidate.permission_model._meta.concrete_model:
+        elif (
+            not direct_content
+            and concrete is candidate.permission_model._meta.concrete_model
+        ):
             labels.append('permission.%s' % candidate.permission_target)
         elif (
             getattr(_ctx, 'reverse_users', False)
             and concrete is candidate.content_model._meta.concrete_model
+            and (
+                not direct_content
+                or getattr(target, 'attname', None) == candidate.content_target
+            )
         ):
+            # An Along reverse row binds only the content-identity
+            # comparison on the uncorrelated walk seed. A condition
+            # literal on that same column, including ``folder__pk=<n>``
+            # after Django collapses it to the foreign key, stays a
+            # constant.
+            if (
+                getattr(candidate, 'along', None) is not None
+                and not getattr(node, 'trusts_content_bind', False)
+            ):
+                continue
             labels.append('content.%s' % candidate.content_target)
     if not labels:
         return None

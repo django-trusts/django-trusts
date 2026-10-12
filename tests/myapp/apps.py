@@ -12,7 +12,11 @@ class DocumentConfig(TrustsImplementationConfig):
 
     def ready(self):
         super().ready()
-        from tests.myapp.models import Document, DocumentGrant
+        from tests.myapp.models import (
+            Document,
+            DocumentDelegation,
+            DocumentGrant,
+        )
 
         handle = self.configured_backend()
         registry = handle.registry
@@ -23,6 +27,15 @@ class DocumentConfig(TrustsImplementationConfig):
             user='user',
             permission='permission',
             content='document',
+        )
+        handle.register(
+            trust=DocumentDelegation,
+            delegate='delegate',
+            sponsor='sponsor',
+            content='document',
+            condition=lambda relationship, permission: (
+                relationship.allowed_permissions.contains(permission)
+            ),
         )
         handle.add_named_filter(
             Document,

@@ -31,3 +31,20 @@ class DocumentAltGrant(models.Model):
 
     class Meta:
         app_label = 'myapp'
+
+
+class DocumentDelegation(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    delegate = models.ForeignKey(
+        'auth.User', related_name='received_document_delegations',
+        on_delete=models.CASCADE,
+    )
+    sponsor = models.ForeignKey(
+        'auth.User', related_name='sponsored_document_delegations',
+        on_delete=models.CASCADE,
+    )
+    allowed_permissions = models.ManyToManyField(Permission)
+    approved = models.BooleanField(default=True)
+
+    class Meta:
+        app_label = 'myapp'

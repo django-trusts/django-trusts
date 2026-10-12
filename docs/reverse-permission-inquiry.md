@@ -373,10 +373,10 @@ inferred from that ancestry. Any other object-capable `has_perm` without
 `permitted_users_predicate` raises `TrustsConfigurationError` before SQL.
 
 An `Along` registration grants through a user-seeded walk. Reverse inquiry
-correlates each candidate user into that same seed, applies the same bound and
-directed edge, and tests whether the supplied content is reachable. That
-branch also carries the same terminal `condition=` overlay and
-active-principal eligibility predicate as the forward proof. The condition is
+derives walk-site identities from the bound content, traverses the inverse
+graph without the outer candidate user, and joins eligible grants and users
+outside the CTE. It uses the same bound, terminal `condition=` overlay, and
+user checks as the forward proof. The condition is
 not evaluated on intermediate walk nodes. For a fixed content and permission,
 the result must agree with the forward object check for every candidate user.
 The policy-lock statement uses this same reverse compiler. An unsupported
