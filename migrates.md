@@ -1,12 +1,11 @@
 # Migrating to django-trusts 1.0
 
 This guide records only changes from a released version that require
-applications to change their code, settings, or data when they upgrade. It does
-not record changes between unreleased development commits, including a surface
-that was refused on an unreleased branch and is now supported, because no
-released application could depend on it. It is not a development log. New
-features and changes that require no application action belong in
-[What's new](docs/whats-new.md); development history belongs in
+applications to change their code, settings, or data when they upgrade. A
+surface that was previously refused and is now supported does not need an
+entry, because no application could have depended on it. It is not a
+development log. New features and changes that require no application action
+belong in [What's new](docs/whats-new.md); development history belongs in
 [DEV.md](DEV.md).
 
 django-trusts 1.0 is a step change from django-trusts 0.x. It is not API,
