@@ -1,5 +1,5 @@
-Authorization policy in SQL
-===========================
+Permission policy in SQL
+========================
 
 django-trusts can render its registered authorization policy as parameterized
 SQL for inspection. The same stable output can be committed as an authorization
