@@ -11,9 +11,10 @@ log.
 
 ## 1.1.0
 
-- **Provisional `along=` reachability.** Reverse inquiry and policy SQL
-  support bounded provisional `along=` registrations on SQLite, PostgreSQL,
-  and MySQL 8.4+. See the [core registry](core-registry.md) and [#286].
+- **Provisional `along=` reachability.** Reverse inquiry, policy SQL, and
+  delegation support bounded provisional `along=` on SQLite, PostgreSQL,
+  and MySQL 8.4+. `along=` is improved and remains provisional. See the
+  [core registry](core-registry.md) and [#286].
 
 - **Readable policy-lock SQL.** Each lockfile statement is broken between
   tokens onto predictable lines, including a `WITH RECURSIVE` walk and

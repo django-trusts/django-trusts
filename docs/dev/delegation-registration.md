@@ -91,12 +91,19 @@ Here `personal_organization` is reverse one-to-one from the sponsor and
 be a prefix hop, including one hop in a chain, but is not itself a supported
 content terminal or gateway.
 
-The initial delegated mode does not accept `along=` on the delegated
-registration itself. Such a registration fails closed as unsupported pending
-the hierarchy design in [issue #282][issue-282]. This is a temporary feature
-boundary, not a decision that delegated hierarchical reach should be rejected
-permanently. An ordinary registration may still use `along=`, and the
-sponsor-side ordinary-authority union must honor that effective bounded reach.
+A delegated registration accepts the same `along=` walk as an ordinary
+registration. The delegate is allowed on an object only when that walk
+reaches the object and the sponsor's ordinary authority also reaches it.
+If the delegation has no `along=`, the delegation row must name that
+object. If the sponsor's ordinary grant has no `along=`, that grant must
+name that object. When both sides walk, the delegate gets only the objects
+both walks reach. A longer content suffix than one reverse hop is not one
+column on the content row; compiling that delegated walk raises
+`TrustsConfigurationError` before a grant, on a forward check and on
+reverse inquiry. The sponsor comparison keeps the full root-relative
+sponsor path, so `sponsor_link__user` uses `sponsor_link__user_id` and
+not a bare `user_id` on the delegation row. One delegation cannot sponsor
+another; that chain stays rejected.
 
 For example, a delegation row with an `allowed_permissions` relation may
 narrow the sponsor ceiling without adding another public registration
@@ -151,7 +158,7 @@ AND (
     OR
     EXISTS relationship d:
         d.delegate = u
-        AND d.content = c
+        AND delegation_reaches(d, c)
         AND delegated_condition(d, p)
         AND is_active_principal(d.sponsor)
         AND ordinary(d.sponsor, c, p)
@@ -184,10 +191,13 @@ They are not flattened into
 scope, and the sponsor-authority ceiling stay correlated to the exact row from
 the same relationship branch.
 
-`ordinary(d.sponsor, c, p)` is the complete live OR-union of applicable
-ordinary registrations, including registrations under other configured
-handles. It is not one selected permission path. Delegated registrations are
-excluded from that inner union.
+`delegation_reaches(d, c)` is equality when the delegated registration has
+no `along=`, and the bounded walk otherwise. `ordinary(d.sponsor, c, p)` is
+the complete live OR-union of applicable ordinary registrations, including
+registrations under other configured handles, evaluated on the requested
+object. An ordinary `along=` grant in that union counts when its walk
+reaches that object. It is not one selected permission path. Delegated
+registrations are excluded from that inner union.
 
 The initial profile does not preserve or select the provenance of the
 ordinary path that matched. It has neither a per-registration `delegable`
@@ -277,4 +287,3 @@ statement, concrete cases, and candidate scorecard.
 [issue-265]: https://github.com/django-trusts/django-trusts/issues/265
 [issue-266]: https://github.com/django-trusts/django-trusts/issues/266
 [issue-273]: https://github.com/django-trusts/django-trusts/issues/273
-[issue-282]: https://github.com/django-trusts/django-trusts/issues/282

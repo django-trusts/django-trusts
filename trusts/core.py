@@ -1725,11 +1725,122 @@ def _compatible_sponsor_records(delegations, sponsor_records):
     return tuple(compatible)
 
 
-def _delegation_sponsor_q(record, sponsor_records, permission, content_identity):
-    """Sponsor ordinary-authority OR, correlated to one delegation row."""
+def _root_relative_column(model, path):
+    """Concrete column lookup for a forward single-valued path.
+
+    ``sponsor`` becomes ``sponsor_id``. ``sponsor_link__user`` becomes
+    ``sponsor_link__user_id``. Every prefix stays on the path, so ``F()``
+    cannot bind a bare ``user_id`` on the delegation root. The last
+    component is that field's attname: the column that stores the
+    comparison identity, including a non-PK ``to_field``. The path was
+    already resolved at registration.
+    """
+    parts = str(path).split('__')
+    current = model
+    prefix = []
+    field = None
+    for index, name in enumerate(parts):
+        field = current._meta.get_field(name)
+        if index == len(parts) - 1:
+            break
+        prefix.append(name)
+        current = field.related_model
+    return '__'.join(prefix + [field.attname])
+
+
+def _reject_unsupported_delegated_suffix(walk):
+    """Longer than one reverse content hop is not one content column.
+
+    One reverse hop rewrites onto ``rewrite_attname``. A longer suffix
+    is fail-closed on both the forward and reverse checks. This does
+    not implement that walk.
+    """
+    if walk is None or not walk.suffix_path or walk.rewrite_attname:
+        return
+    raise TrustsConfigurationError(
+        'Delegated along= cannot compile suffix path %r; the walk '
+        'identity is not one column of the content row.'
+        % _path_text(walk.suffix_path)
+    )
+
+
+def _candidate_outer_ref(walk):
+    """Outer content column that stores this walk's identity.
+
+    No suffix: the content row is the walk-site, so the column is the
+    walk identity. One reverse suffix hop rewrites that comparison onto
+    the content row's foreign key (``rewrite_attname``). A longer suffix
+    is not a single column on the content row.
+    """
+    if walk.rewrite_attname:
+        return OuterRef(walk.rewrite_attname)
+    _reject_unsupported_delegated_suffix(walk)
+    return OuterRef(walk.walk_ident)
+
+
+def _sponsor_walk_seed(ordinary, permission, content_identity):
+    """Grant identities that carry the sponsoring user through the walk.
+
+    The seed is not filtered to one user. The delegation row matches its
+    sponsor column to ``carrier`` outside the recursive member, so the
+    CTE does not reference the delegation row.
+    """
+    walk = ordinary.along
+    qs = _bind_record_qs(
+        ordinary,
+        permission=permission,
+        correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
+        content_identity=content_identity,
+    )
+    seed = qs.values(
+        carrier=F(ordinary.user_field),
+        ident=F(walk.walk_field),
+    ).distinct()
+    query = seed.query.clone()
+    query.subquery = True
+    return query
+
+
+def _delegation_walk_seed(record, user):
+    """Delegation-row identities for one delegate.
+
+    ``user`` is the bound actor, a constant in the seed. Reach is matched
+    back to ``carrier`` (the delegation primary key) outside the CTE.
+    """
+    walk = record.along
+    qs = record.root._default_manager.filter(**{
+        record.delegate_field: _bind_terminal(user, 'delegate'),
+        '%s__isnull' % walk.walk_field: False,
+    })
+    seed = qs.values(
+        carrier=F(record.root._meta.pk.attname),
+        ident=F(walk.walk_field),
+    ).distinct()
+    query = seed.query.clone()
+    query.subquery = True
+    return query
+
+
+def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
+                          *, forward=True, bound_content=None):
+    """Sponsor ordinary-authority OR, correlated to one delegation row.
+
+    An ordinary row without ``along`` keeps an exact content comparison.
+    When the delegation row itself does not walk, that comparison is the
+    delegation's content column, which equals the requested object. When
+    the delegation walks, the sponsor must reach the requested object,
+    not the delegation anchor. An ordinary ``along`` row instead requires
+    the sponsor's walked grant to reach that same object.
+    """
     parts = []
     expected_model = record.condition_permission_model
     expected_target = record.condition_permission_target
+    if record.along is None:
+        content_binding = OuterRef(record.content_field)
+    elif forward:
+        content_binding = _shift_outer_ref(OuterRef(record.content_target))
+    else:
+        content_binding = bound_content
     for ordinary in sponsor_records:
         if ordinary.content_model is not record.content_model:
             continue
@@ -1740,17 +1851,53 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity)
                 continue
             if ordinary.permission_target != expected_target:
                 continue
-        inner = _bind_record_qs(
+        if ordinary.along is None:
+            inner = _bind_record_qs(
+                ordinary,
+                content_identity=content_identity,
+                user=OuterRef(record.sponsor_field),
+                content=content_binding,
+                permission=_shift_outer_ref(permission),
+            )
+            parts.append(Exists(inner))
+            continue
+        if forward:
+            parts.append(_KeyedReach(
+                ordinary.along,
+                _sponsor_walk_seed(
+                    ordinary, _shift_outer_ref(permission), content_identity,
+                ),
+                F(_root_relative_column(record.root, record.sponsor_field)),
+                _candidate_outer_ref(ordinary.along),
+            ))
+            continue
+        parts.append(GrantReach(
             ordinary,
+            OuterRef(record.sponsor_field),
+            _shift_outer_ref(permission),
+            content=bound_content,
             content_identity=content_identity,
-            user=OuterRef(record.sponsor_field),
-            content=OuterRef(record.content_field),
-            permission=_shift_outer_ref(permission),
-        )
-        parts.append(Exists(inner))
+        ))
     if not parts:
         return None
     return parts[0] if len(parts) == 1 else reduce(or_, parts)
+
+
+def _delegation_reaches(record, *, forward, user=None, content=None):
+    """Equality, or the delegation row's own bounded walk, to the object."""
+    _reject_unsupported_delegated_suffix(record.along)
+    if record.along is None:
+        if forward:
+            return Q(**{record.content_field: OuterRef(record.content_target)})
+        return Q(**{record.content_field: content})
+    if forward:
+        return Q(_KeyedReach(
+            record.along,
+            _delegation_walk_seed(record, user),
+            F(record.root._meta.pk.attname),
+            _candidate_outer_ref(record.along),
+        ))
+    return Q(_AnchorInInverseReach(record, content))
 
 
 def _delegated_content_exists(delegations, sponsor_records, user, permission,
@@ -1781,8 +1928,8 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
             continue
         combined = Q(**{
             record.delegate_field: _bind_terminal(user, 'delegate'),
-            record.content_field: OuterRef(record.content_target),
         })
+        combined &= _delegation_reaches(record, forward=True, user=user)
         condition = _compile_predicate(
             record.condition, record, permission=permission,
         )
@@ -1804,6 +1951,7 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
     for record in delegations:
         sponsor_q = _delegation_sponsor_q(
             record, sponsor_records, permission, content_identity,
+            forward=False, bound_content=content,
         )
         if sponsor_q is None:
             continue
@@ -1815,8 +1963,10 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
             continue
         combined = Q(**{
             record.delegate_field: OuterRef(record.delegate_target),
-            record.content_field: content,
         })
+        combined &= _delegation_reaches(
+            record, forward=False, content=content,
+        )
         condition = _compile_predicate(
             record.condition, record, permission=permission,
         )
@@ -2644,6 +2794,146 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
     return sql, tuple(seed_params) + (walk.bound,)
 
 
+def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
+    """Recursive walk that carries one non-identity column.
+
+    ``seed_sql`` selects ``carrier`` and ``ident``. The recursive member
+    copies ``carrier`` and replaces ``ident`` with the next hop. The final
+    select returns carriers whose ident equals the caller's candidate.
+    The recursive member does not reference the outer query. The depth
+    cap is the same bound as an ordinary ``along=`` walk. PostgreSQL's
+    ``CYCLE`` clause stays the only engine-specific suffix, and it still
+    names the ident column.
+    """
+    qn = connection.ops.quote_name
+    gen = qn('gen')
+    g = qn('g')
+    depth = qn('depth')
+    ident_col = qn('ident')
+    carrier = qn('carrier')
+    ident = qn(walk.walk_ident)
+    walk_table = qn(walk.walk_model._meta.db_table)
+    site = qn('s')
+    seed_alias = qn('seed_rows')
+    if neighbor is None:
+        neighbor = _neighbor_sql
+    frm, project = neighbor(walk, qn, gen, g, ident_col, ident)
+    sql = (
+        'WITH RECURSIVE %(gen)s(%(carrier)s, %(ident_col)s, %(depth)s) AS ('
+        'SELECT %(seed_alias)s.%(carrier)s, %(seed_alias)s.%(ident_col)s, 0 '
+        'FROM (%(seed_sql)s) AS %(seed_alias)s '
+        'UNION ALL '
+        'SELECT %(g)s.%(carrier)s, %(project)s, %(g)s.%(depth)s + 1 '
+        '%(frm)s '
+        'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
+        ') '
+        '%(cycle)s'
+        'SELECT DISTINCT %(gen)s.%(carrier)s '
+        'FROM %(gen)s '
+        'JOIN %(walk_table)s AS %(site)s '
+        'ON %(site)s.%(ident)s = %(gen)s.%(ident_col)s '
+        'WHERE %(site)s.%(ident)s = '
+        % {
+            'gen': gen, 'carrier': carrier, 'ident_col': ident_col,
+            'depth': depth, 'seed_alias': seed_alias, 'seed_sql': seed_sql,
+            'project': project, 'g': g, 'frm': frm,
+            'site': site, 'ident': ident, 'walk_table': walk_table,
+            'cycle': _along_cycle_clause(connection, ident_col, qn),
+        }
+    )
+    return sql, tuple(seed_params) + (walk.bound,)
+
+
+def _unwrap_seed_sql(seed_sql):
+    if seed_sql.startswith('(') and seed_sql.endswith(')'):
+        return seed_sql[1:-1]
+    return seed_sql
+
+
+class _KeyedReach(Expression):
+    """``key IN (carriers whose walk ident is the candidate)``.
+
+    Used on a delegation queryset. ``key`` is a column of that row (the
+    sponsor foreign key, or the delegation primary key). ``candidate`` is
+    the requested object's walk identity on the outer content query.
+    """
+
+    filterable = True
+    subquery = True
+
+    def __init__(self, walk, seed_query, key, candidate):
+        super().__init__(output_field=BooleanField())
+        self.walk = walk
+        self.seed_query = seed_query
+        self.key = key
+        self.candidate = candidate
+
+    def copy(self):
+        clone = super().copy()
+        clone.seed_query = clone.seed_query.clone()
+        return clone
+
+    def get_source_expressions(self):
+        return [self.seed_query, self.key, self.candidate]
+
+    def set_source_expressions(self, exprs):
+        self.seed_query, self.key, self.candidate = exprs
+
+    def as_sql(self, compiler, connection):
+        _require_along_renderer(connection)
+        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
+        seed_sql = _unwrap_seed_sql(seed_sql)
+        w_sql, w_params = _render_keyed_reach_sql(
+            self.walk, seed_sql, seed_params, connection,
+        )
+        key_sql, key_params = compiler.compile(self.key)
+        cand_sql, cand_params = compiler.compile(self.candidate)
+        sql = '(%s) IN (%s(%s))' % (key_sql, w_sql, cand_sql)
+        return sql, tuple(key_params) + tuple(w_params) + tuple(cand_params)
+
+
+class _AnchorInInverseReach(Expression):
+    """Delegation walk column ``IN`` the inverse walk from a saved object.
+
+    The seed is the bound content, as in an ordinary reverse ``along=``
+    check. The delegation row is correlated only outside the CTE.
+    """
+
+    filterable = True
+    subquery = True
+
+    def __init__(self, record, content):
+        super().__init__(output_field=BooleanField())
+        self.record = record
+        self.seed_query = _content_walk_seed(record.along, content)
+
+    def copy(self):
+        clone = super().copy()
+        clone.seed_query = clone.seed_query.clone()
+        return clone
+
+    def get_source_expressions(self):
+        return [self.seed_query]
+
+    def set_source_expressions(self, exprs):
+        self.seed_query = exprs[0]
+
+    def as_sql(self, compiler, connection):
+        _require_along_renderer(connection)
+        self.seed_query.where.children[0].trusts_content_bind = True
+        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
+        seed_sql = _unwrap_seed_sql(seed_sql)
+        w_sql, w_params = _render_reach_sql(
+            self.record.along, seed_sql, seed_params, connection,
+            neighbor=_inverse_neighbor_sql,
+        )
+        qn = connection.ops.quote_name
+        alias = compiler.query.get_initial_alias()
+        attname = _grant_walk_attname(self.record)
+        sql = '%s.%s IN (%s)' % (qn(alias), qn(attname), w_sql)
+        return sql, tuple(w_params)
+
+
 class _IdentInReach(Expression):
     """Boolean predicate ``alias.ident IN (W)`` compiled on the inner query."""
 
@@ -2884,6 +3174,7 @@ class RegisteredDelegation:
     condition: object | None = None
     condition_permission_model: type | None = None
     condition_permission_target: str | None = None
+    along: AlongWalk | None = None
 
 
 _BINDING_FIELDS = {
@@ -3269,13 +3560,16 @@ class TrustsRegistry(object):
                 % (getattr(root, '__name__', root),)
             )
 
-    def register_delegation(self, *, content, delegate, sponsor, condition=None):
+    def register_delegation(self, *, content, delegate, sponsor, condition=None,
+                            along=None):
         """Register one non-granting delegation relationship.
 
         The three paths share one root. Delegate and sponsor are
         single-valued forward paths to the same persisted principal model.
         The condition is row-only or may contain a private symbolic match to
-        the requested permission. Registration validates metadata only.
+        the requested permission. Optional ``along`` is the same bounded
+        walk as an ordinary registration: the delegation anchor reaches
+        objects within that walk. Registration validates metadata only.
         """
         if self._frozen:
             raise TrustsConfigurationError(
@@ -3319,6 +3613,15 @@ class TrustsRegistry(object):
             condition, condition_permission_model,
             condition_permission_target,
         ) = _validate_delegated_condition(condition, root)
+        if along is not None and not isinstance(along, Along):
+            raise TrustsConfigurationError(
+                'along must be an Along instance or None, not %r.' % (along,)
+            )
+        along_walk = None
+        if along is not None:
+            along_walk = _build_along_walk(
+                root, content_path, content_model, along,
+            )
         record = RegisteredDelegation(
             root=root,
             content_path=content_path,
@@ -3336,6 +3639,7 @@ class TrustsRegistry(object):
             condition=condition,
             condition_permission_model=condition_permission_model,
             condition_permission_target=condition_permission_target,
+            along=along_walk,
         )
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
@@ -4345,7 +4649,10 @@ class BackendHandle:
         ``permission=`` registration does not contribute to
         ``get_group_permissions``. Delegated mode instead requires exactly
         ``delegate=`` and ``sponsor=`` and forbids ``user=``, ``permission=``,
-        ``group=``, and ``along=``. A delegated row is not an ordinary grant.
+        and ``group=``. ``along=`` is the same bounded walk as an ordinary
+        registration. A delegated row is not an ordinary grant: the delegate
+        is allowed on an object only when that walk reaches the object and
+        the sponsor's ordinary authority reaches it too.
 
         A builder is called once during registration with a value typed
         as ``trust``. Attribute access records a path; the callable is
@@ -4389,10 +4696,6 @@ class BackendHandle:
                 raise TrustsConfigurationError(
                     'delegated register forbids user=, permission=, and group=.'
                 )
-            if along is not None:
-                raise TrustsConfigurationError(
-                    'delegated register does not support along=.'
-                )
         else:
             if user is None:
                 raise TrustsConfigurationError(
@@ -4427,6 +4730,7 @@ class BackendHandle:
                 condition=_normalize_delegated_condition(
                     trust, condition, token=token,
                 ),
+                along=_bind_public_along(trust, along),
             )
         user_path = _normalize_public_role(trust, user, 'user', token=token)
         if group is not None:

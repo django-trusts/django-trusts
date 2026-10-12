@@ -365,6 +365,13 @@ def _project_content(handle, alias, group, filters, handles):
             condition = _render_condition(record.condition)
             if condition is not None:
                 row['condition'] = condition
+            along = getattr(record, 'along', None)
+            if along is not None:
+                row['along'] = {
+                    'path': '__'.join(along.path),
+                    'shape': along.shape,
+                    'bound': along.bound,
+                }
             if multi:
                 row['or_group'] = True
             delegated_rows.append(row)
@@ -1206,9 +1213,19 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
-    from trusts.core import GrantReach, _IdentInReach
+    from trusts.core import (
+        GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
+    )
 
     if isinstance(node, GrantReach):
+        return _with_hint(
+            {'const': _json_const(node.record.along.bound)}, 'along bound',
+        )
+    if isinstance(node, _KeyedReach):
+        return _with_hint(
+            {'const': _json_const(node.walk.bound)}, 'along bound',
+        )
+    if isinstance(node, _AnchorInInverseReach):
         return _with_hint(
             {'const': _json_const(node.record.along.bound)}, 'along bound',
         )
@@ -1268,7 +1285,9 @@ def _with_hint(symbol, hint):
 
 def _const_hint(node, value):
     """Readable label for one constant placeholder."""
-    from trusts.core import GrantReach, _IdentInReach
+    from trusts.core import (
+        GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
+    )
 
     if isinstance(node, Value):
         if value == 1:
@@ -1276,7 +1295,9 @@ def _const_hint(node, value):
         return 'literal'
     if isinstance(node, Lookup):
         lhs = getattr(node, 'lhs', None)
-        if isinstance(lhs, (GrantReach, _IdentInReach)) and value is True:
+        if isinstance(lhs, (
+            GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
+        )) and value is True:
             return 'along match'
         name = _lookup_field_name(node)
         label = _lookup_model_label(node)

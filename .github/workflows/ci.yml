@@ -116,7 +116,7 @@ jobs:
     - name: Along forward and reverse tests
       env:
         DJANGO_SETTINGS_MODULE: tests.along_db_settings
-      run: python -m tests.runtests tests.core.test_issue92
+      run: python -m tests.runtests tests.core.test_issue92 tests.core.test_issue282
 
   along-mysql:
     name: along tests (MySQL 8.4)
@@ -156,7 +156,7 @@ jobs:
     - name: Along forward and reverse tests
       env:
         DJANGO_SETTINGS_MODULE: tests.along_db_settings
-      run: python -m tests.runtests tests.core.test_issue92
+      run: python -m tests.runtests tests.core.test_issue92 tests.core.test_issue282
 
   package:
     name: package
