@@ -2,9 +2,11 @@
 
 ``group=`` ends at Django ``auth.Group``. The compiler appends
 ``Group.permissions``. ``permission=`` is unchanged and mutually
-exclusive with ``group=``. Only explicit ``group=`` records feed
-``get_group_permissions``; they also participate in ordinary
-authorization. Membership shape is not a group.
+exclusive with ``group=``. Explicit ``group=`` records feed
+``get_group_permissions``. A ``permission=`` record does too when the
+user path reaches ``auth.Group`` and the condition requires that
+permission to be in ``Group.permissions``. Any other membership shape
+is not a group.
 """
 
 import re
@@ -1271,3 +1273,174 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             (self.alice, self.read, [paper_a]),
             (self.alice, self.change, [paper_b]),
         ))
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class LocalPermissionInsideGroupPermissionsTest(TransactionTestCase):
+    """A local permission row inside ``Group.permissions`` is a group grant.
+
+    The permission terminal stays the local foreign key. The user path
+    reaches ``auth.Group``. The condition requires that foreign key to
+    be in ``Group.permissions``. ``get_group_permissions`` returns that
+    intersection. A direct user grant and a role-collection condition
+    stay in ``get_all_permissions`` and out of the group result.
+    """
+
+    def setUp(self):
+        User = get_user_model()
+
+        class Paper(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class LocalGrant(models.Model):
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+            paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class DirectGrant(models.Model):
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+            paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Role(models.Model):
+            permissions = models.ManyToManyField(
+                Permission, related_name='+', blank=True,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class RoleGrant(models.Model):
+            group = models.ForeignKey(Group, on_delete=models.CASCADE)
+            role = models.ForeignKey(Role, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+            paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        self.Paper = Paper
+        self.LocalGrant = LocalGrant
+        self.DirectGrant = DirectGrant
+        self.Role = Role
+        self.RoleGrant = RoleGrant
+        self._table_cm = _tables(Paper, LocalGrant, DirectGrant, Role, RoleGrant)
+        self._table_cm.__enter__()
+        try:
+            _contribute_m2m(Role._meta.get_field('permissions'), Permission)
+            self.alice = User.objects.create_user('alice-local-group', password='x')
+            self.cara = User.objects.create_user('cara-local-group', password='x')
+            self.read = _perm(Paper, 'read_paper')
+            self.change = _perm(Paper, 'change_paper')
+            self.add = _perm(Paper, 'add_paper')
+            self.delete = _perm(Paper, 'delete_paper')
+            self.read_code = _code(self.read)
+            self.change_code = _code(self.change)
+            self.add_code = _code(self.add)
+            self.delete_code = _code(self.delete)
+            self.handle = _handle(
+                TrustsRegistry(), path='tests.core.issue246-local-group',
+            )
+            self.local = self.handle.register(
+                trust=LocalGrant,
+                user='group__user',
+                permission='permission',
+                content='paper',
+                condition=lambda row: row.group.permissions.contains(row.permission),
+            )
+            self.handle.register(
+                trust=DirectGrant,
+                user='user',
+                permission='permission',
+                content='paper',
+            )
+            self.role_record = self.handle.register(
+                trust=RoleGrant,
+                user='group__user',
+                permission='permission',
+                content='paper',
+                condition=lambda row: row.role.permissions.contains(row.permission),
+            )
+        except Exception:
+            self._table_cm.__exit__(None, None, None)
+            raise
+
+    def tearDown(self):
+        self._table_cm.__exit__(None, None, None)
+
+    def test_local_row_inside_group_permissions_is_the_group_result(self):
+        self.assertFalse(self.local.via_group)
+        self.assertFalse(self.role_record.via_group)
+        paper = self.Paper.objects.create(title='local')
+        editors = Group.objects.create(name='local-editors')
+        editors.permissions.add(self.read, self.change)
+        editors.user_set.add(self.alice)
+        self.LocalGrant.objects.create(
+            group=editors, permission=self.read, paper=paper,
+        )
+        self.DirectGrant.objects.create(
+            user=self.alice, permission=self.add, paper=paper,
+        )
+        self.DirectGrant.objects.create(
+            user=self.cara, permission=self.add, paper=paper,
+        )
+        role = self.Role.objects.create()
+        role.permissions.add(self.delete)
+        self.RoleGrant.objects.create(
+            group=editors, role=role, permission=self.delete, paper=paper,
+        )
+        backend = _ProbeBackend()
+        one = self.Paper.objects.filter(pk=paper.pk)
+        with patch.object(backend, '_own_handle', return_value=self.handle):
+            self.assertTrue(backend.has_perm(self.alice, self.read_code, paper))
+            self.assertFalse(backend.has_perm(self.alice, self.change_code, paper))
+            self.assertTrue(backend.has_perm(self.alice, self.add_code, paper))
+            self.assertTrue(backend.has_perm(self.alice, self.delete_code, paper))
+            self.assertFalse(backend.has_perm(self.cara, self.read_code, paper))
+            self.assertEqual(
+                backend.get_all_permissions(self.alice, paper),
+                {self.read_code, self.add_code, self.delete_code},
+            )
+            self.assertEqual(
+                backend.get_group_permissions(self.alice, paper),
+                {self.read_code},
+            )
+            self.assertEqual(
+                backend.get_group_permissions(self.alice, one),
+                {self.read_code},
+            )
+            self.assertEqual(
+                backend.get_group_permissions(self.cara, paper), set(),
+            )
+            self.assertEqual(
+                backend.get_all_permissions(self.cara, paper),
+                {self.add_code},
+            )
+            with self.assertNumQueries(1):
+                self.assertEqual(
+                    backend.get_group_permissions(self.alice, one),
+                    {self.read_code},
+                )
+
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[self.handle]),
+        )
+        content = document['backends'][0]['contents'][0]
+        group_sql = content['get_group_permissions']['sql']
+        self.assertIn(self.LocalGrant._meta.db_table, group_sql)
+        self.assertIn('auth_group_permissions', group_sql)
+        self.assertNotIn(self.DirectGrant._meta.db_table, group_sql)
+        self.assertNotIn(self.RoleGrant._meta.db_table, group_sql)
+        self.assertIn(
+            self.RoleGrant._meta.db_table,
+            content['get_all_permissions']['sql'],
+        )
