@@ -25,7 +25,7 @@ split and sized before implementation.
 | Lower-level `.authorized` and manager adapter | `trusts/query.py`, `trusts/core.py:granted` | Default activity denial is a behavior change; retain instance-only input and candidate queryset |
 | Backend checks and enumeration | `trusts/backends.py` | Extend owned signatures without changing stock Django calls; cover instance/collection and complete/group queries |
 | Reverse content and user-manager adapters | `trusts/query.py`, `trusts/reverse.py` | Share mode-aware compiler; default aggregate candidate eligibility; preserve candidate manager and backend completeness |
-| Registry inquiries | `TrustsRegistry.permissions_for`, `has_permission`, `filter_authorized` | Current ordinary projections have no principal gate; require old/new migration and explicit mode |
+| Registry inquiries | `TrustsRegistry.permissions_for`, `has_permission`, `filter_authorized` | Current ordinary projections have no user check; require old/new migration and explicit mode |
 | Plan/compiler projections | `RelationPlan.content_exists`, `user_exists`, `permissions`, `common_permissions`, `has_permission`, `filter_content`; `PlanQueryCompiler` | Propagate mode without treating correlated SQL bindings as runtime users; verify each supported query shape |
 | Aggregate inquiries | `granted`, `all_match`, `instance_match`, `common_permissions`, `_compile_common_permissions` | Keep grants/conditions composed per handle and preserve validation and query budget |
 | Scope listing | `filter_authorized_scopes` | Ordinary-prefix projection currently has no activity gate; review support boundaries rather than silently adding delegated scopes |
@@ -48,7 +48,7 @@ ticket propagates an activity mode.
    the mode. Define explicit capability/dispatch for custom audit backends.
 2. Confirm anonymous/unauthenticated denial, strict boolean validation, and
    existing permission/configuration validation before inactive shortcuts.
-   Inventory schema-neutral principal models lacking an `is_active` field
+   Inventory schema-neutral user models lacking an `is_active` field
    or exposing Python-only eligibility properties; surface any change in
    compatibility or inability to express equivalent reverse SQL.
 3. Decide how policy SQL exposes both modes without misdescribing the default
