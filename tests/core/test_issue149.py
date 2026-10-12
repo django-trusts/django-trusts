@@ -13,7 +13,7 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ZERO_CANDIDATE = '1e3ce71aedb5218b88bf9112c5bbfe84254acb5a'
+ZERO_CANDIDATE = '00a58981134a1957fb9aa08bc0768b226fd310ba'
 STALE_ZERO_R5A = '462c83b59edfb51011b4373e8214b2daaab7f500'
 STALE_ZERO_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
 
