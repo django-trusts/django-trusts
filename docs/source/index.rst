@@ -337,9 +337,9 @@ Permission checks keep the familiar Django spelling:
    )
 
 The same correlated policy drives object checks, permission enumeration,
-``QuerySet.permitted()``, ``filter_by_permitted_content()``, reverse
-permitted-user inquiry, and authorization policy SQL. The sponsor's live
-ordinary permissions provide the authority ceiling.
+``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
+policy SQL. The sponsor's live ordinary permissions provide the authority
+ceiling.
 
 Several delegated relationship models may target the same content model. Each
 relationship remains a complete alternative: its own delegate, content,
@@ -506,10 +506,6 @@ the user may read:
        read_sheet,
        content=Sheet,
    )
-
-The same call follows ``along=`` and delegation. A cabinet stays when the
-bounded walk reaches a permitted sheet under it, and when a delegate may
-open that sheet through the sponsor's ordinary permission.
 
 List the users who may perform one permission on one saved object:
 
@@ -701,8 +697,8 @@ rather than traversing the hierarchy in Python. The database combinations
 currently exercised by CI are recorded in the `support matrix
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
 The same bounded walk participates in object checks, permitted-content
-querysets, ``filter_by_permitted_content``, permission enumeration,
-reverse permitted-user inquiry, and authorization-policy SQL. For one content and
+querysets, permission enumeration, reverse permitted-user inquiry, and
+authorization-policy SQL. For one content and
 permission, reverse inquiry returns exactly the users whose complete
 forward object check succeeds, including the terminal condition and user
 checks.
