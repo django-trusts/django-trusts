@@ -80,7 +80,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'register(*, trust, user=None, permission=None, content, group=None, '
             'delegate=None, sponsor=None, condition=None, along=None)',
             'add_named_filter(...)',
-            'Named filters are outer restrictions',
+            'Named filters restrict the query',
             'Runtime callbacks are unsupported',
             'Django treats an active superuser as globally authorized',
             'Trusts cannot revoke authorization supplied by another backend',
@@ -89,7 +89,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'one-argument symbolic predicate',
             'collection-rooted `.contains(member)`',
             'Discrepancies must be surfaced in the PR',
-            'does not apply that principal check',
+            'Both use the shared user checks.',
             'issue #268',
         ):
             with self.subTest(needle=needle):

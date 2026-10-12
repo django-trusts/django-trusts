@@ -309,9 +309,8 @@ django-trusts requires the same delegation row, its selected content and
 condition, and an ordinary sponsor grant on that content. The actor's own
 ordinary grants remain available as independent alternatives.
 
-Both principals must remain eligible. A delegate or sponsor that fails the
-same active-principal rule used by django-trusts receives no delegated access,
-even if its ordinary grants and delegation rows remain in the database.
+By default, both sponsoring and delegated users must have ``is_active=True``.
+See :ref:`user-is-active-checks` for the shared inquiry rule.
 
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
@@ -348,7 +347,7 @@ condition, and sponsor's ordinary-authority ceiling are ANDed before that
 branch is ORed with the others. A branch cannot borrow another relationship's
 approval or sponsor.
 
-In ordinary or delegated mode, ``content=`` may also reach a bounded content
+For ordinary and delegated registrations, ``content=`` may also reach a bounded content
 set rather than a foreign key on the relationship row. For example,
 ``sponsor__personal_organization__repositories`` crosses a reverse one-to-one
 personal organization and then the one reverse one-to-many repository gateway.
@@ -457,11 +456,9 @@ own the full set, the call raises ``TrustsConfigurationError`` before SQL.
 declarations only. A runtime ``.permitted()`` call is not one of those
 declarations; it still validates and raises on first use.
 
-Malformed permissions and conditions raise before SQL, including when the
-principal is anonymous. Anonymous and inactive principals, and a
-well-formed permission for another content type, produce an empty
-queryset. There is no active-superuser shortcut. Named conditions remain
-explicit:
+Malformed permissions and conditions raise before SQL. A well-formed
+permission for another content type produces an empty queryset. There is no
+active-superuser shortcut. Named conditions remain explicit:
 
 .. code-block:: python
 
@@ -486,8 +483,7 @@ The permission may also use Django's string form:
    )
 
 The result is a lazy queryset of the configured user model. Normal queryset
-operations remain available, for example
-``document.get_permitted_users(change_document).filter(is_active=True)``.
+operations remain available.
 
 Applications that own their user model may expose the same inquiry on their
 existing user manager:
@@ -517,6 +513,40 @@ This method returns a lazy queryset. Both spellings return the same rows.
 The user-manager mixin is optional; an application that cannot change its
 user manager uses ``content.get_permitted_users(perm)``. Stock ``auth.User``
 does not grow ``permitted``.
+
+.. _user-is-active-checks:
+
+user.is_active checks
+~~~~~~~~~~~~~~~~~~~~~
+
+All Trusts permission inquiries check ``user.is_active`` for Trusts-owned grants
+by default, including ordinary and delegated grants, permission enumeration, and reverse user
+listing. Anonymous and unauthenticated users cannot supply persisted grants
+and receive no positive permission result. Input and configuration errors
+still raise before a denied result is returned.
+
+Including inactive users
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+To include inactive users in an inquiry, use the keyword-only option
+(default ``False``). Inquiries returning content, permissions, or a boolean
+use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
+It skips only the built-in ``is_active`` checks for the user, delegate, and
+sponsor. Explicit conditions and candidate-queryset filters still apply.
+For example, inspect a suspended user's grants before reactivating them:
+
+.. code-block:: python
+
+   documents = Document.objects.permitted(
+       "documents.change_document", suspended_user, allow_inactive_user=True,
+   )
+   users = document.get_permitted_users(
+       "documents.change_document", allow_inactive=True,
+   )
+
+Stock Django user methods do not forward either keyword. Use the Trusts
+adapters; view guards and login behavior are unchanged. Custom backends retain
+their own rules and do not receive either keyword.
 
 Protect a view with the Trusts-only primary-key guard:
 
@@ -641,8 +671,8 @@ An example Windows declaration lives in
 `django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
-Authorization policy in SQL
----------------------------
+Permission policy in SQL
+------------------------
 
 django-trusts can render the registered authorization policy as deterministic
 YAML containing parameterized compiler SQL:
@@ -658,7 +688,7 @@ The artifact is organized by backend and protected content model. A content
 with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
 ``get_all_permissions``, and ``get_permitted_users``. The locked
 ``get_permitted_users`` statement is that backend's reverse predicate
-(eligibility and complete grants), not Django's outer superuser rule and
+(eligibility and complete grants), not Django's superuser check and
 not other backends. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
@@ -705,7 +735,7 @@ alias consistently in settings and every render or E009 job. For example,
 MySQL ``default`` plus SQLite ``policy`` reviews one SQLite lockfile; E009
 follows ``policy``. Run ``python manage.py check`` in CI and before deployment.
 
-See the :doc:`authorization policy SQL guide <authorization-policy-sql>` for
+See the :doc:`permission policy SQL guide <permission-policy-sql>` for
 the schema, identifiers, renderer selection, and review workflow. See the
 `lockfile security audit guide
 <../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
@@ -796,6 +826,6 @@ in the `support matrix
 .. toctree::
    :hidden:
 
-   authorization-policy-sql
+   permission-policy-sql
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.

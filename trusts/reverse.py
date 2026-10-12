@@ -22,19 +22,27 @@ from trusts.core import (
 _OBJECT_BLIND_BACKENDS = None
 
 
-def compile_permitted_users(content, perm, *, user_queryset=None):
+def compile_permitted_users(content, perm, *, user_queryset=None,
+                            allow_inactive=False):
     """Lazy user queryset for one saved content object and one permission.
 
     The candidate rows are ``user_queryset`` when given (the optional
     manager adapter) and otherwise ``AUTH_USER_MODEL``'s default manager.
     Django's active-superuser rule is OR-ed with each configured backend
-    that can contribute an exact reverse predicate. An unsupported
-    object-permission backend raises before SQL.
+    that can contribute an exact reverse predicate. The ``is_active``
+    check applies inside the Trusts-owned branch only. A custom predicate
+    is not wrapped. ``allow_inactive=True`` is forwarded only to the
+    Trusts-owned mixin method. The superuser contributor still requires an
+    active superuser. An unsupported object-permission backend raises
+    before SQL.
     """
     from django.contrib.auth import get_backends, get_user_model
 
+    from trusts.query import require_mode_flag
+
     _require_saved_content(content)
     _reject_permission_shape(perm)
+    require_mode_flag(allow_inactive, 'allow_inactive')
     if user_queryset is None:
         user_queryset = get_user_model()._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
@@ -51,7 +59,9 @@ def compile_permitted_users(content, perm, *, user_queryset=None):
     if isinstance(perm, (str, Permission)):
         involved.append(Permission)
     for backend in backends:
-        predicate = _backend_predicate(backend, content, perm)
+        predicate = _backend_predicate(
+            backend, content, perm, allow_inactive=allow_inactive,
+        )
         if predicate is None:
             continue
         if not isinstance(predicate, Q):
@@ -72,7 +82,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None):
     return user_queryset.filter(combined).distinct()
 
 
-def trusts_mixin_predicate(backend, content, perm):
+def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
     from trusts.apps import _relationship_implementation_handles
 
@@ -95,13 +105,16 @@ def trusts_mixin_predicate(backend, content, perm):
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
             content_identity=getattr(plan, 'content_identity', None),
+            allow_inactive=allow_inactive,
         )
         if delegated is not None:
             exists = delegated if exists is None else (_as_q(exists) | delegated)
     if exists is None:
         return None
     user_model = _plan_user_model(plan, content)
-    eligibility = _trusts_eligibility_q(user_model)
+    eligibility = _trusts_eligibility_q(
+        user_model, allow_inactive=allow_inactive,
+    )
     if eligibility is None:
         return None
     predicate = eligibility & _as_q(exists)
@@ -232,10 +245,32 @@ def _object_blind_backends():
     return _OBJECT_BLIND_BACKENDS
 
 
-def _backend_predicate(backend, content, perm):
+def _trusts_owned_reverse_hook(backend):
+    """True when the reverse hook is the mixin method, not an override.
+
+    ``allow_inactive=True`` is passed only through that Trusts-owned
+    method. Other hooks are called as
+    ``permitted_users_predicate(content, perm)``. Trusts does not require
+    them to accept ``allow_inactive`` and does not raise when they do not.
+    """
+    from trusts.backends import TrustModelBackendMixin
+
+    if not isinstance(backend, TrustModelBackendMixin):
+        return False
+    return (
+        type(backend).permitted_users_predicate
+        is TrustModelBackendMixin.permitted_users_predicate
+    )
+
+
+def _backend_predicate(backend, content, perm, *, allow_inactive=False):
     if getattr(backend, 'trusts_object_permissions', None) is False:
         return None
     if _declares_reverse_hook(backend):
+        if allow_inactive and _trusts_owned_reverse_hook(backend):
+            return backend.permitted_users_predicate(
+                content, perm, allow_inactive=True,
+            )
         return backend.permitted_users_predicate(content, perm)
     if type(backend) in _object_blind_backends():
         return None
@@ -586,23 +621,26 @@ def _principal_presence(model, name):
     )
 
 
-def _trusts_eligibility_q(model):
+def _trusts_eligibility_q(model, *, allow_inactive=False):
     """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
 
     ``is_active_principal`` denies anonymous, unauthenticated, and inactive
-    principals. A missing ``is_active`` uses the same default as
+    users. A missing ``is_active`` uses the same default as
     ``getattr(user, 'is_active', False)`` and contributes no users.
-    Persisted rows use the stock anonymous/authenticated properties
-    unless those names are concrete fields.
+    ``allow_inactive`` omits the ``is_active`` equality and does not fail
+    closed when that column is absent. Persisted rows use the stock
+    anonymous/authenticated properties unless those names are concrete
+    fields. The predicate is standard boolean SQL.
     """
-    if _principal_presence(model, 'is_active') != 'field':
-        _principal_presence(model, 'is_anonymous')
-        _principal_presence(model, 'is_authenticated')
+    active = _principal_presence(model, 'is_active')
+    anonymous = _principal_presence(model, 'is_anonymous')
+    authenticated = _principal_presence(model, 'is_authenticated')
+    if not allow_inactive and active != 'field':
         return None
-    predicate = Q(is_active=True)
-    if _principal_presence(model, 'is_anonymous') == 'field':
+    predicate = Q() if allow_inactive else Q(is_active=True)
+    if anonymous == 'field':
         predicate &= Q(is_anonymous=False)
-    if _principal_presence(model, 'is_authenticated') == 'field':
+    if authenticated == 'field':
         predicate &= Q(is_authenticated=True)
     return predicate
 

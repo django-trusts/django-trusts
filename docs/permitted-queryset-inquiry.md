@@ -1,7 +1,10 @@
 # Permitted content queryset inquiry
 
-Public contract for issue #270. `queryset.permitted(permission, user, conditions=())`
+Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)`
 is implemented on `PermittedQuerySet`.
+
+The [`is_active` check and examples](source/index.rst#user-is-active-checks)
+apply to this inquiry.
 
 ## Question
 
@@ -25,7 +28,7 @@ parser, and it is not the reverse inquiry answered by
 ## Public API
 
 ```python
-queryset.permitted(permission, user, conditions=())
+queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)
 ```
 
 The method lives on the queryset, so it stays available after `filter()`:
@@ -162,11 +165,11 @@ registered grant path AND every explicitly selected named condition
 Participating backends are ORed. The final queryset is distinct and stays
 lazy, so pagination applies in SQL.
 
-## Principal and backend boundary
+## User and backend boundary
 
-Anonymous and inactive principals receive an empty queryset. The method does
-not copy Django's active-superuser shortcut. An active superuser without a
-registered grant receives an empty queryset.
+The shared user checks apply before the grant query. The method does not copy
+Django's active-superuser shortcut: an active superuser without a registered
+grant receives an empty queryset.
 
 The result is Trusts' registered relationship-family projection. It does not
 call `user.has_perm()` per row and does not OR results from arbitrary Django
@@ -174,11 +177,11 @@ authorization backends. Django has no general protocol through which a backend
 can contribute a queryset predicate.
 
 Authentication method does not change these semantics. A session, bearer
-token, or another authenticator establishes the principal; it does not select
+token, or another authenticator establishes the user; it does not select
 a broader authorization path.
 
-Input and configuration are validated before the principal shortcut. A
-misconfigured call raises for an anonymous principal instead of returning an
+Input and configuration are validated before the user shortcut. A
+misconfigured call raises for an anonymous user instead of returning an
 empty queryset.
 
 ## Failure behavior
@@ -196,7 +199,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
-- the principal is anonymous or inactive; or
+- the user is anonymous, unauthenticated, or inactive, unless `allow_inactive_user=True`; or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another
   application label.
@@ -215,8 +218,8 @@ when the view is declared. That static check stays on the decorator.
 | Which users may access one object with one permission? | `content.get_permitted_users(permission)` |
 
 `.authorized(user, permission, extra_q=None)` remains available. It accepts
-any saved permission-terminal instance, including a custom model, does not
-check that the principal is active, and ANDs `extra_q`. It is not routed
+any saved permission-terminal instance, including a custom model, applies the
+shared user checks, and ANDs `extra_q`. It is not routed
 through `.permitted()` validation. Its docstring points here.
 
 Zero already exposes `ContentQuerySet.permitted(perm, user)`. This slice

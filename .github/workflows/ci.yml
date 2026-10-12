@@ -10,7 +10,7 @@ permissions:
 
 env:
   # Exact Zero candidate companion.
-  COMPANION_ZERO_SHA: 5e802bd50c9f8e5373514236db3697189a97e371
+  COMPANION_ZERO_SHA: 00a58981134a1957fb9aa08bc0768b226fd310ba
 
 jobs:
   tests:
@@ -214,6 +214,8 @@ jobs:
     name: follow Core (${{ matrix.companion }})
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      TRUSTS_POLICY_LOCKFILE: ${{ github.workspace }}/companion/.ci/trusts-policy.sqlite.lock.yaml
     permissions:
       contents: read
       actions: write
@@ -317,24 +319,27 @@ jobs:
         echo "KERNEL_CHECKOUT=${GITHUB_WORKSPACE}/core" >> "${GITHUB_ENV}"
         echo "PYTHONPATH=${target}" >> "${GITHUB_ENV}"
 
+    - name: Generate SQLite policy lockfile
+      id: policy-lock
+      if: ${{ matrix.lockfile == true && !cancelled() }}
+      working-directory: companion
+      run: |
+        mkdir -p .ci
+        python manage.py trusts_policy_sql --lock
+
+
     - name: Companion test suite
       working-directory: companion
       env:
         TRUSTS_FOLLOW_CORE: "1"
       run: python -m tests.runtests
 
-    - name: Generate SQLite policy lockfile
-      id: policy-lock
-      if: ${{ matrix.lockfile == true && !cancelled() }}
-      working-directory: companion
-      run: python manage.py trusts_policy_sql --lock
-
     - name: Upload SQLite policy lockfile
       if: ${{ !cancelled() && matrix.lockfile == true && steps.policy-lock.outcome == 'success' }}
       uses: actions/upload-artifact@v4
       with:
         name: gh-permissions-sqlite-policy-lock
-        path: companion/trusts-policy.lock.yaml
+        path: companion/.ci/trusts-policy.sqlite.lock.yaml
         retention-days: 7
         if-no-files-found: error
 

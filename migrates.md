@@ -19,6 +19,32 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## user.is_active checks (#284)
+
+The shared [user.is_active rule](docs/source/index.rst#user-is-active-checks)
+also applies to `.authorized()` and ordinary registry/intermediate-model
+inquiries, superseding their earlier ungated behavior described below. Their
+default results change for an inactive user:
+
+| Before #284 | After #284 |
+| --- | --- |
+| Ordinary `.authorized()`, `permissions_for`, `has_permission`, `filter_authorized`, and `filter_authorized_scopes` can produce a positive result for an inactive user | The same default inquiry returns false/empty |
+
+Use the optional keyword in the usage guide when those calls intentionally inspect
+stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;
+user-list inquiries use `allow_inactive`.
+Existing permission inputs, query shapes, and positional arguments remain.
+Review affected compiler/backend overrides and regenerate policy locks with
+the runtime change.
+
+Migration-bot checklist:
+
+- `.authorized(`, `permissions_for(`, `has_permission(`, and `filter_authorized(`
+- `filter_authorized_scopes(` and its `allow_inactive_user` keyword
+- `.permitted(`, `get_permitted_users(`, and backend inquiry overrides
+- custom reverse/compiler hooks and candidate-manager `is_active` filters
+- permission-result caches, if present, and `trusts_policy_sql`
+
 ## Permission content type must match the object (#267)
 
 `1.0.0 → 1.1.0`. Crossed `auth.Permission.content_type` positives are
@@ -27,7 +53,7 @@ should follow the
 | | 1.0.0 | 1.1.0 |
 | --- | --- | --- |
 | Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, `.authorized()`, reverse users, and lockfile SQL that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
-| `authorization_required` for that pair | Already `PermissionDenied` for an ordinary principal | Same denial |
+| `authorization_required` for that pair | Already `PermissionDenied` for an ordinary user | Same denial |
 | Same-model grant, including a custom codename that does not end with the model name | Grant on instance projections | Unchanged grant |
 | Permission terminal that is not `auth.Permission`, including a custom model with a `content_type` foreign key | Primary-key identity | Unchanged |
 | Active superuser `user.has_perm` | Django returns `True` before backends | Unchanged. Queryset and enumeration projections do not copy that shortcut |
@@ -76,13 +102,13 @@ Migration-bot checklist:
 | Content rows one user may access for one permission | Resolve an `auth.Permission` row, then `.authorized(user, permission)` | `queryset.permitted(permission, user, conditions=())` |
 | Chained queryset | The list method is not on `QuerySet` | `Repository.objects.filter(...).permitted(...)` when the queryset mixes in `PermittedQuerySetMixin` and is supplied with `as_manager()` or `from_queryset` |
 | Attachment names | `AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager` | Those names stay. Add `PermittedQuerySetMixin`, `PermittedQuerySet`, and `PermittedManager` |
-| `.authorized(user, permission, extra_q=None)` | Instance projection, no principal check, any registered terminal | Unchanged. Not routed through `.permitted` validation |
-| Anonymous or inactive principal | `.authorized()` can still return granted rows | `.permitted()` returns an empty queryset. `.authorized()` does not |
-| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous principal |
+| `.authorized(user, permission, extra_q=None)` | Instance projection, no user check, any registered terminal | Unchanged. Not routed through `.permitted` validation |
+| Anonymous or inactive user | `.authorized()` can still return granted rows | `.permitted()` returns an empty queryset. `.authorized()` does not |
+| Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous user |
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
 No mandatory consumer change. Existing `.authorized()` callers keep their
-results, including an inactive principal who holds a grant. New code should
+results, including an inactive user who holds a grant. New code should
 use `.permitted()`. Zero's `ContentQuerySet.permitted(perm, user)` is
 unchanged.
 
@@ -208,7 +234,7 @@ Migration-bot checklist:
 | --- | --- | --- |
 | Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
 
-No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion.
+No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion. An `Along` registration cannot be reversed exactly and raises `TrustsConfigurationError` before SQL, including when rendering the policy lock.
 
 Migration-bot checklist:
 

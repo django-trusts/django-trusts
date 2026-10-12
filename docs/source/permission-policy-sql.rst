@@ -1,5 +1,5 @@
-Authorization policy in SQL
-===========================
+Permission policy in SQL
+========================
 
 django-trusts can render its registered authorization policy as parameterized
 SQL for inspection. The same stable output can be committed as an authorization
@@ -121,7 +121,7 @@ the SQL bytes for every ``auth.Permission`` grant.
 object and one permission, compiled to the users that backend can grant.
 The locked statement is that backend branch only. It carries the backend's
 eligibility predicate and the complete-grant ``EXISTS``. It does not include
-Django's outer active-superuser rule, and it does not OR other
+Django's check that an active superuser has every permission, and it does not OR other
 authentication backends. The content primary key is a ``content.<target>``
 bind. The permission row is a ``permission.<target>`` bind. The candidate
 user is the outer row. ``content.get_permitted_users(perm)`` and optional
@@ -149,13 +149,9 @@ SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
 combines all applicable ordinary grants with OR: any matching ordinary grant
 may supply the sponsor's authority on the same content and permission.
-Reviewers should verify the delegate/sponsor direction, the
-relationship-owned scope predicate, the delegate and sponsor eligibility
-predicates, and the sponsor's ordinary-authority predicate in both the policy
-document and generated SQL. A delegate or sponsor that fails the principal
-eligibility rule
-equivalent to ``is_active_principal`` must contribute no delegated authority,
-even while its grants and delegation rows remain stored.
+Reviewers should verify the delegate/sponsor direction, the relationship's
+explicit conditions, the :ref:`user.is_active checks <user-is-active-checks>`,
+and the sponsor's ordinary-grant predicate in the document and generated SQL.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
