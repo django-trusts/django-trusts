@@ -7,21 +7,25 @@ either keyword is true. Superuser shortcuts and explicit conditions stay
 in place.
 """
 
+import datetime
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.db.models import Q
 from django.test import TestCase, TransactionTestCase
-from django.test.utils import isolate_apps
+from django.test.utils import isolate_apps, override_settings
 
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from trusts.backends import TrustModelBackendMixin
 from trusts.core import (
+    BackendHandle,
     PlanQueryCompiler,
     Ref,
     TrustsConfigurationError,
@@ -32,6 +36,7 @@ from trusts.query import (
     AuthorizedQuerySet,
     PermittedQuerySet,
     PermittedUsersManagerMixin,
+    PermittedUsersMixin,
 )
 
 
@@ -618,3 +623,297 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             with connection.schema_editor() as editor:
                 for model in reversed(models_):
                     editor.delete_model(model)
+
+
+class _AcceptanceBackend(TrustModelBackendMixin, ModelBackend):
+    """Installed only for the acceptance class below."""
+
+    handle = None
+
+    def _own_handle(self):
+        handle = type(self).handle
+        if handle is None:
+            raise TrustsConfigurationError('acceptance handle is unset')
+        return handle
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class DelegationAcceptanceInquiryTest(TransactionTestCase):
+    """Permanent checks for delegation, expiry, and an explicit active filter.
+
+    ``active_only`` is ``lambda user, permission, content: user.is_active == True``.
+    ``unexpired`` is ``content.expires_on == content.as_of``. Both are named
+    filters. The relationship condition stays
+    ``allowed_permissions.contains(permission)``. Scope listing follows the
+    ordinary cabinet grant. ``has_perm`` and ``get_permitted_users`` also
+    follow the relationship.
+    """
+
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+
+        class Cabinet(models.Model):
+            name = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Sheet(PermittedUsersMixin, models.Model):
+            cabinet = models.ForeignKey(
+                Cabinet, related_name='sheets', on_delete=models.CASCADE,
+            )
+            title = models.CharField(max_length=40)
+            expires_on = models.DateField()
+            as_of = models.DateField()
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Grant(models.Model):
+            cabinet = models.ForeignKey(Cabinet, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Relationship(models.Model):
+            cabinet = models.ForeignKey(Cabinet, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                User, related_name='+', on_delete=models.CASCADE,
+            )
+            allowed_permissions = models.ManyToManyField(
+                Permission, related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        self.Cabinet = Cabinet
+        self.Sheet = Sheet
+        self.Grant = Grant
+        self.Relationship = Relationship
+        self._models = (Cabinet, Sheet, Grant, Relationship)
+        with connection.schema_editor() as editor:
+            for model in self._models:
+                editor.create_model(model)
+        allowed = Relationship._meta.get_field('allowed_permissions')
+        if not hasattr(allowed, 'm2m_field_name'):
+            allowed.contribute_to_related_class(Permission, allowed.remote_field)
+        self._tables_ready = True
+        try:
+            self.live = datetime.date(2026, 10, 12)
+            self.earlier = datetime.date(2026, 9, 1)
+            self.sponsor = User.objects.create_user('sponsor-accept-284', password='x')
+            self.delegate = User.objects.create_user('delegate-accept-284', password='x')
+            self.nora = User.objects.create_user('nora-accept-284', password='x')
+            self.cara = User.objects.create_user('cara-accept-284', password='x')
+            self.read = _permission(Sheet, 'read_sheet')
+            self.code = 'trusts_tests.read_sheet'
+            self.filtered = self.code + ':active_only'
+            self.cabinet = Cabinet.objects.create(name='cabinet')
+            self.sheet = Sheet.objects.create(
+                cabinet=self.cabinet, title='sheet',
+                expires_on=self.live, as_of=self.live,
+            )
+            for user in (self.sponsor, self.nora, self.cara):
+                Grant.objects.create(
+                    cabinet=self.cabinet, user=user, permission=self.read,
+                )
+            self.relationship = Relationship.objects.create(
+                cabinet=self.cabinet,
+                delegate=self.delegate,
+                sponsor=self.sponsor,
+            )
+            self.relationship.allowed_permissions.add(self.read)
+            self.handle = BackendHandle(
+                path='tests.core.test_issue284._AcceptanceBackend',
+                registry=TrustsRegistry(),
+                compiler=PlanQueryCompiler(),
+            )
+            self.handle.register(
+                trust=Grant,
+                user='user',
+                permission='permission',
+                content='cabinet__sheets',
+            )
+            self.handle.register(
+                trust=Relationship,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='cabinet__sheets',
+                condition=lambda relationship, permission: (
+                    relationship.allowed_permissions.contains(permission)
+                ),
+            )
+            self.handle.add_named_filter(
+                Sheet,
+                'active_only',
+                lambda user, permission, content: user.is_active == True,
+            )
+            self.handle.add_named_filter(
+                Sheet,
+                'unexpired',
+                lambda user, permission, content: (
+                    content.expires_on == content.as_of
+                ),
+            )
+            _AcceptanceBackend.handle = self.handle
+            self.backend = _AcceptanceBackend()
+            self._settings = override_settings(AUTHENTICATION_BACKENDS=(
+                'tests.core.test_issue284._AcceptanceBackend',
+            ))
+            self._settings.enable()
+            self._handles = patch(
+                'trusts.apps._relationship_implementation_handles',
+                return_value=(self.handle,),
+            )
+            self._handles.start()
+        except Exception:
+            self._drop_tables()
+            raise
+
+    def tearDown(self):
+        _AcceptanceBackend.handle = None
+        if getattr(self, '_handles', None) is not None:
+            self._handles.stop()
+        if getattr(self, '_settings', None) is not None:
+            self._settings.disable()
+        self._drop_tables()
+        super().tearDown()
+
+    def _drop_tables(self):
+        if not getattr(self, '_tables_ready', False):
+            return
+        with connection.schema_editor() as editor:
+            for model in reversed(self._models):
+                editor.delete_model(model)
+        self._tables_ready = False
+
+    def _deactivate(self, user):
+        user.is_active = False
+        user.save(update_fields=['is_active'])
+
+    def _user_pks(self, perm, **kwargs):
+        return set(self.sheet.get_permitted_users(perm, **kwargs).values_list(
+            'pk', flat=True,
+        ))
+
+    def _scope_pks(self, user, **kwargs):
+        return set(filter_authorized_scopes(
+            self.Cabinet.objects.all(), user, self.read,
+            content=self.Sheet, handles=(self.handle,), **kwargs,
+        ).values_list('pk', flat=True))
+
+    def test_both_inactive_delegate_and_sponsor_need_the_optional_keyword(self):
+        self.assertTrue(self.backend.has_perm(
+            self.delegate, self.code, self.sheet,
+        ))
+        self.assertIn(self.delegate.pk, self._user_pks(self.code))
+        self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
+        self._deactivate(self.delegate)
+        self._deactivate(self.sponsor)
+        self.assertFalse(self.backend.has_perm(
+            self.delegate, self.code, self.sheet,
+        ))
+        self.assertFalse(self.backend.has_perm(
+            self.sponsor, self.code, self.sheet,
+        ))
+        self.assertTrue(self.backend.has_perm(
+            self.delegate, self.code, self.sheet, allow_inactive_user=True,
+        ))
+        self.assertTrue(self.backend.has_perm(
+            self.sponsor, self.code, self.sheet, allow_inactive_user=True,
+        ))
+        self.assertNotIn(self.delegate.pk, self._user_pks(self.code))
+        self.assertNotIn(self.sponsor.pk, self._user_pks(self.code))
+        included = self._user_pks(self.code, allow_inactive=True)
+        self.assertIn(self.delegate.pk, included)
+        self.assertIn(self.sponsor.pk, included)
+        self.assertEqual(self._scope_pks(self.delegate), set())
+        self.assertEqual(
+            self._scope_pks(self.delegate, allow_inactive_user=True), set(),
+        )
+        self.assertEqual(self._scope_pks(self.sponsor), set())
+        self.assertEqual(
+            self._scope_pks(self.sponsor, allow_inactive_user=True),
+            {self.cabinet.pk},
+        )
+
+    def test_removing_the_allowed_permission_denies_the_delegate(self):
+        self.relationship.allowed_permissions.remove(self.read)
+        self.assertFalse(self.backend.has_perm(
+            self.delegate, self.code, self.sheet,
+        ))
+        self.assertNotIn(self.delegate.pk, self._user_pks(self.code))
+        self.assertIn(self.sponsor.pk, self._user_pks(self.code))
+        self.assertEqual(self._scope_pks(self.delegate), set())
+        self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
+
+    def test_revoking_the_sponsor_grant_denies_the_delegate(self):
+        self.Grant.objects.filter(user=self.sponsor).delete()
+        self.assertFalse(self.backend.has_perm(
+            self.delegate, self.code, self.sheet,
+        ))
+        self.assertFalse(self.backend.has_perm(
+            self.sponsor, self.code, self.sheet,
+        ))
+        users = self._user_pks(self.code)
+        self.assertNotIn(self.delegate.pk, users)
+        self.assertNotIn(self.sponsor.pk, users)
+        self.assertEqual(self._scope_pks(self.delegate), set())
+        self.assertEqual(self._scope_pks(self.sponsor), set())
+
+    def test_unexpired_named_filter_denies_when_the_dates_differ(self):
+        filtered = self.code + ':unexpired'
+        self.assertTrue(self.backend.has_perm(
+            self.delegate, filtered, self.sheet,
+        ))
+        self.assertIn(self.delegate.pk, self._user_pks(filtered))
+        self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
+        self.sheet.expires_on = self.earlier
+        self.sheet.save(update_fields=['expires_on'])
+        self.assertFalse(self.backend.has_perm(
+            self.delegate, filtered, self.sheet,
+        ))
+        self.assertFalse(self.backend.has_perm(
+            self.sponsor, filtered, self.sheet,
+        ))
+        expired_users = self._user_pks(filtered)
+        self.assertNotIn(self.delegate.pk, expired_users)
+        self.assertNotIn(self.sponsor.pk, expired_users)
+        self.assertTrue(self.backend.has_perm(
+            self.sponsor, self.code, self.sheet,
+        ))
+        self.assertIn(self.sponsor.pk, self._user_pks(self.code))
+        self.assertEqual(self._scope_pks(self.delegate), set())
+        self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
+
+    def test_active_only_named_filter_keeps_an_inactive_user_denied(self):
+        self._deactivate(self.cara)
+        self.assertFalse(self.backend.has_perm(
+            self.cara, self.filtered, self.sheet,
+        ))
+        self.assertFalse(self.backend.has_perm(
+            self.cara, self.filtered, self.sheet, allow_inactive_user=True,
+        ))
+        self.assertTrue(self.backend.has_perm(
+            self.cara, self.code, self.sheet, allow_inactive_user=True,
+        ))
+        self.assertTrue(self.backend.has_perm(
+            self.nora, self.filtered, self.sheet,
+        ))
+        self.assertNotIn(
+            self.cara.pk, self._user_pks(self.filtered, allow_inactive=True),
+        )
+        self.assertIn(self.nora.pk, self._user_pks(self.filtered))
+        self.assertEqual(self._scope_pks(self.cara), set())
+        self.assertEqual(
+            self._scope_pks(self.cara, allow_inactive_user=True),
+            {self.cabinet.pk},
+        )
+        self.assertEqual(self._scope_pks(self.nora), {self.cabinet.pk})
