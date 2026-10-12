@@ -16,6 +16,10 @@ log.
   and MySQL 8.4+. `along=` is improved and remains provisional. See the
   [core registry](core-registry.md) and [#286].
 
+- **Scope listings follow `along=`.** `filter_by_permitted_content` uses the
+  same bounded walk and the same one-level delegation as the object
+  check. See the [user guide](source/index.rst).
+
 - **Readable policy-lock SQL.** Each lockfile statement is broken between
   tokens onto predictable lines, including a `WITH RECURSIVE` walk and
   PostgreSQL's `CYCLE` clause. `AND` and `OR` keep an `EXISTS (` or

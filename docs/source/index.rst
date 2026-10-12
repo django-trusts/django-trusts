@@ -507,6 +507,9 @@ the user may read:
        content=Sheet,
    )
 
+``filter_by_permitted_content`` follows ``along=`` walks and one-level
+delegation.
+
 List the users who may perform one permission on one saved object:
 
 .. code-block:: python
