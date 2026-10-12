@@ -17,8 +17,11 @@ log.
 
 - **Readable policy-lock SQL.** Each lockfile statement is broken between
   tokens onto predictable lines, including a `WITH RECURSIVE` walk and
-  PostgreSQL's `CYCLE` clause. The formatter accepts only the tokens those
-  statements use and fails closed on anything else. Schema version stays 1.
+  PostgreSQL's `CYCLE` clause. `AND ( EXISTS (` and `OR ( EXISTS (` open
+  on one line and close with `) )`. Delegation `delegate` and `sponsor`
+  are one-line flow maps, and a `__cond` id includes the stored
+  condition. The formatter accepts only the tokens those statements use
+  and fails closed on anything else. Schema version stays 1.
   See the
   [authorization-policy SQL guide](source/authorization-policy-sql.rst)
   and [#292].

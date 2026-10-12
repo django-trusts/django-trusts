@@ -175,6 +175,30 @@ class PolicyAccount(models.Model):
         app_label = 'documents'
 
 
+class CappedDocumentPermission(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+    caps = models.ManyToManyField(Permission, related_name='+')
+
+    class Meta:
+        app_label = 'documents'
+
+
+class PolicyDelegation(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    delegate = models.ForeignKey(
+        'auth.User', related_name='+', on_delete=models.CASCADE,
+    )
+    sponsor = models.ForeignKey(
+        'auth.User', related_name='+', on_delete=models.CASCADE,
+    )
+    permissions = models.ManyToManyField(Permission, related_name='+')
+
+    class Meta:
+        app_label = 'documents'
+
+
 class PolicyAccountGrant(models.Model):
     document = models.ForeignKey(Document, on_delete=models.CASCADE)
     user = models.ForeignKey(
@@ -439,6 +463,86 @@ class PolicySqlGoldenTest(SimpleTestCase):
             document['backends'][0]['contents'][0]['named_filters'][0]['id'],
             'documents__Document__needs_review',
         )
+
+    def test_cond_entries_show_conditions_and_delegations_use_flow_maps(self):
+        handle = _handle('documents.backends.DocumentBackend')
+        handle.register(
+            trust=DocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+        )
+        handle.register(
+            trust=CappedDocumentPermission,
+            user='user',
+            permission='permission',
+            content='document',
+            condition=lambda trust: (
+                trust.caps.contains(trust.permission)
+                & (trust.user == trust.user)
+            ),
+        )
+        handle.register(
+            trust=PolicyDelegation,
+            delegate='delegate',
+            sponsor='sponsor',
+            content='document',
+            condition=lambda row, permission: (
+                row.permissions.contains(permission)
+                & (row.delegate == row.sponsor)
+            ),
+        )
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        content = document['backends'][0]['contents'][0]
+        plain, capped, delegated = (
+            content['trusts'][0],
+            content['trusts'][1],
+            content['delegations'][0],
+        )
+        self.assertEqual(plain['id'], 'documents__DocumentPermission__document')
+        self.assertNotIn('condition', plain)
+        self.assertEqual(
+            capped['id'],
+            'documents__CappedDocumentPermission__document__cond',
+        )
+        self.assertEqual(capped['condition'], {
+            'all': [
+                {'permission_in': ['caps']},
+                {'equal': {'left': 'user', 'right': 'user'}},
+            ],
+        })
+        self.assertEqual(
+            delegated['id'],
+            'documents__PolicyDelegation__document__cond',
+        )
+        self.assertEqual(delegated['delegate'], {
+            'path': 'delegate', 'model': 'auth.User', 'target': 'id',
+        })
+        self.assertEqual(delegated['sponsor'], {
+            'path': 'sponsor', 'model': 'auth.User', 'target': 'id',
+        })
+        self.assertEqual(delegated['condition'], {
+            'all': [
+                {'inquiry_permission': 'permissions'},
+                {'equal': {'left': 'delegate', 'right': 'sponsor'}},
+            ],
+        })
+        text = render_policy_sql_bytes(handles=[handle]).decode('utf-8')
+        self.assertIn(
+            'delegate: {path: "delegate", model: "auth.User", target: "id"}\n',
+            text,
+        )
+        self.assertIn(
+            'sponsor: {path: "sponsor", model: "auth.User", target: "id"}\n',
+            text,
+        )
+        self.assertIn('permission_in: ["caps"]\n', text)
+        self.assertIn('equal: {left: "user", right: "user"}\n', text)
+        self.assertIn('inquiry_permission: "permissions"\n', text)
+        self.assertNotIn('delegate:\n', text)
+        self.assertNotIn('sponsor:\n', text)
 
     def test_condition_along_and_duplicate_suffixes_are_in_the_trust_id(self):
         handle = _handle('documents.backends.DocumentBackend')

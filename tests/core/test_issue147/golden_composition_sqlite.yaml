@@ -179,8 +179,7 @@ backends:
             SELECT %s AS "a"
             FROM "documents_document"
             WHERE ("documents_document"."id" = %s
-                AND (
-                EXISTS(
+                AND ( EXISTS (
                   SELECT %s AS "a"
                   FROM "documents_documentpermission" "U0"
                   INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
@@ -209,8 +208,7 @@ backends:
                   )
                   LIMIT 1
                 )
-              )
-            )
+              ) )
             LIMIT 1
         get_all_permissions:
           params: [{const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}, {const: 1}, {const: "documents"}, {const: "document"}, {bind: "user.id"}]
@@ -273,8 +271,7 @@ backends:
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"
             WHERE ("auth_user"."is_active" = %s
-                AND (
-                EXISTS(
+                AND ( EXISTS (
                   SELECT %s AS "a"
                   FROM "documents_documentpermission" "U0"
                   INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
@@ -303,5 +300,4 @@ backends:
                   )
                   LIMIT 1
                 )
-              )
-            )
+              ) )

@@ -42,7 +42,11 @@ def _format_policy_sql(sql):
 
     Whitespace between tokens is a single space, or a newline and indent
     at a break. Spacing that Django omitted, such as ``EXISTS(``, stays
-    omitted. The result has no trailing newline. A comment, dollar quote,
+    omitted, except one readability pattern: ``AND ( EXISTS (`` and
+    ``OR ( EXISTS (`` are written on one line with those spaces, and a
+    run of closing parens that finishes that group is ``) )`` on one
+    line. Token texts are unchanged. The result has no trailing newline.
+    A comment, dollar quote,
     E-string, backslash escape, adjacent string literals, unknown operator,
     or other unrecognized token raises ``TrustsConfigurationError`` and
     names the query and the token. Adjacent string literals are rejected
@@ -303,6 +307,22 @@ def _bare_upper(text):
     return text.upper()
 
 
+def _opens_parenthesized_exists(tokens, index):
+    """True when ``AND`` or ``OR`` is followed by ``( EXISTS (``."""
+    if index + 3 >= len(tokens):
+        return False
+    paren, exists, inner = (
+        tokens[index + 1][0],
+        tokens[index + 2][0],
+        tokens[index + 3][0],
+    )
+    return (
+        paren == '('
+        and _bare_upper(exists) == 'EXISTS'
+        and inner == '('
+    )
+
+
 def _wants_break(bare, prev_bare, next_bare, line_open):
     """Return ``(break, extra_indent)`` for one bare word."""
     if not line_open or bare is None:
@@ -332,6 +352,11 @@ def _emit(tokens):
     depth = 0
     stack = [False]
     prev_bare = None
+    # Depths of the ``(`` tokens in ``AND ( EXISTS (`` / ``OR ( EXISTS (``.
+    # Their closing parens share one line when they are adjacent.
+    join_close = set()
+    skip = 0
+    stick = 0
 
     def line_open():
         return any(not char.isspace() for char in ''.join(parts))
@@ -348,6 +373,23 @@ def _emit(tokens):
         parts.append(text)
 
     for index, (text, spaced) in enumerate(tokens):
+        if index < skip:
+            continue
+        if stick:
+            if text == '(':
+                emit('(', True)
+                depth += 1
+                stack.append(False)
+                join_close.add(depth)
+                prev_bare = None
+                stick -= 1
+                continue
+            if _bare_upper(text) == 'EXISTS':
+                emit(text, True)
+                prev_bare = 'EXISTS'
+                stick -= 1
+                continue
+            stick = 0
         if text == '(':
             emit('(', spaced)
             depth += 1
@@ -355,9 +397,41 @@ def _emit(tokens):
             prev_bare = None
             continue
         if text == ')':
+            if (
+                depth in join_close
+                and stack[depth]
+                and index + 1 < len(tokens)
+                and tokens[index + 1][0] == ')'
+            ):
+                run = 1
+                while (
+                    index + run < len(tokens)
+                    and tokens[index + run][0] == ')'
+                    and depth - run >= 0
+                ):
+                    run += 1
+                # Keep the indent of the first close so the group that
+                # opened with AND/OR stays put. Later closes share the line.
+                close_indent = (depth - 1) * 2
+                if line_open():
+                    lines.append(''.join(parts).rstrip())
+                for _step in range(run):
+                    join_close.discard(depth)
+                    stack.pop()
+                    depth -= 1
+                stack[depth] = True
+                parts = [' ' * close_indent]
+                emit(')', False)
+                for _step in range(run - 1):
+                    parts.append(' ')
+                    parts.append(')')
+                prev_bare = None
+                skip = index + run
+                continue
             if depth == 0:
                 emit(')', spaced)
             else:
+                join_close.discard(depth)
                 inner = stack.pop()
                 depth -= 1
                 if inner:
@@ -378,6 +452,8 @@ def _emit(tokens):
         if should:
             newline(extra)
             spaced = False
+        if bare in ('AND', 'OR') and _opens_parenthesized_exists(tokens, index):
+            stick = 3
         emit(text, spaced)
         prev_bare = bare
     if line_open():

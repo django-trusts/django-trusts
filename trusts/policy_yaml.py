@@ -47,7 +47,10 @@ _ALLOWED_TAGS = frozenset((
     _TAG_NULL, _TAG_BOOL, _TAG_INT, _TAG_FLOAT, _TAG_STR, _TAG_SEQ, _TAG_MAP,
 ))
 _LITERAL_KEYS = frozenset(('sql',))
-_FLOW_MAP_KEYS = frozenset(('user', 'group', 'permission', 'content'))
+_FLOW_MAP_KEYS = frozenset((
+    'user', 'group', 'permission', 'content', 'delegate', 'sponsor', 'equal',
+))
+_FLOW_SEQ_KEYS = frozenset(('params', 'permission_in'))
 
 
 class PolicyYamlError(ValueError):
@@ -194,7 +197,7 @@ def _flow_prepare(value):
 
 
 def _prepare_value(key, value):
-    if key == 'params':
+    if key in _FLOW_SEQ_KEYS:
         if not isinstance(value, list):
             raise PolicyYamlError(
                 'Key %r must be a list, not %s.'

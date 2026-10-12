@@ -147,6 +147,52 @@ class PolicySqlFormatTest(SimpleTestCase):
         ordered = 'SELECT "t"."id" FROM "t" ORDER BY "t"."id" DESC'
         self.assertIn('\nORDER BY "t"."id" DESC', _format_policy_sql(ordered))
 
+    def test_parenthesized_exists_opens_and_closes_on_one_line(self):
+        raw = (
+            'SELECT 1 WHERE ("t"."id" = %s AND (EXISTS('
+            'SELECT %s AS "a" FROM "t" WHERE "t"."id" = %s LIMIT 1)))'
+        )
+        formatted = _format_policy_sql(raw)
+        self.assertIn('\n    AND ( EXISTS (\n', formatted)
+        self.assertIn('\n    ) ) )', formatted)
+        self.assertNotIn('AND (\n', formatted)
+        self.assertEqual(_texts(raw), _texts(formatted))
+        self.assertEqual(formatted, _format_policy_sql(formatted))
+        disjunction = (
+            'SELECT 1 WHERE ("t"."id" = %s OR (EXISTS('
+            'SELECT %s AS "a" FROM "t" LIMIT 1)))'
+        )
+        formatted_or = _format_policy_sql(disjunction)
+        self.assertIn('\n    OR ( EXISTS (\n', formatted_or)
+        self.assertIn('\n    ) ) )', formatted_or)
+        self.assertEqual(_texts(disjunction), _texts(formatted_or))
+        siblings = (
+            'SELECT 1 WHERE ("t"."id" = %s AND (EXISTS('
+            'SELECT %s AS "a" FROM "t" LIMIT 1) OR EXISTS('
+            'SELECT %s AS "a" FROM "u" LIMIT 1)))'
+        )
+        formatted_siblings = _format_policy_sql(siblings)
+        self.assertIn('\n    AND ( EXISTS (\n', formatted_siblings)
+        self.assertIn('\n    )\n      OR\n    EXISTS(', formatted_siblings)
+        self.assertIn('\n  ) )', formatted_siblings)
+        self.assertEqual(_texts(siblings), _texts(formatted_siblings))
+        # A comparison stays on the connective's line. A following EXISTS
+        # is its own clause break, so a bare OR sits alone above EXISTS.
+        compared = 'SELECT 1 WHERE "t"."id" = %s AND "t"."id" = %s OR "u"."id" = %s'
+        self.assertIn(
+            '\n  AND "t"."id" = %s\n  OR "u"."id" = %s',
+            _format_policy_sql(compared),
+        )
+        bare = (
+            'SELECT 1 WHERE (EXISTS(SELECT %s AS "a" FROM "t" LIMIT 1) '
+            'OR EXISTS(SELECT %s AS "a" FROM "u" LIMIT 1))'
+        )
+        formatted_bare = _format_policy_sql(bare)
+        self.assertIn('\n    OR\n  EXISTS(', formatted_bare)
+        self.assertNotIn('OR ( EXISTS (', formatted_bare)
+        self.assertNotIn('OR EXISTS(', formatted_bare)
+        self.assertEqual(_texts(bare), _texts(formatted_bare))
+
     def test_adjacent_string_literals_are_rejected(self):
         raw = "SELECT 'a'\n'b'"
         collapsed = "SELECT 'a' 'b'"

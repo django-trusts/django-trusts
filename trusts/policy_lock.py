@@ -362,6 +362,9 @@ def _project_content(handle, alias, group, filters, handles):
                 'sponsor': _delegation_relation(record, 'sponsor'),
                 'content': _relation(record, 'content'),
             }
+            condition = _render_condition(record.condition)
+            if condition is not None:
+                row['condition'] = condition
             if multi:
                 row['or_group'] = True
             delegated_rows.append(row)
@@ -382,6 +385,9 @@ def _project_content(handle, alias, group, filters, handles):
                 'shape': along.shape,
                 'bound': along.bound,
             }
+        condition = _render_condition(record.condition)
+        if condition is not None:
+            row['condition'] = condition
         if multi:
             row['or_group'] = True
         trusts.append(row)
@@ -664,6 +670,59 @@ def _relation(record, role):
         'model': _model_label(getattr(record, '%s_model' % role)),
         'target': getattr(record, '%s_target' % role),
     }
+
+
+def _render_condition(condition):
+    """Readable condition tree, or ``None`` when the registration has none.
+
+    A trust id ending in ``__cond`` means ``record.condition`` is set.
+    The same tree is what the lockfile shows.
+    """
+    if condition is None:
+        return None
+    return _condition_node(condition)
+
+
+def _condition_path(operand):
+    from trusts.core import Ref
+
+    if isinstance(operand, Ref):
+        if not operand._path:
+            raise TrustsConfigurationError(
+                'Policy SQL condition path is empty.'
+            )
+        return '__'.join(operand._path)
+    if isinstance(operand, str) and operand:
+        return operand
+    raise TrustsConfigurationError(
+        'Policy SQL condition path is not a relationship path.'
+    )
+
+
+def _condition_node(node):
+    from trusts.core import All, Equal, PermissionIn, _InquiryPermissionMatch
+
+    if isinstance(node, All):
+        return {'all': [_condition_node(part) for part in node.predicates]}
+    if isinstance(node, Equal):
+        return {
+            'equal': {
+                'left': _condition_path(node.left),
+                'right': _condition_path(node.right),
+            },
+        }
+    if isinstance(node, PermissionIn):
+        return {
+            'permission_in': [
+                _condition_path(ref) for ref in node.refs
+            ],
+        }
+    if isinstance(node, _InquiryPermissionMatch):
+        return {'inquiry_permission': _condition_path(node.ref)}
+    raise TrustsConfigurationError(
+        'Policy SQL cannot render condition node %s.'
+        % type(node).__name__
+    )
 
 
 def _assign_ids(records):

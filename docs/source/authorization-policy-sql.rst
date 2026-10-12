@@ -137,7 +137,10 @@ SQL combines those trusts with OR and each trust in the content row has
 ``or_group: true``. A sole trust omits ``or_group``.
 
 A delegated trust exposes its normalized ``delegate``, ``sponsor``,
-``content``, and condition relationships in the same content row. Its inquiry
+``content``, and condition relationships in the same content row.
+``delegate`` and ``sponsor`` are one-line flow maps, the same spelling
+``user`` and ``permission`` already use:
+``{path: "...", model: "...", target: "..."}``. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
 combines all applicable ordinary grants with OR: any matching ordinary grant
@@ -164,10 +167,15 @@ Identifiers and ordering
 
 Artifact IDs use portable ``_`` and ``__`` segments. A trust ID folds model-name
 dots to ``__`` and adds the content field, for example
-``documents__DocumentPermission__document``. Conditions append ``__cond``;
-``Along`` adds ``__along_{shape}_{bound}``. For repeated bases, the first ID
-keeps the unsuffixed base and the second and later IDs add ``__2``, ``__3``, and
-so on. Named-filter IDs combine the content-model label and filter code. Filter
+``documents__DocumentPermission__document``. Conditions append ``__cond``
+because the registration stored a condition (``record.condition`` is not
+``None``). That entry then includes the condition in a fixed shape:
+``equal`` with ``left`` and ``right`` paths, ``permission_in`` as a
+one-line list of paths, ``inquiry_permission`` as one path, and ``all``
+as an ordered list of those nodes. A registration without a condition
+omits the key. ``Along`` adds ``__along_{shape}_{bound}``. For repeated
+bases, the first ID keeps the unsuffixed base and the second and later IDs
+add ``__2``, ``__3``, and so on. Named-filter IDs combine the content-model label and filter code. Filter
 codes must match ``[A-Za-z0-9_]+`` or export fails.
 
 Backend rows are sorted by backend path, independent of
@@ -194,9 +202,18 @@ Each SQL block is broken between tokens onto predictable lines: before
 ``WHERE``, ``AND``, ``OR``, ``UNION``, ``UNION ALL``, ``EXISTS``, and the
 other clause keywords (``ORDER BY``, ``GROUP BY``, ``HAVING``, ``LIMIT``,
 ``OFFSET``, ``CYCLE``, and a ``SELECT`` or ``WITH`` that continues the
-statement). The seed and recursive member of ``WITH RECURSIVE``, and the
-subqueries inside them, are indented. A break never falls inside a quoted
-identifier or a plain single-quoted string.
+statement). ``AND`` and ``OR`` use that same break: each starts a new
+line, indented two spaces past the group that contains it. A comparison
+stays on the connective's line (``AND "t"."id" = %s``). A following
+clause keyword starts its own line, so a disjunction of bare ``EXISTS``
+predicates is ``OR`` on one line and ``EXISTS(`` on the next. ``NOT
+EXISTS`` stays one unit, which is why ``AND NOT (`` still breaks before
+``EXISTS``. A parenthesized group that opens with ``EXISTS`` is the
+exception: ``AND ( EXISTS (`` and ``OR ( EXISTS (`` are one line, with
+those spaces, and the closing parens that finish that group share one
+line (``) )``). The seed and recursive member of ``WITH RECURSIVE``, and
+the subqueries inside them, are indented. A break never falls inside a
+quoted identifier or a plain single-quoted string.
 
 The formatter accepts only tokens it fully understands: identifiers quoted
 the way SQLite, PostgreSQL, and MySQL quote them, plain single-quoted
