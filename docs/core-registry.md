@@ -388,8 +388,9 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `instance_match`. There is no `.permitted` and no `.get_permission` on
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
-`.authorized` does not call it; both inquiries apply the activity mode without
-sharing permission-input validation.
+`.authorized` does not call it; both inquiries apply the `is_active` check
+(or skip it with `allow_inactive_user=True`) without sharing permission-input
+validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 

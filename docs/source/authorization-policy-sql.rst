@@ -121,7 +121,7 @@ the SQL bytes for every ``auth.Permission`` grant.
 object and one permission, compiled to the users that backend can grant.
 The locked statement is that backend branch only. It carries the backend's
 eligibility predicate and the complete-grant ``EXISTS``. It does not include
-Django's outer active-superuser rule, and it does not OR other
+Django's check that an active superuser has every permission, and it does not OR other
 authentication backends. The content primary key is a ``content.<target>``
 bind. The permission row is a ``permission.<target>`` bind. The candidate
 user is the outer row. ``content.get_permitted_users(perm)`` and optional
