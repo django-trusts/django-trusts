@@ -3,7 +3,7 @@
 Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)`
 is implemented on `PermittedQuerySet`.
 
-The [shared user.is_active rule](source/index.rst#user-is-active-checks)
+The [`is_active` check and examples](source/index.rst#user-is-active-checks)
 apply to this inquiry.
 
 ## Question
@@ -165,7 +165,7 @@ registered grant path AND every explicitly selected named condition
 Participating backends are ORed. The final queryset is distinct and stays
 lazy, so pagination applies in SQL.
 
-## Principal and backend boundary
+## User and backend boundary
 
 The shared user checks apply before the grant query. The method does not copy
 Django's active-superuser shortcut: an active superuser without a registered
@@ -199,7 +199,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
-- the user is anonymous, unauthenticated, or inactive with `allow_inactive_user` left false; or
+- the user is anonymous, unauthenticated, or inactive, unless `allow_inactive_user=True`; or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another
   application label.

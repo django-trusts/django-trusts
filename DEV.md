@@ -146,6 +146,19 @@ clean dependency or release boundaries and size the resulting tasks
 independently. A task that grows to 13 during implementation follows the same
 rule.
 
+## Writing docs
+
+- Write in plain English, the way Django's docs read.
+- Use the terms Django's docs already use: user, active user, superuser,
+  authentication backend, permission, object permissions, `has_perm()`.
+- Describe what the code does instead of inventing labels. No "mode",
+  "principal", "contributor", "invariant" or "outer rules".
+- Prefer examples to abstract rules.
+- User docs read as already shipped. No version disclaimers.
+- Don't imply hooks or flags that code outside Trusts must support.
+- Don't present pseudo-code as a real function.
+- If a reader has to read a sentence twice, rewrite it.
+
 ## Test
 
 ```

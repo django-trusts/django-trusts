@@ -5,7 +5,7 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the `Along` failure boundary below.
 
-Both adapters use the [shared user.is_active rule](source/index.rst#user-is-active-checks), including ``allow_inactive=True``.
+Both adapters use the [`is_active` check and `allow_inactive` argument](source/index.rst#user-is-active-checks).
 
 ## Decision
 
@@ -17,7 +17,7 @@ users = User.objects.permitted(document, perm)
 ```
 
 Both accept exactly one saved content object, one permission, and the
-keyword-only `allow_inactive=False` mode, call one
+keyword-only `allow_inactive=False` argument, call one
 internal reverse-query compiler, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
@@ -127,9 +127,9 @@ unsupported and raises before SQL. Malformed strings raise the same public
 configuration/permission-code error selected for the singular object check. A
 well-formed string that identifies no permission row applicable to the supplied
 content does not authorize an ordinary user. Active superusers remain governed
-by Django's outer superuser rule.
+by Django's superuser check.
 
-## Agreement invariant
+## How the result matches `has_perm()`
 
 For every user row in the configured user model's candidate queryset and every
 accepted `perm` / saved `content` pair:
@@ -139,57 +139,38 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must agree when called with the same `allow_inactive` mode. Each supported
-backend contribution is compared with that backend's mode-aware singular
-inquiry for the normalized permission identity, then composed with the same
-candidate eligibility and Django active-superuser contributor.
+must agree when called with the same `allow_inactive` value. Each supported
+backend contribution retains its own eligibility rules, composed with the
+same candidate queryset and Django's superuser check.
 
-For eligible users when ``allow_inactive`` is left false, the comparison with stock Django remains:
-
-```python
-normalized_perm = normalize_permission_for_singular_check(perm)
-user.has_perm(normalized_perm, content)
-```
-
-`normalize_permission_for_singular_check()` is explanatory notation, not a
-second public API. It leaves supported strings and explicitly supported custom
-permission instances unchanged, and uses `user_perm_str` for an
-`auth.Permission` instance. Reverse compilation still uses the canonical row.
-With `allow_inactive` left false, the result agrees with stock `has_perm` for
-a custom backend, including an inactive user that only that backend grants.
-Trusts guarantees `is_active` only for its own grants and does not wrap a
-custom predicate in `is_active`. `allow_inactive=True` skips that check only
-on Trusts-owned grants. Stock `user.has_perm()` cannot forward
-`allow_inactive`. A custom reverse hook is still called as
-`permitted_users_predicate(content, perm)`. Trusts does not require that hook
-to accept `allow_inactive` and does not raise when it does not. If the hook's
-own predicate excludes inactive users, `allow_inactive=True` cannot include
-them. That limit is recorded in the implementation notes, not as a public
-hook contract. The reverse result must retain every supported contributor.
+By default, membership in either queryset matches `user.has_perm(perm, content)`.
+For an `auth.Permission` instance, use its `app_label.codename` string in
+`has_perm()`; supported strings and custom permission instances are unchanged.
+Reverse compilation still uses the canonical permission row.
+`allow_inactive=True` skips only Trusts' built-in `is_active` checks. Custom
+backend contributions are unchanged, and stock `user.has_perm()` cannot
+forward this keyword.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not
 silently omit a grant supplied by another backend and still call the result
 complete.
 
-### Django outer rules
+### Django auth's checks before calling backends
 
-The reverse query reproduces Django's outer user rules and each supported
+The reverse query reproduces Django auth's checks and each supported
 backend's own eligibility rules:
 
 - an active superuser is included for every accepted permission/content pair;
-- an inactive superuser does not receive Django's outer superuser shortcut;
-- an inactive ordinary user is excluded from the Trusts branch by default
-  and can be included with `allow_inactive=True` when that branch grants;
-- the Trusts branch applies the shared user checks to its candidate users.
+- an inactive superuser is not automatically granted every permission;
+- Trusts-owned grants follow the shared user checks;
+- custom backend grants follow that backend's own rules, including any grants
+  to inactive users.
 
-Django's outer superuser contributor is unchanged. Other backends keep the
-predicates they already contribute. Trusts does not add an `is_active`
-wrapper around that whole OR. `allow_inactive=True` is passed only to the
-Trusts-owned mixin method. A custom hook keeps its existing call.
-Arbitrary Python-only state is unsupported and fails loudly.
+A supported backend must express its contribution in SQL. Arbitrary
+Python-only state is unsupported and fails loudly.
 
-The invariant is over candidate rows supplied by the application's existing
+The comparison uses the candidate users from the application's existing
 default user manager. A custom default manager may intentionally exclude rows.
 The content adapter preserves that manager's queryset type and filters. The
 optional user-manager adapter uses the application manager on which the mixin
@@ -204,16 +185,16 @@ grants. Exact reverse lookup therefore needs a closed backend set.
 At construction time, every configured backend must fall into one of three
 classes:
 
-1. **Reverse-query contributor.** It can compile a predicate over candidate
+1. **Backend that can add users to the query.** It can compile a predicate over candidate
    user rows for the supplied permission and content.
-2. **Known object-permission non-contributor.** It declares, or is a precisely
+2. **Backend known to grant no object permissions.** It declares, or is a precisely
    recognized built-in backend whose contract establishes, that it cannot
    grant when an object is supplied.
 3. **Unsupported.** It might grant an object permission but cannot express the
    reverse predicate.
 
-Core ORs every contributor in one user query. A known non-contributor adds
-nothing. The presence of an unsupported backend raises
+Core ORs the backend predicates in one user query. A backend that grants no
+object permissions adds nothing. The presence of an unsupported backend raises
 `TrustsConfigurationError` before SQL instead of returning an incomplete
 queryset.
 
@@ -224,11 +205,11 @@ this document. The semantics are mandatory:
 - a `TrustModelBackendMixin` backend contributes the same complete
   relationship plan and named-filter overlay used by its singular
   `has_perm`;
-- separate Trusts backend paths OR together, just as Django's outer backend
+- separate Trusts backend paths OR together, just as Django's authentication backend
   loop does;
 - the stock `ModelBackend` contributes no object grant;
 - a third-party authentication-only backend must be explicitly known as a
-  non-contributor rather than inferred from a class name;
+  unable to grant object permissions rather than inferred from a class name;
 - a third-party object-permission backend must supply a reverse-query
   contribution or make the inquiry unsupported.
 
@@ -244,19 +225,18 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    django_outer_superuser_predicate(user)
+    django_superuser_check(user)
     OR (
-        trusts_eligibility_predicate(user)
+        (allow_inactive OR user.is_active)
         AND trusts_complete_grant_predicate(user, permission, content)
     )
-    OR other_backend_predicate(user, permission, content)
+    OR custom_backend_complete_predicate(user, permission, content)
+    OR ...
 ```
 
-`trusts_eligibility_predicate` includes `user.is_active` unless
-`allow_inactive` is true. Sponsor `is_active` inside a delegated grant uses
-the same value. The superuser predicate still requires an active superuser.
-Other backend predicates are not rewritten. The named predicates are
-conceptual SQL placeholders, not Python callbacks.
+The named predicates are conceptual SQL placeholders, not Python callbacks.
+Backend branches retain their explicit conditions. Django's superuser
+check is unchanged.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain
@@ -327,9 +307,10 @@ Implementation must cover:
 - preservation of an application's existing user manager and queryset class;
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
-The result set must be compared row-for-row with the mode-aware contributors
-in the agreement invariant, using the same candidate users and normalization
-rule in every behavioral fixture.
+With `allow_inactive=False`, compare the result row for row with `has_perm()`
+for the same candidate users and normalized permission in every behavioral
+fixture. With `allow_inactive=True`, verify that only Trusts-owned
+`is_active` checks are skipped.
 
 ## Non-goals
 
@@ -378,7 +359,7 @@ singular object `has_perm` accepts a non-string permission instance. The
 mixin default accepts `django.contrib.auth.models.Permission` only.
 
 `trusts_object_permissions = False` marks an authentication-only backend
-as a known non-contributor. The exact classes `ModelBackend`,
+as a backend that grants no object permissions. The exact classes `ModelBackend`,
 `AllowAllUsersModelBackend`, `RemoteUserBackend`, and
 `AllowAllUsersRemoteUserBackend` are object-blind. A subclass is not
 inferred from that ancestry. Any other object-capable `has_perm` without

@@ -347,7 +347,7 @@ condition, and sponsor's ordinary-authority ceiling are ANDed before that
 branch is ORed with the others. A branch cannot borrow another relationship's
 approval or sponsor.
 
-In ordinary or delegated mode, ``content=`` may also reach a bounded content
+For ordinary and delegated registrations, ``content=`` may also reach a bounded content
 set rather than a foreign key on the relationship row. For example,
 ``sponsor__personal_organization__repositories`` crosses a reverse one-to-one
 personal organization and then the one reverse one-to-many repository gateway.
@@ -519,22 +519,21 @@ does not grow ``permitted``.
 user.is_active checks
 ~~~~~~~~~~~~~~~~~~~~~
 
-All Trusts permission inquiries check ``user.is_active`` by default, including
-ordinary and delegated grants, permission enumeration, and reverse user
-listing of Trusts-owned grants. Anonymous and unauthenticated users cannot
-supply persisted grants and receive no positive permission result. Input and
-configuration errors still raise before a denied result is returned. Trusts
-does not wrap another backend's reverse predicate in ``is_active``.
+All Trusts permission inquiries check ``user.is_active`` for Trusts-owned grants
+by default, including ordinary and delegated grants, permission enumeration, and reverse user
+listing. Anonymous and unauthenticated users cannot supply persisted grants
+and receive no positive permission result. Input and configuration errors
+still raise before a denied result is returned.
 
 Including inactive users
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-``allow_inactive_user=True`` and ``allow_inactive=True`` skip only the
-built-in ``is_active`` check for the user, delegate, and sponsor.
-Inquiries returning content, permissions, or a boolean use
-``allow_inactive_user``. Inquiries returning users use ``allow_inactive``.
-Reactivation review is one use case. Explicit conditions and
-candidate-queryset filters still apply.
+To include inactive users in an inquiry, use the keyword-only option
+(default ``False``). Inquiries returning content, permissions, or a boolean
+use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
+It skips only the built-in ``is_active`` checks for the user, delegate, and
+sponsor. Explicit conditions and candidate-queryset filters still apply.
+For example, inspect a suspended user's grants before reactivating them:
 
 .. code-block:: python
 
@@ -546,9 +545,8 @@ candidate-queryset filters still apply.
    )
 
 Stock Django user methods do not forward either keyword. Use the Trusts
-adapters when ``allow_inactive_user=True`` or ``allow_inactive=True`` is
-required. View guards and login behavior are unchanged. Trusts does not
-define a public flag contract for a custom backend.
+adapters; view guards and login behavior are unchanged. Custom backends retain
+their own rules and do not receive either keyword.
 
 Protect a view with the Trusts-only primary-key guard:
 
@@ -685,7 +683,7 @@ The artifact is organized by backend and protected content model. A content
 with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
 ``get_all_permissions``, and ``get_permitted_users``. The locked
 ``get_permitted_users`` statement is that backend's reverse predicate
-(eligibility and complete grants), not Django's outer superuser rule and
+(eligibility and complete grants), not Django's superuser check and
 not other backends. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 

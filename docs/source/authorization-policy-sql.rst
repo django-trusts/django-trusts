@@ -121,7 +121,7 @@ the SQL bytes for every ``auth.Permission`` grant.
 object and one permission, compiled to the users that backend can grant.
 The locked statement is that backend branch only. It carries the backend's
 eligibility predicate and the complete-grant ``EXISTS``. It does not include
-Django's outer active-superuser rule, and it does not OR other
+Django's check that an active superuser has every permission, and it does not OR other
 authentication backends. The content primary key is a ``content.<target>``
 bind. The permission row is a ``permission.<target>`` bind. The candidate
 user is the outer row. ``content.get_permitted_users(perm)`` and optional
@@ -143,10 +143,8 @@ correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
 combines all applicable ordinary grants with OR: any matching ordinary grant
 may supply the sponsor's authority on the same content and permission.
 Reviewers should verify the delegate/sponsor direction, the relationship's
-explicit conditions, the default :ref:`user.is_active checks <user-is-active-checks>`,
+explicit conditions, the :ref:`user.is_active checks <user-is-active-checks>`,
 and the sponsor's ordinary-grant predicate in the document and generated SQL.
-The lockfile records `allow_inactive` left false. How an inquiry with
-`allow_inactive=True` would be represented in the same document is unresolved.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.

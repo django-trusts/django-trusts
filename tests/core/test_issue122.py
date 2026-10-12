@@ -80,7 +80,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'register(*, trust, user=None, permission=None, content, group=None, '
             'delegate=None, sponsor=None, condition=None, along=None)',
             'add_named_filter(...)',
-            'Named filters are outer restrictions',
+            'Named filters restrict the query',
             'Runtime callbacks are unsupported',
             'Django treats an active superuser as globally authorized',
             'Trusts cannot revoke authorization supplied by another backend',

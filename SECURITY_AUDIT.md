@@ -170,7 +170,7 @@ AND (
 ```
 
 The `is_active` checks follow the [shared inquiry rule](docs/source/index.rst#user-is-active-checks).
-Explicit registration conditions remain restrictions in either mode.
+Explicit registration conditions remain restrictions whether or not `allow_inactive_user=True`.
 
 Audit the following boundaries:
 
@@ -185,23 +185,22 @@ Audit the following boundaries:
   permission the sponsor does not hold;
 - delegate and sponsor eligibility must be enforced inside the shared plan,
   without loading the sponsor or issuing a second authorization inquiry;
-- the actor's independent ordinary grant remains the outer OR branch;
+- the actor's independent ordinary grant remains a separate OR branch;
 - tenant, organization, approval, revocation, and expiry data require
   authorized write paths and database constraints; and
 - object checks, permitted querysets, enumeration, reverse inquiry, and policy
   SQL must agree and remain one queryset statement per inquiry.
 
-The initial delegated mode rejects `along=` on the delegated registration and
-fails closed as unsupported. This is a temporary proposed-1.1 boundary while
-the hierarchy design is resolved in [issue #282](https://github.com/django-trusts/django-trusts/issues/282),
-not a permanent decision against delegated hierarchical reach. An ordinary
+A delegated registration rejects `along=` as unsupported.
+[Issue #282](https://github.com/django-trusts/django-trusts/issues/282) tracks
+delegated hierarchical reach. An ordinary
 sponsor grant may still use `along=`, and its effective bounded reach
 participates in the live sponsor-authority ceiling.
 
 Delegation remains inside the registered declarative policy and its correlated
 sponsor-authority predicate. An application-level nested call to
 `sponsor.has_perm()` falls outside that audited policy surface: it can import
-Django's outer shortcuts, separate the relationship row from its authority
+Django's superuser and authentication backend checks, separate the relationship row from its authority
 predicate, and disagree with queryset, reverse-inquiry, or lockfile behavior.
 
 A terminal many-to-many user membership is supported where validated. Review
@@ -213,7 +212,7 @@ and then query only its first hop.
 The `user`, `permission`, and `content` relationship path arguments may
 not be empty.
 
-### Named filters are outer restrictions
+### Named filters restrict the query
 
 A named filter is registered against the protected model:
 
@@ -276,7 +275,7 @@ Audit all of the following:
 django-trusts is schema-neutral and has no final `AppConfig`. Concrete implementations
 own their application labels, migrations, tables, and registration calls.
 
-### Django's outer authorization boundary
+### Django auth's checks before calling backends
 
 Django treats an active superuser as globally authorized in
 `PermissionsMixin.has_perm()` before consulting authentication backends.
@@ -299,8 +298,8 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; Shared user checks; relationship-family SQL before pagination; not Django backend OR or a superuser shortcut |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; shared user checks over candidate users |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Shared user checks; relationship-family SQL before pagination; not Django backend OR or a superuser shortcut |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; shared user checks within Trusts-owned grants |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.
@@ -430,7 +429,7 @@ The generated YAML is organized by backend and protected content model. Each
 trust exposes its declared relationships. Each content with trusts records SQL
 for `permitted`, `has_perm`, `get_all_permissions`, and
 `get_permitted_users`. The locked reverse statement is that backend's
-branch, not Django's outer superuser rule. Filter-only
+branch, not Django's superuser check. Filter-only
 contents carry their model and `named_filters`, and empty relationship
 backends remain visible as `contents: []`.
 
