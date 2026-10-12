@@ -421,7 +421,7 @@ checks. Runtime denial should not fall back to a broader Trusts path.
 
 ## Authorization policy SQL and lockfile
 
-The user-facing [authorization policy SQL guide](docs/source/authorization-policy-sql.rst)
+The user-facing [permission policy SQL guide](docs/source/permission-policy-sql.rst)
 describes the schema, command, lockfile, and system-check workflow. This section
 records the additional security boundaries.
 

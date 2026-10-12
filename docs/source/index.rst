@@ -666,8 +666,8 @@ An example Windows declaration lives in
 `django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
-Authorization policy in SQL
----------------------------
+Permission policy in SQL
+------------------------
 
 django-trusts can render the registered authorization policy as deterministic
 YAML containing parameterized compiler SQL:
@@ -730,7 +730,7 @@ alias consistently in settings and every render or E009 job. For example,
 MySQL ``default`` plus SQLite ``policy`` reviews one SQLite lockfile; E009
 follows ``policy``. Run ``python manage.py check`` in CI and before deployment.
 
-See the :doc:`authorization policy SQL guide <authorization-policy-sql>` for
+See the :doc:`permission policy SQL guide <permission-policy-sql>` for
 the schema, identifiers, renderer selection, and review workflow. See the
 `lockfile security audit guide
 <../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
@@ -821,6 +821,6 @@ in the `support matrix
 .. toctree::
    :hidden:
 
-   authorization-policy-sql
+   permission-policy-sql
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.
