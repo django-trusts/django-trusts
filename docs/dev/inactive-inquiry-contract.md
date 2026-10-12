@@ -1,7 +1,7 @@
 # #284 activity inquiries: implementation review driver
 
 Date: 2026-10-11. Status: S1 documentation proposal, not implemented.
-The contract is [in the built documentation](../source/inactive-permission-inquiries.rst).
+The contract is [in the built documentation](../source/index.rst#user-is-active-checks).
 Chat owns documentation/design coordination; Grok reviews the contract and
 independently verifies implementation feasibility before coding.
 
@@ -104,3 +104,22 @@ gate for the existing train remain unchanged.
 Chat agrees with the activity-mode direction. Grok must confirm the revised
 contract and resolve SQL mode representation plus custom-backend dispatch
 before runtime coding; this review did not settle those remaining decisions.
+
+## Thomas's wording review, 2026-10-11
+
+Keep one shared default rule and a short audit section in the existing usage
+guide. No separate user-facing activity page. Use user, delegate, and sponsor;
+write `user.is_active` and `sponsor.is_active` directly. Keep anonymous and
+unauthenticated denial separate from activity. These callers cannot supply
+persisted grants, so no positive permission answer is meaningful.
+
+Use `allow_inactive` when the user is clear from the inquiry. Where the name
+could instead suggest inactive content, use `allow_inactive_user`; the
+`filter_authorized_scopes` adapter uses that longer spelling. Internal
+propagation may use one mode, but public adapters must map the documented
+keyword explicitly. The scope/intermediate-model inquiry remains limited to
+its existing accepted shapes.
+
+Do not add an eligibility abstraction in anticipation of a superuser feature.
+Existing Django behavior stays unchanged; the inventory here remains evidence
+for a later, separate superuser design.

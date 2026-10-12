@@ -5,9 +5,7 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the `Along` failure boundary below.
 
-The [activity-inquiry contract](source/inactive-permission-inquiries.rst)
-applies a default activity gate to the aggregate candidate users and exposes
-the keyword-only `allow_inactive=False` audit mode on both reverse adapters.
+Both adapters use the [shared user.is_active rule and audit option](source/index.rst#user-is-active-checks).
 
 ## Decision
 
@@ -169,22 +167,18 @@ complete.
 
 ### Django outer rules
 
-The reverse query reproduces Django's outer principal rules and each supported
+The reverse query reproduces Django's outer user rules and each supported
 backend's own eligibility rules:
 
 - an active superuser is included for every accepted permission/content pair;
 - an inactive superuser does not receive Django's outer superuser shortcut;
 - an inactive ordinary user is excluded by default and can be included with
   `allow_inactive=True` when a supported audit contributor grants that permission;
-- an anonymous principal is not a persisted user row and cannot appear.
+- the shared user checks apply to the candidate users.
 
-Core applies its default activity gate across the combined candidate-user
-result. Audit mode removes that built-in gate and the built-in delegate/sponsor
-activity checks; participating contributors must explicitly support the mode.
-This default boundary is stricter than a stock Django aggregate whose custom
-backend may grant an inactive user. Each contributor must express the remaining
-principal conditions in SQL. The configured user model must expose the
-required conditions as SQL.
+The shared user checks apply across the combined result, even if a custom
+Django backend would grant an inactive user. Each audit contributor must
+support the selected mode and express its remaining conditions in SQL.
 Arbitrary Python-only state is unsupported and fails loudly.
 
 The invariant is over candidate rows supplied by the application's existing
@@ -242,7 +236,7 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    inquiry_principal_eligibility(user, allow_inactive)
+    (allow_inactive OR user.is_active)
     AND (
         django_outer_superuser_predicate(user)
         OR (
@@ -258,12 +252,8 @@ WHERE
 ```
 
 The named predicates are conceptual SQL placeholders, not Python callbacks.
-Django's outer superuser contributor includes its active-state rule. Each
-backend branch includes that backend's own eligibility behavior, including any
-active-state restriction explicitly required by policy. Core's outer
-principal predicate excludes inactive candidates in default mode and skips
-only the built-in activity test in audit mode. Django's active-superuser
-contribution retains its activity restriction under both modes.
+Backend branches retain their explicit conditions. Django's outer superuser
+contributor is unchanged.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain
@@ -334,9 +324,9 @@ Implementation must cover:
 - preservation of an application's existing user manager and queryset class;
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
-The result set must be compared row-for-row with singular
-`user.has_perm(normalized_perm, content)` across the candidate users in every
-behavioral fixture, using the normalization rule above.
+The result set must be compared row-for-row with the mode-aware contributors
+in the agreement invariant, using the same candidate users and normalization
+rule in every behavioral fixture.
 
 ## Non-goals
 
@@ -367,7 +357,7 @@ estimate.
   **8**
 - Phase B2, public content and optional user-manager adapters,
   permission-string/named-filter codec, backend-completeness preflight,
-  principal rules, routing, lockfile, and migration record: **8**
+  user rules, routing, lockfile, and migration record: **8**
 - GH adoption: separate consumer issue, not included
 
 Phase B1 ships no public application method. Phase B2 exposes

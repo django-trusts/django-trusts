@@ -169,9 +169,7 @@ concrete forms when no custom queryset is required. Plain
 either one. ``.authorized()`` remains the lower-level instance
 projection. The `permitted queryset inquiry contract
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/permitted-queryset-inquiry.md>`_
-records the public surface. The
-:doc:`activity and inactive-user audit contract <inactive-permission-inquiries>`
-explains default activity checks and explicit ``allow_inactive=True`` inquiries.
+records that split.
 
 ``PermittedUsersMixin`` adds
 ``document.get_permitted_users(permission)``, the reverse inquiry that
@@ -311,11 +309,8 @@ django-trusts requires the same delegation row, its selected content and
 condition, and an ordinary sponsor grant on that content. The actor's own
 ordinary grants remain available as independent alternatives.
 
-By default, both principals must remain eligible. An inactive delegate or
-sponsor receives no delegated access even if its grants and delegation rows
-remain stored. An explicit ``allow_inactive=True`` inquiry skips only their
-built-in activity checks; delegation scope and every explicit condition still
-apply. Anonymous and unauthenticated principals remain ineligible.
+By default, both sponsoring and delegated users must have ``is_active=True``.
+See :ref:`user-is-active-checks` for the shared inquiry rule.
 
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
@@ -461,11 +456,9 @@ own the full set, the call raises ``TrustsConfigurationError`` before SQL.
 declarations only. A runtime ``.permitted()`` call is not one of those
 declarations; it still validates and raises on first use.
 
-Malformed permissions and conditions raise before SQL, including when the
-principal is anonymous. Anonymous and inactive principals, and a
-well-formed permission for another content type, produce an empty
-queryset. There is no active-superuser shortcut. Named conditions remain
-explicit:
+Malformed permissions and conditions raise before SQL. A well-formed
+permission for another content type produces an empty queryset. There is no
+active-superuser shortcut. Named conditions remain explicit:
 
 .. code-block:: python
 
@@ -492,9 +485,6 @@ The permission may also use Django's string form:
 The result is a lazy queryset of the configured user model. Normal queryset
 operations remain available, for example
 ``document.get_permitted_users(change_document).filter(is_staff=True)``.
-Inactive users are excluded by default. To audit their otherwise valid grants,
-call ``document.get_permitted_users(change_document, allow_inactive=True)``;
-this does not waive restrictions already imposed by the candidate user manager.
 
 Applications that own their user model may expose the same inquiry on their
 existing user manager:
@@ -524,6 +514,52 @@ This method returns a lazy queryset. Both spellings return the same rows.
 The user-manager mixin is optional; an application that cannot change its
 user manager uses ``content.get_permitted_users(perm)``. Stock ``auth.User``
 does not grow ``permitted``.
+
+.. _user-is-active-checks:
+
+user.is_active checks
+~~~~~~~~~~~~~~~~~~~~~
+
+All Trusts permission inquiries check ``user.is_active`` by default, including
+ordinary and delegated grants, permission enumeration, and reverse user
+listing. Anonymous and unauthenticated users cannot supply persisted grants
+and receive no positive permission result. Input and configuration errors
+still raise before a denied result is returned.
+
+Auditing inactive users
+~~~~~~~~~~~~~~~~~~~~~~~
+
+To inspect grants held by a suspended user, pass ``allow_inactive=True`` to a
+Trusts inquiry. It skips only the built-in ``is_active`` checks for the user,
+delegate, and sponsor; explicit conditions and candidate-queryset filters
+still apply.
+
+.. code-block:: python
+
+   documents = Document.objects.permitted(
+       "documents.change_document", suspended_user, allow_inactive=True,
+   )
+   users = document.get_permitted_users(
+       "documents.change_document", allow_inactive=True,
+   )
+
+The option is keyword-only and defaults to ``False``. Where the target might
+be mistaken for content, the spelling is ``allow_inactive_user``; for example:
+
+.. code-block:: python
+
+   from trusts.core import filter_authorized_scopes
+
+
+   folders = filter_authorized_scopes(
+       Folder.objects.all(), suspended_user, permission,
+       content=Document, allow_inactive_user=True,
+   )
+
+Stock Django user methods do not forward either keyword. Use the Trusts
+adapters for audits; view guards and login behavior are unchanged. A custom
+backend participating in an audit must support it explicitly, or the inquiry
+raises instead of silently returning an incomplete result.
 
 Protect a view with the Trusts-only primary-key guard:
 
@@ -799,6 +835,5 @@ in the `support matrix
    :hidden:
 
    authorization-policy-sql
-   inactive-permission-inquiries
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.

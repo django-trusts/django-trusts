@@ -382,8 +382,8 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse
-`:condition` or call `get_permission`. It applies principal eligibility by
-default and accepts keyword-only `allow_inactive=False` for explicit audits.
+`:condition` or call `get_permission`. It uses the
+[shared user.is_active checks](source/index.rst#user-is-active-checks).
 `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
 this class. The public content-list inquiry is
@@ -393,8 +393,8 @@ sharing permission-input validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
-`filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive=False)`
-in `trusts.core` filters rows of an intermediate scope model that is a
+`filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
+in `trusts.core` filters rows of an intermediate model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. It compiles `EXISTS` of root rows
 correlated to `OuterRef` of that step's resolved target field (the

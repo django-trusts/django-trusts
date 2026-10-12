@@ -142,25 +142,15 @@ SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
 combines all applicable ordinary grants with OR: any matching ordinary grant
 may supply the sponsor's authority on the same content and permission.
-Reviewers should verify the delegate/sponsor direction, the
-relationship-owned scope predicate, the delegate and sponsor eligibility
-predicates, and the sponsor's ordinary-authority predicate in both the policy
-document and generated SQL. A delegate or sponsor that fails the principal
-eligibility rule
-equivalent to ``is_active_principal`` contributes no delegated authority in
-default mode, even while its grants and delegation rows remain stored. Audit
-mode skips only the built-in activity tests; explicit policy still applies.
+Reviewers should verify the delegate/sponsor direction, the relationship's
+explicit conditions, the :ref:`user.is_active checks <user-is-active-checks>`,
+and the sponsor's ordinary-grant predicate in the document and generated SQL.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
 
 Permission inquiries and named filters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The :doc:`activity-inquiry contract <inactive-permission-inquiries>`
-defines the eligibility restrictions that an inquiry applies. Audit reviewers
-inspect built-in activity gates separately from explicit conditions on
-``is_active``: only the built-in gates are waived by ``allow_inactive=True``.
 
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. Named filters are listed in ``add_named_filter()`` order.
