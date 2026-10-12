@@ -46,7 +46,8 @@ The document is organized by application meaning:
 * a content with trusts lists them with their associated SQL for
   ``permitted``, ``has_perm``, ``get_all_permissions``, and
   ``get_permitted_users``, plus ``get_group_permissions`` when a trust
-  uses ``group=``;
+  uses ``group=`` or a ``permission=`` condition that requires
+  ``Group.permissions``;
 * a content with named filters lists those queries; and
 * a filter-only content contains ``model`` and ``named_filters``.
 
@@ -101,11 +102,13 @@ An explicit ``group=`` registration also records ``group``: the declared
 path, which ends at ``auth.Group``. Its ``permission`` relation is the
 compiler-owned step from that group to ``auth.Permission``. That content
 includes ``get_group_permissions`` next to the other permission inquiries.
-A ``permission=`` registration does not add either field. When
-``permission=`` ends on a forward many-to-many collection, ``permission``
-records that path (for example ``permissions`` or ``team__permissions``),
-``auth.Permission``, and the permission primary key. The lock still omits
-``group`` and ``get_group_permissions`` for that registration.
+A ``permission=`` registration does not record ``group``. It includes
+``get_group_permissions`` when the user path reaches ``auth.Group`` and the
+condition requires ``Group.permissions``. When ``permission=`` ends on a
+forward many-to-many collection, ``permission`` records that path (for
+example ``permissions`` or ``team__permissions``), ``auth.Permission``, and
+the permission primary key. That collection omits ``group`` and
+``get_group_permissions``.
 
 When the permission terminal's concrete model is ``auth.Permission``,
 each inquiry's grant also requires that row's ``app_label`` and ``model``

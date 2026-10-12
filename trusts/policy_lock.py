@@ -4,7 +4,8 @@
 Each backend lists ``contents`` by model. A content owns its trust
 legs, the compiled SQL for ``permitted``, ``has_perm``,
 ``get_all_permissions``, and ``get_permitted_users`` when it has trusts,
-``get_group_permissions`` when a trust was registered with ``group=``,
+``get_group_permissions`` when a trust was registered with ``group=``
+or with a ``permission=`` condition that requires ``Group.permissions``,
 and its named filters. ``get_permitted_users`` is the reverse
 content-and-permission-to-users predicate for that backend, not
 Django's outer superuser rule and not other backends.
@@ -35,7 +36,7 @@ from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-from trusts.core import TrustsConfigurationError
+from trusts.core import TrustsConfigurationError, _record_in_group_slice
 from trusts.policy_sql_format import _format_policy_sql
 from trusts.policy_yaml import (
     PolicyYamlError,
@@ -407,7 +408,7 @@ def _project_content(handle, alias, group, filters, handles):
             handle, alias, classifier_records, group['model'], handles,
         )),
     })
-    if any(getattr(record, 'via_group', False) for record in records):
+    if any(_record_in_group_slice(record) for record in records):
         content['get_group_permissions'] = _sql_row(
             _compile_get_group_permissions(
                 handle, alias, records, group['model'],
