@@ -321,7 +321,12 @@ jobs:
       working-directory: companion
       env:
         TRUSTS_FOLLOW_CORE: "1"
-      run: python -m tests.runtests
+      run: |
+        if [ "${{ matrix.companion }}" = "gh-permissions" ]; then
+          echo "Temporary forced failure to prove lockfile upload after a failed suite." >&2
+          exit 1
+        fi
+        python -m tests.runtests
 
     - name: Generate SQLite policy lockfile
       id: policy-lock
@@ -330,7 +335,7 @@ jobs:
       run: python manage.py trusts_policy_sql --lock
 
     - name: Upload SQLite policy lockfile
-      if: ${{ matrix.lockfile == true && steps.policy-lock.outcome == 'success' }}
+      if: ${{ !cancelled() && matrix.lockfile == true && steps.policy-lock.outcome == 'success' }}
       uses: actions/upload-artifact@v4
       with:
         name: gh-permissions-sqlite-policy-lock
