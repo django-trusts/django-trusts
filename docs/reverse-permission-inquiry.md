@@ -5,10 +5,9 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the `Along` failure boundary below.
 
-The proposed [activity-inquiry contract](source/inactive-permission-inquiries.rst)
-for #284 would add a global default activity gate and an explicit
-`allow_inactive=True` audit mode. Neither change is implemented. The current
-backend-OR and active-superuser behavior described here remains the baseline.
+The [activity-inquiry contract](source/inactive-permission-inquiries.rst)
+applies a default activity gate to the aggregate candidate users and exposes
+the keyword-only `allow_inactive=False` audit mode on both reverse adapters.
 
 ## Decision
 
@@ -19,7 +18,8 @@ users = document.get_permitted_users(perm)
 users = User.objects.permitted(document, perm)
 ```
 
-Both accept exactly one saved content object and one permission, call one
+Both accept exactly one saved content object, one permission, and the
+keyword-only `allow_inactive=False` mode, call one
 internal reverse-query compiler, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
@@ -168,14 +168,17 @@ backend's own eligibility rules:
 
 - an active superuser is included for every accepted permission/content pair;
 - an inactive superuser does not receive Django's outer superuser shortcut;
-- an inactive ordinary user is included only if a configured supported backend
-  would grant that same singular object permission;
+- an inactive ordinary user is excluded by default and can be included with
+  `allow_inactive=True` when a supported audit contributor grants that permission;
 - an anonymous principal is not a persisted user row and cannot appear.
 
-Core must not impose a blanket `is_active` exclusion that disagrees with a
-custom backend. Each reverse-query contributor reproduces the active-state
-behavior of its singular `has_perm` path. The implementation must prove that
-the configured user model exposes every required principal condition as SQL.
+Core applies its default activity gate across the combined candidate-user
+result. Audit mode removes that built-in gate and the built-in delegate/sponsor
+activity checks; participating contributors must explicitly support the mode.
+This default boundary is stricter than a stock Django aggregate whose custom
+backend may grant an inactive user. Each contributor must express the remaining
+principal conditions in SQL. The configured user model must expose the
+required conditions as SQL.
 Arbitrary Python-only state is unsupported and fails loudly.
 
 The invariant is over candidate rows supplied by the application's existing
@@ -233,23 +236,28 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    django_outer_superuser_predicate(user)
-    OR (
-        backend_1_eligibility_predicate(user)
-        AND backend_1_complete_grant_predicate(user, permission, content)
+    inquiry_principal_eligibility(user, allow_inactive)
+    AND (
+        django_outer_superuser_predicate(user)
+        OR (
+            backend_1_eligibility_predicate(user)
+            AND backend_1_complete_grant_predicate(user, permission, content)
+        )
+        OR (
+            backend_2_eligibility_predicate(user)
+            AND backend_2_complete_grant_predicate(user, permission, content)
+        )
+        OR ...
     )
-    OR (
-        backend_2_eligibility_predicate(user)
-        AND backend_2_complete_grant_predicate(user, permission, content)
-    )
-    OR ...
 ```
 
 The named predicates are conceptual SQL placeholders, not Python callbacks.
 Django's outer superuser contributor includes its active-state rule. Each
 backend branch includes that backend's own eligibility behavior, including any
-active-state rule it applies in the singular check. Core adds no global
-`is_active` exclusion across all branches.
+active-state restriction explicitly required by policy. Core's outer
+principal predicate excludes inactive candidates in default mode and skips
+only the built-in activity test in audit mode. Django's active-superuser
+contribution retains its activity restriction under both modes.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain

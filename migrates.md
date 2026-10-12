@@ -19,6 +19,57 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
+## Activity checks in permission inquiries (#284)
+
+Trusts-owned inquiries deny inactive principals by default. Use keyword-only
+`allow_inactive=True` when an audit must inspect otherwise valid grants held
+by suspended users, delegates, or sponsors. Anonymous and unauthenticated
+principals remain denied, and explicit activity conditions remain effective.
+This entry supersedes the ungated ordinary-inquiry behavior described in the
+earlier `.authorized()` migration history below.
+
+| Surface | Before #284 | After #284 |
+| --- | --- | --- |
+| Ordinary `.authorized()` and registry/scope inquiries | Stored ordinary grants can produce positives for an inactive user | Default false/empty; explicit audit mode can inspect matching grants |
+| Delegated `.authorized()` branch | Delegate activity checked in Python; sponsor activity checked in SQL even when ordinary rows remain | Default and audit eligibility are consistent across ordinary/delegated branches and inquiry directions |
+| Public `.permitted()` and Trusts backend checks/enumeration | Default principal eligibility already applies | Default denial retained; explicit audit mode skips only built-in activity |
+| Aggregate reverse inquiry | Trusts eligibility and each backend's eligibility apply locally; no aggregate activity gate | Default activity gate applies to all candidate users; audit contributors must explicitly support the mode |
+| Enforcement guards and stock Django user calls | Their existing interfaces and authorization composition | Unchanged interfaces; no audit keyword forwarded by stock Django |
+
+```python
+# Before: ordinary projection could expose an inactive user's stored grant.
+Document.objects.authorized(suspended_user, permission)
+
+# After: default inquiry denies inactive principals.
+Document.objects.authorized(suspended_user, permission)  # empty queryset
+
+# Explicit inspection retains scope and every policy condition.
+Document.objects.authorized(suspended_user, permission, allow_inactive=True)
+document.get_permitted_users(permission, allow_inactive=True)
+```
+
+Review custom principal models and compiler/backend overrides for matching
+eligibility and flag forwarding. A manager filtering inactive rows remains an
+upper bound on the audit candidate set. An unsupported participating audit
+backend raises rather than silently producing an incomplete answer. The flag
+does not add superuser privilege or waive Django's active-superuser rule.
+
+Review and regenerate affected policy locks alongside the implementation;
+activity checks outside SQL must not be mistaken for SQL predicates. See the
+[activity contract](docs/source/inactive-permission-inquiries.rst) for inquiry
+boundaries. Existing permission codecs, accepted query shapes, and positional
+arguments are preserved.
+
+Migration-bot checklist:
+
+- `.authorized(` and `AuthorizedManagerMixin`
+- `.permitted(`, `get_permitted_users(`, and `PermittedUsersManagerMixin`
+- `permissions_for(`, `has_permission(`, and `filter_authorized(`
+- `filter_authorized_scopes(`
+- backend `has_perm(`, `get_all_permissions(`, and `get_group_permissions(` overrides
+- custom reverse/compiler hooks, `is_active`, and candidate-manager filters
+- permission-result caches, if present, and `trusts_policy_sql`
+
 ## Permission content type must match the object (#267)
 
 `1.0.0 → 1.1.0`. Crossed `auth.Permission.content_type` positives are

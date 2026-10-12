@@ -157,22 +157,23 @@ For actor `u`, content `c`, and permission `p`, every projection compiles the
 same shape:
 
 ```text
-is_active_principal(u)
+inquiry_principal_eligibility(u, allow_inactive)
 AND (
     ordinary(u, c, p)
     OR EXISTS delegation d:
         d.delegate = u
         AND d.content = c
         AND delegated_condition(d, p)
-        AND is_active_principal(d.sponsor)
+        AND inquiry_principal_eligibility(d.sponsor, allow_inactive)
         AND ordinary(d.sponsor, c, p)
 )
 ```
 
-For projections over persisted users, `is_active_principal(x)` is compiled as
-an equivalent principal-eligibility predicate. A delegate or sponsor that
-fails that rule receives no delegated authority even if its grants and
-relationship rows remain.
+The conceptual `inquiry_principal_eligibility` enforces the active-principal
+rule by default and skips only its activity test for `allow_inactive=True`.
+Persisted-user projections compile the corresponding SQL predicate. Anonymous
+and unauthenticated principals remain ineligible in either mode; explicit
+conditions on activity remain restrictions.
 
 Audit the following boundaries:
 
@@ -293,11 +294,11 @@ rejecting Trusts branch as a global deny.
 
 ## Ask permission questions
 
-The [proposed activity-inquiry contract](docs/source/inactive-permission-inquiries.rst)
-for #284 distinguishes normal inquiries from an explicit inactive-user audit.
-Its `allow_inactive` option and consistent default activity gate are not
-implemented. The behavior below is the current audit baseline; the proposal
-does not change enforcement guards or superuser policy.
+The [activity-inquiry contract](docs/source/inactive-permission-inquiries.rst)
+distinguishes default activity denial from an explicit `allow_inactive=True`
+inquiry. Audit mode skips only built-in user/delegate/sponsor activity checks.
+It does not waive explicit policy, change enforcement guards, or add superuser
+privileges.
 
 The supported projections consume the same normalized registration:
 
@@ -305,16 +306,17 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; anonymous and inactive principals are an empty queryset; not Django backend OR or a superuser shortcut |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; no Core `is_active` blanket |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Relationship-family SQL before pagination; anonymous/unauthenticated denial; default inactive denial with explicit audit mode; not Django backend OR or a superuser shortcut |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; default activity gate over candidate users; explicit audit mode retains grant restrictions |
+| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry. Anonymous
-and inactive principals receive an empty queryset, and configuration errors
-raise before that shortcut. `.authorized(user, permission, extra_q=None)` is
-the lower-level instance projection: it does not apply that principal check,
+and unauthenticated principals receive an empty queryset. Inactive principals
+receive an empty queryset by default; audit mode skips only built-in activity
+checks. Configuration errors raise before that shortcut. `.authorized(user, permission, extra_q=None)` is
+the lower-level instance projection: it applies the same activity mode,
 does not accept permission strings, and does not select named conditions.
 Do not treat the two as the same filter.
-| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
 through the protected model's primary-key field, and keeps it as a parameter.

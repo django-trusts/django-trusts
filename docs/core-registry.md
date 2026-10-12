@@ -382,12 +382,13 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse
-`:condition`, does not call `is_active_principal`, and does not call
-`get_permission`. `extra_q` is the same AND overlay as `all_match` /
+`:condition` or call `get_permission`. It applies principal eligibility by
+default and accepts keyword-only `allow_inactive=False` for explicit audits. `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
-`.authorized` does not call it and does not apply its principal check.
+`.authorized` does not call it; both inquiries apply the activity mode without
+sharing permission-input validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 

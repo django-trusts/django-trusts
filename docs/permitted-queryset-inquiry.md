@@ -1,11 +1,11 @@
 # Permitted content queryset inquiry
 
-Public contract for issue #270. `queryset.permitted(permission, user, conditions=())`
+Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive=False)`
 is implemented on `PermittedQuerySet`.
 
-The proposed [activity-inquiry contract](source/inactive-permission-inquiries.rst)
-for #284 adds a keyword-only `allow_inactive=False` audit mode. That option is
-not implemented; this document records the current behavior.
+The [activity-inquiry contract](source/inactive-permission-inquiries.rst)
+defines the keyword-only `allow_inactive=False` mode. It applies consistently
+to the queried user/delegate and any sponsor used to supply authority.
 
 ## Question
 
@@ -29,7 +29,7 @@ parser, and it is not the reverse inquiry answered by
 ## Public API
 
 ```python
-queryset.permitted(permission, user, conditions=())
+queryset.permitted(permission, user, conditions=(), *, allow_inactive=False)
 ```
 
 The method lives on the queryset, so it stays available after `filter()`:
@@ -168,8 +168,10 @@ lazy, so pagination applies in SQL.
 
 ## Principal and backend boundary
 
-Anonymous and inactive principals receive an empty queryset. The method does
-not copy Django's active-superuser shortcut. An active superuser without a
+Anonymous and unauthenticated principals receive an empty queryset. Inactive
+principals receive an empty queryset by default. `allow_inactive=True` skips
+only the built-in activity checks, including sponsor activity, while retaining
+all explicit policy conditions. The method does not copy Django's active-superuser shortcut. An active superuser without a
 registered grant receives an empty queryset.
 
 The result is Trusts' registered relationship-family projection. It does not
@@ -200,7 +202,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
-- the principal is anonymous or inactive; or
+- the principal is anonymous, unauthenticated, or inactive without audit mode; or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another
   application label.
@@ -219,8 +221,8 @@ when the view is declared. That static check stays on the decorator.
 | Which users may access one object with one permission? | `content.get_permitted_users(permission)` |
 
 `.authorized(user, permission, extra_q=None)` remains available. It accepts
-any saved permission-terminal instance, including a custom model, does not
-check that the principal is active, and ANDs `extra_q`. It is not routed
+any saved permission-terminal instance, including a custom model, checks principal eligibility by default, accepts the keyword-only
+`allow_inactive=False` mode, and ANDs `extra_q`. It is not routed
 through `.permitted()` validation. Its docstring points here.
 
 Zero already exposes `ContentQuerySet.permitted(perm, user)`. This slice

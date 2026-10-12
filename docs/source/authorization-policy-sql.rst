@@ -147,8 +147,9 @@ relationship-owned scope predicate, the delegate and sponsor eligibility
 predicates, and the sponsor's ordinary-authority predicate in both the policy
 document and generated SQL. A delegate or sponsor that fails the principal
 eligibility rule
-equivalent to ``is_active_principal`` must contribute no delegated authority,
-even while its grants and delegation rows remain stored.
+equivalent to ``is_active_principal`` contributes no delegated authority in
+default mode, even while its grants and delegation rows remain stored. Audit
+mode skips only the built-in activity tests; explicit policy still applies.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
@@ -156,11 +157,10 @@ content model, the document records each backend separately.
 Permission inquiries and named filters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The :doc:`proposed activity-inquiry contract <inactive-permission-inquiries>`
-requires runtime and exported eligibility predicates to agree under normal
-and audit modes. ``allow_inactive`` is not implemented. This guide describes
-the current export; no audit variant or lockfile-schema change is introduced
-by that proposal. Its representation must be agreed before implementation.
+The :doc:`activity-inquiry contract <inactive-permission-inquiries>`
+defines the eligibility restrictions that an inquiry applies. Audit reviewers
+inspect built-in activity gates separately from explicit conditions on
+``is_active``: only the built-in gates are waived by ``allow_inactive=True``.
 
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. Named filters are listed in ``add_named_filter()`` order.

@@ -169,9 +169,9 @@ concrete forms when no custom queryset is required. Plain
 either one. ``.authorized()`` remains the lower-level instance
 projection. The `permitted queryset inquiry contract
 <https://github.com/django-trusts/django-trusts/blob/dev/docs/permitted-queryset-inquiry.md>`_
-records the implemented surface. The proposed
+records the public surface. The
 :doc:`activity and inactive-user audit contract <inactive-permission-inquiries>`
-describes issue #284; its ``allow_inactive`` option is not implemented.
+explains default activity checks and explicit ``allow_inactive=True`` inquiries.
 
 ``PermittedUsersMixin`` adds
 ``document.get_permitted_users(permission)``, the reverse inquiry that
@@ -311,9 +311,11 @@ django-trusts requires the same delegation row, its selected content and
 condition, and an ordinary sponsor grant on that content. The actor's own
 ordinary grants remain available as independent alternatives.
 
-Both principals must remain eligible. A delegate or sponsor that fails the
-same active-principal rule used by django-trusts receives no delegated access,
-even if its ordinary grants and delegation rows remain in the database.
+By default, both principals must remain eligible. An inactive delegate or
+sponsor receives no delegated access even if its grants and delegation rows
+remain stored. An explicit ``allow_inactive=True`` inquiry skips only their
+built-in activity checks; delegation scope and every explicit condition still
+apply. Anonymous and unauthenticated principals remain ineligible.
 
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
@@ -489,7 +491,10 @@ The permission may also use Django's string form:
 
 The result is a lazy queryset of the configured user model. Normal queryset
 operations remain available, for example
-``document.get_permitted_users(change_document).filter(is_active=True)``.
+``document.get_permitted_users(change_document).filter(is_staff=True)``.
+Inactive users are excluded by default. To audit their otherwise valid grants,
+call ``document.get_permitted_users(change_document, allow_inactive=True)``;
+this does not waive restrictions already imposed by the candidate user manager.
 
 Applications that own their user model may expose the same inquiry on their
 existing user manager:
