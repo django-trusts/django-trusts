@@ -102,13 +102,10 @@ class PlanQueryCompiler(object):
     """Immutable mixin default: registered plan; group slice is explicit.
 
     ``complete_exists`` compiles every relationship record, including
-    explicit ``group=`` registrations. ``group_exists`` compiles those
-    ``group=`` records, and also a ``permission=`` record whose user
-    path reaches ``auth.Group`` and whose condition requires that
-    permission to be in ``Group.permissions``. Any other
-    ``permission=`` record stays out of ``get_group_permissions``,
-    including a many-to-many membership that never reaches
-    ``auth.Group``.
+    explicit ``group=`` registrations. ``group_exists`` compiles only
+    those ``group=`` records. A many-to-many or membership-shaped user
+    path is not a Django group. ``permission=`` records stay out of
+    ``get_group_permissions``.
     """
 
     historical_fallback = False
@@ -128,7 +125,7 @@ class PlanQueryCompiler(object):
     def group_exists(self, plan, candidates, user, permission):
         grouped = tuple(
             record for record in plan.records
-            if _record_in_group_slice(record)
+            if getattr(record, 'via_group', False)
         )
         if not grouped:
             return None
@@ -137,90 +134,6 @@ class PlanQueryCompiler(object):
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
         ).content_exists(user, permission)
-
-
-def _record_in_group_slice(record):
-    """True when ``record`` contributes to ``get_group_permissions``.
-
-    Explicit ``group=`` records always do. A ``permission=`` record does
-    only when the user is reached through ``auth.Group`` and the stored
-    condition requires the registered permission to be a member of
-    ``Group.permissions``. A membership many-to-many that does not reach
-    ``auth.Group``, and a condition on any other collection, stay out.
-    """
-    if getattr(record, 'via_group', False):
-        return True
-    if not _user_path_reaches_auth_group(record):
-        return False
-    return _condition_requires_group_permissions(record)
-
-
-def _user_path_reaches_auth_group(record):
-    """True when a stored user path lands on ``auth.Group``."""
-    group, _permission = _auth_group_and_permission()
-    current = record.root
-    for name in record.user_path:
-        try:
-            field = current._meta.get_field(name)
-        except FieldDoesNotExist:
-            return False
-        try:
-            current, _target = _resolved_hop(field, 'user', record.user_path)
-        except TrustsConfigurationError:
-            return False
-        if current._meta.concrete_model is group._meta.concrete_model:
-            return True
-    return False
-
-
-def _condition_requires_group_permissions(record):
-    """True when a condition pins the permission inside ``Group.permissions``."""
-    return _predicate_requires_group_permissions(
-        getattr(record, 'condition', None), record.root,
-    )
-
-
-def _predicate_requires_group_permissions(node, root):
-    if node is None:
-        return False
-    if isinstance(node, All):
-        return any(
-            _predicate_requires_group_permissions(predicate, root)
-            for predicate in node.predicates
-        )
-    if isinstance(node, PermissionIn):
-        return any(
-            _ref_is_auth_group_permissions(root, ref) for ref in node.refs
-        )
-    return False
-
-
-def _ref_is_auth_group_permissions(root, ref):
-    """True when ``ref`` is the ``permissions`` relation on ``auth.Group``."""
-    if isinstance(ref, str):
-        path = tuple(part for part in ref.split('__') if part)
-    else:
-        path = tuple(getattr(ref, '_path', ()) or ())
-    if not path:
-        return False
-    try:
-        permissions_field = _group_permissions_field()
-        group, _permission = _auth_group_and_permission()
-    except TrustsConfigurationError:
-        return False
-    if path[-1] != permissions_field.name:
-        return False
-    current = root
-    for name in path[:-1]:
-        try:
-            field = current._meta.get_field(name)
-        except FieldDoesNotExist:
-            return False
-        try:
-            current, _target = _resolved_hop(field, 'group', path)
-        except TrustsConfigurationError:
-            return False
-    return current._meta.concrete_model is group._meta.concrete_model
 
 
 def compiler_for_class(cls):
@@ -4429,10 +4342,8 @@ class BackendHandle:
         ``Group.permissions``; applications do not put ``permissions``
         on the group path. Supplying both, or neither, raises
         ``TrustsConfigurationError`` before any path builder runs. A
-        ``permission=`` registration contributes to
-        ``get_group_permissions`` only when the user path reaches
-        ``auth.Group`` and the condition requires that permission to be
-        in ``Group.permissions``. Delegated mode instead requires exactly
+        ``permission=`` registration does not contribute to
+        ``get_group_permissions``. Delegated mode instead requires exactly
         ``delegate=`` and ``sponsor=`` and forbids ``user=``, ``permission=``,
         ``group=``, and ``along=``. A delegated row is not an ordinary grant.
 
@@ -4452,13 +4363,11 @@ class BackendHandle:
         ``TrustsConfigurationError`` before path parsing or builder
         invocation.
 
-        An explicit ``group=`` record contributes to
-        ``get_group_permissions``. A ``permission=`` record contributes
-        only when its user path reaches ``auth.Group`` and its condition
-        requires that permission to be in ``Group.permissions``. Both
-        participate in ordinary ``has_perm``, ``get_all_permissions``,
-        and authorized querysets. A many-to-many user path that does not
-        reach ``auth.Group`` is not a Django group.
+        Only an explicit ``group=`` record contributes to
+        ``get_group_permissions``. That same record also participates in
+        ordinary ``has_perm``, ``get_all_permissions``, and authorized
+        querysets. A ``permission=`` record is never treated as
+        group-derived because its user path is many-to-many.
         """
         if getattr(self.registry, 'frozen', False):
             raise TrustsConfigurationError(

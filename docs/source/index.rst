@@ -283,7 +283,7 @@ a collection that does not end on ``auth.Permission``, is rejected when the
 relationship is registered. An intermediate many-to-many is still rejected
 at registration; support for that shape is deferred and is not a design
 rejection. The collection still does not contribute to
-``get_group_permissions()``.
+``get_group_permissions()``; only an explicit ``group=`` registration does.
 
 ``user``, ``permission``, ``group``, and ``content`` each accept either a
 one-argument path lambda (the form in ``ready()`` above) or a Django ``__``
@@ -427,10 +427,9 @@ enumeration, and queryset filtering as a ``permission=`` registration. Its
 explicit group classification also lets ``get_group_permissions()`` select the
 group-derived subset.
 
-A ``permission=`` registration contributes to ``get_group_permissions()`` when
-its user path reaches ``auth.Group`` and its condition requires that permission
-to be in ``Group.permissions``. A many-to-many membership that never reaches
-``auth.Group``, and a condition on any other collection, stay out.
+A ``permission=`` registration is not treated as group-derived merely because its
+``user=`` path crosses ``auth.Group``; only explicit ``group=`` registrations
+contribute to ``get_group_permissions()``.
 
 Filter a queryset to the objects permitted for a particular permission:
 

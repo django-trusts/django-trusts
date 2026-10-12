@@ -422,17 +422,14 @@ terminal, empty handles, or a scope model not on the path return
 handles only. Core does not import Zero schema models
 (`Trust`, `TrustUserPermission`, `TrustGroup`, …).
 
-`PlanQueryCompiler.group_exists` compiles records registered with
+`PlanQueryCompiler.group_exists` compiles only records registered with
 explicit `group=` (a forward path ending at `auth.Group`; the compiler
-appends `Group.permissions`) via `RelationPlan.content_exists`. It also
-compiles a `permission=` record when the user path reaches that same
-`auth.Group` and the condition requires the registered permission to be
-in `Group.permissions`. Other `permission=` records stay out, including
-a many-to-many membership that never reaches `auth.Group` and a
-condition on any other collection. Core plans are relationship records
-only. A plan with neither kind of record makes `group_exists`
-inapplicable (`None`). `complete_exists` still includes every
-relationship record.
+appends `Group.permissions`) via `RelationPlan.content_exists`.
+`permission=` records stay out of that slice, including when the user
+path ends in a many-to-many membership step. Core plans are relationship
+records only. A plan with no explicit `group=` record makes
+`group_exists` inapplicable (`None`). `complete_exists` still includes
+both `permission=` and `group=` records.
 
 `ConditionLookup` (`record_for`, `compile_q`) is self-bound at
 `TrustsRegistry` construct. `set_condition_lookup` remains for tests
