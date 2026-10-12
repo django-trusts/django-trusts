@@ -483,8 +483,7 @@ The permission may also use Django's string form:
    )
 
 The result is a lazy queryset of the configured user model. Normal queryset
-operations remain available, for example
-``document.get_permitted_users(change_document).filter(is_staff=True)``.
+operations remain available.
 
 Applications that own their user model may expose the same inquiry on their
 existing user manager:
@@ -529,31 +528,19 @@ still raise before a denied result is returned.
 Auditing inactive users
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-To inspect grants held by a suspended user, pass ``allow_inactive=True`` to a
-Trusts inquiry. It skips only the built-in ``is_active`` checks for the user,
-delegate, and sponsor; explicit conditions and candidate-queryset filters
-still apply.
+To inspect a suspended user's grants, use the keyword-only audit option
+(default ``False``). Inquiries returning content, permissions, or a boolean
+use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
+It skips only the built-in ``is_active`` checks for the user, delegate, and
+sponsor. Explicit conditions and candidate-queryset filters still apply.
 
 .. code-block:: python
 
    documents = Document.objects.permitted(
-       "documents.change_document", suspended_user, allow_inactive=True,
+       "documents.change_document", suspended_user, allow_inactive_user=True,
    )
    users = document.get_permitted_users(
        "documents.change_document", allow_inactive=True,
-   )
-
-The option is keyword-only and defaults to ``False``. Where the target might
-be mistaken for content, the spelling is ``allow_inactive_user``; for example:
-
-.. code-block:: python
-
-   from trusts.core import filter_authorized_scopes
-
-
-   folders = filter_authorized_scopes(
-       Folder.objects.all(), suspended_user, permission,
-       content=Document, allow_inactive_user=True,
    )
 
 Stock Django user methods do not forward either keyword. Use the Trusts

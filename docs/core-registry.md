@@ -378,7 +378,7 @@ These additive APIs are the instance-only / metadata-driven surfaces that
 later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `filter_by_user_content_perm`, the app label, or the historical compiler.
 
-`AuthorizedQuerySet.authorized(user, permission, extra_q=None)` and
+`AuthorizedQuerySet.authorized(user, permission, extra_q=None, *, allow_inactive_user=False)` and
 `AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse

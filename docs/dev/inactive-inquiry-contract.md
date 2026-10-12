@@ -113,13 +113,26 @@ write `user.is_active` and `sponsor.is_active` directly. Keep anonymous and
 unauthenticated denial separate from activity. These callers cannot supply
 persisted grants, so no positive permission answer is meaningful.
 
-Use `allow_inactive` when the user is clear from the inquiry. Where the name
-could instead suggest inactive content, use `allow_inactive_user`; the
-`filter_authorized_scopes` adapter uses that longer spelling. Internal
-propagation may use one mode, but public adapters must map the documented
-keyword explicitly. The scope/intermediate-model inquiry remains limited to
-its existing accepted shapes.
+Thomas clarified the public keyword by the returned answer (review
+5486296327): content, permission enumeration, and boolean inquiries use
+`allow_inactive_user`; user-list inquiries use `allow_inactive`. This
+supersedes the narrower exception that initially named only
+`filter_authorized_scopes`. Internal helpers can propagate one boolean mode;
+public adapters map their documented keyword explicitly.
+
+| Public inquiry | Keyword |
+| --- | --- |
+| Content `.permitted` and `.authorized`, and their manager adapters | `allow_inactive_user=False` |
+| Backend `has_perm`, `get_all_permissions`, `get_group_permissions` | `allow_inactive_user=False` |
+| Registry `permissions_for`, `has_permission`, `filter_authorized`; `filter_authorized_scopes` | `allow_inactive_user=False` |
+| Content `get_permitted_users`; optional user-manager `.permitted` | `allow_inactive=False` |
 
 Do not add an eligibility abstraction in anticipation of a superuser feature.
 Existing Django behavior stays unchanged; the inventory here remains evidence
 for a later, separate superuser design.
+
+Thomas authorizes Grok to begin implementation after these wording corrections
+(review 5486296327). Merge the documentation only after the feature. Resolve
+SQL mode representation/custom-backend dispatch in the implementation design;
+surface any genuine behavior conflict before expanding scope. No additional
+human authorization is required for the already agreed bounded feature work.

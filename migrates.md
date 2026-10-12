@@ -32,8 +32,8 @@ default results change for an inactive user:
 | An aggregate reverse inquiry can include an inactive user through a custom backend | Its default result excludes that user |
 
 Use the audit option in the usage guide when those calls intentionally inspect
-stored grants. `filter_authorized_scopes` uses `allow_inactive_user=True` to
-make clear that the option refers to the user, not the returned content.
+stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;
+user-list inquiries use `allow_inactive`.
 Existing permission inputs, query shapes, and positional arguments remain.
 Review affected compiler/backend overrides and regenerate policy locks with
 the runtime change.

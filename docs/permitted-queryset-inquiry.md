@@ -1,6 +1,6 @@
 # Permitted content queryset inquiry
 
-Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive=False)`
+Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)`
 is implemented on `PermittedQuerySet`.
 
 The [shared user.is_active rule and audit examples](source/index.rst#user-is-active-checks)
@@ -28,7 +28,7 @@ parser, and it is not the reverse inquiry answered by
 ## Public API
 
 ```python
-queryset.permitted(permission, user, conditions=(), *, allow_inactive=False)
+queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)
 ```
 
 The method lives on the queryset, so it stays available after `filter()`:
