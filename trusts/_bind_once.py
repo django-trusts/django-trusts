@@ -120,46 +120,22 @@ class _Walk(object):
         self.hits = []
         self.seen_queries = set()
         self.seen_along = set()
-        self._query_stack = []
-        self._along_parents = []
-        self._inside_along = 0
 
     def finish(self, query):
         if not self.hits:
             return
-        inner_parents = []
-        if getattr(self.connection, 'vendor', None) == 'mysql':
-            # A recursive CTE inside EXISTS cannot see a derived table
-            # joined above that EXISTS. Repeat the row there, but only
-            # with the columns that CTE (or that EXISTS) actually reads.
-            # Everything else stays on the outer row.
-            for item in self._along_parents:
-                if item is not query and item not in inner_parents:
-                    inner_parents.append(item)
-        inner_ids = {id(item) for item in inner_parents}
-        buckets = {id(query): []}
-        for item in inner_parents:
-            buckets[id(item)] = []
-        for hit in self.hits:
-            if hit.forced_along is not None and id(hit.forced_along) in inner_ids:
-                buckets[id(hit.forced_along)].append(hit)
-            elif hit.query is not None and id(hit.query) in inner_ids:
-                buckets[id(hit.query)].append(hit)
-            else:
-                buckets[id(query)].append(hit)
-        for target in [query] + inner_parents:
-            owned = buckets[id(target)]
-            if not owned:
-                continue
-            names = set()
-            columns = []
-            for group in _group(owned):
-                column = _column_for(group, names)
-                columns.append(column)
-                ref = BindRef(BIND_ALIAS, column.sql_name, column.output_field)
-                for hit in group:
-                    hit.apply(ref)
-            _install(target, columns)
+        # One row on the outer statement. A trusts_bind column is visible
+        # inside WITH RECURSIVE, including a walk nested in EXISTS, so
+        # MySQL uses that same column instead of binding the value again.
+        names = set()
+        columns = []
+        for group in _group(self.hits):
+            column = _column_for(group, names)
+            columns.append(column)
+            ref = BindRef(BIND_ALIAS, column.sql_name, column.output_field)
+            for hit in group:
+                hit.apply(ref)
+        _install(query, columns)
 
     def visit(self, node):
         if node is None or isinstance(node, (
@@ -173,24 +149,20 @@ class _Walk(object):
             if id(node) in self.seen_queries:
                 return
             self.seen_queries.add(id(node))
-            self._query_stack.append(node)
-            try:
-                self.visit(node.where)
-                for key, annotation in list(node.annotations.items()):
-                    if (
-                        key == 'a'
-                        and isinstance(annotation, Value)
-                        and annotation.value == 1
-                        and not isinstance(annotation.value, bool)
-                    ):
-                        node.annotations[key] = SqlInt(1)
-                        node._annotation_select_cache = None
-                        continue
-                    self.visit(annotation)
-                for part in node.combined_queries or ():
-                    self.visit(part)
-            finally:
-                self._query_stack.pop()
+            self.visit(node.where)
+            for key, annotation in list(node.annotations.items()):
+                if (
+                    key == 'a'
+                    and isinstance(annotation, Value)
+                    and annotation.value == 1
+                    and not isinstance(annotation.value, bool)
+                ):
+                    node.annotations[key] = SqlInt(1)
+                    node._annotation_select_cache = None
+                    continue
+                self.visit(annotation)
+            for part in node.combined_queries or ():
+                self.visit(part)
             return
         if isinstance(node, Lookup):
             self._visit_lookup(node)
@@ -234,11 +206,9 @@ class _Walk(object):
         if kind != 'bind' and kind != 'const':
             return
         output = _lookup_output(node)
-        query, forced_along = self._hit_scope()
         self.hits.append(_Hit(
             plain, kind, label, output,
             lambda ref, lookup=node: setattr(lookup, 'rhs', ref),
-            query, forced_along,
         ))
 
     def _note_unresolved(self, parent, index, child):
@@ -255,33 +225,20 @@ class _Walk(object):
             return
         if kind != 'bind' and kind != 'const':
             return
-        query, forced_along = self._hit_scope()
         self.hits.append(_Hit(
             plain, kind, label, None,
             lambda ref, parent=parent, index=index, key=key: (
                 parent.children.__setitem__(index, (key, ref))
             ),
-            query, forced_along,
         ))
 
     def _note_along(self, node, apply):
         if id(node) in self.seen_along:
             return
         self.seen_along.add(id(node))
-        if self._inside_along == 0 and self._query_stack:
-            parent = self._query_stack[-1]
-            if parent not in self._along_parents:
-                self._along_parents.append(parent)
         bound = _along_bound(node)
-        parent = self._query_stack[-1] if self._query_stack else None
-        self.hits.append(_Hit(
-            bound, 'const', 'along bound', _INTEGER, apply, parent, parent,
-        ))
-        self._inside_along += 1
-        try:
-            self._visit_sources(node)
-        finally:
-            self._inside_along -= 1
+        self.hits.append(_Hit(bound, 'const', 'along bound', _INTEGER, apply))
+        self._visit_sources(node)
 
     def _visit_sources(self, node):
         if not hasattr(node, 'get_source_expressions'):
@@ -289,29 +246,17 @@ class _Walk(object):
         for source in node.get_source_expressions():
             self.visit(source)
 
-    def _hit_scope(self):
-        query = self._query_stack[-1] if self._query_stack else None
-        forced = None
-        if self._inside_along and self._along_parents:
-            forced = self._along_parents[-1]
-        return query, forced
-
 
 class _Hit(object):
-    __slots__ = (
-        'token', 'kind', 'label', 'value', 'output_field', 'apply',
-        'query', 'forced_along',
-    )
+    __slots__ = ('token', 'kind', 'label', 'value', 'output_field', 'apply')
 
-    def __init__(self, value, kind, label, output_field, apply, query, forced_along):
+    def __init__(self, value, kind, label, output_field, apply):
         self.token = _value_token(value)
         self.kind = kind
         self.label = label
         self.value = value
         self.output_field = output_field
         self.apply = apply
-        self.query = query
-        self.forced_along = forced_along
 
 
 def _group(hits):

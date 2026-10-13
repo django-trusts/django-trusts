@@ -11,7 +11,7 @@ reach the prefix.
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
-from django.db import connection, models
+from django.db import models
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
@@ -1130,13 +1130,10 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             param for param in row['params']
             if param.get('hint') == 'along bound'
         ]
-        expected_bounds = [{'const': 1, 'hint': 'along bound'}]
-        if connection.vendor == 'mysql':
-            # The delegation walk is inside EXISTS. Its CTE cannot see
-            # the outer trusts_bind row, so the same bound is a
-            # parameter on both rows.
-            expected_bounds = expected_bounds * 2
-        self.assertEqual(bounds, expected_bounds)
+        self.assertEqual(
+            bounds,
+            [{'const': 1, 'hint': 'along bound'}],
+        )
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

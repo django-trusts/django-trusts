@@ -607,9 +607,8 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self._assert_projections(
             registry, self.Node, [root, child, leaf], [other],
         )
-        # MySQL cannot see an outer derived table from a recursive CTE
-        # nested inside EXISTS. The bind row has to sit on that EXISTS,
-        # and the depth cap has to use the same alias as the row.
+        # The outer trusts_bind column is visible inside WITH RECURSIVE,
+        # including a walk nested in EXISTS. MySQL keeps that one row.
         granted_qs = self.Node.objects.filter(
             pk__in=[root.pk, child.pk, leaf.pk],
         )
@@ -619,13 +618,9 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             on_root = common_permissions((handle,), root, self.alice)
         self.assertEqual(_pks(common), {self.read.pk})
         self.assertEqual(_pks(on_root), {self.read.pk})
-        nested_sql, _nested_params = common.query.sql_with_params()
-        walk_at = nested_sql.rfind('WITH RECURSIVE')
-        join_at = nested_sql.rfind('CROSS JOIN', 0, walk_at)
-        self.assertGreater(join_at, nested_sql.rfind('NOT (EXISTS'))
-        quote = connection.ops.quote_name('x')[0]
-        alias = nested_sql[join_at:].split(') ' + quote, 1)[1].split(quote, 1)[0]
-        quoted_alias = connection.ops.quote_name(alias)
+        nested_sql, nested_params = common.query.sql_with_params()
+        self.assertEqual(nested_sql.count('CROSS JOIN'), 1)
+        quoted_alias = connection.ops.quote_name('trusts_bind')
         self.assertIn(
             '%s < %s.%s' % (
                 connection.ops.quote_name('depth'),
@@ -638,6 +633,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             '%s.%s' % (quoted_alias, connection.ops.quote_name('user_id')),
             nested_sql,
         )
+        self.assertEqual(nested_params.count(16), 1)
         qs = registry.filter_authorized(
             self.Node.objects.order_by('pk'), self.alice, self.read,
         )
