@@ -574,11 +574,11 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 with self.subTest(model=model_name, key=key):
                     self.assertIn('django_content_type', sql)
                     self.assertIn(
-                        {'const': 'trusts_tests', 'hint': 'content type app'},
+                        '$content.app_label="trusts_tests"',
                         params,
                     )
                     self.assertIn(
-                        {'const': model_name, 'hint': 'content type model'},
+                        '$content.model="%s"' % model_name,
                         params,
                     )
                     self.assertEqual(
