@@ -69,7 +69,7 @@ T = TypeVar('T', bound=Model)
 def _bind_query(queryset, *also):
     """Return ``queryset`` with each inquiry value bound once.
 
-    ``TRUSTS_BIND_ONCE`` false returns the queryset unchanged.
+    ``TRUSTS_SQL_BIND_ONCE`` false returns the queryset unchanged.
     """
     from trusts._bind_once import bind_once
 

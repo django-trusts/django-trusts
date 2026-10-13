@@ -5,7 +5,7 @@ Policy code builds ordinary querysets (``filter``, ``Q``, ``Exists``,
 onto one ``trusts_bind`` row. That queryset is what runs and what the
 lockfile records.
 
-``TRUSTS_BIND_ONCE`` defaults to true. Set it to false and ``bind_once``
+``TRUSTS_SQL_BIND_ONCE`` defaults to true. Set it to false and ``bind_once``
 returns the queryset unchanged, so the lockfile shows the plain SQL.
 """
 
@@ -40,12 +40,12 @@ _PERMISSION_FIELDS = frozenset(('permission', 'permission_id'))
 def trusts_bind_once():
     """Whether statements bind each distinct inquiry value once.
 
-    Missing ``TRUSTS_BIND_ONCE`` means on. ``False`` leaves the queryset
+    Missing ``TRUSTS_SQL_BIND_ONCE`` means on. ``False`` leaves the queryset
     exactly as policy code built it.
     """
     from django.conf import settings
 
-    return bool(getattr(settings, 'TRUSTS_BIND_ONCE', True))
+    return bool(getattr(settings, 'TRUSTS_SQL_BIND_ONCE', True))
 
 
 def bind_once(queryset, *also):

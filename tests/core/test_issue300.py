@@ -66,7 +66,7 @@ class Issue300LockfileTest(SimpleTestCase):
         self.assertNotIn('allow_inactive', users['sql'])
 
     def test_flag_off_records_the_plain_queryset(self):
-        with override_settings(TRUSTS_BIND_ONCE=False):
+        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
             content = _document_rows()
         for key in (
             'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
@@ -161,14 +161,14 @@ class Issue300BindOnceTest(SimpleTestCase):
 
     def test_setting_defaults_to_true_and_false_skips_the_bind_row(self):
         self.assertTrue(trusts_bind_once())
-        with override_settings(TRUSTS_BIND_ONCE=True):
+        with override_settings(TRUSTS_SQL_BIND_ONCE=True):
             self.assertTrue(trusts_bind_once())
             sql, params = bind_once(
                 User.objects.filter(id=4).filter(pk=4),
             ).query.sql_with_params()
             self.assertIn('trusts_bind', sql)
             self.assertEqual(list(params), [4])
-        with override_settings(TRUSTS_BIND_ONCE=False):
+        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
             self.assertFalse(trusts_bind_once())
             skipped = bind_once(User.objects.filter(id=4).filter(pk=4))
             sql, params = skipped.query.sql_with_params()
@@ -290,7 +290,7 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                 self.assertIn(True, params)
 
     def test_flag_off_compiles_the_plain_is_active_comparison(self):
-        with override_settings(TRUSTS_BIND_ONCE=False):
+        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
             plain = bind_once(User.objects.filter(is_active=True))
             bound_shape = User.objects.filter(is_active=True)
         plain_sql, plain_params = plain.query.sql_with_params()

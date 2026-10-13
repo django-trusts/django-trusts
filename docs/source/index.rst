@@ -773,7 +773,7 @@ lockfile key remains ``get_permitted_users``. For the direct
            LIMIT 1
          ) )
 
-``TRUSTS_BIND_ONCE`` defaults to true. It is the switch for the one-row
+``TRUSTS_SQL_BIND_ONCE`` defaults to true. It is the switch for the one-row
 bind table in the statement above. Leave it on. Set it to false only
 when that SQL misbehaves: django-trusts then runs the plain queryset,
 and the lockfile records that plain SQL. Set it back to true when the
