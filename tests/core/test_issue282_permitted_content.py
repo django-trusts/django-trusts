@@ -77,15 +77,25 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     recorded = []
 
     def wrapper(execute, sql, params, many, context):
-        recorded.append((sql, () if params is None else tuple(params)))
-        return execute(sql, params, many, context)
+        result = execute(sql, params, many, context)
+        db_cursor = context['cursor'].cursor
+        logged = connection.ops.last_executed_query(
+            db_cursor, sql, () if params is None else params,
+        )
+        recorded.append((
+            sql,
+            () if params is None else tuple(params),
+            logged,
+        ))
+        return result
 
     with CaptureQueriesContext(connection) as captured:
         with connection.execute_wrapper(wrapper):
             list(queryset)
     test.assertEqual(len(recorded), 1)
     test.assertEqual(len(captured.captured_queries), 1)
-    raw_sql, raw_params = recorded[0]
+    raw_sql, raw_params, logged = recorded[0]
+    test.assertEqual(captured.captured_queries[0]['sql'], logged)
     test.assertEqual(row['sql'], _format_policy_sql(raw_sql))
     test.assertEqual(
         [token for token, _spaced in _tokenize_policy_sql(row['sql'])],
@@ -98,12 +108,6 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
             test.assertEqual(symbol['const'], _json_const(value))
         else:
             test.assertEqual(set(symbol), {'bind', 'hint'})
-    test.assertEqual(
-        captured.captured_queries[0]['sql'],
-        connection.ops.last_executed_query(
-            connection.cursor(), raw_sql, raw_params,
-        ),
-    )
     return row
 
 
