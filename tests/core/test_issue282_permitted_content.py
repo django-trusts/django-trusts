@@ -1,4 +1,4 @@
-"""Scope listings agree with the forward and reverse checks (#282).
+"""Permitted content agrees with the forward and reverse checks (#282).
 
 ``filter_by_permitted_content`` follows the same ``along=`` walk and the
 same one-level delegation as ``filter_authorized`` and
@@ -35,14 +35,86 @@ def _request(user):
     return request
 
 
-class Issue282ScopesSuiteRegistrationTest(SimpleTestCase):
+def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
+    """The lockfile statement is the SQL and values Django runs.
+
+    Constants in the lockfile are those values. The SQL text is that
+    statement broken between tokens. Nothing is rewritten into another
+    inquiry.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from trusts.policy_lock import (
+        _json_const,
+        _load_policy_sql_document,
+        _role_sentinel,
+        render_policy_sql_bytes,
+    )
+    from trusts.policy_sql_format import _format_policy_sql, _tokenize_policy_sql
+
+    document = _load_policy_sql_document(
+        render_policy_sql_bytes(handles=[handle]),
+    )
+    test.assertEqual(document['schema_version'], 1)
+    content = document['backends'][0]['contents'][0]
+    label = prefix_model._meta.label
+    rows = [
+        row for row in content['filter_by_permitted_content']
+        if row['model'] == label
+    ]
+    test.assertEqual(len(rows), 1)
+    row = rows[0]
+    record = handle.registry.plan_for(content_model).records[0]
+    queryset = filter_by_permitted_content(
+        prefix_model._default_manager.all(),
+        _role_sentinel(record, 'user', 'default'),
+        _role_sentinel(record, 'permission', 'default'),
+        content=content_model,
+        handles=(handle,),
+        sponsor_handles=(handle,),
+    )
+    recorded = []
+
+    def wrapper(execute, sql, params, many, context):
+        recorded.append((sql, () if params is None else tuple(params)))
+        return execute(sql, params, many, context)
+
+    with CaptureQueriesContext(connection) as captured:
+        with connection.execute_wrapper(wrapper):
+            list(queryset)
+    test.assertEqual(len(recorded), 1)
+    test.assertEqual(len(captured.captured_queries), 1)
+    raw_sql, raw_params = recorded[0]
+    test.assertEqual(row['sql'], _format_policy_sql(raw_sql))
+    test.assertEqual(
+        [token for token, _spaced in _tokenize_policy_sql(row['sql'])],
+        [token for token, _spaced in _tokenize_policy_sql(raw_sql)],
+    )
+    test.assertEqual(row['sql'].count('%s'), len(row['params']))
+    test.assertEqual(len(row['params']), len(raw_params))
+    for symbol, value in zip(row['params'], raw_params):
+        if 'const' in symbol:
+            test.assertEqual(symbol['const'], _json_const(value))
+        else:
+            test.assertEqual(set(symbol), {'bind', 'hint'})
+    test.assertEqual(
+        captured.captured_queries[0]['sql'],
+        connection.ops.last_executed_query(
+            connection.cursor(), raw_sql, raw_params,
+        ),
+    )
+    return row
+
+
+class Issue282PermittedContentSuiteRegistrationTest(SimpleTestCase):
     def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_issue282_scopes', KERNEL_SUITE)
-        self.assertIn('tests.core.test_issue282_scopes', PAIR_KERNEL_SUITE)
+        self.assertIn('tests.core.test_issue282_permitted_content', KERNEL_SUITE)
+        self.assertIn('tests.core.test_issue282_permitted_content', PAIR_KERNEL_SUITE)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class ScopeAlongAgreementTest(TransactionTestCase):
+class PermittedContentAlongAgreementTest(TransactionTestCase):
     """Cabinet → child → past, plus a two-node cycle with one step past it.
 
     Shape S (``parent``) walks toward children. Depth 0 is the grant's
@@ -58,9 +130,9 @@ class ScopeAlongAgreementTest(TransactionTestCase):
         self._table_cm = _tables(self.Cabinet, self.Sheet, self.Grant)
         self._table_cm.__enter__()
         self.addCleanup(self._table_cm.__exit__, None, None, None)
-        self.change = _permission(self.Sheet, 'change_sheet_scope')
-        self.alice = self.User.objects.create_user('scope-alice', password='x')
-        self.outsider = self.User.objects.create_user('scope-out', password='x')
+        self.change = _permission(self.Sheet, 'change_sheet')
+        self.alice = self.User.objects.create_user('pc-alice', password='x')
+        self.outsider = self.User.objects.create_user('pc-out', password='x')
         self.root = self.Cabinet.objects.create(title='root')
         self.child = self.Cabinet.objects.create(title='child', parent=self.root)
         self.past = self.Cabinet.objects.create(title='past', parent=self.child)
@@ -121,7 +193,7 @@ class ScopeAlongAgreementTest(TransactionTestCase):
         return Cabinet, Sheet, Grant
 
     def _handle(self):
-        handle = _handle('tests.core.issue282-scopes')
+        handle = _handle('tests.core.issue282-permitted-content')
         handle.register(
             trust=self.Grant,
             user='user',
@@ -148,14 +220,14 @@ class ScopeAlongAgreementTest(TransactionTestCase):
                     sheet.pk in authorized,
                     sheet.title,
                 )
-            scopes = filter_by_permitted_content(
+            listed = filter_by_permitted_content(
                 self.Cabinet.objects.all(), user, permission,
                 content=self.Sheet, handles=(handle,),
                 allow_inactive_user=allow_inactive,
             )
-            self.assertIsNone(scopes._result_cache)
+            self.assertIsNone(listed._result_cache)
             with self.assertNumQueries(1):
-                found = set(scopes.values_list('pk', flat=True))
+                found = set(listed.values_list('pk', flat=True))
         expected = {cabinet.pk for cabinet in allowed_cabinets}
         self.assertEqual(found, expected)
         self.assertEqual(
@@ -163,7 +235,7 @@ class ScopeAlongAgreementTest(TransactionTestCase):
             {self.sheets[cabinet.pk].pk for cabinet in allowed_cabinets},
         )
         if allowed_cabinets:
-            self.assertIn('with recursive', str(scopes.query).lower())
+            self.assertIn('with recursive', str(listed.query).lower())
         return found
 
     def test_along_agrees_at_bound_one_past_and_on_a_cycle(self):
@@ -217,7 +289,7 @@ class ScopeAlongAgreementTest(TransactionTestCase):
                 db_table = 'i282s_folder_grant'
 
         with _tables(Folder, Payload, Row, FolderGrant):
-            handle = _handle('tests.core.issue282-scopes-suffix')
+            handle = _handle('tests.core.issue282-permitted-content-suffix')
             handle.register(
                 trust=FolderGrant,
                 user='user',
@@ -225,7 +297,7 @@ class ScopeAlongAgreementTest(TransactionTestCase):
                 content='folder__rows__content',
                 along=('folder__parent', 1),
             )
-            change = _permission(Payload, 'change_payload_scope')
+            change = _permission(Payload, 'change_payload')
             root = Folder.objects.create(title='root')
             child = Folder.objects.create(title='child', parent=root)
             past = Folder.objects.create(title='past', parent=child)
@@ -311,7 +383,7 @@ class ScopeAlongAgreementTest(TransactionTestCase):
                 db_table = 'i282s_office_grant'
 
         with _tables(Office, AncCabinet, AncSheet, OfficeGrant):
-            handle = _handle('tests.core.issue282-scopes-ancestor')
+            handle = _handle('tests.core.issue282-permitted-content-ancestor')
             handle.register(
                 trust=OfficeGrant,
                 user='user',
@@ -359,10 +431,21 @@ class ScopeAlongAgreementTest(TransactionTestCase):
             self.assertEqual(cabinets, {root.pk, child.pk})
             self.assertNotIn(past.pk, cabinets)
 
+    def test_walked_grant_lockfile_matches_the_executed_statement(self):
+        handle = self._handle()
+        row = _assert_lock_matches_executed(
+            self, handle, self.Cabinet, self.Sheet,
+        )
+        self.assertIn('WITH RECURSIVE', row['sql'])
+        self.assertEqual(
+            [param for param in row['params'] if param.get('hint') == 'along bound'],
+            [{'const': 1, 'hint': 'along bound'}],
+        )
+
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class DelegatedScopeAgreementTest(TransactionTestCase):
-    """One-level delegation on cabinet/sheet scopes.
+class DelegatedPermittedContentAgreementTest(TransactionTestCase):
+    """One-level delegation on cabinets that hold sheets.
 
     root → child → past → beyond. Shape S walks toward children.
     """
@@ -443,7 +526,7 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
         return Cabinet, Sheet, Grant, Delegation
 
     def _register(self, *, sponsor_along=None, delegation_along=None):
-        handle = _handle('tests.core.issue282-deleg-scopes')
+        handle = _handle('tests.core.issue282-delegated-permitted-content')
         handle.register(
             trust=self.Grant,
             user='user',
@@ -460,7 +543,7 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
         )
         return handle
 
-    def _scopes(self, handle, user, *, allow_inactive=False):
+    def _permitted_content(self, handle, user, *, allow_inactive=False):
         return set(filter_by_permitted_content(
             self.Cabinet.objects.all(), user, self.change,
             content=self.Sheet, handles=(handle,),
@@ -482,9 +565,9 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
                     sheet.pk in authorized,
                     cabinet.title,
                 )
-        scopes = self._scopes(handle, user, allow_inactive=allow_inactive)
+        listed = self._permitted_content(handle, user, allow_inactive=allow_inactive)
         expected = {cabinet.pk for cabinet in allowed_cabinets}
-        self.assertEqual(scopes, expected)
+        self.assertEqual(listed, expected)
         self.assertEqual(
             authorized,
             {self.sheets[cabinet.pk].pk for cabinet in allowed_cabinets},
@@ -526,8 +609,8 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
         )
         self._agree_user(handle, self.delegate, (self.child, self.past))
         self._agree_user(handle, self.sponsor, (self.root, self.child, self.past))
-        self.assertNotIn(self.beyond.pk, self._scopes(handle, self.delegate))
-        self.assertNotIn(self.root.pk, self._scopes(handle, self.delegate))
+        self.assertNotIn(self.beyond.pk, self._permitted_content(handle, self.delegate))
+        self.assertNotIn(self.root.pk, self._permitted_content(handle, self.delegate))
 
     def test_second_delegation_level_is_denied(self):
         handle = self._register(
@@ -614,7 +697,7 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
                 app_label = 'trusts_tests'
                 db_table = 'i282d_suffix_delegation'
 
-        change = _permission(Attachment, 'change_attachment_scope')
+        change = _permission(Attachment, 'change_attachment')
         with _tables(Attachment, Note, AttachmentGrant, SuffixDelegation):
             attachment = Attachment.objects.create(title='sheet')
             Note.objects.create(cabinet=self.child, attachment=attachment)
@@ -624,7 +707,7 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
             SuffixDelegation.objects.create(
                 delegate=self.delegate, sponsor=self.sponsor, cabinet=self.child,
             )
-            handle = _handle('tests.core.issue282-suffix-scope')
+            handle = _handle('tests.core.issue282-suffix')
             handle.register(
                 trust=AttachmentGrant,
                 user='user',
@@ -1033,6 +1116,22 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
                         content=Payload, handles=(handle,),
                     )
 
+    def test_delegated_grant_lockfile_matches_the_executed_statement(self):
+        handle = self._register(sponsor_along=('cabinet__parent', 1))
+        row = _assert_lock_matches_executed(
+            self, handle, self.Cabinet, self.Sheet,
+        )
+        self.assertIn('WITH RECURSIVE', row['sql'])
+        self.assertIn('i282d_delegation', row['sql'])
+        bounds = [
+            param for param in row['params']
+            if param.get('hint') == 'along bound'
+        ]
+        self.assertEqual(
+            bounds,
+            [{'const': 1, 'hint': 'along bound'}, {'const': 1, 'hint': 'along bound'}],
+        )
+
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongSurfaceAgreementTest(TransactionTestCase):
@@ -1078,8 +1177,8 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
         self._table_cm = _tables(Trust, TrustGrant)
         self._table_cm.__enter__()
         self.addCleanup(self._table_cm.__exit__, None, None, None)
-        self.change = _permission(Trust, 'change_trust_scope')
-        self.code = 'trusts_tests.change_trust_scope'
+        self.change = _permission(Trust, 'change_trust')
+        self.code = 'trusts_tests.change_trust'
         self.alice = self.User.objects.create_user('t-alice', password='x')
         self.root = Trust.objects.create(title='root')
         self.child = Trust.objects.create(title='child', parent=self.root)

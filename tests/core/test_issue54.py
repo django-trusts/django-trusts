@@ -169,7 +169,7 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
         self.assertIs(result, sentinel)
         called.assert_called_once_with(
             queryset, user, permission, content=content,
-            handles=handles, allow_inactive_user=True,
+            handles=handles, allow_inactive_user=True, sponsor_handles=None,
         )
 
 

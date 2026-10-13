@@ -46,7 +46,8 @@ The document is organized by application meaning:
 * a content with trusts lists them with their associated SQL for
   ``permitted``, ``has_perm``, ``get_all_permissions``, and
   ``get_permitted_users``, plus ``get_group_permissions`` when a trust
-  uses ``group=``;
+  uses ``group=``, plus ``filter_by_permitted_content`` when the content
+  path has a proper prefix;
 * a content with named filters lists those queries; and
 * a filter-only content contains ``model`` and ``named_filters``.
 
@@ -167,6 +168,28 @@ Permission inquiries and named filters
 
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. Named filters are listed in ``add_named_filter()`` order.
+
+Permitted content
+~~~~~~~~~~~~~~~~~
+
+When the registered content path passes through another model before the
+protected object, the lockfile lists that model under
+``filter_by_permitted_content``. Each entry names the model and holds one
+SQL statement and its ordered parameters. A cabinet that holds sheets
+produces one entry for the cabinet. The statement keeps a cabinet when a
+permitted sheet sits under it.
+
+The statement is the queryset ``filter_by_permitted_content`` compiles for
+that model. The parameter values are the values in that statement. An
+``along=`` walk uses the same bounded ``WITH RECURSIVE`` query as the
+object check. The depth cap is a ``const`` with hint ``along bound``. A
+prefix at the walk site is compared with the walk. An ancestor of the walk
+site stays the value stored on the grant. A one-level delegation keeps a
+row only where the delegation and the sponsor's ordinary permission both
+reach it. Ordinary sponsor grants may come from another backend in the
+same document, as they do for ``has_perm``. A content path with no proper
+prefix omits the key. A prefix whose queryset is empty also omits that
+model, because that call runs no SQL. Schema version stays 1.
 
 Identifiers and ordering
 ~~~~~~~~~~~~~~~~~~~~~~~~

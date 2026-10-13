@@ -4,6 +4,7 @@
 Each backend lists ``contents`` by model. A content owns its trust
 legs, the compiled SQL for ``permitted``, ``has_perm``,
 ``get_all_permissions``, and ``get_permitted_users`` when it has trusts,
+``filter_by_permitted_content`` when the content path has a proper prefix,
 ``get_group_permissions`` when a trust was registered with ``group=``,
 and its named filters. ``get_permitted_users`` is the reverse
 content-and-permission-to-users predicate for that backend, not
@@ -432,6 +433,11 @@ def _project_content(handle, alias, group, filters, handles):
     content['get_permitted_users'] = _sql_row(_compile_get_permitted_users(
         handle, alias, classifier_records, group['model'], handles,
     ))
+    permitted_content = _compile_filter_by_permitted_content(
+        handle, alias, classifier_records, group['model'], handles,
+    )
+    if permitted_content:
+        content['filter_by_permitted_content'] = permitted_content
     if filters:
         content['named_filters'] = [_named_filter_row(row) for row in filters]
     return content
@@ -649,6 +655,67 @@ def _compile_get_permitted_users(handle, alias, records, model, handles):
         queryset, alias, record=records[0], expr=None, records=records,
         reverse_users=True,
     )
+
+
+def _permitted_content_prefix_models(handle, model):
+    """Concrete models that are a proper prefix of this backend's content path.
+
+    Order is registration order, then path order. A model is listed once.
+    The protected model is included only when an earlier hop on the same
+    path also uses it.
+    """
+    from trusts.core import _resolved_hop
+
+    plan = handle.registry.plan_for(model)
+    legs = tuple(plan.records) + tuple(getattr(plan, 'delegations', ()) or ())
+    found = []
+    seen = set()
+    for record in legs:
+        path = record.content_path
+        if not path:
+            continue
+        current = record.root
+        last = len(path) - 1
+        for index, name in enumerate(path):
+            field = current._meta.get_field(name)
+            related, _target = _resolved_hop(field, 'content', path)
+            concrete = related._meta.concrete_model
+            if index != last and concrete not in seen:
+                seen.add(concrete)
+                found.append(concrete)
+            current = related
+    return tuple(found)
+
+
+def _compile_filter_by_permitted_content(handle, alias, records, model, handles):
+    """One statement per proper prefix, the queryset that actually runs."""
+    from trusts.core import filter_by_permitted_content
+
+    user = _role_sentinel(records[0], 'user', alias)
+    permission = _role_sentinel(records[0], 'permission', alias)
+    rows = []
+    for prefix in _permitted_content_prefix_models(handle, model):
+        queryset = filter_by_permitted_content(
+            _content_manager(prefix).all(),
+            user,
+            permission,
+            content=model,
+            handles=(handle,),
+            sponsor_handles=handles,
+        )
+        # An empty queryset runs no SQL. Omit it instead of inventing a
+        # statement.
+        if queryset.query.is_empty():
+            continue
+        sql, params = _compile_queryset(
+            queryset, alias, record=records[0], expr=None, records=records,
+        )
+        rows.append({
+            'model': _model_label(prefix),
+            'params': params,
+            'sql': _format_policy_sql(sql),
+        })
+    return rows
 
 
 def _compile_get_group_permissions(handle, alias, records, model):
@@ -1215,9 +1282,10 @@ def _classify_compiled(node, sql, params):
 def _symbol_for_new_param(node):
     from trusts.core import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
+        _PrefixInForwardWalk,
     )
 
-    if isinstance(node, GrantReach):
+    if isinstance(node, (GrantReach, _PrefixInForwardWalk)):
         return _with_hint(
             {'const': _json_const(node.record.along.bound)}, 'along bound',
         )
@@ -1287,6 +1355,7 @@ def _const_hint(node, value):
     """Readable label for one constant placeholder."""
     from trusts.core import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
+        _PrefixInForwardWalk,
     )
 
     if isinstance(node, Value):
@@ -1297,6 +1366,7 @@ def _const_hint(node, value):
         lhs = getattr(node, 'lhs', None)
         if isinstance(lhs, (
             GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
+            _PrefixInForwardWalk,
         )) and value is True:
             return 'along match'
         name = _lookup_field_name(node)
