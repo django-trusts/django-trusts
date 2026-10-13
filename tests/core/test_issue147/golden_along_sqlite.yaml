@@ -6,7 +6,7 @@ backends:
     contents:
       - model: "documents.Folder"
         permitted:
-          params: [{bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
+          params: [{bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}]
           sql: |-
             SELECT DISTINCT "documents_folder"."id", "documents_folder"."parent_id"
             FROM "documents_folder"
@@ -35,11 +35,11 @@ backends:
               SELECT DISTINCT "s"."id"
               FROM "gen"
               JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
-            ) = %s
+            )
         has_perm:
-          params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
+          params: [{const: 1, hint: "content pk"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}]
           sql: |-
-            SELECT %s AS "a"
+            SELECT 1 AS "a"
             FROM "documents_folder"
             WHERE ("documents_folder"."id" = %s
                 AND "documents_folder"."id" IN (
@@ -67,24 +67,24 @@ backends:
                 SELECT DISTINCT "s"."id"
                 FROM "gen"
                 JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
-              ) = %s
+              )
             )
             LIMIT 1
         get_all_permissions:
-          params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
+          params: [{const: 1, hint: "content pk"}, {const: 1, hint: "content pk"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
               EXISTS (
-                SELECT %s AS "a"
+                SELECT 1 AS "a"
                 FROM "documents_folder" "U0"
                 WHERE "U0"."id" = %s
                 LIMIT 1
               )
               AND NOT ( EXISTS (
-                  SELECT %s AS "a"
+                  SELECT 1 AS "a"
                   FROM "documents_folder" "V0"
                   WHERE ("V0"."id" = %s
                       AND NOT ("V0"."id" IN (
@@ -112,20 +112,22 @@ backends:
                         SELECT DISTINCT "s"."id"
                         FROM "gen"
                         JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
-                      ) = %s
+                      )
                     )
                   )
                   LIMIT 1
                 ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
-          params: [{const: true, hint: "active"}, {const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "content.id", hint: "$content"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}, {const: true, hint: "along match"}]
+          params: [{const: false, hint: "allow inactive"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "content.id", hint: "$content"}, {const: 2, hint: "along bound"}]
           sql: |-
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"
-            WHERE ("auth_user"."is_active" = %s
+            WHERE ((%s
+                  OR "auth_user"."is_active"
+              )
               AND EXISTS (
-                SELECT %s AS "a"
+                SELECT 1 AS "a"
                 FROM "documents_foldergrant" "U0"
                 INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
                 INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
@@ -151,8 +153,7 @@ backends:
                     SELECT DISTINCT "s"."id"
                     FROM "gen"
                     JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
-                  ) = %s
+                  )
                 )
                 LIMIT 1
-              ) = %s
-            )
+              ) )

@@ -156,6 +156,7 @@ class Folder(models.Model):
 
 class PolicyActor(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         app_label = 'documents'
@@ -172,6 +173,7 @@ class PolicyActorGrant(models.Model):
 
 class PolicyAccount(models.Model):
     code = models.CharField(max_length=16, unique=True)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         app_label = 'documents'
@@ -377,7 +379,6 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(list(document['database']), ['engine'])
         self.assertEqual(list(content['permitted']), ['params', 'sql'])
         self.assertEqual(content['permitted']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'document', 'hint': 'content type model'},
@@ -1043,7 +1044,6 @@ class PolicySqlSentinelTest(SimpleTestCase):
         actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
         self.assertEqual(actor_content['permitted']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'document', 'hint': 'content type model'},
@@ -1068,7 +1068,6 @@ class PolicySqlSentinelTest(SimpleTestCase):
             'target': 'code',
         })
         self.assertEqual(account_content['permitted']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'document', 'hint': 'content type model'},

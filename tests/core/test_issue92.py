@@ -607,6 +607,22 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self._assert_projections(
             registry, self.Node, [root, child, leaf], [other],
         )
+        # The depth cap is a placeholder inside the CTE, so MySQL does
+        # not have to read an outer derived table.
+        granted_qs = self.Node.objects.filter(
+            pk__in=[root.pk, child.pk, leaf.pk],
+        )
+        with patch.object(connections[granted_qs.db], 'vendor', 'mysql'):
+            handle = _direct_handle(registry)
+            common = common_permissions((handle,), granted_qs, self.alice)
+            on_root = common_permissions((handle,), root, self.alice)
+        self.assertEqual(_pks(common), {self.read.pk})
+        self.assertEqual(_pks(on_root), {self.read.pk})
+        nested_sql, nested_params = common.query.sql_with_params()
+        self.assertIn('WITH RECURSIVE', nested_sql)
+        self.assertIn('"depth" < %s', nested_sql)
+        self.assertNotIn('trusts_bind', nested_sql)
+        self.assertIn(16, nested_params)
         qs = registry.filter_authorized(
             self.Node.objects.order_by('pk'), self.alice, self.read,
         )
@@ -617,9 +633,11 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         if connection.vendor == 'sqlite':
             plan = _plan_text(qs)
             self.assertIn('LIST SUBQUERY', plan)
-            self.assertIn('MATERIALIZE', plan)
-            self.assertEqual(plan.count('MATERIALIZE'), 1)
-            self.assertIn('SCAN trusts_tests_node', plan.split('\n')[0])
+            # The walk is materialized once. The one-row bind table is the
+            # other materialization.
+            self.assertEqual(plan.count('MATERIALIZE gen'), 1)
+            self.assertNotIn('trusts_bind', plan)
+            self.assertIn('RECURSIVE STEP', plan)
 
     def test_shape_c_grant_on_descendant_authorizes_ancestors(self):
         root = self.Node.objects.create(title='root')
@@ -681,7 +699,8 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         compiled, params = qs.query.sql_with_params()
         self.assertIn('WITH RECURSIVE', sql.upper())
         self.assertIn('UNION ALL', sql.upper())
-        self.assertIn('< %s', compiled)
+        self.assertIn('"depth" < %s', compiled)
+        self.assertNotIn('trusts_bind', compiled)
         self.assertIn(16, params)
         self.assertIn('depth', compiled.lower())
         outer = sql.split('SELECT DISTINCT')[-1]
@@ -738,7 +757,8 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertNotIn('auth_user', body.lower())
         self.assertNotIn('json_', sql.lower())
         self.assertIn('UNION ALL', upper)
-        self.assertIn('< %s', compiled)
+        self.assertIn('"depth" < %s', compiled)
+        self.assertNotIn('trusts_bind', compiled)
         self.assertIn(bound, params)
         self.assertIn(connection.ops.quote_name('auth_user'), sql)
         outer = sql.split('SELECT DISTINCT')[-1]

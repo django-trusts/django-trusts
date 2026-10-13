@@ -32,6 +32,7 @@ CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
+CHECK_ID_INACTIVE_PRINCIPAL = 'trusts.E010'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -583,4 +584,103 @@ def check_along_renderer(app_configs, **kwargs):
                 obj=None,
                 id=CHECK_ID_ALONG_RENDERER,
             ))
+    return messages
+
+
+_E010_HINT = (
+    'Add a concrete BooleanField named is_active, or inherit '
+    "AbstractBaseUser's is_active property. Silencing trusts.E010 does "
+    'not compile permission SQL.'
+)
+
+
+def _configured_principal_models():
+    """AUTH_USER_MODEL plus registered user, sponsor, and delegate models.
+
+    These are the models whose ``is_active`` permission SQL must match
+    ``has_perm``. A database is not required. A broken backend path is
+    skipped so ``check()`` still reports the models it can see.
+    """
+    from django.contrib.auth import get_user_model
+
+    from trusts.apps import implementation_configs
+    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+
+    found = []
+    try:
+        found.append(get_user_model())
+    except Exception:
+        pass
+    for config in implementation_configs():
+        try:
+            paths = config._configured_trusts_paths()
+        except TrustsConfigurationError:
+            continue
+        for path in paths:
+            try:
+                handle = config.configured_backend(path)
+            except (TrustsCompilerError, TrustsConfigurationError, Exception):
+                continue
+            registry = handle.registry
+            for record in getattr(registry, 'records', ()):
+                found.append(record.user_model)
+            for record in getattr(registry, 'delegations', ()):
+                found.append(record.sponsor_model)
+                found.append(record.delegate_model)
+    return found
+
+
+@django_checks.register(django_checks.Tags.models)
+def check_principal_is_active(app_configs, **kwargs):
+    """Report principals whose ``is_active`` cannot compile permission SQL.
+
+    A concrete ``BooleanField`` and the stock ``AbstractBaseUser``
+    property are accepted. A missing name, or any other attribute, is
+    ``trusts.E010``. ``app_configs`` is ignored so a subset check still
+    sees every configured principal. No database queries.
+    """
+    from trusts.core import TrustsConfigurationError
+    from trusts.query import principal_attribute_kind
+
+    seen = set()
+    messages = []
+    for model in _configured_principal_models():
+        meta = getattr(model, '_meta', None)
+        if meta is None:
+            continue
+        model = meta.concrete_model
+        label = model._meta.label
+        if label in seen:
+            continue
+        seen.add(label)
+        try:
+            kind = principal_attribute_kind(model, 'is_active')
+        except TrustsConfigurationError as exc:
+            messages.append(django_checks.Error(
+                str(exc),
+                hint=_E010_HINT,
+                obj=model,
+                id=CHECK_ID_INACTIVE_PRINCIPAL,
+            ))
+            continue
+        except Exception as exc:
+            messages.append(django_checks.Error(
+                '%s.is_active cannot be classified (%s).' % (label, exc),
+                hint=_E010_HINT,
+                obj=model,
+                id=CHECK_ID_INACTIVE_PRINCIPAL,
+            ))
+            continue
+        if kind == 'absent':
+            messages.append(django_checks.Error(
+                '%s has no is_active column or stock AbstractBaseUser '
+                'property, so permission SQL cannot be compiled.' % label,
+                hint=_E010_HINT,
+                obj=model,
+                id=CHECK_ID_INACTIVE_PRINCIPAL,
+            ))
+    messages.sort(key=lambda message: (
+        getattr(getattr(message.obj, '_meta', None), 'label', ''),
+        message.msg,
+    ))
     return messages

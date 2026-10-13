@@ -322,82 +322,64 @@ class Issue255PolicySqlTest(SimpleTestCase):
             self.assertEqual(
                 forward['sql'].count('%s'), len(forward['params']),
             )
+        # Each walk carries its own placeholders. Nothing on the outer
+        # row holds the user, permission, content type, or depth cap.
         self.assertEqual(content['permitted']['params'], [
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(content['has_perm']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
             {'const': 1, 'hint': 'content pk'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(content['get_all_permissions']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
             {'const': 1, 'hint': 'content pk'},
-            {'const': 1, 'hint': 'exists marker'},
             {'const': 1, 'hint': 'content pk'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
         ])
-        # One ordered list for the ORed reverse statement. is_active is
-        # once, outside both walks. Each walk then contributes the EXISTS
-        # sentinel, the permission bind, the content-type pair, the
-        # content bind from the uncorrelated seed, and the depth ceiling.
-        # That ceiling is the only ``const: 2``.
         self.assertEqual(reverse['params'], [
-            {'const': True, 'hint': 'active'},
-            {'const': 1, 'hint': 'exists marker'},
+            {'const': False, 'hint': 'allow inactive'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'content.id', 'hint': '$content'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
-            {'const': True, 'hint': 'along match'},
-            {'const': 1, 'hint': 'exists marker'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'bind': 'content.id', 'hint': '$content'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
-            {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(
             [
                 index for index, param in enumerate(reverse['params'])
                 if param.get('const') == 2
             ],
-            [6, 14],
+            [5, 10],
         )
         self.assertEqual(reverse['sql'].count('%s'), len(reverse['params']))
         self.assertEqual(reverse['sql'].count('WITH RECURSIVE'), 2)
@@ -472,13 +454,11 @@ class Issue255PolicySqlTest(SimpleTestCase):
             {'const': 'walknode', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 8, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'walknode', 'hint': 'content type model'},
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 8, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
         ])
 
     def test_along_reverse_uuid_to_field_binds_content_ident(self):
@@ -526,17 +506,15 @@ class Issue255PolicySqlTest(SimpleTestCase):
         reverse = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertIn('WITH RECURSIVE', reverse['sql'])
         self.assertIn('"ident" = %s', reverse['sql'])
+        self.assertNotIn('trusts_bind', reverse['sql'])
         self.assertIn('"user_id" = ("auth_user"."id")', reverse['sql'])
         self.assertEqual(reverse['params'], [
-            {'const': True, 'hint': 'active'},
-            {'const': 1, 'hint': 'exists marker'},
+            {'const': False, 'hint': 'allow inactive'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'uuidnode', 'hint': 'content type model'},
             {'bind': 'content.ident', 'hint': '$content.ident'},
             {'const': 2, 'hint': 'along bound'},
-            {'const': True, 'hint': 'along match'},
-            {'const': True, 'hint': 'along match'},
         ])
         self.assertFalse(any(
             param.get('bind') == 'content.id' for param in reverse['params']
@@ -549,7 +527,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
                 index for index, param in enumerate(reverse['params'])
                 if param.get('const') == 2
             ],
-            [6],
+            [5],
         )
 
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
