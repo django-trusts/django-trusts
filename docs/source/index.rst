@@ -484,14 +484,15 @@ the same model.
 
    def filter_by_permitted_content(
        queryset, user, permission, *, content, handles=None,
-       allow_inactive_user=False,
+       allow_inactive_user=False, sponsor_handles=None,
    ):
        ...
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``allow_inactive_user`` is the same option as the other content
-inquiries.
+backends. ``sponsor_handles`` selects the ordinary grants a delegation may
+use and defaults to ``handles``. ``allow_inactive_user`` is the same option
+as the other content inquiries.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -731,7 +732,11 @@ unset. ``--database`` selects another configured alias for one invocation.
 
 The artifact is organized by backend and protected content model. A content
 with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
-``get_all_permissions``, and ``get_permitted_users``. The locked
+``get_all_permissions``, and ``get_permitted_users``. When the content path
+passes through another model before the protected object, it also lists
+``filter_by_permitted_content``: one statement for each of those models,
+the same SQL and parameter values ``filter_by_permitted_content`` runs.
+The locked
 ``get_permitted_users`` statement is that backend's reverse predicate
 (eligibility and complete grants), not Django's superuser check and
 not other backends. A content with named filters lists those queries.

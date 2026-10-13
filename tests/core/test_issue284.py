@@ -644,8 +644,8 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
     ``active_only`` is ``lambda user, permission, content: user.is_active == True``.
     ``unexpired`` is ``content.expires_on == content.as_of``. Both are named
     filters. The relationship condition stays
-    ``allowed_permissions.contains(permission)``. Scope listing follows the
-    ordinary cabinet grant and a one-level delegation of that grant.
+    ``allowed_permissions.contains(permission)``. ``filter_by_permitted_content``
+    follows the ordinary cabinet grant and a one-level delegation of that grant.
     ``has_perm`` and ``get_permitted_users`` follow the same relationship.
     A named filter applies to those two inquiries. ``filter_by_permitted_content``
     receives the permission instance, so it follows the unfiltered grant.

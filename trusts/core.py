@@ -349,11 +349,11 @@ def _scope_prefix_lookups(record, scope_model):
     return tuple(lookups)
 
 
-def _scope_lookup_hops(lookup):
+def _prefix_lookup_hops(lookup):
     return tuple(lookup.split('__'))
 
 
-def _scope_walk_position(record, lookup):
+def _prefix_walk_position(record, lookup):
     """Where this prefix sits relative to an ``along=`` walk site.
 
     ``exact`` is a registration with no walk. ``before`` is an ancestor
@@ -363,7 +363,7 @@ def _scope_walk_position(record, lookup):
     walk = getattr(record, 'along', None)
     if walk is None:
         return 'exact'
-    hops = _scope_lookup_hops(lookup)
+    hops = _prefix_lookup_hops(lookup)
     walk_hops = tuple(walk.walk_path)
     if hops == walk_hops:
         return 'site'
@@ -374,15 +374,15 @@ def _scope_walk_position(record, lookup):
     return 'exact'
 
 
-def _scope_partial_suffix(record, lookup):
+def _prefix_partial_suffix(record, lookup):
     """Path from the walk site to this prefix, not including the site."""
-    hops = _scope_lookup_hops(lookup)
+    hops = _prefix_lookup_hops(lookup)
     return '__'.join(hops[len(record.along.walk_path):])
 
 
-def _exact_scope_exists(record, lookup, target_attname, user, permission,
+def _exact_prefix_exists(record, lookup, target_attname, user, permission,
                         content_identity):
-    """Grant row whose stored prefix is the outer scope row."""
+    """Grant row whose stored prefix is the outer row."""
     inner = _bind_record_qs(
         record,
         user=user,
@@ -393,30 +393,30 @@ def _exact_scope_exists(record, lookup, target_attname, user, permission,
     return Exists(inner)
 
 
-def _ordinary_scope_predicate(record, lookup, target_attname, user, permission,
+def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
                               content_identity):
-    """One ordinary scope predicate, including an ``along=`` walk."""
-    position = _scope_walk_position(record, lookup)
+    """One ordinary permitted-content predicate, including an ``along=`` walk."""
+    position = _prefix_walk_position(record, lookup)
     if position in ('exact', 'before'):
-        return _exact_scope_exists(
+        return _exact_prefix_exists(
             record, lookup, target_attname, user, permission, content_identity,
         )
     suffix = None
     if position == 'after':
-        suffix = _scope_partial_suffix(record, lookup)
-    return _ScopeInForwardWalk(
+        suffix = _prefix_partial_suffix(record, lookup)
+    return _PrefixInForwardWalk(
         record, user, permission, target_attname,
         content_identity=content_identity,
         suffix_lookup=suffix,
     )
 
 
-def _scope_sponsor_q(record, sponsor_records, permission, content_identity,
-                     scope_model, candidate, lookup):
-    """Sponsor ordinary-authority OR for one scope prefix.
+def _prefix_sponsor_q(record, sponsor_records, permission, content_identity,
+                     prefix_model, candidate, lookup):
+    """Sponsor ordinary-authority OR for one permitted-content prefix.
 
     Placed on the delegation row. An ordinary ``along=`` walk must reach
-    the same scope identity the delegation reaches. An ordinary row
+    the same prefix identity the delegation reaches. An ordinary row
     without ``along=`` keeps an exact prefix comparison. An ancestor of
     the walk site stays that stored prefix, including when the ordinary
     grant is the walk. A sponsor ``along=`` whose content suffix is longer
@@ -437,9 +437,9 @@ def _scope_sponsor_q(record, sponsor_records, permission, content_identity,
             if ordinary.permission_target != expected_target:
                 continue
         for ordinary_lookup, _attname in _scope_prefix_lookups(
-            ordinary, scope_model,
+            ordinary, prefix_model,
         ):
-            ordinary_pos = _scope_walk_position(ordinary, ordinary_lookup)
+            ordinary_pos = _prefix_walk_position(ordinary, ordinary_lookup)
             if ordinary.along is not None:
                 _reject_unsupported_delegated_suffix(ordinary.along)
                 if ordinary_pos == 'site':
@@ -471,9 +471,9 @@ def _scope_sponsor_q(record, sponsor_records, permission, content_identity,
     return parts[0] if len(parts) == 1 else reduce(or_, parts)
 
 
-def _delegation_scope_reach_q(record, user, lookup, target_attname, candidate,
+def _delegation_prefix_reach_q(record, user, lookup, target_attname, candidate,
                               position):
-    """Delegation row reaches this scope prefix."""
+    """Delegation row reaches this prefix."""
     if record.along is None or position == 'before':
         return Q(**{lookup: OuterRef(target_attname)})
     return Q(_KeyedReach(
@@ -484,13 +484,13 @@ def _delegation_scope_reach_q(record, user, lookup, target_attname, candidate,
     ))
 
 
-def _delegation_scope_exists(record, sponsor_records, user, permission,
-                             content_identity, scope_model, lookup,
+def _delegation_prefix_exists(record, sponsor_records, user, permission,
+                             content_identity, prefix_model, lookup,
                              target_attname, candidate, position,
                              allow_inactive):
     """``EXISTS`` delegation row correlated to ``candidate``."""
-    sponsor_q = _scope_sponsor_q(
-        record, sponsor_records, permission, content_identity, scope_model,
+    sponsor_q = _prefix_sponsor_q(
+        record, sponsor_records, permission, content_identity, prefix_model,
         candidate, lookup,
     )
     if sponsor_q is None:
@@ -504,7 +504,7 @@ def _delegation_scope_exists(record, sponsor_records, user, permission,
     combined = Q(**{
         record.delegate_field: _bind_terminal(user, 'delegate'),
     })
-    combined &= _delegation_scope_reach_q(
+    combined &= _delegation_prefix_reach_q(
         record, user, lookup, target_attname, candidate, position,
     )
     condition = _compile_predicate(
@@ -517,10 +517,10 @@ def _delegation_scope_exists(record, sponsor_records, user, permission,
     return Exists(record.root._default_manager.filter(combined))
 
 
-def _delegated_scope_predicates(delegations, sponsor_records, user, permission,
-                                scope_model, *, content_identity,
+def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
+                                prefix_model, *, content_identity,
                                 allow_inactive=False):
-    """Scope predicates for one-level delegated authority.
+    """Permitted-content predicates for one-level delegated authority.
 
     The delegate is included on a prefix only where the delegation and
     the sponsor's ordinary permission both reach it. A second delegation
@@ -531,17 +531,17 @@ def _delegated_scope_predicates(delegations, sponsor_records, user, permission,
     """
     parts = []
     for record in delegations:
-        lookups = _scope_prefix_lookups(record, scope_model)
+        lookups = _scope_prefix_lookups(record, prefix_model)
         if not lookups:
             continue
         if record.along is not None:
             _reject_unsupported_delegated_suffix(record.along)
         for lookup, target_attname in lookups:
-            position = _scope_walk_position(record, lookup)
+            position = _prefix_walk_position(record, lookup)
             candidate = OuterRef(target_attname)
-            found = _delegation_scope_exists(
+            found = _delegation_prefix_exists(
                 record, sponsor_records, user, permission, content_identity,
-                scope_model, lookup, target_attname, candidate, position,
+                prefix_model, lookup, target_attname, candidate, position,
                 allow_inactive,
             )
             if found is not None:
@@ -550,7 +550,7 @@ def _delegated_scope_predicates(delegations, sponsor_records, user, permission,
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
-                                allow_inactive_user=False):
+                                allow_inactive_user=False, sponsor_handles=None):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -575,7 +575,9 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
     trees). A terminal-only path has no proper prefix, so the same-model
     queryset still returns ``none()``. Unknown terminal, empty handles,
     or a scope model not on the path also return ``none()``.
-    ``permission`` must be a model instance. Construction of a fail-closed
+    ``sponsor_handles`` selects the ordinary grants a delegation may use
+    and defaults to ``handles``. ``permission`` must be a model instance.
+    Construction of a fail-closed
     result issues zero SQL; SQL runs only when a compiled predicate is
     evaluated. Default and explicit handle lists include
     relationship-family handles only.
@@ -595,6 +597,10 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
         handles = _relationship_implementation_handles()
     else:
         handles = _relationship_handles(handles)
+    if sponsor_handles is None:
+        sponsor_handles = handles
+    else:
+        sponsor_handles = _relationship_handles(sponsor_handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
     from trusts.query import (
@@ -623,16 +629,16 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
             for lookup, target_attname in _scope_prefix_lookups(
                 record, scope_model,
             ):
-                parts.append(_ordinary_scope_predicate(
+                parts.append(_ordinary_prefix_predicate(
                     record, lookup, target_attname, user, permission,
                     content_identity,
                 ))
         delegations.extend(getattr(plan, 'delegations', ()) or ())
     if delegations:
-        parts.extend(_delegated_scope_predicates(
+        parts.extend(_delegated_prefix_predicates(
             tuple(delegations),
             _ordinary_records(
-                handles, content, permission._meta.concrete_model,
+                sponsor_handles, content, permission._meta.concrete_model,
             ),
             user, permission, scope_model,
             content_identity=content_identity,
@@ -645,8 +651,8 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
 
 
 def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
-                             allow_inactive_user=False):
-    return filter_by_permitted_content(queryset, user, permission, content=content, handles=handles, allow_inactive_user=allow_inactive_user)
+                             allow_inactive_user=False, sponsor_handles=None):
+    return filter_by_permitted_content(queryset, user, permission, content=content, handles=handles, allow_inactive_user=allow_inactive_user, sponsor_handles=sponsor_handles)
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete',
@@ -3176,14 +3182,14 @@ class _IdentInReach(Expression):
         return sql, tuple(self.w_params)
 
 
-class _ScopeInForwardWalk(Expression):
-    """Outer scope column is in the forward grant walk.
+class _PrefixInForwardWalk(Expression):
+    """Outer prefix column is in the forward grant walk.
 
     The seed and ``WITH RECURSIVE`` statement are the ones ``GrantReach``
-    uses for a forward check. ``suffix_lookup`` is empty when the scope
-    model is the walk site: the scope identity is compared directly.
-    A later prefix passes the path from the walk site to that prefix,
-    and the walk-site row must be related to the outer scope row.
+    uses for a forward check. ``suffix_lookup`` is empty when the queryset
+    model is the walk site: that identity is compared directly. A later
+    prefix passes the path from the walk site to that prefix, and the
+    walk-site row must be related to the outer row.
     """
 
     filterable = True
