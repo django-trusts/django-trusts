@@ -783,6 +783,256 @@ class DelegatedScopeAgreementTest(TransactionTestCase):
             self.assertEqual(cabinets, {root.pk})
             self.assertNotIn(child.pk, cabinets)
 
+    def test_sponsor_walk_keeps_the_stored_ancestor(self):
+        """An ordinary sponsor walk still lists its stored ancestor.
+
+        The grant walks ``office__cabinets__parent``. The delegation is
+        exact on that same office. The root sheet is permitted. The
+        child cabinet is inside the walk and belongs to the other
+        office, so that office stays out of the listing.
+        """
+        User = self.User
+
+        class Office(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_spon_office'
+
+        class WalkCabinet(models.Model):
+            title = models.CharField(max_length=40)
+            office = models.ForeignKey(
+                Office, related_name='cabinets', on_delete=models.CASCADE,
+            )
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_spon_cabinet'
+
+        class WalkSheet(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=40)
+            cabinet = models.ForeignKey(
+                WalkCabinet, related_name='sheets', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_spon_sheet'
+
+        class OfficeGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_spon_grant'
+
+        class OfficeDelegation(models.Model):
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            office = models.ForeignKey(Office, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_spon_delegation'
+
+        with _tables(
+            Office, WalkCabinet, WalkSheet, OfficeGrant, OfficeDelegation,
+        ):
+            handle = _handle('tests.core.issue282-sponsor-ancestor')
+            handle.register(
+                trust=OfficeGrant,
+                user='user',
+                permission='permission',
+                content='office__cabinets__sheets',
+                along=('office__cabinets__parent', 1),
+            )
+            handle.register(
+                trust=OfficeDelegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='office__cabinets__sheets',
+            )
+            change = _permission(WalkSheet, 'change_sponsor_ancestor')
+            office = Office.objects.create(title='office')
+            other = Office.objects.create(title='other')
+            root = WalkCabinet.objects.create(title='root', office=office)
+            child = WalkCabinet.objects.create(
+                title='child', office=other, parent=root,
+            )
+            side = WalkCabinet.objects.create(title='side', office=other)
+            sheets = {
+                cabinet.pk: WalkSheet.objects.create(
+                    title=cabinet.title, cabinet=cabinet,
+                )
+                for cabinet in (root, child, side)
+            }
+            OfficeGrant.objects.create(
+                user=self.sponsor, office=office, permission=change,
+            )
+            OfficeDelegation.objects.create(
+                delegate=self.delegate, sponsor=self.sponsor, office=office,
+            )
+            with _listed(handle):
+                authorized = set(AuthorizedQuerySet(WalkSheet).authorized(
+                    self.delegate, change,
+                ).values_list('pk', flat=True))
+                permitted = set(sheets[root.pk].get_permitted_users(
+                    change,
+                ).values_list('pk', flat=True))
+            self.assertEqual(authorized, {sheets[root.pk].pk})
+            self.assertIn(self.delegate.pk, permitted)
+            offices = set(filter_by_permitted_content(
+                Office.objects.all(), self.delegate, change,
+                content=WalkSheet, handles=(handle,),
+            ).values_list('pk', flat=True))
+            self.assertEqual(offices, {office.pk})
+            self.assertNotIn(other.pk, offices)
+            cabinets = set(filter_by_permitted_content(
+                WalkCabinet.objects.all(), self.delegate, change,
+                content=WalkSheet, handles=(handle,),
+            ).values_list('pk', flat=True))
+            self.assertEqual(cabinets, {root.pk})
+            both = _handle('tests.core.issue282-sponsor-ancestor-both')
+            both.register(
+                trust=OfficeGrant,
+                user='user',
+                permission='permission',
+                content='office__cabinets__sheets',
+                along=('office__cabinets__parent', 1),
+            )
+            both.register(
+                trust=OfficeDelegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='office__cabinets__sheets',
+                along=('office__cabinets__parent', 1),
+            )
+            with _listed(both):
+                both_sheets = set(AuthorizedQuerySet(WalkSheet).authorized(
+                    self.delegate, change,
+                ).values_list('pk', flat=True))
+            self.assertEqual(
+                both_sheets,
+                {sheets[root.pk].pk, sheets[child.pk].pk},
+            )
+            both_offices = set(filter_by_permitted_content(
+                Office.objects.all(), self.delegate, change,
+                content=WalkSheet, handles=(both,),
+            ).values_list('pk', flat=True))
+            self.assertEqual(both_offices, {office.pk})
+            self.assertNotIn(other.pk, both_offices)
+
+    def test_sponsor_walk_with_a_longer_suffix_fails_closed(self):
+        """A later prefix is not a supported delegated sponsor walk.
+
+        ``folder__rows__content`` leaves two hops after ``folder``. The
+        forward check raises. Listing the folder and the row raises the
+        same ``TrustsConfigurationError`` instead of returning an empty
+        queryset.
+        """
+        User = self.User
+
+        class Folder(models.Model):
+            title = models.CharField(max_length=40)
+            parent = models.ForeignKey(
+                'self', null=True, on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_later_folder'
+
+        class Payload(PermittedUsersMixin, models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_later_payload'
+
+        class Row(models.Model):
+            folder = models.ForeignKey(
+                Folder, related_name='rows', on_delete=models.CASCADE,
+            )
+            content = models.ForeignKey(Payload, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_later_row'
+
+        class FolderGrant(models.Model):
+            user = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_later_grant'
+
+        class FolderDelegation(models.Model):
+            delegate = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                User, on_delete=models.CASCADE, related_name='+',
+            )
+            folder = models.ForeignKey(Folder, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+                db_table = 'i282d_later_delegation'
+
+        with _tables(Folder, Payload, Row, FolderGrant, FolderDelegation):
+            handle = _handle('tests.core.issue282-sponsor-later')
+            handle.register(
+                trust=FolderGrant,
+                user='user',
+                permission='permission',
+                content='folder__rows__content',
+                along=('folder__parent', 1),
+            )
+            handle.register(
+                trust=FolderDelegation,
+                delegate='delegate',
+                sponsor='sponsor',
+                content='folder__rows__content',
+            )
+            change = _permission(Payload, 'change_sponsor_later')
+            root = Folder.objects.create(title='root')
+            child = Folder.objects.create(title='child', parent=root)
+            payload = Payload.objects.create(title='child')
+            Row.objects.create(folder=child, content=payload)
+            FolderGrant.objects.create(
+                user=self.sponsor, folder=root, permission=change,
+            )
+            FolderDelegation.objects.create(
+                delegate=self.delegate, sponsor=self.sponsor, folder=child,
+            )
+            with _listed(handle):
+                with self.assertRaises(TrustsConfigurationError):
+                    list(AuthorizedQuerySet(Payload).authorized(
+                        self.delegate, change,
+                    ))
+            for model in (Folder, Row):
+                with self.assertRaises(TrustsConfigurationError):
+                    filter_by_permitted_content(
+                        model.objects.all(), self.delegate, change,
+                        content=Payload, handles=(handle,),
+                    )
+
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class AlongSurfaceAgreementTest(TransactionTestCase):
