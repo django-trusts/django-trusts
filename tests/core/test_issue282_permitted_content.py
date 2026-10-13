@@ -72,7 +72,6 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
         _role_sentinel(record, 'permission', 'default'),
         content=content_model,
         handles=(handle,),
-        sponsor_handles=(handle,),
     )
     recorded = []
 

@@ -689,19 +689,24 @@ def _permitted_content_prefix_models(handle, model):
 
 def _compile_filter_by_permitted_content(handle, alias, records, model, handles):
     """One statement per proper prefix, the queryset that actually runs."""
-    from trusts.core import filter_by_permitted_content
+    from trusts.core import (
+        _compile_permitted_content_queryset,
+        _relationship_handles,
+    )
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
+    listed = _relationship_handles((handle,))
+    sponsors = _relationship_handles(handles)
     rows = []
     for prefix in _permitted_content_prefix_models(handle, model):
-        queryset = filter_by_permitted_content(
+        queryset = _compile_permitted_content_queryset(
             _content_manager(prefix).all(),
             user,
             permission,
             content=model,
-            handles=(handle,),
-            sponsor_handles=handles,
+            handles=listed,
+            sponsor_handles=sponsors,
         )
         # An empty queryset runs no SQL. Omit it instead of inventing a
         # statement.
