@@ -7,7 +7,10 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models import FloatField, IntegerField, OuterRef, Value
 from django.test import SimpleTestCase, TestCase
 
-from tests.core.test_issue147.test_sql_export import _document_handle
+from tests.core.test_issue147.test_sql_export import (
+    Document as GuideDocument,
+    _document_handle,
+)
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.binds import (
@@ -20,13 +23,10 @@ from trusts.binds import (
     seal,
     strip_exists_marker,
 )
-from trusts.core import TrustsConfigurationError
+from trusts.core import TrustsConfigurationError, granted
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import stored_user_is_inactive
-from trusts.reverse import compile_permitted_users
-
-
-PERM = 'myapp.change_document'
+from trusts.reverse import _trusts_eligibility_q
 
 
 def _repeat_count(params):
@@ -78,25 +78,19 @@ class Issue300LockfileTest(SimpleTestCase):
 
 class Issue300EligibilitySqlTest(SimpleTestCase):
     def test_is_active_equality_is_added_only_when_inactive_users_are_denied(self):
-        document = Document(title='note-300', pk=1)
-        denied = compile_permitted_users(
-            document, PERM, allow_inactive=False,
+        denied = User.objects.filter(
+            _trusts_eligibility_q(User, allow_inactive=False),
         )
-        included = compile_permitted_users(
-            document, PERM, allow_inactive=True,
+        included = User.objects.filter(
+            _trusts_eligibility_q(User, allow_inactive=True),
         )
-        denied_sql, _denied_params = denied.query.sql_with_params()
-        included_sql, _included_params = included.query.sql_with_params()
-        self.assertNotEqual(denied_sql, included_sql)
-        self.assertNotIn('allow_inactive', denied_sql)
-        self.assertNotIn('allow_inactive', included_sql)
-        self.assertNotIn('OR "auth_user"."is_active"', denied_sql)
-        # The superuser branch always compares is_active. The Trusts
-        # branch adds that comparison only when inactive users are denied.
-        self.assertGreater(
-            denied_sql.count('"is_active" = %s'),
-            included_sql.count('"is_active" = %s'),
-        )
+        denied_where = str(denied.query.where)
+        included_where = str(included.query.where)
+        self.assertIn('is_active', denied_where)
+        self.assertNotIn('is_active', included_where)
+        self.assertNotIn('allow_inactive', denied_where)
+        self.assertNotIn('allow_inactive', included_where)
+        self.assertNotIn('OR', denied_where)
 
 
 class Issue300BooleanFieldTest(TestCase):
@@ -118,10 +112,12 @@ class Issue300BooleanFieldTest(TestCase):
             self.assertFalse(
                 Document.objects.authorized(Authenticated(), permission).exists()
             )
+        handle = _document_handle()
+        content = GuideDocument(title='note-300', pk=1)
         with self.assertRaises(TrustsConfigurationError):
-            Document.objects.authorized(None, permission)
+            granted((handle,), content, None, permission)
         with self.assertRaises(TrustsConfigurationError):
-            Document.objects.authorized(object(), permission)
+            granted((handle,), content, object(), permission)
 
 
 class Issue300BindRowTest(SimpleTestCase):

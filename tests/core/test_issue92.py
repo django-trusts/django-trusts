@@ -623,9 +623,21 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         walk_at = nested_sql.rfind('WITH RECURSIVE')
         join_at = nested_sql.rfind('CROSS JOIN', 0, walk_at)
         self.assertGreater(join_at, nested_sql.rfind('NOT (EXISTS'))
-        alias = nested_sql[join_at:].split(') "', 1)[1].split('"', 1)[0]
-        self.assertIn('"depth" < "%s"."along_bound"' % alias, nested_sql)
-        self.assertIn('"%s"."user_id"' % alias, nested_sql)
+        quote = connection.ops.quote_name('x')[0]
+        alias = nested_sql[join_at:].split(') ' + quote, 1)[1].split(quote, 1)[0]
+        quoted_alias = connection.ops.quote_name(alias)
+        self.assertIn(
+            '%s < %s.%s' % (
+                connection.ops.quote_name('depth'),
+                quoted_alias,
+                connection.ops.quote_name('along_bound'),
+            ),
+            nested_sql,
+        )
+        self.assertIn(
+            '%s.%s' % (quoted_alias, connection.ops.quote_name('user_id')),
+            nested_sql,
+        )
         qs = registry.filter_authorized(
             self.Node.objects.order_by('pk'), self.alice, self.read,
         )
