@@ -593,7 +593,8 @@ def _compile_permitted_content_queryset(
     if not parts:
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
-    return queryset.filter(granted_q).distinct()
+    from trusts._standardize import standardize
+    return standardize(queryset.filter(granted_q).distinct())
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
@@ -687,7 +688,8 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
         return None
     if extra_q is not None:
         granted_q = granted_q & extra_q
-    qs = candidate_queryset(candidates)
+    from trusts._standardize import standardize
+    qs, granted_q = standardize(candidate_queryset(candidates), granted_q)
     stats = qs.aggregate(
         total=Count('pk', distinct=True),
         lacking=Count('pk', distinct=True, filter=~granted_q),
@@ -713,9 +715,10 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
         return None
     if extra_q is not None:
         granted_q = granted_q & extra_q
-    return obj._meta.concrete_model._default_manager.filter(
+    from trusts._standardize import execute_exists
+    return execute_exists(obj._meta.concrete_model._default_manager.filter(
         pk=obj.pk,
-    ).filter(granted_q).exists()
+    ).filter(granted_q))
 
 
 def _compile_common_permissions(handles, candidates, user, *, kind='complete',
@@ -789,11 +792,12 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     if not parts:
         return permission_model._default_manager.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
-    return permission_model._default_manager.filter(
+    from trusts._standardize import standardize
+    return standardize(permission_model._default_manager.filter(
         Exists(qs),
     ).exclude(
         Exists(qs.filter(~granted_q)),
-    ).distinct()
+    ).distinct())
 
 
 def common_permissions(handles, candidates, user, *, kind='complete'):
@@ -3705,11 +3709,12 @@ class RelationPlan:
         exists = self.content_exists(user, OuterRef(OuterRef('pk')))
         if exists is None:
             return self.permission_model._default_manager.none()
-        return self.permission_model._default_manager.filter(
+        from trusts._standardize import standardize
+        return standardize(self.permission_model._default_manager.filter(
             Exists(qs),
         ).exclude(
             Exists(qs.filter(~Q(exists))),
-        ).distinct()
+        ).distinct())
 
     def permissions(self, user, content):
         """Distinct permission rows for ``(user, content)``."""
@@ -3720,7 +3725,10 @@ class RelationPlan:
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
         )
-        return self.permission_model._default_manager.filter(exists).distinct()
+        from trusts._standardize import standardize
+        return standardize(
+            self.permission_model._default_manager.filter(exists).distinct(),
+        )
 
     def has_permission(self, user, content, permission):
         """SQL ``EXISTS`` membership of ``permission`` in ``permissions()``."""
@@ -3734,16 +3742,18 @@ class RelationPlan:
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
         )
-        return self.permission_model._default_manager.filter(
+        from trusts._standardize import execute_exists
+        return execute_exists(self.permission_model._default_manager.filter(
             pk=permission.pk,
-        ).filter(exists).exists()
+        ).filter(exists))
 
     def filter_content(self, queryset, user, permission):
         """Lazy queryset of candidate rows correlated to the same plan."""
         exists = self.content_exists(user, permission)
         if exists is None:
             return queryset.none()
-        return queryset.filter(exists).distinct()
+        from trusts._standardize import standardize
+        return standardize(queryset.filter(exists).distinct())
 
 
 class TrustsRegistry(object):

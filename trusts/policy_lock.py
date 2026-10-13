@@ -1057,6 +1057,9 @@ def _compile_queryset(
     _ctx.reverse_users = reverse_users
     token = _export_scope.set(object())
     try:
+        from trusts._standardize import standardize
+
+        queryset = standardize(queryset)
         compiler = queryset.query.get_compiler(
             connection=_ExportConnection(connections[alias]),
         )
@@ -1285,11 +1288,25 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
+    from trusts._standardize import BindTable
     from trusts.core import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )
 
+    if isinstance(node, BindTable):
+        try:
+            column = node.next_column()
+        except IndexError:
+            return None
+        if column.kind == 'bind':
+            return _with_hint(
+                {'bind': column.label}, _request_hint(column.label),
+            )
+        return _with_hint(
+            {'const': _json_const(column.value)},
+            column.label or 'literal',
+        )
     if isinstance(node, (GrantReach, _PrefixInForwardWalk)):
         return _with_hint(
             {'const': _json_const(node.record.along.bound)}, 'along bound',

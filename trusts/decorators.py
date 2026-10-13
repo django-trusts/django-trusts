@@ -118,7 +118,8 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
         if candidates.exists():
             raise PermissionDenied
         raise Http404
-    if candidates.filter(granted_q).exists():
+    from trusts._standardize import execute_exists
+    if execute_exists(candidates.filter(granted_q)):
         return
     if candidates.exists():
         raise PermissionDenied

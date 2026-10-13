@@ -340,4 +340,5 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     )
     if granted_q is None:
         return queryset.none()
-    return queryset.filter(granted_q).distinct()
+    from trusts._standardize import standardize
+    return standardize(queryset.filter(granted_q).distinct())

@@ -100,7 +100,8 @@ class AuthorizedQuerySet(QuerySet):
             return self.none()
         if extra_q is not None:
             granted_q = granted_q & extra_q
-        return self.filter(granted_q).distinct()
+        from trusts._standardize import standardize
+        return standardize(self.filter(granted_q).distinct())
 
 
 class AuthorizedManagerMixin:

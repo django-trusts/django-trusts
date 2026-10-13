@@ -79,7 +79,8 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     combined = parts[0]
     for part in parts[1:]:
         combined |= part
-    return user_queryset.filter(combined).distinct()
+    from trusts._standardize import standardize
+    return standardize(user_queryset.filter(combined).distinct())
 
 
 def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
@@ -173,7 +174,10 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
         # set for a saved primary key and stays classifiable.
         return user_model._default_manager.all().filter(pk__isnull=True)
     predicate = eligibility & _as_q(exists)
-    return user_model._default_manager.all().filter(predicate).distinct()
+    from trusts._standardize import standardize
+    return standardize(
+        user_model._default_manager.all().filter(predicate).distinct(),
+    )
 
 
 def _plan_user_model(plan, content):
