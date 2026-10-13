@@ -579,18 +579,21 @@ def _role_sentinel(record, role, alias):
 def _compile_permitted(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
+    from trusts.binds import bind_scope, seal
+
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
     queryset = _content_manager(model).all()
-    granted = _compile_granted(
-        (handle,), queryset, user, permission, kind='complete',
-        sponsor_handles=handles,
-    )
-    if granted is None:
-        raise TrustsConfigurationError(
-            'Policy SQL found no grant for %s.' % _model_label(model)
+    with bind_scope():
+        granted = _compile_granted(
+            (handle,), queryset, user, permission, kind='complete',
+            sponsor_handles=handles,
         )
-    queryset = queryset.filter(granted).distinct()
+        if granted is None:
+            raise TrustsConfigurationError(
+                'Policy SQL found no grant for %s.' % _model_label(model)
+            )
+        queryset = seal(queryset.filter(granted).distinct())
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
     )
@@ -599,20 +602,27 @@ def _compile_permitted(handle, alias, records, model, handles):
 def _compile_has_perm(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
+    from trusts.binds import bind_scope, hoist, seal, strip_exists_marker
+
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
     instance = _content_sentinel(model, alias)
-    granted = _compile_granted(
-        (handle,), instance, user, permission, kind='complete',
-        sponsor_handles=handles,
-    )
-    if granted is None:
-        raise TrustsConfigurationError(
-            'Policy SQL found no grant for %s.' % _model_label(model)
+    with bind_scope():
+        granted = _compile_granted(
+            (handle,), instance, user, permission, kind='complete',
+            sponsor_handles=handles,
         )
-    exists = _content_manager(model).filter(pk=instance.pk).filter(granted)
+        if granted is None:
+            raise TrustsConfigurationError(
+                'Policy SQL found no grant for %s.' % _model_label(model)
+            )
+        exists = _content_manager(model).filter(
+            pk=hoist(instance.pk, instance._meta.pk, hint='content pk'),
+        ).filter(granted)
+        seal(exists)
+        compiled = strip_exists_marker(exists.query.exists())
     return _compile_queryset(
-        _Query(exists.query.exists()),
+        _Query(compiled),
         alias, record=records[0], expr=None, records=records,
     )
 
@@ -1285,11 +1295,19 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
+    from trusts.binds import BindTable
     from trusts.core import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )
 
+    if isinstance(node, BindTable):
+        column = node.next_column()
+        if column.kind == 'bind':
+            return _with_hint({'bind': column.label}, _request_hint(column.label))
+        return _with_hint(
+            {'const': _json_const(column.value)}, column.label,
+        )
     if isinstance(node, (GrantReach, _PrefixInForwardWalk)):
         return _with_hint(
             {'const': _json_const(node.record.along.bound)}, 'along bound',

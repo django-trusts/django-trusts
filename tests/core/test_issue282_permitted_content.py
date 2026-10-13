@@ -1132,7 +1132,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         ]
         self.assertEqual(
             bounds,
-            [{'const': 1, 'hint': 'along bound'}, {'const': 1, 'hint': 'along bound'}],
+            [{'const': 1, 'hint': 'along bound'}],
         )
 
 

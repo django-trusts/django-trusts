@@ -15,10 +15,10 @@ from trusts.core import TrustsConfigurationError
 # word is rejected. Quoted identifiers are a separate token class.
 _KEYWORDS = frozenset((
     'ALL', 'AND', 'AS', 'ASC', 'BY', 'CROSS', 'CYCLE', 'DESC', 'DISTINCT',
-    'EXISTS', 'FROM', 'FULL', 'GROUP', 'HAVING', 'IN', 'INNER', 'IS', 'JOIN',
-    'LEFT', 'LIMIT', 'NATURAL', 'NOT', 'NULL', 'OFFSET', 'ON', 'OR', 'ORDER',
-    'OUTER', 'RECURSIVE', 'RIGHT', 'SELECT', 'SET', 'UNION', 'USING', 'WHERE',
-    'WITH',
+    'EXISTS', 'FALSE', 'FROM', 'FULL', 'GROUP', 'HAVING', 'IN', 'INNER', 'IS',
+    'JOIN', 'LEFT', 'LIMIT', 'NATURAL', 'NOT', 'NULL', 'OFFSET', 'ON', 'OR',
+    'ORDER', 'OUTER', 'RECURSIVE', 'RIGHT', 'SELECT', 'SET', 'TRUE', 'UNION',
+    'USING', 'WHERE', 'WITH',
 ))
 # Clause and boolean keywords that start a new line. ``AND`` and ``OR``
 # are the boolean connectives of the group that contains them. ``JOIN``

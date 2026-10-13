@@ -617,9 +617,14 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         if connection.vendor == 'sqlite':
             plan = _plan_text(qs)
             self.assertIn('LIST SUBQUERY', plan)
-            self.assertIn('MATERIALIZE', plan)
-            self.assertEqual(plan.count('MATERIALIZE'), 1)
-            self.assertIn('SCAN trusts_tests_node', plan.split('\n')[0])
+            # The walk is materialized once. The one-row bind table is the
+            # other materialization.
+            self.assertEqual(plan.count('MATERIALIZE gen'), 1)
+            self.assertEqual(plan.count('MATERIALIZE trusts_bind'), 1)
+            self.assertLess(
+                plan.index('SCAN trusts_tests_node'),
+                plan.index('MATERIALIZE gen'),
+            )
 
     def test_shape_c_grant_on_descendant_authorizes_ancestors(self):
         root = self.Node.objects.create(title='root')
@@ -681,7 +686,13 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         compiled, params = qs.query.sql_with_params()
         self.assertIn('WITH RECURSIVE', sql.upper())
         self.assertIn('UNION ALL', sql.upper())
-        self.assertIn('< %s', compiled)
+        self.assertIn(
+            '< %s.%s' % (
+                connection.ops.quote_name('trusts_bind'),
+                connection.ops.quote_name('along_bound'),
+            ),
+            compiled,
+        )
         self.assertIn(16, params)
         self.assertIn('depth', compiled.lower())
         outer = sql.split('SELECT DISTINCT')[-1]
@@ -738,7 +749,13 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertNotIn('auth_user', body.lower())
         self.assertNotIn('json_', sql.lower())
         self.assertIn('UNION ALL', upper)
-        self.assertIn('< %s', compiled)
+        self.assertIn(
+            '< %s.%s' % (
+                connection.ops.quote_name('trusts_bind'),
+                connection.ops.quote_name('along_bound'),
+            ),
+            compiled,
+        )
         self.assertIn(bound, params)
         self.assertIn(connection.ops.quote_name('auth_user'), sql)
         outer = sql.split('SELECT DISTINCT')[-1]

@@ -460,19 +460,23 @@ class PolicyLockSentinelTest(SimpleTestCase):
         )
         for name, field, expected in cases:
             with self.subTest(name=name):
-                consts = _has_perm_consts(name, field)
-                self.assertEqual(consts[0], 1)
-                self.assertEqual(consts[1], expected)
-                self.assertEqual(consts[2], 1)
+                self.assertEqual(
+                    _has_perm_const(name, field, 'content pk'),
+                    expected,
+                )
 
-        aware = _has_perm_consts('AwareDoc', models.DateTimeField())
-        self.assertEqual(aware[1], {
+        aware = _has_perm_const(
+            'AwareDoc', models.DateTimeField(), 'content pk',
+        )
+        self.assertEqual(aware, {
             'type': 'datetime',
             'value': '2000-01-01T00:00:00+00:00',
         })
         with override_settings(USE_TZ=False):
-            naive = _has_perm_consts('NaiveDoc', models.DateTimeField())
-        self.assertEqual(naive[1], {
+            naive = _has_perm_const(
+                'NaiveDoc', models.DateTimeField(), 'content pk',
+            )
+        self.assertEqual(naive, {
             'type': 'datetime',
             'value': '2000-01-01T00:00:00',
         })
@@ -626,7 +630,7 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         self.assertEqual(_json_const('alpha'), 'alpha')
         self.assertEqual(_const_from_json('alpha'), 'alpha')
 
-    def test_split_content_targets_fail_closed(self):
+    def test_split_content_targets_bind_each_column(self):
         class CodeDocument(models.Model):
             code = models.CharField(max_length=8, unique=True)
 
@@ -664,11 +668,17 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[handle])
-        message = str(ctx.exception)
-        self.assertIn('do not share a target', message)
-        self.assertIn('documents.CodeDocument', message)
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        content_row = document['backends'][0]['contents'][0]
+        self.assertEqual(content_row['model'], 'documents.CodeDocument')
+        users = content_row['get_permitted_users']
+        binds = [row['bind'] for row in users['params'] if 'bind' in row]
+        self.assertEqual(binds.count('content.id'), 1)
+        self.assertEqual(binds.count('content.code'), 1)
+        self.assertIn('content_id', users['sql'])
+        self.assertIn('content_code', users['sql'])
 
     def test_directory_lock_path_and_non_text_path_fail_closed(self):
         payload = dump_policy_yaml({'schema_version': 1})
@@ -712,7 +722,7 @@ def math_sign(value):
     return math.copysign(1.0, value)
 
 
-def _has_perm_consts(name, field):
+def _has_perm_const(name, field, hint):
     content, grant = _pk_pair(name, field)
     handle = _handle('documents.backends.%sBackend' % name)
     handle.register(
@@ -729,8 +739,11 @@ def _has_perm_consts(name, field):
     content_row = document['backends'][0]['contents'][0]
     if content_row['model'] != content._meta.label:
         raise AssertionError(content_row['model'])
-    return [
+    matches = [
         row['const']
         for row in content_row['has_perm']['params']
-        if 'const' in row
+        if row.get('hint') == hint
     ]
+    if len(matches) != 1:
+        raise AssertionError('%s produced %r' % (hint, content_row['has_perm']['params']))
+    return matches[0]

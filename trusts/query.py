@@ -1,6 +1,10 @@
 """Generic authorized queryset/manager. No Zero-noun grant helpers."""
 
-from django.db.models import Manager, Model, QuerySet
+from django.contrib.auth.base_user import AbstractBaseUser
+from django.core.exceptions import FieldDoesNotExist
+from django.db.models import BooleanField, F, Manager, Model, Q, QuerySet
+
+from trusts.binds import AllowOr, SqlTrue, bind_scope, hoist, seal
 
 
 def is_active_principal(user, *, allow_inactive=False):
@@ -31,14 +35,97 @@ def require_mode_flag(value, name):
 def stored_user_is_inactive(user, *, allow_inactive=False):
     """Whether a stored user's built-in ``is_active`` rejects the inquiry.
 
-    ``allow_inactive=True`` skips the check. A user with no ``is_active``
-    attribute is not inactive, so schema-neutral terminals keep their
-    current results. Anonymous and unauthenticated denial stays with the
-    caller.
+    ``allow_inactive=True`` skips the check. ``None`` is not inactive so
+    ``authorized(None)`` still fails at grant binding. A model with no
+    ``is_active`` is not inactive: a schema-neutral terminal keeps its
+    result, and permission SQL reports that model separately. A non-model
+    object with no ``is_active`` is denied, the same default as
+    ``has_perm``. Anonymous and unauthenticated denial stays with the
+    caller. A user object that is not a model instance is not a SQL
+    principal; permission SQL is compiled against the user model.
     """
-    if allow_inactive or user is None or not hasattr(user, 'is_active'):
+    if allow_inactive or user is None:
         return False
-    return not bool(user.is_active)
+    if isinstance(user, Model) and not hasattr(user, 'is_active'):
+        return False
+    return not bool(getattr(user, 'is_active', False))
+
+
+def principal_attribute_kind(model, name):
+    """How ``name`` is visible on ``model``.
+
+    ``field`` is a concrete boolean column. ``stock`` is
+    ``AbstractBaseUser``'s property. ``absent`` means the model does not
+    define the name. Any other attribute raises
+    ``TrustsConfigurationError``.
+    """
+    from trusts.core import TrustsConfigurationError
+
+    field = _concrete_boolean(model, name)
+    if field is not None:
+        return 'field'
+    found = None
+    for cls in model.__mro__:
+        if name in cls.__dict__:
+            found = cls.__dict__[name]
+            break
+    if found is None:
+        return 'absent'
+    if found is AbstractBaseUser.__dict__.get(name):
+        return 'stock'
+    raise TrustsConfigurationError(
+        '%s.%s is not a concrete BooleanField or the stock '
+        'AbstractBaseUser property, so permission SQL cannot match '
+        'has_perm.' % (model._meta.label, name)
+    )
+
+
+def _concrete_boolean(model, name):
+    from trusts.core import TrustsConfigurationError
+
+    try:
+        field = model._meta.get_field(name)
+    except FieldDoesNotExist:
+        return None
+    if (
+        not getattr(field, 'concrete', False)
+        or getattr(field, 'many_to_many', False)
+    ):
+        return None
+    if field.get_internal_type() != 'BooleanField':
+        raise TrustsConfigurationError(
+            '%s.%s is not a concrete BooleanField or the stock '
+            'AbstractBaseUser property, so permission SQL cannot match '
+            'has_perm.' % (model._meta.label, name)
+        )
+    return field
+
+
+def active_eligibility_q(model, lookup, *, allow_inactive=False):
+    """SQL for the built-in ``is_active`` rule on ``lookup``.
+
+    A boolean column becomes ``(allow_inactive OR column)``. Both flag
+    values compile the same text; the bound flag is the one this query
+    runs. The stock ``AbstractBaseUser`` property is always true and has
+    no column, so the predicate is the SQL literal ``TRUE``. A model with
+    no ``is_active`` at all cannot compile permission SQL.
+    """
+    from trusts.core import TrustsConfigurationError
+
+    kind = principal_attribute_kind(model, 'is_active')
+    if kind == 'absent':
+        raise TrustsConfigurationError(
+            '%s has no is_active column or stock AbstractBaseUser '
+            'property, so permission SQL cannot be compiled.'
+            % model._meta.label
+        )
+    if kind == 'stock':
+        return Q(SqlTrue())
+    flag = bool(allow_inactive)
+    return Q(AllowOr(
+        F(lookup),
+        hoist(flag, BooleanField(), hint='allow inactive'),
+    ))
 
 
 def user_identity_denied(user):
@@ -91,16 +178,17 @@ class AuthorizedQuerySet(QuerySet):
             return self.none()
         if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
             return self.none()
-        granted_q = granted(
-            _relationship_implementation_handles(),
-            self, user, permission, kind='complete',
-            allow_inactive=allow_inactive_user,
-        )
-        if granted_q is None:
-            return self.none()
-        if extra_q is not None:
-            granted_q = granted_q & extra_q
-        return self.filter(granted_q).distinct()
+        with bind_scope():
+            granted_q = granted(
+                _relationship_implementation_handles(),
+                self, user, permission, kind='complete',
+                allow_inactive=allow_inactive_user,
+            )
+            if granted_q is None:
+                return self.none()
+            if extra_q is not None:
+                granted_q = granted_q & extra_q
+            return seal(self.filter(granted_q).distinct())
 
 
 class AuthorizedManagerMixin:
