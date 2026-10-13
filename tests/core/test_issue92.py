@@ -607,6 +607,25 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self._assert_projections(
             registry, self.Node, [root, child, leaf], [other],
         )
+        # MySQL cannot see an outer derived table from a recursive CTE
+        # nested inside EXISTS. The bind row has to sit on that EXISTS,
+        # and the depth cap has to use the same alias as the row.
+        granted_qs = self.Node.objects.filter(
+            pk__in=[root.pk, child.pk, leaf.pk],
+        )
+        with patch.object(connections[granted_qs.db], 'vendor', 'mysql'):
+            handle = _direct_handle(registry)
+            common = common_permissions((handle,), granted_qs, self.alice)
+            on_root = common_permissions((handle,), root, self.alice)
+        self.assertEqual(_pks(common), {self.read.pk})
+        self.assertEqual(_pks(on_root), {self.read.pk})
+        nested_sql, _nested_params = common.query.sql_with_params()
+        walk_at = nested_sql.rfind('WITH RECURSIVE')
+        join_at = nested_sql.rfind('CROSS JOIN', 0, walk_at)
+        self.assertGreater(join_at, nested_sql.rfind('NOT (EXISTS'))
+        alias = nested_sql[join_at:].split(') "', 1)[1].split('"', 1)[0]
+        self.assertIn('"depth" < "%s"."along_bound"' % alias, nested_sql)
+        self.assertIn('"%s"."user_id"' % alias, nested_sql)
         qs = registry.filter_authorized(
             self.Node.objects.order_by('pk'), self.alice, self.read,
         )

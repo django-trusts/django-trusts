@@ -39,14 +39,23 @@ def stored_user_is_inactive(user, *, allow_inactive=False):
     ``authorized(None)`` still fails at grant binding. A model with no
     ``is_active`` is not inactive: a schema-neutral terminal keeps its
     result, and permission SQL reports that model separately. A non-model
-    object with no ``is_active`` is denied, the same default as
-    ``has_perm``. Anonymous and unauthenticated denial stays with the
-    caller. A user object that is not a model instance is not a SQL
-    principal; permission SQL is compiled against the user model.
+    that presents as a user (``is_authenticated`` or ``is_anonymous``) and
+    has no ``is_active`` is denied, the same default as ``has_perm``.
+    Any other non-model is not inactive, so grant binding still raises.
+    Anonymous and unauthenticated denial stays with the caller. A user
+    object that is not a model instance is not a SQL principal; permission
+    SQL is compiled against the user model.
     """
     if allow_inactive or user is None:
         return False
     if isinstance(user, Model) and not hasattr(user, 'is_active'):
+        return False
+    if (
+        not isinstance(user, Model)
+        and not hasattr(user, 'is_active')
+        and not hasattr(user, 'is_authenticated')
+        and not hasattr(user, 'is_anonymous')
+    ):
         return False
     return not bool(getattr(user, 'is_active', False))
 

@@ -865,11 +865,68 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     if not parts:
         return permission_model._default_manager.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
-    return _binds().seal(permission_model._default_manager.filter(
-        _binds().LiteralExists(qs),
+    return _common_permission_queryset(permission_model, qs, granted_q)
+
+
+def _where_references_bind(query):
+    from trusts.binds import BindRef
+
+    seen = set()
+    stack = [getattr(query, 'where', None)]
+    while stack:
+        node = stack.pop()
+        if node is None or id(node) in seen:
+            continue
+        if isinstance(node, (str, bytes, int, float, bool)):
+            continue
+        seen.add(id(node))
+        if isinstance(node, BindRef):
+            return True
+        if isinstance(node, (list, tuple)):
+            stack.extend(node)
+            continue
+        children = getattr(node, 'children', None)
+        if children:
+            stack.extend(children)
+        getter = getattr(node, 'get_source_expressions', None)
+        if getter is None:
+            continue
+        sources = getter()
+        if sources:
+            stack.extend(sources)
+    return False
+
+
+def _common_permission_queryset(permission_model, qs, predicate):
+    """Permission rows that survive on every candidate.
+
+    SQLite and PostgreSQL read ``trusts_bind`` from the outer permission
+    statement, including through a nested recursive CTE. MySQL does not
+    see that derived table from a CTE inside ``EXISTS``, so the row is
+    placed on the statement that contains the walk.
+    """
+    from django.db import connections
+
+    lacking = qs._clone().filter(~predicate)
+    if connections[qs.db].vendor != 'mysql':
+        return _binds().seal(permission_model._default_manager.filter(
+            _binds().LiteralExists(qs),
+        ).exclude(
+            _binds().LiteralExists(lacking),
+        ).distinct())
+    positive = qs._clone()
+    if _where_references_bind(positive.query):
+        _binds().seal(positive)
+        lacking = positive.filter(~predicate)
+        candidate = positive
+    else:
+        _binds().seal(lacking)
+        candidate = qs
+    return permission_model._default_manager.filter(
+        _binds().LiteralExists(candidate),
     ).exclude(
-        _binds().LiteralExists(qs.filter(~granted_q)),
-    ).distinct())
+        _binds().LiteralExists(lacking),
+    ).distinct()
 
 
 def common_permissions(handles, candidates, user, *, kind='complete'):
@@ -3074,6 +3131,26 @@ def _bound_limit_sql(compiler, connection, bound_ref, bound):
     return '%s', (bound,)
 
 
+def _sources_with_bound(exprs, bound_ref):
+    """Include the depth cap so subquery alias relabeling updates it.
+
+    The cap is not part of the seed. A nested statement renames
+    ``trusts_bind`` when that row lives on the nested statement, and the
+    seed columns follow. The cap has to follow the same rename.
+    """
+    exprs = list(exprs)
+    if bound_ref is not None:
+        exprs.append(bound_ref)
+    return exprs
+
+
+def _take_bound(exprs, bound_ref):
+    exprs = list(exprs)
+    if bound_ref is None:
+        return exprs, None
+    return exprs[:-1], exprs[-1]
+
+
 def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
                       bound_sql='%s', bound_params=None):
     """Return ``(sql, params)`` for the uncorrelated W membership list.
@@ -3216,9 +3293,12 @@ class _KeyedReach(Expression):
         return clone
 
     def get_source_expressions(self):
-        return [self.seed_query, self.key, self.candidate]
+        return _sources_with_bound(
+            [self.seed_query, self.key, self.candidate], self.bound_ref,
+        )
 
     def set_source_expressions(self, exprs):
+        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
         self.seed_query, self.key, self.candidate = exprs
 
     def as_sql(self, compiler, connection):
@@ -3260,9 +3340,10 @@ class _AnchorInInverseReach(Expression):
         return clone
 
     def get_source_expressions(self):
-        return [self.seed_query]
+        return _sources_with_bound([self.seed_query], self.bound_ref)
 
     def set_source_expressions(self, exprs):
+        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
         self.seed_query = exprs[0]
 
     def as_sql(self, compiler, connection):
@@ -3353,10 +3434,10 @@ class _PrefixInForwardWalk(Expression):
             exprs.append(self.lhs)
         if self.suffix_query is not None:
             exprs.append(self.suffix_query)
-        return exprs
+        return _sources_with_bound(exprs, self.bound_ref)
 
     def set_source_expressions(self, exprs):
-        exprs = list(exprs)
+        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
         self.seed_query = exprs.pop(0)
         if self.lhs is not None:
             self.lhs = exprs.pop(0)
@@ -3518,10 +3599,10 @@ class GrantReach(Expression):
             exprs.append(self.lhs)
         if self.suffix_query is not None:
             exprs.append(self.suffix_query)
-        return exprs
+        return _sources_with_bound(exprs, self.bound_ref)
 
     def set_source_expressions(self, exprs):
-        exprs = list(exprs)
+        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
         self.seed_query = exprs.pop(0)
         if self.grant_query is not None:
             self.grant_query = exprs.pop(0)
@@ -3845,11 +3926,9 @@ class RelationPlan:
         exists = self.content_exists(user, OuterRef(OuterRef('pk')))
         if exists is None:
             return self.permission_model._default_manager.none()
-        return _binds().seal(self.permission_model._default_manager.filter(
-            _binds().LiteralExists(qs),
-        ).exclude(
-            _binds().LiteralExists(qs.filter(~Q(exists))),
-        ).distinct())
+        return _common_permission_queryset(
+            self.permission_model, qs, Q(exists),
+        )
 
     @_with_binds
     def permissions(self, user, content):

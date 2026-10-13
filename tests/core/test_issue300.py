@@ -209,9 +209,11 @@ class Issue300PrincipalCheckTest(SimpleTestCase):
 
 class Issue300BooleanFieldTest(TestCase):
     def setUp(self):
-        self.change = Permission.objects.get(
-            content_type=ContentType.objects.get_for_model(Document),
+        content_type = ContentType.objects.get_for_model(Document)
+        self.change, _created = Permission.objects.get_or_create(
+            content_type=content_type,
             codename='change_document',
+            defaults={'name': 'Can change document'},
         )
         self.alice = User.objects.create_user('alice-300', password='x')
         self.inactive = User.objects.create_user('inactive-300', password='x')
@@ -248,12 +250,15 @@ class Issue300BooleanFieldTest(TestCase):
             pk = self.alice.pk
 
         self.assertTrue(stored_user_is_inactive(Authenticated()))
+        self.assertFalse(stored_user_is_inactive(object()))
         with self.assertNumQueries(0):
             self.assertFalse(
                 Document.objects.authorized(Authenticated(), self.change).exists()
             )
         with self.assertRaises(TrustsConfigurationError):
             Document.objects.authorized(None, self.change)
+        with self.assertRaises(TrustsConfigurationError):
+            Document.objects.authorized(object(), self.change)
 
 
 class Issue300BindRowTest(SimpleTestCase):
