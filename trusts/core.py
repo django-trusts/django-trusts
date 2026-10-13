@@ -418,7 +418,10 @@ def _scope_sponsor_q(record, sponsor_records, permission, content_identity,
     Placed on the delegation row. An ordinary ``along=`` walk must reach
     the same scope identity the delegation reaches. An ordinary row
     without ``along=`` keeps an exact prefix comparison. An ancestor of
-    the walk site uses that same stored prefix, not a descendant walk.
+    the walk site stays that stored prefix, including when the ordinary
+    grant is the walk. A sponsor ``along=`` whose content suffix is longer
+    than one reverse hop raises ``TrustsConfigurationError``, the same
+    failure as the forward check.
     """
     parts = []
     expected_model = record.condition_permission_model
@@ -437,21 +440,21 @@ def _scope_sponsor_q(record, sponsor_records, permission, content_identity,
             ordinary, scope_model,
         ):
             ordinary_pos = _scope_walk_position(ordinary, ordinary_lookup)
-            if ordinary.along is not None and ordinary_pos != 'site':
-                continue
             if ordinary.along is not None:
-                parts.append(_KeyedReach(
-                    ordinary.along,
-                    _sponsor_walk_seed(
-                        ordinary, _shift_outer_ref(permission),
-                        content_identity,
-                    ),
-                    F(_root_relative_column(
-                        record.root, record.sponsor_field,
-                    )),
-                    candidate,
-                ))
-                continue
+                _reject_unsupported_delegated_suffix(ordinary.along)
+                if ordinary_pos == 'site':
+                    parts.append(_KeyedReach(
+                        ordinary.along,
+                        _sponsor_walk_seed(
+                            ordinary, _shift_outer_ref(permission),
+                            content_identity,
+                        ),
+                        F(_root_relative_column(
+                            record.root, record.sponsor_field,
+                        )),
+                        candidate,
+                    ))
+                    continue
             if record.along is None:
                 binding = OuterRef(lookup)
             else:

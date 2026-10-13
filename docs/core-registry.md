@@ -435,11 +435,14 @@ related `attname` from `get_path_info()`, including non-PK
 permission, and ORs applicable records. An `along=` registration
 uses that same bounded walk: a prefix at the walk site is kept when
 its identity is in the walk, and a later proper prefix is kept when
-it hangs off a walk-site row the walk reaches. A one-level delegation
+it hangs off a walk-site row the walk reaches. An ancestor of the walk
+site stays the row stored on that grant, including when the sponsor's
+ordinary grant is the walk. A one-level delegation
 keeps a prefix only when the delegation and the sponsor's ordinary
 permission both reach it. A second delegation level does not. A
 delegated `along=` whose content suffix is longer than one reverse hop
-raises `TrustsConfigurationError`. `queryset.model` equal to the
+raises `TrustsConfigurationError`. The sponsor's ordinary `along=`
+has that same limit. `queryset.model` equal to the
 content terminal is allowed when a proper prefix step of that same model
 exists (self-referential trees). A terminal-only path, an unknown
 terminal, empty handles, or a scope model not on the path return
