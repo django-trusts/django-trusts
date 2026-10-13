@@ -81,7 +81,7 @@ The following abridged example shows the schema:
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
-             params: [{bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: false, hint: "allow inactive"}]
+             params: [{bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: true, hint: "active"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
@@ -238,7 +238,7 @@ Constants and generated YAML
 also carries a ``hint``: ``$user``, ``$permission``, ``$content``, or
 ``$user.<target>`` when the bind is a request-time role, and a short label
 for a constant (``content type app``, ``content type model``, ``content pk``,
-``along bound``, ``allow inactive``, or the compared field). ``bind`` and
+``along bound``, ``active``, ``along match``, or the compared field). ``bind`` and
 ``const`` values and their order are unchanged.
 Constants are mapped between Python and SQL types so their values and type
 information are available for inspection. These mappings are data, not YAML

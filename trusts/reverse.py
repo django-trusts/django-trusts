@@ -603,33 +603,51 @@ def _principal_presence(model, name):
     evaluates without a column. ``absent`` uses that helper's
     ``getattr`` default. Any other Python attribute fails closed.
     """
-    from trusts.query import principal_attribute_kind
-
-    return principal_attribute_kind(model, name)
+    field = _concrete_field(model, name)
+    if field is not None:
+        if field.get_internal_type() != 'BooleanField':
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry needs %s.%s as a concrete '
+                'BooleanField.' % (model._meta.label, name)
+            )
+        return 'field'
+    found = None
+    for cls in model.__mro__:
+        if name in cls.__dict__:
+            found = cls.__dict__[name]
+            break
+    if found is None:
+        return 'absent'
+    if found is AbstractBaseUser.__dict__.get(name):
+        return 'stock'
+    raise TrustsConfigurationError(
+        '%s.%s is not a concrete BooleanField or the stock '
+        'AbstractBaseUser property, so get_permitted_users cannot '
+        'match has_perm in SQL.' % (model._meta.label, name)
+    )
 
 
 def _trusts_eligibility_q(model, *, allow_inactive=False):
     """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
 
-    A boolean ``is_active`` is ``(allow_inactive OR column)`` for both
-    flag values. The stock property is the SQL literal ``TRUE``. A model
-    with no ``is_active`` cannot compile this predicate. Persisted rows
-    use the stock anonymous and authenticated properties unless those
-    names are concrete fields.
+    ``is_active_principal`` denies anonymous, unauthenticated, and inactive
+    users. A missing ``is_active`` uses the same default as
+    ``getattr(user, 'is_active', False)`` and contributes no users.
+    ``allow_inactive`` omits the ``is_active`` equality and does not fail
+    closed when that column is absent. Persisted rows use the stock
+    anonymous/authenticated properties unless those names are concrete
+    fields. The predicate is standard boolean SQL.
     """
-    from trusts.query import active_eligibility_q, principal_attribute_kind
-    from trusts.binds import hoist
-    from django.db.models import BooleanField
-
-    predicate = active_eligibility_q(
-        model, 'is_active', allow_inactive=allow_inactive,
-    )
-    if principal_attribute_kind(model, 'is_anonymous') == 'field':
-        predicate &= Q(is_anonymous=hoist(False, BooleanField(), hint='is_anonymous'))
-    if principal_attribute_kind(model, 'is_authenticated') == 'field':
-        predicate &= Q(is_authenticated=hoist(
-            True, BooleanField(), hint='is_authenticated',
-        ))
+    active = _principal_presence(model, 'is_active')
+    anonymous = _principal_presence(model, 'is_anonymous')
+    authenticated = _principal_presence(model, 'is_authenticated')
+    if not allow_inactive and active != 'field':
+        return None
+    predicate = Q() if allow_inactive else Q(is_active=True)
+    if anonymous == 'field':
+        predicate &= Q(is_anonymous=False)
+    if authenticated == 'field':
+        predicate &= Q(is_authenticated=True)
     return predicate
 
 

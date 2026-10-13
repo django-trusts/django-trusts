@@ -328,6 +328,8 @@ class Issue255PolicySqlTest(SimpleTestCase):
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(content['has_perm']['params'], [
             {'const': 2, 'hint': 'along bound'},
@@ -336,6 +338,8 @@ class Issue255PolicySqlTest(SimpleTestCase):
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
             {'const': 1, 'hint': 'content pk'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(content['get_all_permissions']['params'], [
             {'const': 1, 'hint': 'content pk'},
@@ -343,18 +347,24 @@ class Issue255PolicySqlTest(SimpleTestCase):
             {'bind': 'user.id', 'hint': '$user'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
         ])
         # One ordered list for the ORed reverse statement. Both walks
         # share one bind row: depth ceiling, content, permission, and
-        # content type. The inactive flag is the outer eligibility
-        # predicate. App and model stay in the statement.
+        # content type. Inactive users are excluded by ``is_active``
+        # equality. App and model stay in the statement.
         self.assertEqual(reverse['params'], [
             {'const': 2, 'hint': 'along bound'},
             {'bind': 'content.id', 'hint': '$content'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
-            {'const': False, 'hint': 'allow inactive'},
+            {'const': True, 'hint': 'active'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(
             [
@@ -436,6 +446,8 @@ class Issue255PolicySqlTest(SimpleTestCase):
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'walknode', 'hint': 'content type model'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
         ])
 
     def test_along_reverse_uuid_to_field_binds_content_ident(self):
@@ -492,7 +504,9 @@ class Issue255PolicySqlTest(SimpleTestCase):
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'uuidnode', 'hint': 'content type model'},
-            {'const': False, 'hint': 'allow inactive'},
+            {'const': True, 'hint': 'active'},
+            {'const': True, 'hint': 'along match'},
+            {'const': True, 'hint': 'along match'},
         ])
         self.assertFalse(any(
             param.get('bind') == 'content.id' for param in reverse['params']

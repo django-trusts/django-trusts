@@ -61,7 +61,6 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db.models import BooleanField, CharField, Count, Exists, F, IntegerField, Model, OuterRef, Q
 from django.db.models.base import ModelBase
 from django.db.models.expressions import Expression
-from django.db.models.lookups import Lookup
 from django.db.models.query import QuerySet
 
 T = TypeVar('T', bound=Model)
@@ -155,37 +154,12 @@ def compiler_for_class(cls):
     return compiler
 
 
-def _direct_condition(predicate):
-    """A WHERE child that must not be compiled as ``expr = True``.
-
-    ``Exists`` and lookups are boolean SQL on every supported engine.
-    Another conditional expression becomes a lookup that emits itself, so
-    the comparison to ``True`` is not a parameter.
-    """
-    if isinstance(predicate, Q):
-        children = [_direct_condition(child) for child in predicate.children]
-        return Q(
-            *children,
-            _connector=predicate.connector,
-            _negated=predicate.negated,
-        )
-    if isinstance(predicate, (Exists, Lookup)):
-        return predicate
-    if isinstance(predicate, tuple):
-        return predicate
-    if hasattr(predicate, 'resolve_expression'):
-        return _binds().BooleanPredicate(predicate)
-    return predicate
-
-
 def _as_q(predicate):
     if predicate is None:
         return None
     if isinstance(predicate, Q):
-        return _direct_condition(predicate)
-    if isinstance(predicate, (Exists, Lookup)):
-        return Q(predicate)
-    return Q(_binds().BooleanPredicate(predicate))
+        return predicate
+    return Q(predicate)
 
 
 def _is_lookup_expression(value):
@@ -532,12 +506,12 @@ def _delegation_prefix_reach_q(record, user, lookup, target_attname, candidate,
     """Delegation row reaches this prefix."""
     if record.along is None or position == 'before':
         return Q(**{lookup: OuterRef(target_attname)})
-    return Q(_binds().BooleanPredicate(_KeyedReach(
+    return Q(_KeyedReach(
         record.along,
         _delegation_walk_seed(record, user),
         F(record.root._meta.pk.attname),
         candidate,
-    )))
+    ))
 
 
 def _delegation_prefix_exists(record, sponsor_records, user, permission,
@@ -2037,26 +2011,38 @@ def _shift_outer_ref(value):
 def _principal_eligibility_q(model, path, *, allow_inactive=False):
     """SQL equivalent of ``is_active_principal`` through ``path``.
 
-    A boolean ``is_active`` is ``(allow_inactive OR column)`` for both flag
-    values. The stock property is ``TRUE``. A missing ``is_active`` raises
-    instead of rendering a placeholder. Anonymous and authenticated
-    attributes use their runtime defaults when they are not concrete
-    fields.
+    Missing ``is_active`` fails closed because the runtime helper's default is
+    false. ``allow_inactive`` omits that predicate and does not require the
+    column. Anonymous/authenticated attributes use their runtime defaults when
+    they are not concrete fields. Any concrete eligibility field must be
+    boolean. Standard SQL only: equality against the boolean column.
     """
-    from trusts.query import active_eligibility_q, principal_attribute_kind
-
-    predicate = active_eligibility_q(
-        model, '%s__is_active' % path, allow_inactive=allow_inactive,
-    )
-    for name, expected in (('is_anonymous', False), ('is_authenticated', True)):
-        if principal_attribute_kind(model, name) != 'field':
+    lookups = {}
+    checks = [
+        ('is_anonymous', False, False),
+        ('is_authenticated', True, False),
+    ]
+    if not allow_inactive:
+        checks.insert(0, ('is_active', True, True))
+    for name, expected, required in checks:
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist:
+            if required:
+                return None
             continue
-        predicate &= Q(**{
-            '%s__%s' % (path, name): _binds().hoist(
-                expected, BooleanField(), hint=name,
-            ),
-        })
-    return predicate
+        if (
+            not getattr(field, 'concrete', False)
+            or field.get_internal_type() != 'BooleanField'
+        ):
+            raise TrustsConfigurationError(
+                '%s.%s must be a concrete BooleanField for delegated '
+                'principal eligibility.' % (model._meta.label, name)
+            )
+        lookups['%s__%s' % (path, name)] = expected
+    if not lookups:
+        return Q()
+    return Q(**lookups)
 
 
 def _ordinary_records(handles, content, permission_model=None):
@@ -2267,13 +2253,13 @@ def _delegation_reaches(record, *, forward, user=None, content=None):
             ),
         })
     if forward:
-        return Q(_binds().BooleanPredicate(_KeyedReach(
+        return Q(_KeyedReach(
             record.along,
             _delegation_walk_seed(record, user),
             F(record.root._meta.pk.attname),
             _candidate_outer_ref(record.along),
-        )))
-    return Q(_binds().BooleanPredicate(_AnchorInInverseReach(record, content)))
+        ))
+    return Q(_AnchorInInverseReach(record, content))
 
 
 def _delegated_content_exists(delegations, sponsor_records, user, permission,
@@ -3462,10 +3448,10 @@ class _PrefixInForwardWalk(Expression):
                 tuple(lhs_params) + tuple(w_params),
             )
         inner = self.suffix_query.clone()
-        inner.add_q(Q(_binds().BooleanPredicate(_IdentInReach(
+        inner.add_q(Q(_IdentInReach(
             self.record.along.walk_ident, w_sql, w_params,
             self.record.along.bound,
-        ))))
+        )))
         return _binds().LiteralExists(inner).as_sql(compiler, connection)
 
 
@@ -3627,10 +3613,10 @@ class GrantReach(Expression):
             lhs_sql, lhs_params = compiler.compile(self.lhs)
             return '%s IN (%s)' % (lhs_sql, w_sql), tuple(lhs_params) + tuple(w_params)
         inner = self.suffix_query.clone()
-        inner.add_q(Q(_binds().BooleanPredicate(_IdentInReach(
+        inner.add_q(Q(_IdentInReach(
             self.record.along.walk_ident, w_sql, w_params,
             self.record.along.bound,
-        ))))
+        )))
         return _binds().LiteralExists(inner).as_sql(compiler, connection)
 
     def _seed_sql(self, compiler, connection):
@@ -3652,10 +3638,10 @@ class GrantReach(Expression):
             bound_sql=bound_sql, bound_params=bound_params,
         )
         inner = self.grant_query.clone()
-        inner.add_q(Q(_binds().BooleanPredicate(_IdentInReach(
+        inner.add_q(Q(_IdentInReach(
             _grant_walk_attname(self.record),
             w_sql, w_params, self.record.along.bound,
-        ))))
+        )))
         return _binds().LiteralExists(inner).as_sql(compiler, connection)
 
 
@@ -3860,10 +3846,9 @@ class RelationPlan:
             parts.append(_binds().LiteralExists(inner))
         if not parts:
             return None
-        direct = [_direct_condition(part) for part in parts]
-        if len(direct) == 1:
-            return direct[0]
-        return reduce(or_, direct)
+        if len(parts) == 1:
+            return parts[0]
+        return reduce(or_, parts)
 
     def content_exists(self, user, permission):
         """Candidate-row ``EXISTS`` correlating content through this plan.

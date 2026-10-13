@@ -1,10 +1,8 @@
 """Generic authorized queryset/manager. No Zero-noun grant helpers."""
 
-from django.contrib.auth.base_user import AbstractBaseUser
-from django.core.exceptions import FieldDoesNotExist
-from django.db.models import BooleanField, F, Manager, Model, Q, QuerySet
+from django.db.models import Manager, Model, QuerySet
 
-from trusts.binds import AllowOr, SqlTrue, bind_scope, hoist, seal
+from trusts.binds import bind_scope, seal
 
 
 def is_active_principal(user, *, allow_inactive=False):
@@ -58,83 +56,6 @@ def stored_user_is_inactive(user, *, allow_inactive=False):
     ):
         return False
     return not bool(getattr(user, 'is_active', False))
-
-
-def principal_attribute_kind(model, name):
-    """How ``name`` is visible on ``model``.
-
-    ``field`` is a concrete boolean column. ``stock`` is
-    ``AbstractBaseUser``'s property. ``absent`` means the model does not
-    define the name. Any other attribute raises
-    ``TrustsConfigurationError``.
-    """
-    from trusts.core import TrustsConfigurationError
-
-    field = _concrete_boolean(model, name)
-    if field is not None:
-        return 'field'
-    found = None
-    for cls in model.__mro__:
-        if name in cls.__dict__:
-            found = cls.__dict__[name]
-            break
-    if found is None:
-        return 'absent'
-    if found is AbstractBaseUser.__dict__.get(name):
-        return 'stock'
-    raise TrustsConfigurationError(
-        '%s.%s is not a concrete BooleanField or the stock '
-        'AbstractBaseUser property, so permission SQL cannot match '
-        'has_perm.' % (model._meta.label, name)
-    )
-
-
-def _concrete_boolean(model, name):
-    from trusts.core import TrustsConfigurationError
-
-    try:
-        field = model._meta.get_field(name)
-    except FieldDoesNotExist:
-        return None
-    if (
-        not getattr(field, 'concrete', False)
-        or getattr(field, 'many_to_many', False)
-    ):
-        return None
-    if field.get_internal_type() != 'BooleanField':
-        raise TrustsConfigurationError(
-            '%s.%s is not a concrete BooleanField or the stock '
-            'AbstractBaseUser property, so permission SQL cannot match '
-            'has_perm.' % (model._meta.label, name)
-        )
-    return field
-
-
-def active_eligibility_q(model, lookup, *, allow_inactive=False):
-    """SQL for the built-in ``is_active`` rule on ``lookup``.
-
-    A boolean column becomes ``(allow_inactive OR column)``. Both flag
-    values compile the same text; the bound flag is the one this query
-    runs. The stock ``AbstractBaseUser`` property is always true and has
-    no column, so the predicate is the SQL literal ``TRUE``. A model with
-    no ``is_active`` at all cannot compile permission SQL.
-    """
-    from trusts.core import TrustsConfigurationError
-
-    kind = principal_attribute_kind(model, 'is_active')
-    if kind == 'absent':
-        raise TrustsConfigurationError(
-            '%s has no is_active column or stock AbstractBaseUser '
-            'property, so permission SQL cannot be compiled.'
-            % model._meta.label
-        )
-    if kind == 'stock':
-        return Q(SqlTrue())
-    flag = bool(allow_inactive)
-    return Q(AllowOr(
-        F(lookup),
-        hoist(flag, BooleanField(), hint='allow inactive'),
-    ))
 
 
 def user_identity_denied(user):

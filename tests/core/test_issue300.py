@@ -1,39 +1,28 @@
 """One placeholder per inquiry value, and ``is_active`` in the statement (#300)."""
 
 from collections import Counter
-from unittest.mock import patch
 
-from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
-from django.db import models
-from django.db.models import BooleanField, F, FloatField, IntegerField, OuterRef, Value
+from django.db.models import FloatField, IntegerField, OuterRef, Value
 from django.test import SimpleTestCase, TestCase
 
 from tests.core.test_issue147.test_sql_export import _document_handle
-from tests.myapp.models import Document, DocumentGrant
+from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.binds import (
     BIND_ALIAS,
-    AllowOr,
     BindRef,
     BindTable,
-    BooleanPredicate,
     SqlInt,
-    SqlTrue,
     bind_scope,
     hoist,
     seal,
     strip_exists_marker,
 )
-from trusts.checks import CHECK_ID_INACTIVE_PRINCIPAL, check_principal_is_active
 from trusts.core import TrustsConfigurationError
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import (
-    active_eligibility_q,
-    principal_attribute_kind,
-    stored_user_is_inactive,
-)
+from trusts.query import stored_user_is_inactive
 from trusts.reverse import compile_permitted_users
 
 
@@ -75,190 +64,64 @@ class Issue300LockfileTest(SimpleTestCase):
             self.assertIn('content type app', hints)
             self.assertIn('content type model', hints)
         users = content['get_permitted_users']
-        self.assertIn(
-            {'const': False, 'hint': 'allow inactive'}, users['params'],
+        self.assertIn({'const': True, 'hint': 'active'}, users['params'])
+        self.assertIn('"is_active" = %s', users['sql'])
+        self.assertNotIn('allow_inactive', users['sql'])
+        for key in (
+            'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
+        ):
+            self.assertFalse(any(
+                param.get('hint') == 'allow inactive'
+                for param in content[key]['params']
+            ))
+
+
+class Issue300EligibilitySqlTest(SimpleTestCase):
+    def test_is_active_equality_is_added_only_when_inactive_users_are_denied(self):
+        document = Document(title='note-300', pk=1)
+        denied = compile_permitted_users(
+            document, PERM, allow_inactive=False,
         )
-        self.assertIn('OR "auth_user"."is_active"', users['sql'])
-        self.assertNotIn('is_active" = %s', users['sql'])
-
-
-class Issue300PrincipalCheckTest(SimpleTestCase):
-    def test_configured_user_model_has_no_e010(self):
-        self.assertEqual(check_principal_is_active(None), [])
-
-    def test_missing_is_active_is_e010_and_refuses_to_compile(self):
-        class Plain(models.Model):
-            name = models.CharField(max_length=20)
-
-            class Meta:
-                app_label = 'myapp'
-
-        with patch(
-            'trusts.checks._configured_principal_models',
-            return_value=[Plain],
-        ):
-            messages = check_principal_is_active(None)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0].id, CHECK_ID_INACTIVE_PRINCIPAL)
-        self.assertIn('Plain', messages[0].msg)
-        with self.assertRaises(TrustsConfigurationError) as caught:
-            active_eligibility_q(Plain, 'is_active')
-        self.assertIn('no is_active', str(caught.exception))
-
-    def test_non_boolean_column_and_custom_property_are_e010(self):
-        class Flag(models.Model):
-            is_active = models.IntegerField()
-
-            class Meta:
-                app_label = 'myapp'
-
-        class Computed(models.Model):
-            class Meta:
-                app_label = 'myapp'
-
-            @property
-            def is_active(self):
-                return True
-
-        class Tagged(models.Model):
-            is_active = models.ManyToManyField(User, related_name='+')
-
-            class Meta:
-                app_label = 'myapp'
-
-        for model in (Flag, Computed, Tagged):
-            with self.assertRaises(TrustsConfigurationError):
-                active_eligibility_q(model, 'is_active')
-        self.assertEqual(principal_attribute_kind(Flag, 'missing'), 'absent')
-        with patch(
-            'trusts.checks._configured_principal_models',
-            return_value=[Flag, Computed, Tagged],
-        ):
-            messages = check_principal_is_active(None)
-        self.assertEqual(
-            [message.id for message in messages],
-            [CHECK_ID_INACTIVE_PRINCIPAL] * 3,
+        included = compile_permitted_users(
+            document, PERM, allow_inactive=True,
         )
-        self.assertTrue(all(
-            'not a concrete BooleanField' in message.msg for message in messages
-        ))
-
-    def test_broken_paths_and_unclassifiable_principals_do_not_crash_the_check(self):
-        class BrokenPaths(object):
-            def _configured_trusts_paths(self):
-                raise TrustsConfigurationError('paths')
-
-        class BrokenBackend(object):
-            def _configured_trusts_paths(self):
-                return ('example.Backend',)
-
-            def configured_backend(self, path=None):
-                raise RuntimeError('backend')
-
-        with patch(
-            'django.contrib.auth.get_user_model',
-            side_effect=RuntimeError('user'),
-        ):
-            with patch(
-                'trusts.apps.implementation_configs',
-                return_value=(BrokenPaths(), BrokenBackend()),
-            ):
-                self.assertEqual(check_principal_is_active(None), [])
-
-        with patch(
-            'trusts.checks._configured_principal_models',
-            return_value=[object(), User],
-        ):
-            self.assertEqual(check_principal_is_active(None), [])
-
-        with patch(
-            'trusts.checks._configured_principal_models',
-            return_value=[User],
-        ):
-            with patch(
-                'trusts.query.principal_attribute_kind',
-                side_effect=RuntimeError('boom'),
-            ):
-                messages = check_principal_is_active(None)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0].id, CHECK_ID_INACTIVE_PRINCIPAL)
-        self.assertIn('cannot be classified', messages[0].msg)
-        self.assertIn('boom', messages[0].msg)
-
-    def test_stock_abstract_base_user_is_sql_true_for_both_flag_values(self):
-        class StockUser(AbstractBaseUser):
-            identifier = models.CharField(max_length=20, unique=True)
-            USERNAME_FIELD = 'identifier'
-
-            class Meta:
-                app_label = 'myapp'
-
-        false_q = active_eligibility_q(
-            StockUser, 'is_active', allow_inactive=False,
+        denied_sql, _denied_params = denied.query.sql_with_params()
+        included_sql, _included_params = included.query.sql_with_params()
+        self.assertNotEqual(denied_sql, included_sql)
+        self.assertNotIn('allow_inactive', denied_sql)
+        self.assertNotIn('allow_inactive', included_sql)
+        self.assertNotIn('OR "auth_user"."is_active"', denied_sql)
+        # The superuser branch always compares is_active. The Trusts
+        # branch adds that comparison only when inactive users are denied.
+        self.assertGreater(
+            denied_sql.count('"is_active" = %s'),
+            included_sql.count('"is_active" = %s'),
         )
-        true_q = active_eligibility_q(
-            StockUser, 'is_active', allow_inactive=True,
-        )
-        false_sql = str(StockUser.objects.filter(false_q).query)
-        true_sql = str(StockUser.objects.filter(true_q).query)
-        self.assertEqual(false_sql, true_sql)
-        self.assertIn('TRUE', false_sql)
-        self.assertNotIn('%s', false_sql)
-        self.assertNotIn('is_active', false_sql)
 
 
 class Issue300BooleanFieldTest(TestCase):
-    def setUp(self):
-        content_type = ContentType.objects.get_for_model(Document)
-        self.change, _created = Permission.objects.get_or_create(
-            content_type=content_type,
-            codename='change_document',
-            defaults={'name': 'Can change document'},
-        )
-        self.alice = User.objects.create_user('alice-300', password='x')
-        self.inactive = User.objects.create_user('inactive-300', password='x')
-        self.inactive.is_active = False
-        self.inactive.save(update_fields=['is_active'])
-        self.document = Document.objects.create(title='note-300')
-        DocumentGrant.objects.create(
-            document=self.document, user=self.alice, permission=self.change,
-        )
-        DocumentGrant.objects.create(
-            document=self.document, user=self.inactive, permission=self.change,
-        )
-
-    def test_both_flag_values_share_sql_and_the_false_flag_denies_inactive(self):
-        denied = compile_permitted_users(
-            self.document, PERM, allow_inactive=False,
-        )
-        included = compile_permitted_users(
-            self.document, PERM, allow_inactive=True,
-        )
-        denied_sql, denied_params = denied.query.sql_with_params()
-        included_sql, included_params = included.query.sql_with_params()
-        self.assertEqual(denied_sql, included_sql)
-        self.assertNotEqual(denied_params, included_params)
-        self.assertIn('OR "auth_user"."is_active"', denied_sql)
-        self.assertIn('"trusts_bind"."allow_inactive"', denied_sql)
-        self.assertEqual(set(denied), {self.alice})
-        self.assertEqual(set(included), {self.alice, self.inactive})
-
     def test_authorized_denies_a_non_model_without_is_active_and_none_raises(self):
         class Authenticated(object):
             is_authenticated = True
             is_anonymous = False
-            pk = self.alice.pk
+            pk = 1
 
+        content_type = ContentType.objects.get_for_model(Document)
+        permission, _created = Permission.objects.get_or_create(
+            content_type=content_type,
+            codename='change_document',
+            defaults={'name': 'Can change document'},
+        )
         self.assertTrue(stored_user_is_inactive(Authenticated()))
         self.assertFalse(stored_user_is_inactive(object()))
         with self.assertNumQueries(0):
             self.assertFalse(
-                Document.objects.authorized(Authenticated(), self.change).exists()
+                Document.objects.authorized(Authenticated(), permission).exists()
             )
         with self.assertRaises(TrustsConfigurationError):
-            Document.objects.authorized(None, self.change)
+            Document.objects.authorized(None, permission)
         with self.assertRaises(TrustsConfigurationError):
-            Document.objects.authorized(object(), self.change)
+            Document.objects.authorized(object(), permission)
 
 
 class Issue300BindRowTest(SimpleTestCase):
@@ -313,11 +176,11 @@ class Issue300BindRowTest(SimpleTestCase):
 
         with bind_scope():
             hoist(4, IntegerField())
-            hoist(False, BooleanField(), hint='allow inactive')
+            hoist(False, IntegerField(), hint='second flag')
             seal(queryset)
         replaced, replaced_params = queryset.query.sql_with_params()
         self.assertIn('AS "literal"', replaced)
-        self.assertIn('AS "allow_inactive"', replaced)
+        self.assertIn('AS "second_flag"', replaced)
         self.assertEqual(replaced.count('CROSS JOIN'), 1)
         self.assertEqual(len(replaced_params), 2)
         self.assertEqual(replaced_params[0], 4)
@@ -339,14 +202,3 @@ class Issue300BindRowTest(SimpleTestCase):
         marker.set_source_expressions([])
         with self.assertRaises(TypeError):
             marker.set_source_expressions([Value(1)])
-
-        flag = SqlTrue()
-        self.assertIs(flag.get_prep_lookup(), True)
-        flag.set_source_expressions([])
-        with self.assertRaises(TypeError):
-            flag.set_source_expressions([Value(1)])
-
-        predicate = BooleanPredicate(Value(True, output_field=BooleanField()))
-        self.assertIs(predicate.get_prep_lookup(), True)
-        allowed = AllowOr(F('is_active'), False)
-        self.assertIs(allowed.get_prep_lookup(), False)

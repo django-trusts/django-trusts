@@ -41,8 +41,7 @@ Migration-bot checklist:
 
 The shared [user.is_active rule](docs/source/index.rst#user-is-active-checks)
 also applies to `.authorized()` and ordinary registry/intermediate-model
-inquiries, superseding their earlier ungated behavior described below. A user
-model without `is_active` now fails at startup instead of being quietly denied.
+inquiries, superseding their earlier ungated behavior described below.
 Their default results change for an inactive user:
 
 | Before #284 | After #284 |

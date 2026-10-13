@@ -751,16 +751,14 @@ lockfile key remains ``get_permitted_users``. For the direct
 .. code-block:: yaml
 
    get_permitted_users:
-     params: [{bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: false, hint: "allow inactive"}]
+     params: [{bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: true, hint: "active"}]
      sql: |-
        SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
        FROM "auth_user"
        CROSS JOIN (
-         SELECT %s AS "content_id", %s AS "permission_id", %s AS "app_label", %s AS "model", %s AS "allow_inactive"
+         SELECT %s AS "content_id", %s AS "permission_id", %s AS "app_label", %s AS "model"
        ) "trusts_bind"
-       WHERE (("trusts_bind"."allow_inactive"
-             OR "auth_user"."is_active"
-         )
+       WHERE ("auth_user"."is_active" = %s
          AND EXISTS (
            SELECT 1 AS "a"
            FROM "documents_documentpermission" "U0"

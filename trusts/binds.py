@@ -14,9 +14,8 @@ import copy
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from django.db.models import BooleanField, Exists, IntegerField, Value
+from django.db.models import Exists, IntegerField, Value
 from django.db.models.expressions import Expression
-from django.db.models.lookups import Lookup
 
 
 BIND_ALIAS = 'trusts_bind'
@@ -45,7 +44,6 @@ def _column_base(kind, label):
         base = {
             'content type app': 'app_label',
             'content type model': 'model',
-            'allow inactive': 'allow_inactive',
             'along bound': 'along_bound',
             'content pk': 'content_pk',
             'exists marker': 'exists_marker',
@@ -322,151 +320,3 @@ class LiteralExists(Exists):
     def __init__(self, queryset, **kwargs):
         super().__init__(queryset, **kwargs)
         strip_exists_marker(self.query)
-
-
-class BooleanPredicate(Lookup):
-    """A boolean expression used directly in ``WHERE``.
-
-    Django wraps a non-lookup conditional expression as ``expr = True``,
-    which binds ``true`` once per use. The comparison is not part of the
-    predicate. Emitting the expression itself keeps that value out of the
-    parameter list.
-    """
-
-    lookup_name = 'trusts_predicate'
-    prepare_rhs = False
-
-    def __init__(self, expression):
-        self.expression = expression
-        Expression.__init__(self, output_field=BooleanField())
-        self.rhs = True
-        self.bilateral_transforms = []
-
-    @property
-    def lhs(self):
-        # WhereNode assigns the outer-query resolution onto ``lhs``. That
-        # assignment has to replace the expression ``as_sql`` compiles.
-        # A separate attribute would keep the inner ``ResolvedOuterRef``
-        # and ``compiler.compile`` would refuse to render it.
-        return self.expression
-
-    @lhs.setter
-    def lhs(self, value):
-        self.expression = value
-
-    def get_prep_lookup(self):
-        return True
-
-    def as_sql(self, compiler, connection):
-        return compiler.compile(self.expression)
-
-    def get_source_expressions(self):
-        return [self.expression]
-
-    def set_source_expressions(self, exprs):
-        self.expression = exprs[0]
-
-    def resolve_expression(
-        self, query=None, allow_joins=True, reuse=None,
-        summarize=False, for_save=False,
-    ):
-        clone = copy.copy(self)
-        clone.expression = self.expression.resolve_expression(
-            query, allow_joins, reuse, summarize, for_save,
-        )
-        return clone
-
-
-class AllowOr(Lookup):
-    """``(flag OR column)`` so both ``allow_inactive`` values share one statement."""
-
-    lookup_name = 'allow_inactive_or'
-    prepare_rhs = False
-
-    def __init__(self, column, flag):
-        self.column = column
-        self.flag = flag
-        Expression.__init__(self, output_field=BooleanField())
-        self.lhs = column
-        self.rhs = flag
-        self.bilateral_transforms = []
-
-    def get_prep_lookup(self):
-        return self.flag
-
-    def as_sql(self, compiler, connection):
-        column_sql, column_params = compiler.compile(self.column)
-        if hasattr(self.flag, 'as_sql'):
-            flag_sql, flag_params = compiler.compile(self.flag)
-        else:
-            flag_sql, flag_params = '%s', (self.flag,)
-        return (
-            '(%s OR %s)' % (flag_sql, column_sql),
-            tuple(flag_params) + tuple(column_params),
-        )
-
-    def get_source_expressions(self):
-        if hasattr(self.flag, 'resolve_expression'):
-            return [self.column, self.flag]
-        return [self.column]
-
-    def set_source_expressions(self, exprs):
-        self.column = exprs[0]
-        self.lhs = self.column
-        if len(exprs) > 1:
-            self.flag = exprs[1]
-            self.rhs = self.flag
-
-    def resolve_expression(
-        self, query=None, allow_joins=True, reuse=None,
-        summarize=False, for_save=False,
-    ):
-        clone = copy.copy(self)
-        clone.column = self.column.resolve_expression(
-            query, allow_joins, reuse, summarize, for_save,
-        )
-        flag = self.flag
-        if hasattr(flag, 'resolve_expression'):
-            flag = flag.resolve_expression(
-                query, allow_joins, reuse, summarize, for_save,
-            )
-        clone.flag = flag
-        clone.lhs = clone.column
-        clone.rhs = clone.flag
-        return clone
-
-
-class SqlTrue(Lookup):
-    """Boolean literal ``TRUE``. No column and no placeholder.
-
-    ``TRUE`` is the standard boolean literal on SQLite, PostgreSQL, and
-    MySQL, which are the engines that render policy SQL.
-    """
-
-    lookup_name = 'sql_true'
-    prepare_rhs = False
-
-    def __init__(self):
-        Expression.__init__(self, output_field=BooleanField())
-        self.lhs = Value(True, output_field=BooleanField())
-        self.rhs = True
-        self.bilateral_transforms = []
-
-    def get_prep_lookup(self):
-        return True
-
-    def as_sql(self, compiler, connection):
-        return 'TRUE', ()
-
-    def get_source_expressions(self):
-        return []
-
-    def set_source_expressions(self, exprs):
-        if exprs:
-            raise TypeError('SqlTrue has no source expressions.')
-
-    def resolve_expression(
-        self, query=None, allow_joins=True, reuse=None,
-        summarize=False, for_save=False,
-    ):
-        return copy.copy(self)
