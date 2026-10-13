@@ -238,10 +238,38 @@ class Issue300BindOnceSettingTest(SimpleTestCase):
         self.assertEqual(list(once_params), [4])
 
 
+def _engine_connection(engine):
+    """Database wrapper for one engine, or ``None`` when its driver is absent.
+
+    The kernel job installs SQLite only. MySQL and PostgreSQL drivers are
+    present on the along jobs and in a local checkout that has them.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+    from django.db.utils import load_backend
+
+    try:
+        backend = load_backend(engine)
+    except ImproperlyConfigured:
+        return None
+    return backend.DatabaseWrapper({
+        'ENGINE': engine,
+        'NAME': ':memory:',
+        'USER': '',
+        'PASSWORD': '',
+        'HOST': '',
+        'PORT': '',
+        'TIME_ZONE': None,
+        'CONN_MAX_AGE': 0,
+        'CONN_HEALTH_CHECKS': False,
+        'OPTIONS': {},
+        'AUTOCOMMIT': True,
+        'ATOMIC_REQUESTS': False,
+    })
+
+
 class Issue300ExistsMarkerTest(SimpleTestCase):
     def test_literal_one_is_standard_sql_on_sqlite_mysql_and_postgresql(self):
         from django.db.models import Exists
-        from django.db.utils import load_backend
 
         from trusts._bind_once import LiteralExists
 
@@ -258,21 +286,9 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
         )
         for engine in engines:
             with self.subTest(engine=engine):
-                backend = load_backend(engine)
-                connection = backend.DatabaseWrapper({
-                    'ENGINE': engine,
-                    'NAME': ':memory:',
-                    'USER': '',
-                    'PASSWORD': '',
-                    'HOST': '',
-                    'PORT': '',
-                    'TIME_ZONE': None,
-                    'CONN_MAX_AGE': 0,
-                    'CONN_HEALTH_CHECKS': False,
-                    'OPTIONS': {},
-                    'AUTOCOMMIT': True,
-                    'ATOMIC_REQUESTS': False,
-                })
+                connection = _engine_connection(engine)
+                if connection is None:
+                    self.skipTest('%s driver is not installed' % engine)
                 sql, params = exists.query.get_compiler(
                     connection=connection,
                 ).as_sql()
@@ -285,8 +301,6 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                 self.assertEqual(list(params), [1])
 
     def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
-        from django.db.utils import load_backend
-
         query = User.objects.filter(
             _trusts_eligibility_q(User, allow_inactive=False),
         ).query
@@ -297,21 +311,9 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
         )
         for engine in engines:
             with self.subTest(engine=engine):
-                backend = load_backend(engine)
-                connection = backend.DatabaseWrapper({
-                    'ENGINE': engine,
-                    'NAME': ':memory:',
-                    'USER': '',
-                    'PASSWORD': '',
-                    'HOST': '',
-                    'PORT': '',
-                    'TIME_ZONE': None,
-                    'CONN_MAX_AGE': 0,
-                    'CONN_HEALTH_CHECKS': False,
-                    'OPTIONS': {},
-                    'AUTOCOMMIT': True,
-                    'ATOMIC_REQUESTS': False,
-                })
+                connection = _engine_connection(engine)
+                if connection is None:
+                    self.skipTest('%s driver is not installed' % engine)
                 sql, params = query.get_compiler(connection=connection).as_sql()
                 quote = connection.ops.quote_name('is_active')
                 self.assertIn('%s = %%s' % quote, sql)
