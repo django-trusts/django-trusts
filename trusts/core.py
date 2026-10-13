@@ -549,73 +549,19 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
     return parts
 
 
-def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
-                                allow_inactive_user=False, sponsor_handles=None):
-    """Filter scope-model rows that appear as a proper prefix of ``content``.
+def _compile_permitted_content_queryset(
+    queryset, user, permission, *, content, handles, sponsor_handles,
+    allow_inactive_user=False,
+):
+    """Compile the permitted-content queryset for resolved handles.
 
-    Fail closed unless ``queryset.model`` is a proper prefix node of some
-    applicable record's ``content_path`` whose content terminal is
-    ``content``. Compile ``EXISTS`` of root rows correlated to
-    ``OuterRef`` of that hop's resolved target field (the related
-    ``attname`` from ``get_path_info()``, which need not be ``pk``) at
-    that node, bind user + permission from the same record, and OR
-    applicable records.
-
-    An ``along=`` registration uses the same bounded ``WITH RECURSIVE``
-    walk as the forward check. A prefix at the walk site is kept when
-    its identity is in that walk. A later proper prefix is kept when it
-    hangs off a walk-site row in the walk. A one-level delegation
-    contributes a prefix only when the delegation and the sponsor's
-    ordinary permission both reach it. A second delegation level does
-    not. A delegated ``along=`` whose content suffix is longer than one
-    reverse hop raises ``TrustsConfigurationError``.
-
-    ``queryset.model`` equal to the content terminal is allowed when a
-    proper prefix hop of that same model exists (self-referential
-    trees). A terminal-only path has no proper prefix, so the same-model
-    queryset still returns ``none()``. Unknown terminal, empty handles,
-    or a scope model not on the path also return ``none()``.
-    ``sponsor_handles`` selects the ordinary grants a delegation may use
-    and defaults to ``handles``. ``permission`` must be a model instance.
-    Construction of a fail-closed
-    result issues zero SQL; SQL runs only when a compiled predicate is
-    evaluated. Default and explicit handle lists include
-    relationship-family handles only.
-
-    Noun-blind: this builder does not import or name Zero schema models
-    and does not use a compiler's historical group
-    OR. Explicit ``group=`` records participate through the same prefix
-    correlation. Membership shape is not a group.
+    ``handles`` owns the ordinary and delegation branches being listed.
+    ``sponsor_handles`` supplies the ordinary grants a delegation may
+    use. Callers resolve relationship handles and apply the inactive-user
+    gate before this helper runs.
     """
-    if not isinstance(queryset, QuerySet):
-        raise TrustsConfigurationError(
-            'filter_by_permitted_content requires a QuerySet, not %r.'
-            % (queryset,)
-        )
-    if handles is None:
-        from trusts.apps import _relationship_implementation_handles
-        handles = _relationship_implementation_handles()
-    else:
-        handles = _relationship_handles(handles)
-    if sponsor_handles is None:
-        sponsor_handles = handles
-    else:
-        sponsor_handles = _relationship_handles(sponsor_handles)
-    user = _require_instance(user, 'user')
-    permission = _require_instance(permission, 'permission')
-    from trusts.query import (
-        user_identity_denied,
-        require_mode_flag,
-        stored_user_is_inactive,
-    )
-    require_mode_flag(allow_inactive_user, 'allow_inactive_user')
-    if not handles:
-        return queryset.none()
-    if user_identity_denied(user) or stored_user_is_inactive(
-        user, allow_inactive=allow_inactive_user,
-    ):
-        return queryset.none()
-
+    handles = tuple(handles)
+    sponsor_handles = tuple(sponsor_handles)
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
@@ -650,9 +596,75 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
     return queryset.filter(granted_q).distinct()
 
 
+def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
+                                allow_inactive_user=False):
+    """Filter scope-model rows that appear as a proper prefix of ``content``.
+
+    Fail closed unless ``queryset.model`` is a proper prefix node of some
+    applicable record's ``content_path`` whose content terminal is
+    ``content``. Compile ``EXISTS`` of root rows correlated to
+    ``OuterRef`` of that hop's resolved target field (the related
+    ``attname`` from ``get_path_info()``, which need not be ``pk``) at
+    that node, bind user + permission from the same record, and OR
+    applicable records.
+
+    An ``along=`` registration uses the same bounded ``WITH RECURSIVE``
+    walk as the forward check. A prefix at the walk site is kept when
+    its identity is in that walk. A later proper prefix is kept when it
+    hangs off a walk-site row in the walk. A one-level delegation
+    contributes a prefix only when the delegation and the sponsor's
+    ordinary permission both reach it. A second delegation level does
+    not. A delegated ``along=`` whose content suffix is longer than one
+    reverse hop raises ``TrustsConfigurationError``.
+
+    ``queryset.model`` equal to the content terminal is allowed when a
+    proper prefix hop of that same model exists (self-referential
+    trees). A terminal-only path has no proper prefix, so the same-model
+    queryset still returns ``none()``. Unknown terminal, empty handles,
+    or a scope model not on the path also return ``none()``.
+    ``permission`` must be a model instance. Construction of a
+    fail-closed result issues zero SQL; SQL runs only when a compiled
+    predicate is evaluated. Default and explicit handle lists include
+    relationship-family handles only.
+
+    Noun-blind: this builder does not import or name Zero schema models
+    and does not use a compiler's historical group
+    OR. Explicit ``group=`` records participate through the same prefix
+    correlation. Membership shape is not a group.
+    """
+    if not isinstance(queryset, QuerySet):
+        raise TrustsConfigurationError(
+            'filter_by_permitted_content requires a QuerySet, not %r.'
+            % (queryset,)
+        )
+    if handles is None:
+        from trusts.apps import _relationship_implementation_handles
+        handles = _relationship_implementation_handles()
+    else:
+        handles = _relationship_handles(handles)
+    user = _require_instance(user, 'user')
+    permission = _require_instance(permission, 'permission')
+    from trusts.query import (
+        user_identity_denied,
+        require_mode_flag,
+        stored_user_is_inactive,
+    )
+    require_mode_flag(allow_inactive_user, 'allow_inactive_user')
+    if not handles:
+        return queryset.none()
+    if user_identity_denied(user) or stored_user_is_inactive(
+        user, allow_inactive=allow_inactive_user,
+    ):
+        return queryset.none()
+    return _compile_permitted_content_queryset(
+        queryset, user, permission, content=content, handles=handles,
+        sponsor_handles=handles, allow_inactive_user=allow_inactive_user,
+    )
+
+
 def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
-                             allow_inactive_user=False, sponsor_handles=None):
-    return filter_by_permitted_content(queryset, user, permission, content=content, handles=handles, allow_inactive_user=allow_inactive_user, sponsor_handles=sponsor_handles)
+                             allow_inactive_user=False):
+    return filter_by_permitted_content(queryset, user, permission, content=content, handles=handles, allow_inactive_user=allow_inactive_user)
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete',

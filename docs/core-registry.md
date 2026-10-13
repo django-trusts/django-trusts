@@ -425,11 +425,10 @@ validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
-`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False, sponsor_handles=None)`
+`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
 in `trusts.core` filters rows of an intermediate model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
-whose content terminal is `content`. `sponsor_handles` selects the ordinary
-grants a delegation may use and defaults to `handles`. The function compiles `EXISTS` of root rows
+whose content terminal is `content`. The function compiles `EXISTS` of root rows
 correlated to `OuterRef` of that step's resolved target field (the
 related `attname` from `get_path_info()`, including non-PK
 `ForeignKey(..., to_field=...)`) at that node, binds user +

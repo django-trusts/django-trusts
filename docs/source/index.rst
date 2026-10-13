@@ -484,15 +484,14 @@ the same model.
 
    def filter_by_permitted_content(
        queryset, user, permission, *, content, handles=None,
-       allow_inactive_user=False, sponsor_handles=None,
+       allow_inactive_user=False,
    ):
        ...
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``sponsor_handles`` selects the ordinary grants a delegation may
-use and defaults to ``handles``. ``allow_inactive_user`` is the same option
-as the other content inquiries.
+backends. ``allow_inactive_user`` is the same option as the other content
+inquiries.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
