@@ -2,7 +2,7 @@
 
 from django.db.models import Manager, Model, QuerySet
 
-from trusts.binds import bind_scope, seal
+from trusts._bind_once import bind_scope, seal
 
 
 def is_active_principal(user, *, allow_inactive=False):

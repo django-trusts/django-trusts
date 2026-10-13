@@ -5,7 +5,7 @@ from collections import Counter
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import FloatField, IntegerField, OuterRef, Value
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from tests.core.test_issue147.test_sql_export import (
     Document as GuideDocument,
@@ -13,7 +13,7 @@ from tests.core.test_issue147.test_sql_export import (
 )
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.binds import (
+from trusts._bind_once import (
     BIND_ALIAS,
     BindRef,
     BindTable,
@@ -21,6 +21,7 @@ from trusts.binds import (
     bind_scope,
     hoist,
     seal,
+    sql_bind_once,
     strip_exists_marker,
 )
 from trusts.core import TrustsConfigurationError, granted
@@ -198,3 +199,87 @@ class Issue300BindRowTest(SimpleTestCase):
         marker.set_source_expressions([])
         with self.assertRaises(TypeError):
             marker.set_source_expressions([Value(1)])
+
+
+class Issue300BindOnceSettingTest(SimpleTestCase):
+    def test_setting_defaults_to_true_and_false_skips_the_bind_row(self):
+        self.assertTrue(sql_bind_once())
+        with override_settings(TRUSTS_SQL_BIND_ONCE=True):
+            self.assertTrue(sql_bind_once())
+        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+            self.assertFalse(sql_bind_once())
+            with bind_scope():
+                self.assertEqual(hoist(4, IntegerField(), bind='user.id'), 4)
+                repeated = User.objects.filter(id=hoist(
+                    4, IntegerField(), hint='along bound',
+                )).filter(pk=hoist(
+                    4, IntegerField(), hint='along bound',
+                ))
+                seal(repeated)
+            sql, params = repeated.query.sql_with_params()
+            self.assertNotIn('trusts_bind', sql)
+            self.assertNotIn(BIND_ALIAS, repeated.query.alias_map)
+            self.assertEqual(list(params), [4, 4])
+            document = _load_policy_sql_document(
+                render_policy_sql_bytes(handles=[_document_handle()]),
+            )
+            row = document['backends'][0]['contents'][0]['permitted']
+            self.assertNotIn('trusts_bind', row['sql'])
+            self.assertEqual(row['sql'].count('%s'), len(row['params']))
+        with bind_scope():
+            once = User.objects.filter(id=hoist(
+                4, IntegerField(), hint='along bound',
+            )).filter(pk=hoist(
+                4, IntegerField(), hint='along bound',
+            ))
+            seal(once)
+        once_sql, once_params = once.query.sql_with_params()
+        self.assertIn('trusts_bind', once_sql)
+        self.assertEqual(list(once_params), [4])
+
+
+class Issue300ExistsMarkerTest(SimpleTestCase):
+    def test_literal_one_is_standard_sql_on_sqlite_mysql_and_postgresql(self):
+        from django.db.models import Exists
+        from django.db.utils import load_backend
+
+        from trusts._bind_once import LiteralExists
+
+        inner = User.objects.filter(pk=1)
+        exists = LiteralExists(inner)
+        self.assertIsInstance(exists.query.annotations['a'], SqlInt)
+        bare = Exists(User.objects.filter(pk=1))
+        self.assertEqual(bare.query.annotations['a'].value, 1)
+
+        engines = (
+            'django.db.backends.sqlite3',
+            'django.db.backends.mysql',
+            'django.db.backends.postgresql',
+        )
+        for engine in engines:
+            with self.subTest(engine=engine):
+                backend = load_backend(engine)
+                connection = backend.DatabaseWrapper({
+                    'ENGINE': engine,
+                    'NAME': ':memory:',
+                    'USER': '',
+                    'PASSWORD': '',
+                    'HOST': '',
+                    'PORT': '',
+                    'TIME_ZONE': None,
+                    'CONN_MAX_AGE': 0,
+                    'CONN_HEALTH_CHECKS': False,
+                    'OPTIONS': {},
+                    'AUTOCOMMIT': True,
+                    'ATOMIC_REQUESTS': False,
+                })
+                sql, params = exists.query.get_compiler(
+                    connection=connection,
+                ).as_sql()
+                quote = connection.ops.quote_name('a')
+                self.assertIn('SELECT 1 AS %s' % quote, sql)
+                self.assertNotIn('SELECT %%s AS %s' % quote, sql)
+                head = sql.split(' FROM ', 1)[0]
+                self.assertNotIn('%s', head)
+                self.assertEqual(sql.count('%s'), len(params))
+                self.assertEqual(list(params), [1])

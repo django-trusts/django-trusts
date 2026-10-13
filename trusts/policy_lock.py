@@ -579,7 +579,7 @@ def _role_sentinel(record, role, alias):
 def _compile_permitted(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
-    from trusts.binds import bind_scope, seal
+    from trusts._bind_once import bind_scope, seal
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -602,7 +602,7 @@ def _compile_permitted(handle, alias, records, model, handles):
 def _compile_has_perm(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
-    from trusts.binds import bind_scope, hoist, seal, strip_exists_marker
+    from trusts._bind_once import bind_scope, hoist, seal, strip_exists_marker
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -1295,7 +1295,7 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
-    from trusts.binds import BindTable
+    from trusts._bind_once import BindTable
     from trusts.core import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,

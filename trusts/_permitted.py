@@ -13,7 +13,7 @@ from operator import or_
 from django.contrib.auth.models import Permission
 from django.db.models import Subquery
 
-from trusts.binds import bind_scope, seal
+from trusts._bind_once import bind_scope, seal
 from trusts.core import TrustsConfigurationError, _ordinary_records, granted
 from trusts.query import is_active_principal
 

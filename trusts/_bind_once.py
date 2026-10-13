@@ -23,6 +23,19 @@ BIND_ALIAS = 'trusts_bind'
 _sheet = ContextVar('trusts_bind_sheet', default=None)
 
 
+def sql_bind_once():
+    """Return whether one statement binds each distinct value once.
+
+    ``TRUSTS_SQL_BIND_ONCE`` defaults to true. Set it to false to leave
+    every placeholder where the compiler emitted it and to skip the
+    one-row ``trusts_bind`` table. The ``EXISTS`` marker stays the
+    literal ``1`` either way.
+    """
+    from django.conf import settings
+
+    return getattr(settings, 'TRUSTS_SQL_BIND_ONCE', True)
+
+
 def _value_token(value):
     if isinstance(value, bool):
         return ('bool', value)
@@ -225,6 +238,8 @@ def hoist(value, output_field, *, bind=None, hint=None):
     """
     if hasattr(value, 'resolve_expression') and not hasattr(value, '_meta'):
         return value
+    if not sql_bind_once():
+        return value
     sheet = current_sheet()
     if sheet is None:
         return value
@@ -252,6 +267,8 @@ def bind_scope():
 
 def seal(queryset):
     """Attach the bind row to the outermost statement, once."""
+    if not sql_bind_once():
+        return queryset
     sheet = current_sheet()
     if sheet is None or not sheet.columns or sheet.sealed:
         return queryset

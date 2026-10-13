@@ -68,8 +68,8 @@ T = TypeVar('T', bound=Model)
 
 def _binds():
     """Local import. ``trusts.core`` does not re-export another trusts module."""
-    from trusts import binds
-    return binds
+    from trusts import _bind_once
+    return _bind_once
 
 
 class TrustsConfigurationError(Exception):
@@ -843,7 +843,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
 
 
 def _where_references_bind(query):
-    from trusts.binds import BindRef
+    from trusts._bind_once import BindRef
 
     seen = set()
     stack = [getattr(query, 'where', None)]
@@ -3472,7 +3472,7 @@ def _content_walk_seed(walk, content):
             ),
         })
     else:
-        from trusts.binds import current_sheet
+        from trusts._bind_once import current_sheet
 
         if current_sheet() is None:
             rhs = content

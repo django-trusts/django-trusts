@@ -54,7 +54,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     user_model = user_queryset.model
     _assert_superuser_fields(user_model)
     _assert_persisted_principal(user_model)
-    from trusts.binds import bind_scope, seal
+    from trusts._bind_once import bind_scope, seal
 
     with bind_scope():
         parts = [_superuser_q(user_model)]
@@ -146,7 +146,7 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    from trusts.binds import bind_scope, seal
+    from trusts._bind_once import bind_scope, seal
 
     user_model = _plan_user_model(plan, content)
     with bind_scope():

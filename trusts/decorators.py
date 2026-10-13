@@ -11,7 +11,7 @@ from trusts._permitted import (
     _guard_permission_string,
     _permission_binding,
 )
-from trusts.binds import bind_scope, query_exists, seal
+from trusts._bind_once import bind_scope, query_exists, seal
 from trusts.core import TrustsConfigurationError
 from trusts.query import is_active_principal
 
