@@ -14,7 +14,7 @@ import copy
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from django.db.models import Exists, IntegerField, Value
+from django.db.models import BooleanField, Exists, IntegerField, Value
 from django.db.models.expressions import Expression
 
 
@@ -289,6 +289,28 @@ def seal(queryset):
         table_map.append(BIND_ALIAS)
     sheet.sealed = True
     return queryset
+
+
+class BoundBool(Value):
+    """Boolean parameter that stays ``= %s`` on PostgreSQL.
+
+    A plain ``True`` is not a ``bool`` here, so ``Exact`` does not turn
+    the comparison into a bare column. ``as_sql`` still emits one
+    placeholder. The hint is the lockfile label (``active``).
+    """
+
+    def __init__(self, value, hint):
+        super().__init__(bool(value), output_field=BooleanField())
+        self.hint = hint
+
+    def as_sql(self, compiler, connection):
+        return '%s', (self.value,)
+
+    def resolve_expression(
+        self, query=None, allow_joins=True, reuse=None,
+        summarize=False, for_save=False,
+    ):
+        return copy.copy(self)
 
 
 class SqlInt(Expression):

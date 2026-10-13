@@ -1324,6 +1324,11 @@ def _symbol_for_new_param(node):
         return _with_hint(
             {'const': _json_const(node.bound)}, 'along bound',
         )
+    from trusts._bind_once import BoundBool
+    if isinstance(node, BoundBool):
+        return _with_hint(
+            {'const': _json_const(node.value)}, node.hint,
+        )
     if isinstance(node, Value):
         return _with_hint(
             {'const': _json_const(node.value)},

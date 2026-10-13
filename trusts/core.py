@@ -2039,7 +2039,8 @@ def _principal_eligibility_q(model, path, *, allow_inactive=False):
                 '%s.%s must be a concrete BooleanField for delegated '
                 'principal eligibility.' % (model._meta.label, name)
             )
-        lookups['%s__%s' % (path, name)] = expected
+        hint = 'active' if name == 'is_active' else name
+        lookups['%s__%s' % (path, name)] = _binds().BoundBool(expected, hint)
     if not lookups:
         return Q()
     return Q(**lookups)

@@ -283,3 +283,38 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                 self.assertNotIn('%s', head)
                 self.assertEqual(sql.count('%s'), len(params))
                 self.assertEqual(list(params), [1])
+
+    def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
+        from django.db.utils import load_backend
+
+        query = User.objects.filter(
+            _trusts_eligibility_q(User, allow_inactive=False),
+        ).query
+        engines = (
+            'django.db.backends.sqlite3',
+            'django.db.backends.mysql',
+            'django.db.backends.postgresql',
+        )
+        for engine in engines:
+            with self.subTest(engine=engine):
+                backend = load_backend(engine)
+                connection = backend.DatabaseWrapper({
+                    'ENGINE': engine,
+                    'NAME': ':memory:',
+                    'USER': '',
+                    'PASSWORD': '',
+                    'HOST': '',
+                    'PORT': '',
+                    'TIME_ZONE': None,
+                    'CONN_MAX_AGE': 0,
+                    'CONN_HEALTH_CHECKS': False,
+                    'OPTIONS': {},
+                    'AUTOCOMMIT': True,
+                    'ATOMIC_REQUESTS': False,
+                })
+                sql, params = query.get_compiler(connection=connection).as_sql()
+                quote = connection.ops.quote_name('is_active')
+                self.assertIn('%s = %%s' % quote, sql)
+                self.assertNotIn('%s = true' % quote, sql.lower())
+                self.assertNotIn('%s = 1' % quote, sql)
+                self.assertIn(True, params)

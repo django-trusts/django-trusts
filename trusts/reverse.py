@@ -643,12 +643,21 @@ def _trusts_eligibility_q(model, *, allow_inactive=False):
     authenticated = _principal_presence(model, 'is_authenticated')
     if not allow_inactive and active != 'field':
         return None
-    predicate = Q() if allow_inactive else Q(is_active=True)
+    predicate = Q() if allow_inactive else Q(
+        is_active=_eligibility_bool(True, 'active'),
+    )
     if anonymous == 'field':
-        predicate &= Q(is_anonymous=False)
+        predicate &= Q(is_anonymous=_eligibility_bool(False, 'is_anonymous'))
     if authenticated == 'field':
-        predicate &= Q(is_authenticated=True)
+        predicate &= Q(is_authenticated=_eligibility_bool(True, 'is_authenticated'))
     return predicate
+
+
+def _eligibility_bool(value, hint):
+    """Bound boolean. PostgreSQL keeps ``column = %s`` instead of the column."""
+    from trusts._bind_once import BoundBool
+
+    return BoundBool(value, hint)
 
 
 def _assert_registration_user_model(backend, content, user_model):
