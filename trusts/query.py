@@ -2,7 +2,7 @@
 
 from django.db.models import Manager, Model, QuerySet
 
-from trusts._bind_once import bind_scope, seal
+from trusts._bind_once import bind_once
 
 
 def is_active_principal(user, *, allow_inactive=False):
@@ -108,17 +108,16 @@ class AuthorizedQuerySet(QuerySet):
             return self.none()
         if stored_user_is_inactive(user, allow_inactive=allow_inactive_user):
             return self.none()
-        with bind_scope():
-            granted_q = granted(
-                _relationship_implementation_handles(),
-                self, user, permission, kind='complete',
-                allow_inactive=allow_inactive_user,
-            )
-            if granted_q is None:
-                return self.none()
-            if extra_q is not None:
-                granted_q = granted_q & extra_q
-            return seal(self.filter(granted_q).distinct())
+        granted_q = granted(
+            _relationship_implementation_handles(),
+            self, user, permission, kind='complete',
+            allow_inactive=allow_inactive_user,
+        )
+        if granted_q is None:
+            return self.none()
+        if extra_q is not None:
+            granted_q = granted_q & extra_q
+        return bind_once(self.filter(granted_q).distinct())
 
 
 class AuthorizedManagerMixin:

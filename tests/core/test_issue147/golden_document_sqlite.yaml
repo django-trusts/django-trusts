@@ -12,12 +12,12 @@ backends:
             permission: {path: "permission", model: "auth.Permission", target: "id"}
             content: {path: "document", model: "documents.Document", target: "id"}
         permitted:
-          params: [{bind: "user.id", hint: "$user"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
+          params: [{bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
           sql: |-
             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "permission_id", %s AS "app_label", %s AS "model"
+              SELECT %s AS "permission_id", %s AS "app_label", %s AS "model", %s AS "user_id"
             ) "trusts_bind"
             WHERE
             EXISTS (
@@ -34,12 +34,12 @@ backends:
               LIMIT 1
             )
         has_perm:
-          params: [{bind: "user.id", hint: "$user"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: 1, hint: "content pk"}]
+          params: [{const: 1, hint: "content pk"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
           sql: |-
             SELECT 1 AS "a"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "permission_id", %s AS "app_label", %s AS "model", %s AS "content_pk"
+              SELECT %s AS "content_pk", %s AS "permission_id", %s AS "app_label", %s AS "model", %s AS "user_id"
             ) "trusts_bind"
             WHERE ("documents_document"."id" = ("trusts_bind"."content_pk")
               AND EXISTS (
@@ -57,12 +57,12 @@ backends:
               ) )
             LIMIT 1
         get_all_permissions:
-          params: [{const: 1, hint: "content pk"}, {bind: "user.id", hint: "$user"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
+          params: [{const: 1, hint: "content pk"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
             CROSS JOIN (
-              SELECT %s AS "content_pk", %s AS "user_id", %s AS "app_label", %s AS "model"
+              SELECT %s AS "content_pk", %s AS "app_label", %s AS "model", %s AS "user_id"
             ) "trusts_bind"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (

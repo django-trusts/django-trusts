@@ -13,7 +13,7 @@ from operator import or_
 from django.contrib.auth.models import Permission
 from django.db.models import Subquery
 
-from trusts._bind_once import bind_scope, seal
+from trusts._bind_once import bind_once
 from trusts.core import TrustsConfigurationError, _ordinary_records, granted
 from trusts.query import is_active_principal
 
@@ -328,18 +328,17 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     require_mode_flag(allow_inactive, 'allow_inactive_user')
     if not is_active_principal(user, allow_inactive=allow_inactive):
         return queryset.none()
-    with bind_scope():
-        granted_q = _authorization_grant_q(
-            handles,
-            queryset,
-            user,
-            model,
-            _condition_permission_label(model, normalized),
-            conditions,
-            _permitted_binding(model, normalized),
-            api='permitted',
-            allow_inactive=allow_inactive,
-        )
-        if granted_q is None:
-            return queryset.none()
-        return seal(queryset.filter(granted_q).distinct())
+    granted_q = _authorization_grant_q(
+        handles,
+        queryset,
+        user,
+        model,
+        _condition_permission_label(model, normalized),
+        conditions,
+        _permitted_binding(model, normalized),
+        api='permitted',
+        allow_inactive=allow_inactive,
+    )
+    if granted_q is None:
+        return queryset.none()
+    return bind_once(queryset.filter(granted_q).distinct())

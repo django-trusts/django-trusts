@@ -324,29 +324,29 @@ class Issue255PolicySqlTest(SimpleTestCase):
             )
         self.assertEqual(content['permitted']['params'], [
             {'const': 2, 'hint': 'along bound'},
-            {'bind': 'user.id', 'hint': '$user'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
+            {'bind': 'user.id', 'hint': '$user'},
             {'const': True, 'hint': 'along match'},
             {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(content['has_perm']['params'], [
+            {'const': 1, 'hint': 'content pk'},
             {'const': 2, 'hint': 'along bound'},
-            {'bind': 'user.id', 'hint': '$user'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
-            {'const': 1, 'hint': 'content pk'},
+            {'bind': 'user.id', 'hint': '$user'},
             {'const': True, 'hint': 'along match'},
             {'const': True, 'hint': 'along match'},
         ])
         self.assertEqual(content['get_all_permissions']['params'], [
             {'const': 1, 'hint': 'content pk'},
             {'const': 2, 'hint': 'along bound'},
-            {'bind': 'user.id', 'hint': '$user'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'folder', 'hint': 'content type model'},
+            {'bind': 'user.id', 'hint': '$user'},
             {'const': True, 'hint': 'along match'},
             {'const': True, 'hint': 'along match'},
         ])
@@ -442,10 +442,10 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertIn('documents_mentorgrant', permitted)
         self.assertEqual(content['permitted']['params'], [
             {'const': 8, 'hint': 'along bound'},
-            {'bind': 'user.id', 'hint': '$user'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'walknode', 'hint': 'content type model'},
+            {'bind': 'user.id', 'hint': '$user'},
             {'const': True, 'hint': 'along match'},
             {'const': True, 'hint': 'along match'},
         ])

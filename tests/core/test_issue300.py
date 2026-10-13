@@ -1,10 +1,8 @@
 """One placeholder per inquiry value, and ``is_active`` in the statement (#300)."""
 
-from collections import Counter
-
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import FloatField, IntegerField, OuterRef, Value
+from django.db.models import IntegerField, OuterRef, Value
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from tests.core.test_issue147.test_sql_export import (
@@ -18,11 +16,9 @@ from trusts._bind_once import (
     BindRef,
     BindTable,
     SqlInt,
-    bind_scope,
-    hoist,
-    seal,
-    sql_bind_once,
+    bind_once,
     strip_exists_marker,
+    trusts_bind_once,
 )
 from trusts.core import TrustsConfigurationError, granted
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
@@ -30,15 +26,11 @@ from trusts.query import stored_user_is_inactive
 from trusts.reverse import _trusts_eligibility_q
 
 
-def _repeat_count(params):
-    keys = []
-    for param in params:
-        if 'bind' in param:
-            keys.append(('bind', param['bind']))
-        else:
-            keys.append(('const', param.get('hint'), repr(param.get('const'))))
-    counts = Counter(keys)
-    return sum(count - 1 for count in counts.values() if count > 1)
+def _document_rows():
+    document = _load_policy_sql_document(
+        render_policy_sql_bytes(handles=[_document_handle()]),
+    )
+    return document['backends'][0]['contents'][0]
 
 
 class Issue300SuiteRegistrationTest(SimpleTestCase):
@@ -49,32 +41,47 @@ class Issue300SuiteRegistrationTest(SimpleTestCase):
 
 class Issue300LockfileTest(SimpleTestCase):
     def test_each_distinct_value_is_one_placeholder_and_content_type_stays(self):
-        document = _load_policy_sql_document(
-            render_policy_sql_bytes(handles=[_document_handle()]),
-        )
-        content = document['backends'][0]['contents'][0]
+        content = _document_rows()
         for key in (
             'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
         ):
             row = content[key]
-            self.assertEqual(_repeat_count(row['params']), 0, key)
-            self.assertEqual(row['sql'].count('%s'), len(row['params']))
+            self.assertEqual(row['sql'].count('%s'), len(row['params']), key)
             self.assertIn('trusts_bind', row['sql'])
             self.assertIn('SELECT 1 AS "a"', row['sql'])
             hints = [param.get('hint') for param in row['params']]
             self.assertIn('content type app', hints)
             self.assertIn('content type model', hints)
+            seen = set()
+            for param in row['params']:
+                if 'bind' in param:
+                    token = ('bind', param['bind'], param.get('hint'))
+                else:
+                    token = ('const', param.get('hint'), repr(param.get('const')))
+                self.assertNotIn(token, seen, key)
+                seen.add(token)
         users = content['get_permitted_users']
         self.assertIn({'const': True, 'hint': 'active'}, users['params'])
         self.assertIn('"is_active" = %s', users['sql'])
         self.assertNotIn('allow_inactive', users['sql'])
+
+    def test_flag_off_records_the_plain_queryset(self):
+        with override_settings(TRUSTS_BIND_ONCE=False):
+            content = _document_rows()
         for key in (
             'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
         ):
-            self.assertFalse(any(
-                param.get('hint') == 'allow inactive'
-                for param in content[key]['params']
-            ))
+            row = content[key]
+            self.assertNotIn('trusts_bind', row['sql'], key)
+            self.assertNotIn('SELECT 1 AS "a"', row['sql'])
+            self.assertIn('SELECT %s AS "a"', row['sql'])
+            self.assertEqual(row['sql'].count('%s'), len(row['params']))
+        users = content['get_permitted_users']
+        self.assertIn('"is_active" = %s', users['sql'])
+        self.assertGreater(
+            len(content['permitted']['params']),
+            len(_document_rows()['permitted']['params']),
+        )
 
 
 class Issue300EligibilitySqlTest(SimpleTestCase):
@@ -121,121 +128,82 @@ class Issue300BooleanFieldTest(TestCase):
             granted((handle,), content, object(), permission)
 
 
-class Issue300BindRowTest(SimpleTestCase):
-    def test_distinct_tokens_nulls_and_digit_names_are_one_row(self):
-        with bind_scope():
-            hoist(1.0, FloatField(), hint='along bound')
-            hoist(1.0, FloatField(), hint='along bound')
-            hoist(1, IntegerField(), hint='along bound')
-            hoist(None, IntegerField(), hint='content pk')
-            hoist(None, None, hint='2nd')
-            queryset = User.objects.all()
-            seal(queryset)
-        sql, params = queryset.query.sql_with_params()
-        self.assertIn('AS "along_bound"', sql)
-        self.assertIn('AS "along_bound_2"', sql)
-        self.assertIn('NULL AS "content_pk"', sql)
-        self.assertIn('NULL AS "v_2nd"', sql)
-        self.assertEqual(sql.count('%s'), 2)
-        self.assertEqual(list(params), [1.0, 1])
-        table = queryset.query.alias_map[BIND_ALIAS]
-        self.assertIs(table.promote(), table)
-        self.assertIs(table.demote(), table)
-        self.assertEqual(hash(table), hash(BindTable(table.columns)))
-        classified = [table.next_column().sql_name for _ in range(4)]
-        self.assertEqual(
-            classified,
-            ['along_bound', 'along_bound_2', 'content_pk', 'v_2nd'],
-        )
-        with self.assertRaises(IndexError):
-            table.next_column()
+class Issue300BindOnceTest(SimpleTestCase):
+    def test_repeated_user_id_is_one_column_and_the_caller_is_unchanged(self):
+        original = User.objects.filter(id=5).filter(pk=5)
+        bound = bind_once(original)
+        sql, params = bound.query.sql_with_params()
+        self.assertIn('trusts_bind', sql)
+        self.assertIn('AS "user_id"', sql)
+        self.assertEqual(list(params), [5])
+        self.assertEqual(sql.count('%s'), 1)
+        plain, plain_params = original.query.sql_with_params()
+        self.assertNotIn('trusts_bind', plain)
+        self.assertEqual(list(plain_params), [5, 5])
+        again = bind_once(bound)
+        self.assertIs(again, bound)
 
-    def test_nested_scope_reuses_the_row_and_a_later_scope_replaces_it(self):
-        outer_ref = OuterRef('pk')
-        with bind_scope() as outer_sheet:
-            with bind_scope() as inner_sheet:
-                self.assertIs(inner_sheet, outer_sheet)
-                self.assertIs(
-                    hoist(outer_ref, IntegerField(), bind='user.id'),
-                    outer_ref,
-                )
-                hoist(4, IntegerField())
-            queryset = User.objects.all()
-            seal(queryset)
-            installed = queryset.query.alias_map[BIND_ALIAS]
-            outer_sheet.sealed = False
-            seal(queryset)
-            self.assertIs(queryset.query.alias_map[BIND_ALIAS], installed)
-        sql, params = queryset.query.sql_with_params()
-        self.assertIn('AS "literal"', sql)
-        self.assertEqual(list(params), [4])
-        self.assertEqual(sql.count('CROSS JOIN'), 1)
+    def test_outer_ref_stays_correlated_and_is_active_stays_a_parameter(self):
+        queryset = User.objects.filter(id=OuterRef('pk')).filter(is_active=True)
+        bound = bind_once(queryset)
+        self.assertNotIn(BIND_ALIAS, bound.query.alias_map)
+        where = str(bound.query.where)
+        self.assertIn('OuterRef', where)
+        self.assertIn('is_active', where)
+        table_sql, table_params = bind_once(
+            User.objects.filter(id=4).filter(is_active=True),
+        ).query.sql_with_params()
+        self.assertIn('trusts_bind', table_sql)
+        self.assertIn('is_active', table_sql)
+        self.assertEqual(table_params.count(4), 1)
+        self.assertIn(True, table_params)
+        self.assertEqual(len(table_params), 2)
 
-        with bind_scope():
-            hoist(4, IntegerField())
-            hoist(False, IntegerField(), hint='second flag')
-            seal(queryset)
-        replaced, replaced_params = queryset.query.sql_with_params()
-        self.assertIn('AS "literal"', replaced)
-        self.assertIn('AS "second_flag"', replaced)
-        self.assertEqual(replaced.count('CROSS JOIN'), 1)
-        self.assertEqual(len(replaced_params), 2)
-        self.assertEqual(replaced_params[0], 4)
-        self.assertFalse(replaced_params[1])
+    def test_setting_defaults_to_true_and_false_skips_the_bind_row(self):
+        self.assertTrue(trusts_bind_once())
+        with override_settings(TRUSTS_BIND_ONCE=True):
+            self.assertTrue(trusts_bind_once())
+            sql, params = bind_once(
+                User.objects.filter(id=4).filter(pk=4),
+            ).query.sql_with_params()
+            self.assertIn('trusts_bind', sql)
+            self.assertEqual(list(params), [4])
+        with override_settings(TRUSTS_BIND_ONCE=False):
+            self.assertFalse(trusts_bind_once())
+            skipped = bind_once(User.objects.filter(id=4).filter(pk=4))
+            sql, params = skipped.query.sql_with_params()
+            self.assertNotIn('trusts_bind', sql)
+            self.assertNotIn(BIND_ALIAS, skipped.query.alias_map)
+            self.assertEqual(list(params), [4, 4])
 
-    def test_exists_marker_strip_ignores_other_queries(self):
-        query = User.objects.all().query
-        self.assertIs(strip_exists_marker(query), query)
-        self.assertNotIn('a', query.annotations)
-
-    def test_predicates_reject_source_expressions_that_would_add_placeholders(self):
+    def test_bind_ref_and_exists_marker_reject_source_expressions(self):
         ref = BindRef(BIND_ALIAS, 'user_id', IntegerField())
         self.assertEqual(ref.get_group_by_cols(), [])
         ref.set_source_expressions([])
         with self.assertRaises(TypeError):
             ref.set_source_expressions([Value(1)])
-
         marker = SqlInt(1)
         marker.set_source_expressions([])
         with self.assertRaises(TypeError):
             marker.set_source_expressions([Value(1)])
+        query = User.objects.all().query
+        self.assertIs(strip_exists_marker(query), query)
+        self.assertNotIn('a', query.annotations)
 
-
-class Issue300BindOnceSettingTest(SimpleTestCase):
-    def test_setting_defaults_to_true_and_false_skips_the_bind_row(self):
-        self.assertTrue(sql_bind_once())
-        with override_settings(TRUSTS_SQL_BIND_ONCE=True):
-            self.assertTrue(sql_bind_once())
-        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-            self.assertFalse(sql_bind_once())
-            with bind_scope():
-                self.assertEqual(hoist(4, IntegerField(), bind='user.id'), 4)
-                repeated = User.objects.filter(id=hoist(
-                    4, IntegerField(), hint='along bound',
-                )).filter(pk=hoist(
-                    4, IntegerField(), hint='along bound',
-                ))
-                seal(repeated)
-            sql, params = repeated.query.sql_with_params()
-            self.assertNotIn('trusts_bind', sql)
-            self.assertNotIn(BIND_ALIAS, repeated.query.alias_map)
-            self.assertEqual(list(params), [4, 4])
-            document = _load_policy_sql_document(
-                render_policy_sql_bytes(handles=[_document_handle()]),
-            )
-            row = document['backends'][0]['contents'][0]['permitted']
-            self.assertNotIn('trusts_bind', row['sql'])
-            self.assertEqual(row['sql'].count('%s'), len(row['params']))
-        with bind_scope():
-            once = User.objects.filter(id=hoist(
-                4, IntegerField(), hint='along bound',
-            )).filter(pk=hoist(
-                4, IntegerField(), hint='along bound',
-            ))
-            seal(once)
-        once_sql, once_params = once.query.sql_with_params()
-        self.assertIn('trusts_bind', once_sql)
-        self.assertEqual(list(once_params), [4])
+    def test_installed_row_classifies_one_symbol_per_placeholder(self):
+        bound = bind_once(User.objects.filter(id=4).filter(pk=7))
+        table = bound.query.alias_map[BIND_ALIAS]
+        self.assertIsInstance(table, BindTable)
+        self.assertIs(table.promote(), table)
+        self.assertIs(table.demote(), table)
+        self.assertEqual(hash(table), hash(BindTable(table.columns)))
+        compiler = bound.query.get_compiler(using='default')
+        _sql, params = table.as_sql(compiler, compiler.connection)
+        self.assertEqual(len(params), 2)
+        names = [table.next_column().sql_name for _ in params]
+        self.assertEqual(names, ['user_id', 'user_id_2'])
+        with self.assertRaises(IndexError):
+            table.next_column()
 
 
 def _engine_connection(engine):
@@ -301,9 +269,9 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                 self.assertEqual(list(params), [1])
 
     def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
-        query = User.objects.filter(
+        query = bind_once(User.objects.filter(
             _trusts_eligibility_q(User, allow_inactive=False),
-        ).query
+        )).query
         engines = (
             'django.db.backends.sqlite3',
             'django.db.backends.mysql',
@@ -320,3 +288,13 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                 self.assertNotIn('%s = true' % quote, sql.lower())
                 self.assertNotIn('%s = 1' % quote, sql)
                 self.assertIn(True, params)
+
+    def test_flag_off_compiles_the_plain_is_active_comparison(self):
+        with override_settings(TRUSTS_BIND_ONCE=False):
+            plain = bind_once(User.objects.filter(is_active=True))
+            bound_shape = User.objects.filter(is_active=True)
+        plain_sql, plain_params = plain.query.sql_with_params()
+        raw_sql, raw_params = bound_shape.query.sql_with_params()
+        self.assertEqual(plain_sql, raw_sql)
+        self.assertEqual(list(plain_params), list(raw_params))
+        self.assertNotIn('trusts_bind', plain_sql)

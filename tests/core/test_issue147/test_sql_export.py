@@ -379,10 +379,10 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(list(document['database']), ['engine'])
         self.assertEqual(list(content['permitted']), ['params', 'sql'])
         self.assertEqual(content['permitted']['params'], [
-            {'bind': 'user.id', 'hint': '$user'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'document', 'hint': 'content type model'},
+            {'bind': 'user.id', 'hint': '$user'},
         ])
         named = content['named_filters'][0]
         self.assertEqual(list(named), ['id', 'params', 'sql'])
@@ -1044,10 +1044,10 @@ class PolicySqlSentinelTest(SimpleTestCase):
         actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
         self.assertEqual(actor_content['permitted']['params'], [
-            {'bind': 'user.id', 'hint': '$user'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'document', 'hint': 'content type model'},
+            {'bind': 'user.id', 'hint': '$user'},
         ])
 
         account_handle = _handle('documents.backends.AccountBackend')
@@ -1068,10 +1068,10 @@ class PolicySqlSentinelTest(SimpleTestCase):
             'target': 'code',
         })
         self.assertEqual(account_content['permitted']['params'], [
-            {'bind': 'user.code', 'hint': '$user.code'},
             {'bind': 'permission.id', 'hint': '$permission'},
             {'const': 'documents', 'hint': 'content type app'},
             {'const': 'document', 'hint': 'content type model'},
+            {'bind': 'user.code', 'hint': '$user.code'},
         ])
 
 

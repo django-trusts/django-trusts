@@ -54,35 +54,34 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     user_model = user_queryset.model
     _assert_superuser_fields(user_model)
     _assert_persisted_principal(user_model)
-    from trusts._bind_once import bind_scope, seal
-
-    with bind_scope():
-        parts = [_superuser_q(user_model)]
-        involved = [user_model, content.__class__]
-        if isinstance(perm, (str, Permission)):
-            involved.append(Permission)
-        for backend in backends:
-            predicate = _backend_predicate(
-                backend, content, perm, allow_inactive=allow_inactive,
+    parts = [_superuser_q(user_model)]
+    involved = [user_model, content.__class__]
+    if isinstance(perm, (str, Permission)):
+        involved.append(Permission)
+    for backend in backends:
+        predicate = _backend_predicate(
+            backend, content, perm, allow_inactive=allow_inactive,
+        )
+        if predicate is None:
+            continue
+        if not isinstance(predicate, Q):
+            raise TrustsConfigurationError(
+                '%s permitted_users_predicate returned %s, not a Q or None.'
+                % (type(backend).__name__, type(predicate).__name__)
             )
-            if predicate is None:
-                continue
-            if not isinstance(predicate, Q):
-                raise TrustsConfigurationError(
-                    '%s permitted_users_predicate returned %s, not a Q or None.'
-                    % (type(backend).__name__, type(predicate).__name__)
-                )
-            _assert_registration_user_model(backend, content, user_model)
-            involved.extend(_registration_models(backend, content))
-            parts.append(predicate)
-        alias = _database_alias(content, user_queryset)
-        _assert_same_database(alias, involved)
-        if user_queryset.db != alias:
-            user_queryset = user_queryset.using(alias)
-        combined = parts[0]
-        for part in parts[1:]:
-            combined |= part
-        return seal(user_queryset.filter(combined).distinct())
+        _assert_registration_user_model(backend, content, user_model)
+        involved.extend(_registration_models(backend, content))
+        parts.append(predicate)
+    alias = _database_alias(content, user_queryset)
+    _assert_same_database(alias, involved)
+    if user_queryset.db != alias:
+        user_queryset = user_queryset.using(alias)
+    combined = parts[0]
+    for part in parts[1:]:
+        combined |= part
+    from trusts._bind_once import bind_once
+
+    return bind_once(user_queryset.filter(combined).distinct())
 
 
 def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
@@ -146,40 +145,41 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    from trusts._bind_once import bind_scope, seal
-
     user_model = _plan_user_model(plan, content)
-    with bind_scope():
-        exists = plan.user_exists(content, permission) if plan.records else None
-        if plan.delegations:
-            sponsor_handles = (handle,) if handles is None else tuple(handles)
-            permission_model = (
-                permission._meta.concrete_model
-                if isinstance(permission, Model) else None
+    exists = plan.user_exists(content, permission) if plan.records else None
+    if plan.delegations:
+        sponsor_handles = (handle,) if handles is None else tuple(handles)
+        permission_model = (
+            permission._meta.concrete_model
+            if isinstance(permission, Model) else None
+        )
+        delegated = _delegated_user_exists(
+            plan.delegations,
+            _ordinary_records(
+                sponsor_handles, content, permission_model,
+            ),
+            content,
+            permission,
+            content_identity=getattr(plan, 'content_identity', None),
+        )
+        if delegated is not None:
+            exists = (
+                delegated if exists is None else (_as_q(exists) | delegated)
             )
-            delegated = _delegated_user_exists(
-                plan.delegations,
-                _ordinary_records(
-                    sponsor_handles, content, permission_model,
-                ),
-                content,
-                permission,
-                content_identity=getattr(plan, 'content_identity', None),
-            )
-            if delegated is not None:
-                exists = (
-                    delegated if exists is None else (_as_q(exists) | delegated)
-                )
-        if exists is None:
-            raise TrustsConfigurationError(
-                'Policy SQL found no permitted-users query for %s.'
-                % content._meta.label
-            )
-        eligibility = _trusts_eligibility_q(user_model)
-        if eligibility is None:
-            return user_model._default_manager.all().filter(pk__isnull=True)
-        predicate = eligibility & _as_q(exists)
-        return seal(user_model._default_manager.all().filter(predicate).distinct())
+    if exists is None:
+        raise TrustsConfigurationError(
+            'Policy SQL found no permitted-users query for %s.'
+            % content._meta.label
+        )
+    eligibility = _trusts_eligibility_q(user_model)
+    if eligibility is None:
+        return user_model._default_manager.all().filter(pk__isnull=True)
+    predicate = eligibility & _as_q(exists)
+    from trusts._bind_once import bind_once
+
+    return bind_once(
+        user_model._default_manager.all().filter(predicate).distinct(),
+    )
 
 
 def _plan_user_model(plan, content):
@@ -643,21 +643,12 @@ def _trusts_eligibility_q(model, *, allow_inactive=False):
     authenticated = _principal_presence(model, 'is_authenticated')
     if not allow_inactive and active != 'field':
         return None
-    predicate = Q() if allow_inactive else Q(
-        is_active=_eligibility_bool(True, 'active'),
-    )
+    predicate = Q() if allow_inactive else Q(is_active=True)
     if anonymous == 'field':
-        predicate &= Q(is_anonymous=_eligibility_bool(False, 'is_anonymous'))
+        predicate &= Q(is_anonymous=False)
     if authenticated == 'field':
-        predicate &= Q(is_authenticated=_eligibility_bool(True, 'is_authenticated'))
+        predicate &= Q(is_authenticated=True)
     return predicate
-
-
-def _eligibility_bool(value, hint):
-    """Bound boolean. PostgreSQL keeps ``column = %s`` instead of the column."""
-    from trusts._bind_once import BoundBool
-
-    return BoundBool(value, hint)
 
 
 def _assert_registration_user_model(backend, content, user_model):

@@ -58,7 +58,7 @@ from typing import TypeVar
 
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import BooleanField, CharField, Count, Exists, F, IntegerField, Model, OuterRef, Q
+from django.db.models import BooleanField, Count, Exists, F, Model, OuterRef, Q
 from django.db.models.base import ModelBase
 from django.db.models.expressions import Expression
 from django.db.models.query import QuerySet
@@ -66,10 +66,21 @@ from django.db.models.query import QuerySet
 T = TypeVar('T', bound=Model)
 
 
-def _binds():
-    """Local import. ``trusts.core`` does not re-export another trusts module."""
-    from trusts import _bind_once
-    return _bind_once
+def _bind_query(queryset, *also):
+    """Return ``queryset`` with each inquiry value bound once.
+
+    ``TRUSTS_BIND_ONCE`` false returns the queryset unchanged.
+    """
+    from trusts._bind_once import bind_once
+
+    return bind_once(queryset, *also)
+
+
+def _exists(queryset):
+    """Run ``EXISTS`` on the queryset ``_bind_query`` would return."""
+    from trusts._bind_once import execute_exists
+
+    return execute_exists(queryset)
 
 
 class TrustsConfigurationError(Exception):
@@ -167,33 +178,11 @@ def _is_lookup_expression(value):
     return hasattr(value, 'resolve_expression') and not isinstance(value, Model)
 
 
-def _field_for_attname(instance, attname):
-    for field in instance._meta.concrete_fields:
-        if field.attname == attname:
-            return field
-    return instance._meta.pk
-
-
-def _bind_terminal(value, role, *, target=None):
-    """Accept a model instance or an unevaluated lookup expression.
-
-    Inside a bind scope the instance's comparison value is hoisted onto
-    the outer bind row. ``delegate`` is the acting user.
-    """
+def _bind_terminal(value, role):
+    """Accept a model instance or an unevaluated lookup expression."""
     if _is_lookup_expression(value):
         return value
-    instance = _require_instance(value, role)
-    if target is None:
-        field = instance._meta.pk
-        target = field.attname
-    else:
-        field = _field_for_attname(instance, target)
-    slot = 'user' if role == 'delegate' else role
-    concrete = getattr(instance, field.attname)
-    hoisted = _binds().hoist(concrete, field, bind='%s.%s' % (slot, target))
-    if hoisted is concrete:
-        return instance
-    return hoisted
+    return _require_instance(value, role)
 
 
 def candidate_queryset(content):
@@ -204,9 +193,7 @@ def candidate_queryset(content):
     if isinstance(content, QuerySet):
         return content
     if isinstance(content, Model):
-        return content._meta.concrete_model._default_manager.filter(
-            pk=_binds().hoist(content.pk, content._meta.pk, hint='content pk'),
-        )
+        return content._meta.concrete_model._default_manager.filter(pk=content.pk)
     raise TrustsConfigurationError(
         'content must be a model instance or QuerySet, not %r.' % (content,)
     )
@@ -420,7 +407,7 @@ def _exact_prefix_exists(record, lookup, target_attname, user, permission,
         correlation=Q(**{lookup: OuterRef(target_attname)}),
         content_identity=content_identity,
     )
-    return _binds().LiteralExists(inner)
+    return Exists(inner)
 
 
 def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
@@ -489,7 +476,7 @@ def _prefix_sponsor_q(record, sponsor_records, permission, content_identity,
                 binding = OuterRef(lookup)
             else:
                 binding = _shift_outer_ref(candidate)
-            parts.append(_binds().LiteralExists(_bind_record_qs(
+            parts.append(Exists(_bind_record_qs(
                 ordinary,
                 content_identity=content_identity,
                 user=OuterRef(record.sponsor_field),
@@ -532,7 +519,7 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     if eligibility is None:
         return None
     combined = Q(**{
-        record.delegate_field: _bind_terminal(user, 'delegate', target=record.delegate_target),
+        record.delegate_field: _bind_terminal(user, 'delegate'),
     })
     combined &= _delegation_prefix_reach_q(
         record, user, lookup, target_attname, candidate, position,
@@ -544,7 +531,7 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
         combined &= condition
     combined &= eligibility
     combined &= sponsor_q
-    return _binds().LiteralExists(record.root._default_manager.filter(combined))
+    return Exists(record.root._default_manager.filter(combined))
 
 
 def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
@@ -579,17 +566,6 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
     return parts
 
 
-def _with_binds(fn):
-    """Open one bind sheet for the whole inquiry builder."""
-    def wrapper(*args, **kwargs):
-        with _binds().bind_scope():
-            return fn(*args, **kwargs)
-    wrapper.__name__ = fn.__name__
-    wrapper.__doc__ = fn.__doc__
-    return wrapper
-
-
-@_with_binds
 def _compile_permitted_content_queryset(
     queryset, user, permission, *, content, handles, sponsor_handles,
     allow_inactive_user=False,
@@ -634,7 +610,7 @@ def _compile_permitted_content_queryset(
     if not parts:
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
-    return _binds().seal(queryset.filter(granted_q).distinct())
+    return _bind_query(queryset.filter(granted_q).distinct())
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
@@ -718,26 +694,22 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
     never creates a grant. Every supplied handle participates.
     """
     handles = tuple(handles)
-    with _binds().bind_scope():
-        granted_q = _compile_granted(
-            handles, candidates, user, permission, kind=kind,
-            sponsor_handles=sponsor_handles,
-            permission_model=permission_model,
-            allow_inactive=allow_inactive,
-        )
-        if granted_q is None:
-            return None
-        if extra_q is not None:
-            granted_q = granted_q & extra_q
-        # Clone before sealing. ``candidate_queryset`` returns a caller-owned
-        # queryset unchanged, and a bind row left on that object is copied
-        # into later statements.
-        qs = candidate_queryset(candidates)._clone()
-        _binds().seal(qs)
-        stats = qs.aggregate(
-            total=Count('pk', distinct=True),
-            lacking=Count('pk', distinct=True, filter=~granted_q),
-        )
+    granted_q = _compile_granted(
+        handles, candidates, user, permission, kind=kind,
+        sponsor_handles=sponsor_handles,
+        permission_model=permission_model,
+        allow_inactive=allow_inactive,
+    )
+    if granted_q is None:
+        return None
+    if extra_q is not None:
+        granted_q = granted_q & extra_q
+    qs = candidate_queryset(candidates)
+    qs, granted_q = _bind_query(qs, granted_q)
+    stats = qs.aggregate(
+        total=Count('pk', distinct=True),
+        lacking=Count('pk', distinct=True, filter=~granted_q),
+    )
     return stats['total'] > 0 and stats['lacking'] == 0
 
 
@@ -749,25 +721,21 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
     overlay (AND); it never creates a grant.
     """
-    with _binds().bind_scope():
-        granted_q = _compile_granted(
-            (handle,), obj, user, permission, kind=kind,
-            sponsor_handles=sponsor_handles,
-            permission_model=permission_model,
-            allow_inactive=allow_inactive,
-        )
-        if granted_q is None:
-            return None
-        if extra_q is not None:
-            granted_q = granted_q & extra_q
-        matched = obj._meta.concrete_model._default_manager.filter(
-            pk=_binds().hoist(obj.pk, obj._meta.pk, hint='content pk'),
-        ).filter(granted_q)
-        _binds().seal(matched)
-        return _binds().query_exists(matched)
+    granted_q = _compile_granted(
+        (handle,), obj, user, permission, kind=kind,
+        sponsor_handles=sponsor_handles,
+        permission_model=permission_model,
+        allow_inactive=allow_inactive,
+    )
+    if granted_q is None:
+        return None
+    if extra_q is not None:
+        granted_q = granted_q & extra_q
+    return _exists(obj._meta.concrete_model._default_manager.filter(
+        pk=obj.pk,
+    ).filter(granted_q))
 
 
-@_with_binds
 def _compile_common_permissions(handles, candidates, user, *, kind='complete',
                                 sponsor_handles=None, allow_inactive=False):
     """Permission queryset for the given handles. No family filter."""
@@ -839,68 +807,11 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     if not parts:
         return permission_model._default_manager.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
-    return _common_permission_queryset(permission_model, qs, granted_q)
-
-
-def _where_references_bind(query):
-    from trusts._bind_once import BindRef
-
-    seen = set()
-    stack = [getattr(query, 'where', None)]
-    while stack:
-        node = stack.pop()
-        if node is None or id(node) in seen:
-            continue
-        if isinstance(node, (str, bytes, int, float, bool)):
-            continue
-        seen.add(id(node))
-        if isinstance(node, BindRef):
-            return True
-        if isinstance(node, (list, tuple)):
-            stack.extend(node)
-            continue
-        children = getattr(node, 'children', None)
-        if children:
-            stack.extend(children)
-        getter = getattr(node, 'get_source_expressions', None)
-        if getter is None:
-            continue
-        sources = getter()
-        if sources:
-            stack.extend(sources)
-    return False
-
-
-def _common_permission_queryset(permission_model, qs, predicate):
-    """Permission rows that survive on every candidate.
-
-    SQLite and PostgreSQL read ``trusts_bind`` from the outer permission
-    statement, including through a nested recursive CTE. MySQL does not
-    see that derived table from a CTE inside ``EXISTS``, so the row is
-    placed on the statement that contains the walk.
-    """
-    from django.db import connections
-
-    lacking = qs._clone().filter(~predicate)
-    if connections[qs.db].vendor != 'mysql':
-        return _binds().seal(permission_model._default_manager.filter(
-            _binds().LiteralExists(qs),
-        ).exclude(
-            _binds().LiteralExists(lacking),
-        ).distinct())
-    positive = qs._clone()
-    if _where_references_bind(positive.query):
-        _binds().seal(positive)
-        lacking = positive.filter(~predicate)
-        candidate = positive
-    else:
-        _binds().seal(lacking)
-        candidate = qs
-    return permission_model._default_manager.filter(
-        _binds().LiteralExists(candidate),
+    return _bind_query(permission_model._default_manager.filter(
+        Exists(qs),
     ).exclude(
-        _binds().LiteralExists(lacking),
-    ).distinct()
+        Exists(qs.filter(~granted_q)),
+    ).distinct())
 
 
 def common_permissions(handles, candidates, user, *, kind='complete'):
@@ -1906,11 +1817,7 @@ def _compile_predicate(node, record, *, permission=None):
             node.ref, record.root, 'delegated inquiry permission',
         )
         return Q(**{
-            _lookup_text(ref._path): _bind_terminal(
-                permission, 'permission',
-                target=getattr(record, 'condition_permission_target', None)
-                or getattr(record, 'permission_target', None),
-            ),
+            _lookup_text(ref._path): _bind_terminal(permission, 'permission'),
         })
     raise TrustsConfigurationError(
         'condition is not supported; omit it or pass None.'
@@ -1957,12 +1864,8 @@ def _permission_content_type_filters(record, content_identity):
     app_label, model_name = _content_type_identity(model)
     field = record.permission_field
     return {
-        '%s__content_type__app_label' % field: _binds().hoist(
-            app_label, CharField(), hint='content type app',
-        ),
-        '%s__content_type__model' % field: _binds().hoist(
-            model_name, CharField(), hint='content type model',
-        ),
+        '%s__content_type__app_label' % field: app_label,
+        '%s__content_type__model' % field: model_name,
     }
 
 
@@ -1977,7 +1880,7 @@ def _record_predicate(record, correlation=None, *, content_identity=None, **bind
     filters = {}
     for role, value in bindings.items():
         filters[getattr(record, _BINDING_FIELDS[role])] = _bind_terminal(
-            value, role, target=getattr(record, '%s_target' % role),
+            value, role,
         )
     filters.update(_permission_content_type_filters(record, content_identity))
     combined = Q(**filters)
@@ -2039,8 +1942,7 @@ def _principal_eligibility_q(model, path, *, allow_inactive=False):
                 '%s.%s must be a concrete BooleanField for delegated '
                 'principal eligibility.' % (model._meta.label, name)
             )
-        hint = 'active' if name == 'is_active' else name
-        lookups['%s__%s' % (path, name)] = _binds().BoundBool(expected, hint)
+        lookups['%s__%s' % (path, name)] = expected
     if not lookups:
         return Q()
     return Q(**lookups)
@@ -2168,7 +2070,7 @@ def _delegation_walk_seed(record, user):
     """
     walk = record.along
     qs = record.root._default_manager.filter(**{
-        record.delegate_field: _bind_terminal(user, 'delegate', target=record.delegate_target),
+        record.delegate_field: _bind_terminal(user, 'delegate'),
         '%s__isnull' % walk.walk_field: False,
     })
     seed = qs.values(
@@ -2218,7 +2120,7 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
                 content=content_binding,
                 permission=_shift_outer_ref(permission),
             )
-            parts.append(_binds().LiteralExists(inner))
+            parts.append(Exists(inner))
             continue
         if forward:
             parts.append(_KeyedReach(
@@ -2248,11 +2150,7 @@ def _delegation_reaches(record, *, forward, user=None, content=None):
     if record.along is None:
         if forward:
             return Q(**{record.content_field: OuterRef(record.content_target)})
-        return Q(**{
-            record.content_field: _bind_terminal(
-                content, 'content', target=record.content_target,
-            ),
-        })
+        return Q(**{record.content_field: content})
     if forward:
         return Q(_KeyedReach(
             record.along,
@@ -2290,7 +2188,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
         if eligibility is None:
             continue
         combined = Q(**{
-            record.delegate_field: _bind_terminal(user, 'delegate', target=record.delegate_target),
+            record.delegate_field: _bind_terminal(user, 'delegate'),
         })
         combined &= _delegation_reaches(record, forward=True, user=user)
         condition = _compile_predicate(
@@ -2300,7 +2198,7 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
             combined &= condition
         combined &= eligibility
         combined &= sponsor_q
-        parts.append(_binds().LiteralExists(record.root._default_manager.filter(combined)))
+        parts.append(Exists(record.root._default_manager.filter(combined)))
     if not parts:
         return None
     return parts[0] if len(parts) == 1 else reduce(or_, parts)
@@ -2337,7 +2235,7 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
             combined &= condition
         combined &= eligibility
         combined &= sponsor_q
-        parts.append(_binds().LiteralExists(record.root._default_manager.filter(combined)))
+        parts.append(Exists(record.root._default_manager.filter(combined)))
     if not parts:
         return None
     return parts[0] if len(parts) == 1 else reduce(or_, parts)
@@ -3104,42 +3002,7 @@ def _along_cycle_clause(connection, ident_col, qn):
     )
 
 
-def _along_bound_ref(bound):
-    """Hoist one along depth cap, or ``None`` when no bind sheet is open."""
-    ref = _binds().hoist(int(bound), IntegerField(), hint='along bound')
-    if hasattr(ref, 'as_sql'):
-        return ref
-    return None
-
-
-def _bound_limit_sql(compiler, connection, bound_ref, bound):
-    if bound_ref is not None:
-        return bound_ref.as_sql(compiler, connection)
-    return '%s', (bound,)
-
-
-def _sources_with_bound(exprs, bound_ref):
-    """Include the depth cap so subquery alias relabeling updates it.
-
-    The cap is not part of the seed. A nested statement renames
-    ``trusts_bind`` when that row lives on the nested statement, and the
-    seed columns follow. The cap has to follow the same rename.
-    """
-    exprs = list(exprs)
-    if bound_ref is not None:
-        exprs.append(bound_ref)
-    return exprs
-
-
-def _take_bound(exprs, bound_ref):
-    exprs = list(exprs)
-    if bound_ref is None:
-        return exprs, None
-    return exprs[:-1], exprs[-1]
-
-
-def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
-                      bound_sql='%s', bound_params=None):
+def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
     """Return ``(sql, params)`` for the uncorrelated W membership list.
 
     SQLite, PostgreSQL, and MySQL 8.4+ share one plain ``WITH RECURSIVE``:
@@ -3174,7 +3037,7 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
         'UNION ALL '
         'SELECT %(project)s, %(g)s.%(depth)s + 1 '
         '%(frm)s '
-        'WHERE %(g)s.%(depth)s < %(bound_sql)s AND %(project)s IS NOT NULL'
+        'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
         ') '
         '%(cycle)s'
         'SELECT DISTINCT %(site)s.%(ident)s '
@@ -3187,16 +3050,12 @@ def _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
             'project': project, 'g': g, 'frm': frm,
             'site': site, 'ident': ident, 'walk_table': walk_table,
             'cycle': _along_cycle_clause(connection, ident_col, qn),
-            'bound_sql': bound_sql,
         }
     )
-    if bound_params is None:
-        bound_params = (walk.bound,)
-    return sql, tuple(seed_params) + tuple(bound_params)
+    return sql, tuple(seed_params) + (walk.bound,)
 
 
-def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None,
-                            bound_sql='%s', bound_params=None):
+def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
     """Recursive walk that carries one non-identity column.
 
     ``seed_sql`` selects ``carrier`` and ``ident``. The recursive member
@@ -3227,7 +3086,7 @@ def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=No
         'UNION ALL '
         'SELECT %(g)s.%(carrier)s, %(project)s, %(g)s.%(depth)s + 1 '
         '%(frm)s '
-        'WHERE %(g)s.%(depth)s < %(bound_sql)s AND %(project)s IS NOT NULL'
+        'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
         ') '
         '%(cycle)s'
         'SELECT DISTINCT %(gen)s.%(carrier)s '
@@ -3241,12 +3100,9 @@ def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=No
             'project': project, 'g': g, 'frm': frm,
             'site': site, 'ident': ident, 'walk_table': walk_table,
             'cycle': _along_cycle_clause(connection, ident_col, qn),
-            'bound_sql': bound_sql,
         }
     )
-    if bound_params is None:
-        bound_params = (walk.bound,)
-    return sql, tuple(seed_params) + tuple(bound_params)
+    return sql, tuple(seed_params) + (walk.bound,)
 
 
 def _unwrap_seed_sql(seed_sql):
@@ -3272,7 +3128,6 @@ class _KeyedReach(Expression):
         self.seed_query = seed_query
         self.key = key
         self.candidate = candidate
-        self.bound_ref = _along_bound_ref(walk.bound)
 
     def copy(self):
         clone = super().copy()
@@ -3280,24 +3135,17 @@ class _KeyedReach(Expression):
         return clone
 
     def get_source_expressions(self):
-        return _sources_with_bound(
-            [self.seed_query, self.key, self.candidate], self.bound_ref,
-        )
+        return [self.seed_query, self.key, self.candidate]
 
     def set_source_expressions(self, exprs):
-        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
         self.seed_query, self.key, self.candidate = exprs
 
     def as_sql(self, compiler, connection):
         _require_along_renderer(connection)
         seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
         seed_sql = _unwrap_seed_sql(seed_sql)
-        bound_sql, bound_params = _bound_limit_sql(
-            compiler, connection, self.bound_ref, self.walk.bound,
-        )
         w_sql, w_params = _render_keyed_reach_sql(
             self.walk, seed_sql, seed_params, connection,
-            bound_sql=bound_sql, bound_params=bound_params,
         )
         key_sql, key_params = compiler.compile(self.key)
         cand_sql, cand_params = compiler.compile(self.candidate)
@@ -3319,7 +3167,6 @@ class _AnchorInInverseReach(Expression):
         super().__init__(output_field=BooleanField())
         self.record = record
         self.seed_query = _content_walk_seed(record.along, content)
-        self.bound_ref = _along_bound_ref(record.along.bound)
 
     def copy(self):
         clone = super().copy()
@@ -3327,10 +3174,9 @@ class _AnchorInInverseReach(Expression):
         return clone
 
     def get_source_expressions(self):
-        return _sources_with_bound([self.seed_query], self.bound_ref)
+        return [self.seed_query]
 
     def set_source_expressions(self, exprs):
-        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
         self.seed_query = exprs[0]
 
     def as_sql(self, compiler, connection):
@@ -3338,13 +3184,9 @@ class _AnchorInInverseReach(Expression):
         self.seed_query.where.children[0].trusts_content_bind = True
         seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
         seed_sql = _unwrap_seed_sql(seed_sql)
-        bound_sql, bound_params = _bound_limit_sql(
-            compiler, connection, self.bound_ref, self.record.along.bound,
-        )
         w_sql, w_params = _render_reach_sql(
             self.record.along, seed_sql, seed_params, connection,
             neighbor=_inverse_neighbor_sql,
-            bound_sql=bound_sql, bound_params=bound_params,
         )
         qn = connection.ops.quote_name
         alias = compiler.query.get_initial_alias()
@@ -3387,7 +3229,6 @@ class _PrefixInForwardWalk(Expression):
                  content_identity=None, suffix_lookup=None):
         super().__init__(output_field=BooleanField())
         walk = record.along
-        self.bound_ref = _along_bound_ref(walk.bound)
         seed = _bind_record_qs(
             record,
             user=user,
@@ -3421,10 +3262,10 @@ class _PrefixInForwardWalk(Expression):
             exprs.append(self.lhs)
         if self.suffix_query is not None:
             exprs.append(self.suffix_query)
-        return _sources_with_bound(exprs, self.bound_ref)
+        return exprs
 
     def set_source_expressions(self, exprs):
-        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
+        exprs = list(exprs)
         self.seed_query = exprs.pop(0)
         if self.lhs is not None:
             self.lhs = exprs.pop(0)
@@ -3435,12 +3276,8 @@ class _PrefixInForwardWalk(Expression):
         _require_along_renderer(connection)
         seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
         seed_sql = _unwrap_seed_sql(seed_sql)
-        bound_sql, bound_params = _bound_limit_sql(
-            compiler, connection, self.bound_ref, self.record.along.bound,
-        )
         w_sql, w_params = _render_reach_sql(
             self.record.along, seed_sql, seed_params, connection,
-            bound_sql=bound_sql, bound_params=bound_params,
         )
         if self.lhs is not None:
             lhs_sql, lhs_params = compiler.compile(self.lhs)
@@ -3453,7 +3290,7 @@ class _PrefixInForwardWalk(Expression):
             self.record.along.walk_ident, w_sql, w_params,
             self.record.along.bound,
         )))
-        return _binds().LiteralExists(inner).as_sql(compiler, connection)
+        return Exists(inner).as_sql(compiler, connection)
 
 
 def _content_walk_seed(walk, content):
@@ -3464,27 +3301,13 @@ def _content_walk_seed(walk, content):
     such as the Cabinet identities for a Sheet.
     """
     if not walk.suffix_path:
-        field = _field_for_attname(content, walk.walk_ident)
-        qs = walk.walk_model._default_manager.filter(**{
-            walk.walk_ident: _binds().hoist(
-                getattr(content, field.attname),
-                field,
-                bind='content.%s' % walk.walk_ident,
-            ),
-        })
+        qs = walk.walk_model._default_manager.filter(
+            **{walk.walk_ident: getattr(content, walk.walk_ident)},
+        )
     else:
-        from trusts._bind_once import current_sheet
-
-        if current_sheet() is None:
-            rhs = content
-        else:
-            field = content._meta.pk
-            rhs = _binds().hoist(
-                content.pk, field, bind='content.%s' % field.attname,
-            )
-        qs = walk.walk_model._default_manager.filter(**{
-            walk.suffix_field: rhs,
-        })
+        qs = walk.walk_model._default_manager.filter(
+            **{walk.suffix_field: content},
+        )
     # ``values(ident=...)`` collides when the walk identity column is
     # already named ``ident`` (a UUID ``to_field``). Selecting that
     # column keeps the seed alias the walk template reads.
@@ -3535,7 +3358,6 @@ class GrantReach(Expression):
         self.record = record
         self.content = content
         walk = record.along
-        self.bound_ref = _along_bound_ref(walk.bound)
         self.lhs = None
         self.suffix_query = None
         self.grant_query = None
@@ -3586,10 +3408,10 @@ class GrantReach(Expression):
             exprs.append(self.lhs)
         if self.suffix_query is not None:
             exprs.append(self.suffix_query)
-        return _sources_with_bound(exprs, self.bound_ref)
+        return exprs
 
     def set_source_expressions(self, exprs):
-        exprs, self.bound_ref = _take_bound(exprs, self.bound_ref)
+        exprs = list(exprs)
         self.seed_query = exprs.pop(0)
         if self.grant_query is not None:
             self.grant_query = exprs.pop(0)
@@ -3603,12 +3425,8 @@ class GrantReach(Expression):
         if self.content is not None:
             return self._reverse_sql(compiler, connection)
         seed_sql, seed_params = self._seed_sql(compiler, connection)
-        bound_sql, bound_params = _bound_limit_sql(
-            compiler, connection, self.bound_ref, self.record.along.bound,
-        )
         w_sql, w_params = _render_reach_sql(
             self.record.along, seed_sql, seed_params, connection,
-            bound_sql=bound_sql, bound_params=bound_params,
         )
         if self.lhs is not None:
             lhs_sql, lhs_params = compiler.compile(self.lhs)
@@ -3618,7 +3436,7 @@ class GrantReach(Expression):
             self.record.along.walk_ident, w_sql, w_params,
             self.record.along.bound,
         )))
-        return _binds().LiteralExists(inner).as_sql(compiler, connection)
+        return Exists(inner).as_sql(compiler, connection)
 
     def _seed_sql(self, compiler, connection):
         seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
@@ -3630,20 +3448,16 @@ class GrantReach(Expression):
         # Resolve may clone the seed. Keep the content comparison marked.
         self.seed_query.where.children[0].trusts_content_bind = True
         seed_sql, seed_params = self._seed_sql(compiler, connection)
-        bound_sql, bound_params = _bound_limit_sql(
-            compiler, connection, self.bound_ref, self.record.along.bound,
-        )
         w_sql, w_params = _render_reach_sql(
             self.record.along, seed_sql, seed_params, connection,
             neighbor=_inverse_neighbor_sql,
-            bound_sql=bound_sql, bound_params=bound_params,
         )
         inner = self.grant_query.clone()
         inner.add_q(Q(_IdentInReach(
             _grant_walk_attname(self.record),
             w_sql, w_params, self.record.along.bound,
         )))
-        return _binds().LiteralExists(inner).as_sql(compiler, connection)
+        return Exists(inner).as_sql(compiler, connection)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3844,7 +3658,7 @@ class RelationPlan:
                 correlation=Q(**{terminal: OuterRef(target)}),
                 **bindings,
             )
-            parts.append(_binds().LiteralExists(inner))
+            parts.append(Exists(inner))
         if not parts:
             return None
         if len(parts) == 1:
@@ -3863,8 +3677,7 @@ class RelationPlan:
         permission identity in the same SQL statement.
         """
         user = _require_instance(user, 'user')
-        if not _is_lookup_expression(permission):
-            permission = _require_instance(permission, 'permission')
+        permission = _bind_terminal(permission, 'permission')
         if not self.records:
             return None
         return self._correlated_exists(
@@ -3887,15 +3700,13 @@ class RelationPlan:
                 'content must be a saved %s instance.'
                 % content._meta.label
             )
-        if not _is_lookup_expression(permission):
-            permission = _require_instance(permission, 'permission')
+        permission = _bind_terminal(permission, 'permission')
         if not self.records:
             return None
         return self._correlated_exists(
             'user_field', content=content, permission=permission,
         )
 
-    @_with_binds
     def common_permissions(self, user, content):
         """Trustee permissions held on every candidate through this plan.
 
@@ -3912,11 +3723,12 @@ class RelationPlan:
         exists = self.content_exists(user, OuterRef(OuterRef('pk')))
         if exists is None:
             return self.permission_model._default_manager.none()
-        return _common_permission_queryset(
-            self.permission_model, qs, Q(exists),
-        )
+        return _bind_query(self.permission_model._default_manager.filter(
+            Exists(qs),
+        ).exclude(
+            Exists(qs.filter(~Q(exists))),
+        ).distinct())
 
-    @_with_binds
     def permissions(self, user, content):
         """Distinct permission rows for ``(user, content)``."""
         user = _require_instance(user, 'user')
@@ -3926,9 +3738,10 @@ class RelationPlan:
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
         )
-        return _binds().seal(self.permission_model._default_manager.filter(exists).distinct())
+        return _bind_query(
+            self.permission_model._default_manager.filter(exists).distinct(),
+        )
 
-    @_with_binds
     def has_permission(self, user, content, permission):
         """SQL ``EXISTS`` membership of ``permission`` in ``permissions()``."""
         user = _require_instance(user, 'user')
@@ -3941,23 +3754,16 @@ class RelationPlan:
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
         )
-        matched = self.permission_model._default_manager.filter(
-            pk=_binds().hoist(
-                permission.pk,
-                permission._meta.pk,
-                bind='permission.%s' % permission._meta.pk.attname,
-            ),
-        ).filter(exists)
-        _binds().seal(matched)
-        return _binds().query_exists(matched)
+        return _exists(self.permission_model._default_manager.filter(
+            pk=permission.pk,
+        ).filter(exists))
 
-    @_with_binds
     def filter_content(self, queryset, user, permission):
         """Lazy queryset of candidate rows correlated to the same plan."""
         exists = self.content_exists(user, permission)
         if exists is None:
             return queryset.none()
-        return _binds().seal(queryset.filter(exists).distinct())
+        return _bind_query(queryset.filter(exists).distinct())
 
 
 class TrustsRegistry(object):

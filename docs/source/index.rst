@@ -773,14 +773,11 @@ lockfile key remains ``get_permitted_users``. For the direct
            LIMIT 1
          ) )
 
-``TRUSTS_SQL_BIND_ONCE`` defaults to true. Each distinct value in one
-statement is then a single placeholder on a one-row ``trusts_bind``
-table, and inner predicates compare against that row. Set it to false
-to leave every placeholder where the compiler emitted it. ``EXISTS``
-selects the literal ``1`` (``SELECT 1 AS "a"`` on SQLite and
-PostgreSQL; MySQL uses the same literal with its identifier quotes).
-That marker is not a parameter. Other values, including ``is_active``
-and content-type constants, stay bound parameters.
+``TRUSTS_BIND_ONCE`` defaults to true. It is the switch for the one-row
+bind table in the statement above. Leave it on. Set it to false only
+when that SQL misbehaves: django-trusts then runs the plain queryset,
+and the lockfile records that plain SQL. Set it back to true when the
+plain statement is no longer needed.
 
 Several trusts for the same content within one backend are OR alternatives.
 django-trusts issues one SQL statement for each permission inquiry and combines

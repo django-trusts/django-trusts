@@ -11,7 +11,7 @@ from trusts._permitted import (
     _guard_permission_string,
     _permission_binding,
 )
-from trusts._bind_once import bind_scope, query_exists, seal
+from trusts._bind_once import bind_once, execute_exists
 from trusts.core import TrustsConfigurationError
 from trusts.query import is_active_principal
 
@@ -105,23 +105,22 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
 
     app_label, codename = permission.split('.', 1)
     binding = _permission_binding(model, app_label, codename)
-    with bind_scope():
-        granted_q = _authorization_grant_q(
-            handles,
-            candidates,
-            user,
-            model,
-            permission,
-            conditions,
-            binding,
-            api='authorization_required',
-        )
-        if granted_q is None:
-            matched = None
-        else:
-            matched = seal(candidates.filter(granted_q))
-            if query_exists(matched):
-                return
+    granted_q = _authorization_grant_q(
+        handles,
+        candidates,
+        user,
+        model,
+        permission,
+        conditions,
+        binding,
+        api='authorization_required',
+    )
+    if granted_q is None:
+        matched = None
+    else:
+        matched = bind_once(candidates.filter(granted_q))
+        if execute_exists(matched):
+            return
     if matched is None:
         if candidates.exists():
             raise PermissionDenied
