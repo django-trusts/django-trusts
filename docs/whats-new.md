@@ -11,6 +11,11 @@ log.
 
 ## 1.1.0
 
+- **Named user rules.** Registry user conditions and optional overrides share
+  named `skip_` options across permission inquiries. See the
+  [user guide](source/index.rst#user-conditions-and-overrides) and
+  [migration record](../migrates.md#user-conditions-and-overrides-273-284).
+
 - **Provisional `along=` reachability.** Reverse inquiry, policy SQL, and
   delegation support bounded provisional `along=` on SQLite, PostgreSQL,
   and MySQL 8.4+. `along=` is improved and remains provisional. See the
@@ -38,8 +43,7 @@ log.
   and [#292].
 
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
-  use a sponsor's live ordinary permissions within delegation scope; an
-  inactive delegate or sponsor fails closed. See the
+  use a sponsor's live ordinary permissions within delegation scope. See the
   [user guide](source/index.rst), [driver contract](dev/delegation-registration.md),
   and [#279].
 

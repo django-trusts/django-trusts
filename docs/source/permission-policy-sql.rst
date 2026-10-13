@@ -121,9 +121,9 @@ the SQL bytes for every ``auth.Permission`` grant.
 ``get_permitted_users`` is the reverse of ``permitted``: one saved content
 object and one permission, compiled to the users that backend can grant.
 The locked statement is that backend branch only. It carries the backend's
-eligibility predicate and the complete-grant ``EXISTS``. It does not include
-Django's check that an active superuser has every permission, and it does not OR other
-authentication backends. The content primary key is a ``content.<target>``
+registered user conditions, any user override, and the complete-grant
+``EXISTS``. It does not OR other authentication backends.
+The content primary key is a ``content.<target>``
 bind. The permission row is a ``permission.<target>`` bind. The candidate
 user is the outer row. ``content.get_permitted_users(perm)`` and optional
 ``User.objects.permitted(content, perm)`` share this one policy entry
@@ -151,7 +151,7 @@ correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
 combines all applicable ordinary grants with OR: any matching ordinary grant
 may supply the sponsor's authority on the same content and permission.
 Reviewers should verify the delegate/sponsor direction, the relationship's
-explicit conditions, the :ref:`user.is_active checks <user-is-active-checks>`,
+explicit conditions, the :ref:`user conditions and overrides <user-conditions-and-overrides>`,
 and the sponsor's ordinary-grant predicate in the document and generated SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration

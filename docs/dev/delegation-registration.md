@@ -11,6 +11,10 @@ This document records the contract used to drive implementation and its
 acceptance tests. The public guide and security audit describe behavior on the
 development branch; What's New records release-train changes.
 
+The fixed user eligibility and superuser discussions below are historical.
+[User conditions and overrides](../source/index.rst#user-conditions-and-overrides)
+supersede those parts; the relationship and ordinary-sponsor ceiling remain.
+
 The public `register()` API has two different authorization modes. They must
 remain visibly different because an ordinary registration is a grant, while a
 delegated registration is only one side of a conditional grant.

@@ -54,13 +54,14 @@ boundary. Application code uses the object returned by
 `configured_backend()`; it must not construct private registry or compiler
 objects.
 
-The django-trusts 1.x public surface has one grant-producing family and one restricting
-overlay:
+The registration APIs define permission sources and restrictions:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
 | `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the complete registered policy matches |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
+| `registry.register_user_condition(...)` | Require a named user predicate unless skipped | No |
+| `registry.set_user_override(...)` | Register an optional alternative to ordinary grants | Yes, subject to required user conditions |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
 types, constants, and combinations are intended to be rejected during setup.
@@ -157,20 +158,26 @@ For actor `u`, content `c`, and permission `p`, every projection compiles the
 same shape:
 
 ```text
-(allow_inactive_user OR u.is_active)
+user_conditions(u, skip_options)
 AND (
-    ordinary(u, c, p)
+    user_override(u, skip_options)
+    OR ordinary(u, c, p)
     OR EXISTS delegation d:
         d.delegate = u
         AND d.content = c
         AND delegated_condition(d, p)
-        AND (allow_inactive_user OR d.sponsor.is_active)
+        AND user_conditions(d.sponsor, skip_options)
         AND ordinary(d.sponsor, c, p)
 )
 ```
 
-The `is_active` checks follow the [shared inquiry rule](docs/source/index.rst#user-is-active-checks).
-Explicit registration conditions remain restrictions whether or not `allow_inactive_user=True`.
+User rules and named skip options follow the
+[usage guide](docs/source/index.rst#user-conditions-and-overrides).
+These names describe compiled predicates, not runtime callbacks. Audit every
+registered condition, optional override, and permitted skip option. An override
+can replace the ordinary grant proof; include any requirements that must remain
+effective when other user conditions are skipped in the override itself.
+The sponsor still requires ordinary authority.
 
 Audit the following boundaries:
 
@@ -290,7 +297,8 @@ rejecting Trusts branch as a global deny.
 
 ## Ask permission questions
 
-All projections follow the [shared user.is_active rule](docs/source/index.rst#user-is-active-checks).
+All Trusts projections follow the
+[registered user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
 
 The supported projections consume the same normalized registration:
 
@@ -298,8 +306,8 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Shared user checks; relationship-family SQL before pagination; not Django backend OR or a superuser shortcut |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; shared user checks within Trusts-owned grants |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user rules and relationship-family SQL before pagination |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user rules within each Trusts branch |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.
@@ -323,9 +331,10 @@ def edit_document(request, pk):
 
 The guard performs structural preflight before candidate lookup. An absent
 candidate produces 404; an existing but unauthorized candidate produces 403.
-Its selected named filters are AND restrictions. Active superusers bypass
-grants and filters only after configuration preflight and still require the
-candidate to exist.
+Its selected named filters constrain the relationship proof. Audit how an
+explicitly registered user override composes with those filters. A successful
+override still requires the candidate to exist and required user conditions
+to pass.
 
 
 Fixed-query behavior is intentional: registration-time structure and
@@ -417,11 +426,9 @@ protected model's content type instead. `trusts.E008` covers declared
 the same ownership rule and raises, but it is not registered with that
 check.
 
-Django's active-superuser rule runs before authentication backends, so
-`user.has_perm` can return `True` for a mismatched pair when the user is an
-active superuser. Enumeration, `.permitted()`, the reverse inquiry, and the
-lockfile do not copy that shortcut. `authorization_required` still has its
-own active-superuser existence shortcut after configuration preflight.
+The [Django backend boundary](#django-auths-checks-before-calling-backends)
+still applies to native `user.has_perm()`. Trusts-owned inquiries use the
+registered user rules; they do not install a superuser override implicitly.
 
 Where practical, configuration failures should surface during startup or system
 checks. Runtime denial should not fall back to a broader Trusts path.
@@ -436,7 +443,7 @@ The generated YAML is organized by backend and protected content model. Each
 trust exposes its declared relationships. Each content with trusts records SQL
 for `permitted`, `has_perm`, `get_all_permissions`, and
 `get_permitted_users`. The locked reverse statement is that backend's
-branch, not Django's superuser check. Filter-only
+branch, including its registered user rules. Filter-only
 contents carry their model and `named_filters`, and empty relationship
 backends remain visible as `contents: []`.
 

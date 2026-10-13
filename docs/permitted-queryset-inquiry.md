@@ -1,9 +1,9 @@
 # Permitted content queryset inquiry
 
-Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)`
+Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), **skip_options)`
 is implemented on `PermittedQuerySet`.
 
-The [`is_active` check and examples](source/index.rst#user-is-active-checks)
+The [user conditions, overrides, and named skip options](source/index.rst#user-conditions-and-overrides)
 apply to this inquiry.
 
 ## Question
@@ -28,7 +28,7 @@ parser, and it is not the reverse inquiry answered by
 ## Public API
 
 ```python
-queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)
+queryset.permitted(permission, user, conditions=(), **skip_options)
 ```
 
 The method lives on the queryset, so it stays available after `filter()`:
@@ -159,7 +159,7 @@ normalized `register()` plans and named-condition registry as
 For every participating backend, the method compiles:
 
 ```text
-registered grant path AND every explicitly selected named condition
+registered user rules composed with the grant path and selected named conditions
 ```
 
 Participating backends are ORed. The final queryset is distinct and stays
@@ -167,9 +167,8 @@ lazy, so pagination applies in SQL.
 
 ## User and backend boundary
 
-The shared user checks apply before the grant query. The method does not copy
-Django's active-superuser shortcut: an active superuser without a registered
-grant receives an empty queryset.
+The registry's user conditions and optional override apply to this inquiry.
+Named skip options select which registered user rules to omit for that call.
 
 The result is Trusts' registered relationship-family projection. It does not
 call `user.has_perm()` per row and does not OR results from arbitrary Django
@@ -199,7 +198,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
-- the user is anonymous, unauthenticated, or inactive, unless `allow_inactive_user=True`; or
+- a required user condition fails; or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another
   application label.
@@ -235,7 +234,6 @@ This API does not infer:
 - which parent object a create request targets;
 - which domain service performs a mutation;
 - ANY or ALL quantification across multiple permissions;
-- arbitrary-backend queryset aggregation; or
-- a superuser compatibility escape.
+- arbitrary-backend queryset aggregation.
 
 Those decisions remain with the application or an optional framework adapter.

@@ -31,37 +31,40 @@ the new one.
 
 | | Old | New |
 | --- | --- | --- |
-| Rows with permitted content under them | `filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` | `filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` |
+| Rows with permitted content under them | `filter_authorized_scopes(...)` | `filter_by_permitted_content(...)` |
 
 Migration-bot checklist:
 
 - search `filter_authorized_scopes(` and replace with `filter_by_permitted_content(`
 
-## user.is_active checks (#284)
+## User conditions and overrides (#273, #284)
 
-The shared [user.is_active rule](docs/source/index.rst#user-is-active-checks)
-also applies to `.authorized()` and ordinary registry/intermediate-model
-inquiries, superseding their earlier ungated behavior described below. Their
-default results change for an inactive user:
+Named [user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides)
+replace built-in activity checks and implicit Trusts superuser shortcuts.
+The default conditions require an active, authenticated user with a saved
+user row. No superuser override is registered by default.
 
-| Before #284 | After #284 |
+| Old | New |
 | --- | --- |
-| Ordinary `.authorized()`, `permissions_for`, `has_permission`, `filter_authorized`, and `filter_authorized_scopes` can produce a positive result for an inactive user | The same default inquiry returns false/empty |
+| `allow_inactive_user=True` or `allow_inactive=True` | `skip_is_active=True` on Trusts inquiry APIs |
+| Built-in user restrictions | Named conditions on `backend.registry`; replace an expression or pass `None` to remove it |
+| Trusts shortcuts supply superuser access | Register `set_user_override("superuser", ...)` explicitly if required; use `skip_superuser=True` to inspect ordinary grants |
 
-Use the optional keyword in the usage guide when those calls intentionally inspect
-stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;
-user-list inquiries use `allow_inactive`.
-Existing permission inputs, query shapes, and positional arguments remain.
-Review affected compiler/backend overrides and regenerate policy locks with
-the runtime change.
+Applications relying on implicit superuser access must register the override
+shown in the guide or grant ordinary permissions. Review custom backend and
+compiler adapters, permission caches, and policy locks. Django's native
+`PermissionsMixin.has_perm()` shortcut remains outside registry control; see
+the [Django backend boundary](SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
 
 Migration-bot checklist:
 
-- `.authorized(`, `permissions_for(`, `has_permission(`, and `filter_authorized(`
-- `filter_authorized_scopes(` and its `allow_inactive_user` keyword
-- `.permitted(`, `get_permitted_users(`, and backend inquiry overrides
-- custom reverse/compiler hooks and candidate-manager `is_active` filters
-- permission-result caches, if present, and `trusts_policy_sql`
+- replace `allow_inactive_user` and `allow_inactive` with `skip_is_active`
+- review `.authorized(`, `.permitted(`, `permissions_for(`, `has_permission(`,
+  `filter_authorized(`, `filter_by_permitted_content(`, and `get_permitted_users(`
+- find reliance on `is_superuser` in view guards, reverse inquiries, and adapters
+- review `register_user_condition(`, `set_user_override(`, custom user models,
+  and candidate-manager filters
+- regenerate policy locks and verify default and skipped-rule results
 
 ## Permission content type must match the object (#267)
 
@@ -74,7 +77,6 @@ Migration-bot checklist:
 | `authorization_required` for that pair | Already `PermissionDenied` for an ordinary user | Same denial |
 | Same-model grant, including a custom codename that does not end with the model name | Grant on instance projections | Unchanged grant |
 | Permission terminal that is not `auth.Permission`, including a custom model with a `content_type` foreign key | Primary-key identity | Unchanged |
-| Active superuser `user.has_perm` | Django returns `True` before backends | Unchanged. Queryset and enumeration projections do not copy that shortcut |
 
 For an ordinary owner of one organization, the shared owner group used to
 grant both content types on both objects. Enumeration, `.authorized()`,
@@ -120,15 +122,13 @@ Migration-bot checklist:
 | Content rows one user may access for one permission | Resolve an `auth.Permission` row, then `.authorized(user, permission)` | `queryset.permitted(permission, user, conditions=())` |
 | Chained queryset | The list method is not on `QuerySet` | `Repository.objects.filter(...).permitted(...)` when the queryset mixes in `PermittedQuerySetMixin` and is supplied with `as_manager()` or `from_queryset` |
 | Attachment names | `AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager` | Those names stay. Add `PermittedQuerySetMixin`, `PermittedQuerySet`, and `PermittedManager` |
-| `.authorized(user, permission, extra_q=None)` | Instance projection, no user check, any registered terminal | Unchanged. Not routed through `.permitted` validation |
-| Anonymous or inactive user | `.authorized()` can still return granted rows | `.permitted()` returns an empty queryset. `.authorized()` does not |
+| `.authorized(user, permission, extra_q=None)` | Instance projection, any registered terminal | Retained. User conditions and overrides apply; not routed through `.permitted` validation |
 | Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous user |
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
-No mandatory consumer change. Existing `.authorized()` callers keep their
-results, including an inactive user who holds a grant. New code should
-use `.permitted()`. Zero's `ContentQuerySet.permitted(perm, user)` is
-unchanged.
+New code should use `.permitted()`. For changes to user checks and audit
+options on existing inquiries, see User conditions and overrides above.
+Zero's `ContentQuerySet.permitted(perm, user)` retains its permission codec.
 
 ```python
 # Old
@@ -252,7 +252,11 @@ Migration-bot checklist:
 | --- | --- | --- |
 | Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
 
-No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion. An `Along` registration cannot be reversed exactly and raises `TrustsConfigurationError` before SQL, including when rendering the policy lock.
+No mandatory consumer change to adopt this adapter. Stock `auth.User` does not
+grow the manager method, and a content manager still returns content rows.
+The registered permission row is the identity used in SQL. A permission string
+is resolved inside that statement, not by a construction-time query. User
+conditions and overrides apply as described above.
 
 Migration-bot checklist:
 

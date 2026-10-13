@@ -1,7 +1,12 @@
 # #284 inactive-user inquiries: implementation review driver
 
-Date: 2026-10-11. Status: documentation held for implementation review of #296.
-The contract is [in the built documentation](../source/index.rst#user-is-active-checks).
+Historical implementation driver for #284/#296, completed before the named-user-rule
+proposal in [draft #312](https://github.com/django-trusts/django-trusts/pull/312).
+Its activity flags and fixed eligibility rules are superseded by
+[user conditions and overrides](../source/index.rst#user-conditions-and-overrides).
+The inventory below records the earlier implementation; it is not the current API contract.
+
+Date: 2026-10-11.
 Chat owns documentation/design coordination; Grok reviews the contract and
 independently verifies implementation feasibility before coding.
 

@@ -409,23 +409,23 @@ These additive APIs are the instance-only / metadata-driven surfaces that
 later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `filter_by_user_content_perm`, the app label, or the historical compiler.
 
-`AuthorizedQuerySet.authorized(user, permission, extra_q=None, *, allow_inactive_user=False)` and
+`AuthorizedQuerySet.authorized(user, permission, extra_q=None, **skip_options)` and
 `AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse
 `:condition` or call `get_permission`. It uses the
-[shared user.is_active checks](source/index.rst#user-is-active-checks).
+[user conditions and overrides](source/index.rst#user-conditions-and-overrides).
 `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
-`.authorized` does not call it; both inquiries apply the `is_active` check
-(or skip it with `allow_inactive_user=True`) without sharing permission-input
-validation.
+`.authorized` does not call it; the inquiries share user rules without sharing
+permission-input validation. `skip_options` contains the named `skip_<name>`
+keywords described in the guide.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
-`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
+`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, **skip_options)`
 in `trusts.core` filters rows of an intermediate model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. The function compiles `EXISTS` of root rows
