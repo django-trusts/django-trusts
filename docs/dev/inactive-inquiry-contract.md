@@ -85,18 +85,13 @@ There are three directional change points, all controlled by the same flag:
 - sponsor eligibility in both directions is `_principal_eligibility_q` SQL;
 - reverse delegate eligibility comes from the Trusts-owned `_trusts_eligibility_q` branch.
 
-Default exporter SQL was asymmetric at the time of this review: `policy_lock.py`
-added no `is_active` predicate of its own; the reverse locked queryset included
-`is_active` checks, while ordinary forward/registry exports consumed projections
-without that check. Python actor checks were not automatically represented in SQL.
-
-That forward gap is closed. Inquiries that used to reject an inactive user in
-Python before SQL now also compare a concrete `is_active` column in the grant
-SQL that runs. The lockfile records that SQL and the token `user.is_active=True`.
-There is no separate rule key. `skip_<name>=True` omits that registered
-condition. The built-in condition's keyword is `skip_is_active=True`. A
-user model with no concrete `is_active` column does not gain a term. The schema
-version stays 1.
+Default exporter SQL is also asymmetric: `policy_lock.py` adds no `is_active`
+predicate of its own; the reverse locked queryset includes `is_active` checks,
+while ordinary forward/registry exports consume projections without that
+`is_active` check. Python actor checks are not automatically represented in SQL.
+S2 must explicitly identify runtime checks versus exported SQL and propose the
+flag representation before claiming matching lockfile behavior. The current
+schema version is 1; there is no pre-authorized schema bump.
 
 User-facing pages describe finished behavior in present tense. Planned status,
 review inventory, sizing, and unresolved representation decisions stay here.
@@ -118,21 +113,18 @@ unauthenticated denial separate from the `is_active` check. These callers cannot
 persisted grants, so no positive permission answer is meaningful.
 
 Thomas clarified the public keyword by the returned answer (review
-5486296327): content, permission enumeration, and boolean inquiries used
-`allow_inactive_user`; user-list inquiries used `allow_inactive`. This
+5486296327): content, permission enumeration, and boolean inquiries use
+`allow_inactive_user`; user-list inquiries use `allow_inactive`. This
 supersedes the narrower exception that initially named only
-`filter_by_permitted_content`. Public adapters accept `skip_<name>` for each
-registered user condition and for the current checked-user override. The
-built-in `is_active` condition's keyword is `skip_is_active`. It is not a
-separate parameter. An override that is unset or replaced does not keep
-its old keyword. Every row below uses that form.
+`filter_by_permitted_content`. Internal helpers can propagate one boolean flag;
+public adapters map their documented keyword explicitly.
 
-| Public inquiry | Keywords |
+| Public inquiry | Keyword |
 | --- | --- |
-| Content `.permitted` and `.authorized`, and their manager adapters | `skip_<name>` |
-| Backend `has_perm`, `get_all_permissions`, `get_group_permissions` | `skip_<name>` |
-| Registry `permissions_for`, `has_permission`, `filter_authorized`; `filter_by_permitted_content` | `skip_<name>` |
-| Content `get_permitted_users`; optional user-manager `.permitted` | `skip_<name>` |
+| Content `.permitted` and `.authorized`, and their manager adapters | `allow_inactive_user=False` |
+| Backend `has_perm`, `get_all_permissions`, `get_group_permissions` | `allow_inactive_user=False` |
+| Registry `permissions_for`, `has_permission`, `filter_authorized`; `filter_by_permitted_content` | `allow_inactive_user=False` |
+| Content `get_permitted_users`; optional user-manager `.permitted` | `allow_inactive=False` |
 
 Do not add an eligibility abstraction in anticipation of a superuser feature.
 Existing Django behavior stays unchanged; the inventory here remains evidence
@@ -149,7 +141,7 @@ human authorization is required for the already agreed bounded feature work.
 Thomas's decision, relayed in #296 comment 6118712403: Trusts guarantees only
 its own backend. `is_active` predicates stay inside Trusts-owned grant branches;
 custom backend predicates are not wrapped with a global `is_active` filter.
-The keyword is not forwarded to custom backends, and no new hook capability
+Neither keyword is forwarded to custom backends, and no new hook capability
 or flag support is required from them. This supersedes the earlier review
 requirements for aggregate `is_active` filtering and explicit audit participation.
 

@@ -483,15 +483,15 @@ the same model.
 .. code-block:: python
 
    def filter_by_permitted_content(
-       queryset, user, permission, *, content, handles=None, **skip_flags,
+       queryset, user, permission, *, content, handles=None,
+       allow_inactive_user=False,
    ):
        ...
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``skip_<name>`` drops that registered user condition, or the
-checked-user override of that name, the same keywords as the other
-content inquiries.
+backends. ``allow_inactive_user`` is the same option as the other content
+inquiries.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -572,32 +572,25 @@ against a user model; a non-model user object is not a SQL principal.
 Including inactive users
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-To include users who fail a registered user condition, pass that
-condition's keyword ``skip_<name>=True``. For the built-in ``is_active``
-condition the keyword is ``skip_is_active``. There is no separate
-parameter. The checked-user override uses the same form: an override
-named ``superuser`` accepts ``skip_superuser``, and that call skips the
-override. With no override set, ``skip_superuser`` is unknown. Replacing
-the override stops accepting the previous name. A condition and the
-override cannot share a name. The same keywords are used for content,
-permissions, booleans, and user lists. ``skip_is_active=True`` skips the
-built-in ``is_active`` checks for the user, delegate, and sponsor. An
-unknown ``skip_*`` keyword raises ``TypeError``. Explicit conditions and
-candidate-queryset filters still apply.
+To include inactive users in an inquiry, use the keyword-only option
+(default ``False``). Inquiries returning content, permissions, or a boolean
+use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
+It skips only the built-in ``is_active`` checks for the user, delegate, and
+sponsor. Explicit conditions and candidate-queryset filters still apply.
 For example, inspect a suspended user's grants before reactivating them:
 
 .. code-block:: python
 
    documents = Document.objects.permitted(
-       "documents.change_document", suspended_user, skip_is_active=True,
+       "documents.change_document", suspended_user, allow_inactive_user=True,
    )
    users = document.get_permitted_users(
-       "documents.change_document", skip_is_active=True,
+       "documents.change_document", allow_inactive=True,
    )
 
-Stock Django user methods do not forward ``skip_is_active``. Use the Trusts
+Stock Django user methods do not forward either keyword. Use the Trusts
 adapters; view guards and login behavior are unchanged. Custom backends retain
-their own rules and do not receive the keyword.
+their own rules and do not receive either keyword.
 
 Protect a view with the Trusts-only primary-key guard:
 
