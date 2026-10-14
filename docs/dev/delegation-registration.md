@@ -13,7 +13,9 @@ development branch; What's New records release-train changes.
 
 The fixed user eligibility and superuser discussions below are historical.
 [User conditions and overrides](../source/index.rst#user-conditions-and-overrides)
-supersede those parts; the relationship and ordinary-sponsor ceiling remain.
+supersede those parts. The relationship and default ordinary-sponsor ceiling
+remain; an override explicitly targeted to the sponsor is a separately declared
+alternative under the draft user-rule contract.
 
 The public `register()` API has two different authorization modes. They must
 remain visibly different because an ordinary registration is a grant, while a
@@ -52,18 +54,22 @@ The mode switch is therefore:
 | Mode | Principal arguments | Meaning |
 | --- | --- | --- |
 | Ordinary permission | `user=` and `permission=` | The matching row is an ordinary grant. |
-| Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires the sponsor's live ordinary authority. |
+| Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires live sponsor authority. By default that authority comes from ordinary grants; an explicitly sponsor-targeted override is an alternative. |
 
 `delegate=` binds the current principal who is acting and receiving delegated
 access. It takes the place of `user=` for the delegated mode. `sponsor=` binds
-the principal who delegated the authority and whose live ordinary permission
-paths provide the ceiling.
+the principal who delegated the authority. By default, that principal's live
+ordinary permission paths provide the ceiling. An override explicitly
+registered for the sponsor may supply that authority instead.
 
 The delegated row does not carry an ordinary `permission=` grant. The
 permission being checked comes from the inquiry and must be satisfied by the
-sponsor's ordinary authority union on the same content. A delegated condition
+sponsor-authority predicate on the same content. That predicate is the
+sponsor's ordinary-authority union by default, with any explicitly
+sponsor-targeted override as an additional alternative. A delegated condition
 may compare that requested permission with relationship-owned scope data, but
-it cannot grant an operation that the sponsor does not currently hold.
+it cannot grant an operation that the sponsor-authority predicate does not
+currently provide.
 
 `content=` identifies the meeting point of the two sides. In ordinary mode,
 `condition=` keeps its existing one-argument builder. In delegated mode, it
@@ -97,11 +103,12 @@ content terminal or gateway.
 
 A delegated registration accepts the same `along=` walk as an ordinary
 registration. The delegate is allowed on an object only when that walk
-reaches the object and the sponsor's ordinary authority also reaches it.
-If the delegation has no `along=`, the delegation row must name that
-object. If the sponsor's ordinary grant has no `along=`, that grant must
-name that object. When both sides walk, the delegate gets only the objects
-both walks reach. A longer content suffix than one reverse hop is not one
+reaches the object and the sponsor-authority predicate also reaches it. By
+default that predicate uses ordinary grants. If the delegation has no
+`along=`, the delegation row must name that object. If the applicable
+ordinary sponsor grant has no `along=`, that grant must name that object.
+When both relationship and ordinary-grant sides walk, the delegate gets only
+the objects both walks reach. A longer content suffix than one reverse hop is not one
 column on the content row; compiling that delegated walk raises
 `TrustsConfigurationError` before a grant, on a forward check and on
 reverse inquiry. The sponsor comparison keeps the full root-relative
