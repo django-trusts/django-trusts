@@ -163,6 +163,10 @@ rule.
 
 ## Docs-first development
 
+Docs-first development is the default, not a hard rule. Use another approach
+for a tiny or sweeping change, an exploratory task, or when this workflow does
+not reasonably fit the problem.
+
 For a user-visible feature, first test feasibility: walk every affected path,
 identify likely pitfalls, and draft the smallest user-doc change. Refine a
 representative snippet until the behavior is clear, then open a docs PR as the
