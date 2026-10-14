@@ -122,9 +122,10 @@ Thomas clarified the public keyword by the returned answer (review
 `allow_inactive_user`; user-list inquiries used `allow_inactive`. This
 supersedes the narrower exception that initially named only
 `filter_by_permitted_content`. Public adapters accept `skip_<name>` for each
-registered user condition. The built-in `is_active` condition's keyword is
-`skip_is_active`. It is not a separate parameter. Every row below uses that
-form.
+registered user condition and for the current checked-user override. The
+built-in `is_active` condition's keyword is `skip_is_active`. It is not a
+separate parameter. An override that is unset or replaced does not keep
+its old keyword. Every row below uses that form.
 
 | Public inquiry | Keywords |
 | --- | --- |

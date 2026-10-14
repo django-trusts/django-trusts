@@ -4365,6 +4365,12 @@ class TrustsRegistry(object):
             self._stored_user_conditions(), self._user_override,
         )
 
+    def _has_condition_name(self, name):
+        if self._user_conditions is None:
+            from trusts.user_rules import BUILTIN_USER_CONDITIONS
+            return any(rule.name == name for rule in BUILTIN_USER_CONDITIONS)
+        return name in self._user_conditions
+
     def register_user_condition(self, name, expr, on='*'):
         """Register, replace, or remove one named user condition.
 
@@ -4376,7 +4382,7 @@ class TrustsRegistry(object):
         of those two. The lambda is walked once into concrete boolean
         fields, ``&``, and ``~``. The skip keyword on the inquiry APIs
         is ``skip_<name>``. The name must be an identifier and must not
-        collide with an inquiry keyword.
+        collide with an inquiry keyword or with the user override.
         """
         from trusts.user_rules import (
             BUILTIN_USER_CONDITIONS,
@@ -4390,6 +4396,15 @@ class TrustsRegistry(object):
             )
         self._reject_rules_after_registration()
         validate_user_rule_name(name, kind='condition')
+        if (
+            expr is not None
+            and self._user_override is not None
+            and self._user_override.name == name
+        ):
+            raise TrustsConfigurationError(
+                'User condition name %r collides with the user override.'
+                % (name,)
+            )
         target = normalize_on(on)
         created = self._user_conditions is None
         self._materialize_user_conditions(BUILTIN_USER_CONDITIONS)
@@ -4482,7 +4497,9 @@ class TrustsRegistry(object):
         ``TrustsConfigurationError``. A new name and expression replace
         the previous slot. ``None`` must name the current override.
         ``on="sponsor"`` and ``on="*"`` raise. Sponsor authority is
-        unchanged. The skip keyword is ``skip_<name>``.
+        unchanged. The skip keyword is ``skip_<name>``, the same form as
+        a user condition. The name cannot match a registered condition.
+        Replacing the override stops accepting the previous name.
         """
         from trusts.user_rules import (
             UserCondition,
@@ -4500,6 +4517,11 @@ class TrustsRegistry(object):
         self._reject_rules_after_registration()
         validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
+        if expr is not None and self._has_condition_name(name):
+            raise TrustsConfigurationError(
+                'User override name %r collides with a user condition.'
+                % (name,)
+            )
         if expr is None:
             current = self._user_override
             if current is None or current.name != name:

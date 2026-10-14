@@ -792,6 +792,9 @@ class SkipKeywordTest(TransactionTestCase):
             with self.assertRaises(TypeError) as ctx:
                 removed.permissions_for(alice, note, skip_is_active=True)
             self.assertIn('skip_is_active', str(ctx.exception))
+            with self.assertRaises(TypeError) as ctx:
+                registry.permissions_for(alice, note, skip_superuser=True)
+            self.assertIn('skip_superuser', str(ctx.exception))
             self.assertEqual(
                 set(removed.permissions_for(alice, note).values_list(
                     'pk', flat=True,
@@ -802,6 +805,61 @@ class SkipKeywordTest(TransactionTestCase):
             with connection.schema_editor() as editor:
                 editor.delete_model(UnknownGrant)
                 editor.delete_model(UnknownNote)
+
+    def test_override_skip_keyword_follows_the_current_name(self):
+        class OverrideNote(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class OverrideGrant(models.Model):
+            note = models.ForeignKey(OverrideNote, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(OverrideNote)
+            editor.create_model(OverrideGrant)
+        try:
+            User = get_user_model()
+            staff = User.objects.create_user('skip-ov-staff', password='x')
+            staff.is_staff = True
+            staff.save(update_fields=['is_staff'])
+            superuser = User.objects.create_user('skip-ov-super', password='x')
+            superuser.is_superuser = True
+            superuser.is_staff = False
+            superuser.save(update_fields=['is_superuser', 'is_staff'])
+            note = OverrideNote.objects.create(title='n')
+            read = _permission(OverrideNote, 'read_note_override_skip')
+            registry = TrustsRegistry()
+            registry.set_user_override(
+                'superuser', lambda u: u.is_superuser,
+            )
+            registry.set_user_override('staff', lambda u: u.is_staff)
+            grant = Ref(OverrideGrant)
+            registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            allowed = registry.permissions_for(staff, note)
+            self.assertEqual(
+                set(allowed.values_list('pk', flat=True)), {read.pk},
+            )
+            self.assertIn('is_staff', str(allowed.query))
+            skipped = registry.permissions_for(staff, note, skip_staff=True)
+            self.assertEqual(list(skipped), [])
+            self.assertNotIn('is_staff', str(skipped.query))
+            self.assertEqual(list(registry.permissions_for(superuser, note)), [])
+            with self.assertRaises(TypeError) as ctx:
+                registry.permissions_for(staff, note, skip_superuser=True)
+            self.assertIn('skip_superuser', str(ctx.exception))
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(OverrideGrant)
+                editor.delete_model(OverrideNote)
 
 
 class SkipKeywordNameTest(TestCase):
@@ -826,6 +884,36 @@ class SkipKeywordNameTest(TestCase):
             tuple(rule.name for rule in registry.user_conditions()),
             ('is_active', 'staff'),
         )
+
+    def test_condition_and_override_cannot_share_a_name(self):
+        registry = TrustsRegistry()
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.set_user_override('is_active', lambda u: u.is_superuser)
+        self.assertIn('collides', str(ctx.exception))
+        self.assertIsNone(registry._user_override)
+        registry.register_user_condition('staff', lambda u: u.is_staff)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.set_user_override('staff', lambda u: u.is_staff)
+        self.assertIn('collides', str(ctx.exception))
+        self.assertIsNone(registry._user_override)
+        registry.set_user_override('superuser', lambda u: u.is_superuser)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.register_user_condition(
+                'superuser', lambda u: u.is_superuser,
+            )
+        self.assertIn('collides', str(ctx.exception))
+        self.assertEqual(registry._user_override.name, 'superuser')
+        self.assertNotIn(
+            'superuser',
+            tuple(rule.name for rule in registry.user_conditions()),
+        )
+        with self.assertRaises(TrustsConfigurationError):
+            registry.set_user_override('staff', lambda u: u.is_staff)
+        self.assertEqual(registry._user_override.name, 'superuser')
+        opened = TrustsRegistry()
+        opened.register_user_condition('is_active', None)
+        opened.set_user_override('is_active', lambda u: u.is_superuser)
+        self.assertEqual(opened._user_override.name, 'is_active')
 
 
 class SkipKeywordInquiryTest(KernelHostRequiredMixin, TestCase):

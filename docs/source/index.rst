@@ -489,8 +489,9 @@ the same model.
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``skip_<name>`` drops that registered user condition, the same
-keywords as the other content inquiries.
+backends. ``skip_<name>`` drops that registered user condition, or the
+checked-user override of that name, the same keywords as the other
+content inquiries.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -574,11 +575,15 @@ Including inactive users
 To include users who fail a registered user condition, pass that
 condition's keyword ``skip_<name>=True``. For the built-in ``is_active``
 condition the keyword is ``skip_is_active``. There is no separate
-parameter. The same keywords are used for content, permissions, booleans,
-and user lists. ``skip_is_active=True`` skips the built-in ``is_active``
-checks for the user, delegate, and sponsor. An unknown ``skip_*`` keyword
-raises ``TypeError``. Explicit conditions and candidate-queryset filters
-still apply.
+parameter. The checked-user override uses the same form: an override
+named ``superuser`` accepts ``skip_superuser``, and that call skips the
+override. With no override set, ``skip_superuser`` is unknown. Replacing
+the override stops accepting the previous name. A condition and the
+override cannot share a name. The same keywords are used for content,
+permissions, booleans, and user lists. ``skip_is_active=True`` skips the
+built-in ``is_active`` checks for the user, delegate, and sponsor. An
+unknown ``skip_*`` keyword raises ``TypeError``. Explicit conditions and
+candidate-queryset filters still apply.
 For example, inspect a suspended user's grants before reactivating them:
 
 .. code-block:: python

@@ -131,9 +131,11 @@ def condition_names(conditions, override=None):
 def collect_skipped(*, known=None, **flags):
     """Names whose ``skip_<name>=True`` drops that condition.
 
-    Each keyword is ``skip_`` plus a registered condition name. The
-    built-in ``is_active`` condition is what makes ``skip_is_active``
-    accepted. There is no separate ``skip_is_active`` parameter.
+    Each keyword is ``skip_`` plus a registered condition name, or the
+    current override name. The built-in ``is_active`` condition is what
+    makes ``skip_is_active`` accepted. There is no separate
+    ``skip_is_active`` parameter. An override that is unset, or a name
+    from an override that was replaced, is not in this set.
     ``known`` is that name set; a ``skip_*`` keyword outside it raises
     ``TypeError``. A non-boolean or an unrelated keyword fails before
     SQL. ``False`` is not a request.
