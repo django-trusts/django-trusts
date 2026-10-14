@@ -674,9 +674,17 @@ Pass ``None`` to remove the override:
 
    registry.set_user_override("superuser", None)
 
-Django's ``PermissionsMixin.has_perm()`` allows an active superuser before
-calling backends. Trusts' own inquiries grant through a superuser override
-only when it is registered.
+Django's ``PermissionsMixin.has_perm()`` returns ``True`` for an active
+superuser before it calls any authentication backend. This is Django behavior;
+Trusts does not change it. Trusts' own inquiries and policy SQL do not grant
+based on ``is_superuser`` unless the application registers the superuser
+override. Registering it makes Trusts' inquiries match the default
+``has_perm()`` superuser behavior.
+
+An application can instead use a custom user model and override ``has_perm()``
+and ``has_module_perms()`` so they skip Django's superuser early return and
+ask the configured authentication backends. This is an available application
+choice, and it also changes superuser behavior in Django admin.
 
 Protect a view with the Trusts-only primary-key guard:
 
