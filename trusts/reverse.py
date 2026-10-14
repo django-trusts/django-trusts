@@ -118,27 +118,25 @@ def trusts_mixin_predicate(backend, content, perm, *,
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
             content_identity=getattr(plan, 'content_identity', None),
-            user_conditions=getattr(plan, 'user_conditions', None),
             skipped=skipped,
         )
         if delegated is not None:
             exists = delegated if exists is None else (_as_q(exists) | delegated)
-    from trusts.core import _bound_permission_identity, attach_user_grant
+    from trusts.core import _bound_permission_identity, user_predicate
 
     user_model = _plan_user_model(plan, content)
     permission_model = plan.permission_model
     if permission_model is None and not isinstance(binding, Model):
         permission_model = Permission
-    predicate = attach_user_grant(
+    predicate = user_predicate(
         None if exists is None else _as_q(exists),
-        user=user_model,
-        conditions=getattr(plan, 'user_conditions', None),
-        override=getattr(plan, 'user_override', None),
-        values=skipped,
-        identity=_bound_permission_identity(
+        user_model,
+        plan.user_rules_closed,
+        plan.user_override_q,
+        skipped,
+        _bound_permission_identity(
             binding, content.__class__, permission_model,
         ),
-        missing='closed',
     )
     if predicate is None:
         return None
@@ -184,27 +182,22 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             content,
             permission,
             content_identity=getattr(plan, 'content_identity', None),
-            user_conditions=getattr(plan, 'user_conditions', None),
         )
         if delegated is not None:
             exists = (
                 delegated if exists is None else (_as_q(exists) | delegated)
             )
-    from trusts.core import _bound_permission_identity, attach_user_grant
-    from trusts.user_rules import compile_user_rules
+    from trusts.core import _bound_permission_identity, user_predicate
 
-    conditions = getattr(plan, 'user_conditions', None)
-    if compile_user_rules(
-        user_model, '', conditions, role='user', values={}, missing='closed',
-    ) is None:
+    if plan.user_rules_closed is None:
         return user_model._default_manager.all().filter(pk__isnull=True)
-    predicate = attach_user_grant(
+    predicate = user_predicate(
         None if exists is None else _as_q(exists),
-        user=user_model,
-        conditions=conditions,
-        override=getattr(plan, 'user_override', None),
-        values={},
-        identity=_bound_permission_identity(
+        user_model,
+        plan.user_rules_closed,
+        plan.user_override_q,
+        {},
+        _bound_permission_identity(
             permission, content.__class__, plan.permission_model,
         ),
     )
@@ -650,8 +643,8 @@ def _principal_presence(model, name):
 def _trusts_eligibility_q(model):
     """Anonymous and authenticated columns on a reverse candidate user.
 
-    Registered user conditions and the override are compiled by
-    ``attach_user_grant``. Persisted rows use the stock
+    Registered user conditions and the override are bound by
+    ``user_predicate``. Persisted rows use the stock
     anonymous/authenticated properties unless those names are concrete
     fields. The predicate is standard boolean SQL.
     """

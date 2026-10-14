@@ -6,6 +6,7 @@ delegation. The skip flag is a bound parameter, so one statement serves
 every skip state. The lockfile records that statement.
 """
 
+import copy
 from collections import namedtuple
 
 from django.core.exceptions import FieldDoesNotExist
@@ -192,6 +193,24 @@ class SkipFlag(RawSQL):
 
     def __repr__(self):
         return 'SkipFlag(%s=%s)' % (self.name, self.value)
+
+
+def bind_skip_flags(fragment, values):
+    """Copy a registration-time fragment and set its skip parameters."""
+    if fragment is None:
+        return None
+    cloned = copy.deepcopy(fragment)
+    _write_flags(cloned, values or {})
+    return cloned
+
+
+def _write_flags(node, values):
+    if isinstance(node, SkipFlag):
+        node.value = bool(values.get(node.name, False))
+        node.params = (node.value,)
+        return
+    for child in getattr(node, 'children', ()) or ():
+        _write_flags(child, values)
 
 
 def _stored(conditions):
