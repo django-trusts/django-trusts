@@ -23,23 +23,6 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
-## `is_active_principal` is deprecated (#312)
-
-`trusts.query.is_active_principal(user)` shipped in 1.0.0rc1. The function
-remains so existing imports keep working, and it still returns false for
-`None`, anonymous, unauthenticated, and inactive users. Calling it emits
-`DeprecationWarning`. New inquiries must not call it. Anonymous and
-unauthenticated users are denied before SQL. An inactive user is denied by
-the grant SQL unless the call passes `skip_is_active=True`.
-
-| | Old | New |
-| --- | --- | --- |
-| Python gate before a grant | `is_active_principal(user)` | Do not call it. Pass `skip_is_active=True` when an inactive user should remain in the SQL predicate. Anonymous users stay denied. |
-
-Migration-bot checklist:
-
-- search `is_active_principal(` and stop calling it from application code
-
 ## `filter_authorized_scopes` renamed (#302)
 
 `filter_authorized_scopes` is deprecated. Call `filter_by_permitted_content`.

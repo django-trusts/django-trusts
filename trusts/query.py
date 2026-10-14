@@ -27,35 +27,6 @@ def user_identity_denied(user):
     return False
 
 
-def is_active_principal(user):
-    """Match ``User.has_perm``: anonymous and inactive principals are denied.
-
-    Superuser short-circuit on ``has_perm`` is a Django ``ModelBackend``
-    behavior and is not duplicated in SQL list filters.
-
-    Deprecated. django-trusts 1.0.0rc1 exported this helper. Inactive
-    users are now filtered by the grant SQL. New Trusts code must not
-    call this function.
-    """
-    import warnings
-
-    warnings.warn(
-        'is_active_principal is deprecated and will be removed. '
-        'Inactive users are filtered by the grant SQL.',
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if user is None:
-        return False
-    if getattr(user, 'is_anonymous', False):
-        return False
-    if not getattr(user, 'is_authenticated', True):
-        return False
-    if not getattr(user, 'is_active', False):
-        return False
-    return True
-
-
 class AuthorizedQuerySet(QuerySet):
     """Instance-only authorized-row filter. No Django permission codec.
 
