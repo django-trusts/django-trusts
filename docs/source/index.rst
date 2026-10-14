@@ -358,10 +358,11 @@ supported content terminal or gateway.
 A sponsor's ordinary grant may use ``along=``. That bounded walk is part of
 the sponsor's live authority on every object it reaches, including when the
 check is a delegation. A delegated registration may use ``along=`` on the
-same call. The delegate is allowed on an object only when the delegation
-walk and the sponsor's ordinary permission both reach that object. If only
-one side uses ``along=``, the other side still has to match the object. A
-delegate cannot sponsor a further delegation.
+same call. The delegate is allowed on an object only when the delegation walk
+and the sponsor-authority predicate both reach that object. When sponsor
+authority comes from an ordinary grant, its ``along=`` walk or exact match
+must reach the object. An explicitly sponsor-targeted override has no
+relationship walk of its own. A delegate cannot sponsor a further delegation.
 
 
 Configure Django
