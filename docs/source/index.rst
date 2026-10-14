@@ -51,10 +51,9 @@ complete trust is an independent way to receive permission.
 
 A delegated trust connects a **delegate** who is acting, a **sponsor** whose
 authority supplies the ceiling, and the protected content. By default that
-authority comes from the sponsor's live ordinary grants; an override explicitly
-targeted to the sponsor may supply it instead. The delegation condition may
-narrow that authority to relationship-owned scope such as approved operations
-or selected repositories.
+authority comes from the sponsor's live ordinary grants. The delegation
+condition may narrow that authority to relationship-owned scope such as
+approved operations or selected repositories.
 
 Installation
 ------------
@@ -308,10 +307,10 @@ Delegate live authority
 The delegated registration makes ``delegate`` the current actor and
 ``sponsor`` the source of live authority. For a requested permission,
 django-trusts requires the same delegation row, its selected content and
-condition, and sponsor authority on that content. By default, user overrides
-target only the checked user, so the sponsor must have an ordinary grant. An
-override explicitly registered with ``on="sponsor"`` or ``on="*"`` may
-supply sponsor authority instead. The actor's own ordinary grants remain
+condition, and sponsor authority on that content. By default, that authority
+comes from the sponsor's ordinary grants. User-rule targeting and alternate
+sponsor authority are described in :ref:`user conditions and overrides
+<user-conditions-and-overrides>`. The actor's own ordinary grants remain
 available as independent alternatives.
 
 The delegated ``condition=`` builder receives the relationship as a symbolic
@@ -340,10 +339,8 @@ Permission checks keep the familiar Django spelling:
 
 The same correlated policy drives object checks, permission enumeration,
 ``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
-policy SQL. By default, the sponsor's live ordinary permissions provide the
-authority ceiling. With the default override target of ``on="user"``, the
-sponsor therefore needs an ordinary grant. An override explicitly registered
-with ``on="sponsor"`` or ``on="*"`` may supply sponsor authority instead.
+policy SQL. The complete sponsor-authority predicate provides the authority
+ceiling for all of those inquiries.
 
 Several delegated relationship models may target the same content model. Each
 relationship remains a complete alternative: its own delegate, content,
@@ -365,8 +362,7 @@ check is a delegation. A delegated registration may use ``along=`` on the
 same call. The delegate is allowed on an object only when the delegation walk
 and the sponsor-authority predicate both reach that object. When sponsor
 authority comes from an ordinary grant, its ``along=`` walk or exact match
-must reach the object. An explicitly sponsor-targeted override has no
-relationship walk of its own. A delegate cannot sponsor a further delegation.
+must reach the object. A delegate cannot sponsor a further delegation.
 
 
 Configure Django
@@ -617,7 +613,11 @@ participates in the result. For an ordinary permission check, that is the
 user being checked. A delegated proof also checks its sponsor. Use
 ``on="user"``, ``on="sponsor"``, or a tuple to narrow a rule. User overrides
 default to ``on="user"``, so an override can grant the checked user access
-but cannot supply a sponsor's authority.
+but cannot supply a sponsor's authority. An override explicitly registered
+with ``on="sponsor"`` or ``on="*"`` is a separate alternative that may supply
+sponsor authority on the same content and requested permission. That override
+has no relationship walk of its own; its own expression and all applicable
+sponsor conditions still have to pass.
 
 .. list-table::
    :header-rows: 1

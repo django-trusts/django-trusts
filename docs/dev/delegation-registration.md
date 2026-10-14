@@ -14,8 +14,7 @@ development branch; What's New records release-train changes.
 The fixed user eligibility and superuser discussions below are historical.
 [User conditions and overrides](../source/index.rst#user-conditions-and-overrides)
 supersede those parts. The relationship and default ordinary-sponsor ceiling
-remain; an override explicitly targeted to the sponsor is a separately declared
-alternative under the draft user-rule contract.
+remain.
 
 The public `register()` API has two different authorization modes. They must
 remain visibly different because an ordinary registration is a grant, while a
@@ -54,21 +53,18 @@ The mode switch is therefore:
 | Mode | Principal arguments | Meaning |
 | --- | --- | --- |
 | Ordinary permission | `user=` and `permission=` | The matching row is an ordinary grant. |
-| Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires live sponsor authority. By default that authority comes from ordinary grants; an explicitly sponsor-targeted override is an alternative. |
+| Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires live sponsor authority. |
 
 `delegate=` binds the current principal who is acting and receiving delegated
 access. It takes the place of `user=` for the delegated mode. `sponsor=` binds
-the principal who delegated the authority. By default, that principal's live
-ordinary permission paths provide the ceiling. An override explicitly
-registered for the sponsor may supply that authority instead.
+the principal who delegated the authority. The complete sponsor-authority
+predicate provides the ceiling.
 
 The delegated row does not carry an ordinary `permission=` grant. The
 permission being checked comes from the inquiry and must be satisfied by the
-sponsor-authority predicate on the same content. That predicate is the
-sponsor's ordinary-authority union by default, with any explicitly
-sponsor-targeted override as an additional alternative. A delegated condition
-may compare that requested permission with relationship-owned scope data, but
-it cannot grant an operation that the sponsor-authority predicate does not
+sponsor-authority predicate on the same content. A delegated condition may
+compare that requested permission with relationship-owned scope data, but it
+cannot grant an operation that the sponsor-authority predicate does not
 currently provide.
 
 `content=` identifies the meeting point of the two sides. In ordinary mode,

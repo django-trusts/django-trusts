@@ -148,13 +148,10 @@ A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 ``{path: "...", model: "...", target: "..."}``. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
-combines all applicable ordinary grants with OR by default. An override
-explicitly registered with ``on="sponsor"`` or ``on="*"`` is an additional
-alternative that may supply sponsor authority on the same content and
-permission. Reviewers should verify the delegate/sponsor direction, the
-relationship's explicit conditions, the :ref:`user conditions and overrides
-<user-conditions-and-overrides>`, and the complete sponsor-authority predicate
-in the document and generated SQL.
+combines all applicable sponsor-authority alternatives with OR. Reviewers
+should verify the delegate/sponsor direction, the relationship's explicit
+conditions, and the complete sponsor-authority predicate in the document and
+generated SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
 used ``along=``. The depth cap stays a ``const`` with hint ``along bound``.
@@ -209,10 +206,9 @@ prefix at the walk site is compared with the walk. An ancestor of the walk
 site stays the value stored on the grant. A one-level delegation keeps a
 row only where the delegation and the sponsor's authority both reach it. By
 default that authority comes from ordinary sponsor grants, which may come from
-another backend in the same document as they do for ``has_perm``; an explicitly
-sponsor-targeted override is an additional alternative. A content path with no proper
-prefix omits the key. A prefix whose queryset is empty also omits that
-model, because that call runs no SQL. Schema version stays 1.
+another backend in the same document as they do for ``has_perm``. A content
+path with no proper prefix omits the key. A prefix whose queryset is empty
+also omits that model, because that call runs no SQL. Schema version stays 1.
 
 Identifiers and ordering
 ~~~~~~~~~~~~~~~~~~~~~~~~
