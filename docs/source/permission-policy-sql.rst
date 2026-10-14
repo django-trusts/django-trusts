@@ -173,10 +173,21 @@ User rules
 ~~~~~~~~~~
 
 Above ``sql:``, each inquiry entry records its user-rule expression with
-parentheses preserved. Each rule records ``check_instance`` so a reviewer
-can see which checks read the supplied user and which run in SQL. Skipped
-rules do not participate in the expression. A skipped condition contributes
-no restriction; a skipped override contributes no grant.
+parentheses preserved. Every named term carries its target from ``on=``
+and where it is evaluated: ``sql`` for the permission statement or
+``instance`` for the supplied user. The ordinary grant proof is written
+``ordinary[sql]``. For example, with the default conditions shortened to
+``is_active`` and a registered ``superuser`` override:
+
+.. code-block:: text
+
+   is_active[*, sql] & (superuser[user, sql] | ordinary[sql])
+
+A rule registered with ``("user", "sponsor")`` is recorded as ``*``.
+Skipped rules do not appear in the expression, for any of their targets. A
+skipped condition contributes no restriction; a skipped override
+contributes no grant. With ``skip_is_active=True`` the entry above records
+``superuser[user, sql] | ordinary[sql]``.
 
 With database evaluation throughout, the expression is evaluated in the SQL
 statement. With instance evaluation, the recorded expression shows how

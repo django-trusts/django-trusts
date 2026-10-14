@@ -60,8 +60,8 @@ The registration APIs define permission sources and restrictions:
 | --- | --- | --- |
 | `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the complete registered policy matches |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
-| `registry.register_user_condition(...)` | Require a named user predicate unless skipped | No |
-| `registry.set_user_override(...)` | Register an optional alternative to ordinary grants | Yes, subject to required user conditions |
+| `registry.register_user_condition(..., on="*")` | Require a named user predicate on the users named by `on=` unless skipped | No |
+| `registry.set_user_override(..., on="user")` | Register an optional alternative to ordinary grants for the users named by `on=` | Yes, subject to required user conditions |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
 types, constants, and combinations are intended to be rejected during setup.
@@ -167,16 +167,19 @@ For a valid inquiry by actor `u`, content `c`, and permission `p`, every
 projection compiles the same authorization shape:
 
 ```text
-user_conditions(u, skip_options)
+user_conditions(u, "user", skip_options)
 AND (
-    user_override(u, skip_options)
+    user_override(u, "user", skip_options)
     OR ordinary(u, c, p)
     OR EXISTS delegation d:
         d.delegate = u
         AND d.content = c
         AND delegated_condition(d, p)
-        AND user_conditions(d.sponsor, skip_options)
-        AND ordinary(d.sponsor, c, p)
+        AND user_conditions(d.sponsor, "sponsor", skip_options)
+        AND (
+            user_override(d.sponsor, "sponsor", skip_options)
+            OR ordinary(d.sponsor, c, p)
+        )
 )
 ```
 
@@ -186,7 +189,26 @@ These names describe compiled predicates, not runtime callbacks. Audit every
 registered condition, optional override, and permitted skip option. An override
 can replace the ordinary grant proof; include any requirements that must remain
 effective when other user conditions are skipped in the override itself.
-The sponsor still requires ordinary authority.
+`user_conditions(x, target, ...)` and `user_override(x, target, ...)` include
+only rules whose `on=` covers `target`; `"*"` covers both. Conditions default
+to `on="*"` and overrides to `on="user"`, so by default the sponsor still
+requires ordinary authority and no override term appears in the sponsor
+branch. An override registered with `on="sponsor"` or `on="*"` is an explicit
+policy choice to let it supply sponsor authority; audit it as such.
+
+| Rule | Default `on=` | Checked user | Sponsor | With `skip_<name>=True` |
+| --- | --- | --- | --- | --- |
+| Condition | `"*"` | Required | Required | Removed for both |
+| Override | `"user"` | Alternative to ordinary grants | Not consulted | Removed |
+| Condition with `on="sponsor"` (e.g. `superuser_cannot_sponsor`) | n/a | Not checked | Required | Removed for the sponsor |
+
+`on=` is validated at registration and fails closed before any inquiry SQL.
+Only `"*"`, `"user"`, `"sponsor"`, or a non-empty tuple of `"user"` and
+`"sponsor"` are accepted; unknown values, an empty tuple, and `"*"` mixed with
+names are rejected. `("user", "sponsor")` is normalized to `"*"`. A skip
+option removes a rule for every target in its `on=`, which preserves the
+existing #284 behavior of `skip_is_active` for the sponsor. Separate skip
+controls require separately named rules.
 
 The expression describes authorization after semantic validation. It does not
 authorize an early return that skips validation, content identity, or required
@@ -221,9 +243,11 @@ not be presented as though the default SQL had run. Reverse inquiries and
 sponsor checks must have defined equivalents or fail closed for unsupported
 declarations.
 
-Each inquiry entry must show the grouped user-rule expression and each rule's
-`check_instance` setting above `sql:`. Preserve AND/OR grouping and identify
-which terms evaluate on an instance or inside SQL. One entry-wide boolean is
+Each inquiry entry must show the grouped user-rule expression above `sql:`.
+Preserve AND/OR grouping, and give every named term its `on=` target and its
+source, for example
+`is_active[*, sql] & (superuser[user, sql] | ordinary[sql])`.
+Skipped terms are omitted for all of their targets. One entry-wide boolean is
 insufficient if the participating declarations use different sources.
 
 ### Delegation boundaries

@@ -602,8 +602,55 @@ permission grant:
    )
 
 User conditions still apply. Skipping a condition does not change the
-override's own requirements. A sponsor cannot delegate authority supplied
-by an override; the sponsor must hold ordinary grants.
+override's own requirements.
+
+By default, a user condition applies to every user whose authority
+participates in the result. For an ordinary permission check, that is the
+user being checked. A delegated proof also checks its sponsor. Use
+``on="user"``, ``on="sponsor"``, or a tuple to narrow a rule. User overrides
+default to ``on="user"``, so an override can grant the checked user access
+but cannot supply a sponsor's authority.
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``on=``
+     - Checked user
+     - Sponsor in a delegated proof
+   * - ``"*"`` (default for conditions)
+     - Yes
+     - Yes
+   * - ``"user"`` (default for overrides)
+     - Yes
+     - No
+   * - ``"sponsor"``
+     - No
+     - Yes
+   * - ``("user", "sponsor")``
+     - Yes
+     - Yes (same as ``"*"``)
+
+Only ``"*"``, ``"user"``, ``"sponsor"``, or a non-empty tuple of
+``"user"`` and ``"sponsor"`` are accepted. Registration raises an error for
+any other value, an empty tuple, or a tuple mixing ``"*"`` with names.
+
+``skip_<name>=True`` removes that rule for every user its ``on=`` names. For
+example, ``skip_is_active=True`` skips the activity check for both the
+checked user and the sponsor. To skip them separately, register two
+conditions with different names and targets.
+
+An application can stop superusers from sponsoring delegated access with an
+ordinary condition that applies only to sponsors:
+
+.. code-block:: python
+
+   registry.register_user_condition(
+       "superuser_cannot_sponsor",
+       lambda u: ~u.is_superuser,
+       on="sponsor",
+   )
+
+This condition is not registered by default.
 
 Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
 
