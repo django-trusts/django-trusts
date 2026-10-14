@@ -216,7 +216,8 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.sponsor.pk, default_users)
         self.assertIn(self.alice.pk, audited_users)
         self.assertEqual(via_manager, audited_users)
-        self.assertIn(self.superuser.pk, default_users)
+        self.assertNotIn(self.superuser.pk, default_users)
+        self.assertTrue(self.superuser.has_perm(PERM, self.open_doc))
         self.assertNotIn(self.inactive_super.pk, default_users)
         self.assertNotIn(self.inactive_super.pk, audited_users)
 

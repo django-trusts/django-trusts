@@ -1,10 +1,16 @@
 """Named user conditions compiled into permission SQL (#312)."""
 
+import inspect
+
+from asgiref.sync import async_to_sync
+from django.contrib import admin
 from django.contrib.auth import get_user_model
+from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
+from django.urls import path, reverse
 
 from tests.apps import isolate_live_registry, override_apps_ready
 from tests.core import KernelHostRequiredMixin
@@ -23,8 +29,13 @@ from trusts.core import (
     filter_by_permitted_content,
     granted,
 )
-from trusts.policy_lock import render_policy_sql_bytes
-from trusts.query import PermittedQuerySet
+from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.query import PermittedQuerySet, PermittedUsersManagerMixin
+
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+]
 
 
 def _permission(model, codename):
@@ -1230,3 +1241,415 @@ class StaffPrefixFilterTest(TransactionTestCase):
                 editor.delete_model(Row)
                 editor.delete_model(Payload)
                 editor.delete_model(Scope)
+
+
+def _restore_document_registry(config, original, sentinel):
+    config.registries[DOCUMENT_BACKEND] = original
+    config._document_grant_registry_id = sentinel
+
+
+def _install_document_registry(*, override):
+    from django.apps import apps
+
+    config = apps.get_app_config('myapp')
+    original = config.registries[DOCUMENT_BACKEND]
+    sentinel = getattr(config, '_document_grant_registry_id', None)
+    registry = TrustsRegistry()
+    if override:
+        registry.set_user_override(
+            'superuser', lambda u: u.is_active & u.is_superuser,
+        )
+    isolate_live_registry(config, registry, DOCUMENT_BACKEND)
+    config._document_grant_registry_id = None
+    with override_apps_ready(False, config.apps):
+        config.ready()
+    return config, original, sentinel, registry
+
+
+def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
+    """Trusts-owned inquiry results for one checked user.
+
+    Native ``user.has_perm`` is not one of these results.
+    """
+    permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
+    held = common_permissions((handle,), doc, user, **flags)
+    listed = handle.registry.permissions_for(user, doc, **flags)
+    return {
+        'has_perm': backend.has_perm(user, perm, doc, **flags),
+        'authorized': Document.objects.authorized(
+            user, change, **flags,
+        ).filter(pk=doc.pk).exists(),
+        'permitted': permitted.permitted(
+            change, user, **flags,
+        ).filter(pk=doc.pk).exists(),
+        'common': change.pk in set(held.values_list('pk', flat=True)),
+        'reverse': user.pk in set(doc.get_permitted_users(
+            change, **flags,
+        ).values_list('pk', flat=True)),
+        'enumerated': perm in backend.get_all_permissions(user, doc, **flags),
+        'permissions_for': change.pk in set(listed.values_list('pk', flat=True)),
+        'has_permission': handle.registry.has_permission(
+            user, doc, change, **flags,
+        ),
+    }
+
+
+class SuperuserSurfaceTest(TestCase):
+    """Active and inactive superusers, with and without the override."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.active = User.objects.create_superuser(
+            'surf-active-super', password='x', email='active-super@example.com',
+        )
+        self.dormant = User.objects.create_superuser(
+            'surf-dormant-super', password='x', email='dormant-super@example.com',
+        )
+        self.dormant.is_active = False
+        self.dormant.save(update_fields=['is_active'])
+        self.peer = User.objects.create_user('surf-peer-super', password='x')
+        self.change = _permission(Document, 'change_document')
+        self.doc = Document.objects.create(title='super-surface')
+        self.perm = 'myapp.change_document'
+        self.backend = DocumentBackend()
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.dormant, permission=self.change,
+        )
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.peer, permission=self.change,
+        )
+
+    def _expect(self, handle, user, allowed, **flags):
+        flags_out = _inquiry_flags(
+            self.backend, handle, user, self.doc, self.change, self.perm,
+            **flags,
+        )
+        self.assertEqual(set(flags_out.values()), {allowed})
+
+    def test_without_override_superuser_is_an_ordinary_principal(self):
+        config, original, sentinel, registry = _install_document_registry(
+            override=False,
+        )
+        self.addCleanup(
+            _restore_document_registry, config, original, sentinel,
+        )
+        handle = config.configured_backend(DOCUMENT_BACKEND)
+        self.assertIsNone(registry._user_override)
+        raw = render_policy_sql_bytes(handles=[handle])
+        document = _load_policy_sql_document(raw)
+        for content in document['backends'][0]['contents']:
+            for row in content.values():
+                if not isinstance(row, dict) or 'sql' not in row:
+                    continue
+                self.assertNotIn('is_superuser', row['sql'].split('WHERE', 1)[-1])
+                self.assertNotIn(
+                    'is_superuser', ' '.join(row['params']),
+                )
+        where = str(self.doc.get_permitted_users(self.change).query)
+        where = where.split('WHERE', 1)[-1]
+        self.assertNotIn('is_superuser', where)
+        self.assertTrue(self.active.has_perm(self.perm, self.doc))
+        self._expect(handle, self.active, False)
+        self._expect(handle, self.dormant, False)
+        self._expect(handle, self.dormant, True, skip_is_active=True)
+        self._expect(handle, self.peer, True)
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.active, permission=self.change,
+        )
+        self._expect(handle, self.active, True)
+
+    def test_with_override_active_superuser_passes_without_a_grant(self):
+        config, original, sentinel, registry = _install_document_registry(
+            override=True,
+        )
+        self.addCleanup(
+            _restore_document_registry, config, original, sentinel,
+        )
+        handle = config.configured_backend(DOCUMENT_BACKEND)
+        self.assertEqual(registry._user_override.name, 'superuser')
+        raw = render_policy_sql_bytes(handles=[handle])
+        self.assertIn(b'user.is_superuser=True', raw)
+        where = str(self.doc.get_permitted_users(self.change).query)
+        self.assertIn('is_superuser', where.split('WHERE', 1)[-1])
+        self.assertTrue(self.active.has_perm(self.perm, self.doc))
+        with self.assertRaises(TypeError):
+            self.active.has_perm(self.perm, self.doc, skip_superuser=True)
+        self._expect(handle, self.active, True)
+        self._expect(handle, self.active, False, skip_superuser=True)
+        self._expect(handle, self.dormant, False)
+        self._expect(handle, self.dormant, True, skip_is_active=True)
+        self._expect(handle, self.peer, True)
+
+
+class SuperuserPrefixFilterTest(TransactionTestCase):
+    def test_prefix_filter_follows_the_override(self):
+        class PrefixScope(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PrefixPayload(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PrefixRow(models.Model):
+            scope = models.ForeignKey(
+                PrefixScope, related_name='rows', on_delete=models.CASCADE,
+            )
+            content = models.ForeignKey(PrefixPayload, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PrefixGrant(models.Model):
+            scope = models.ForeignKey(PrefixScope, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(PrefixScope)
+            editor.create_model(PrefixPayload)
+            editor.create_model(PrefixRow)
+            editor.create_model(PrefixGrant)
+        try:
+            User = get_user_model()
+            active = User.objects.create_superuser(
+                'pref-active-super', password='x',
+                email='pref-active-super@example.com',
+            )
+            dormant = User.objects.create_superuser(
+                'pref-dormant-super', password='x',
+                email='pref-dormant-super@example.com',
+            )
+            dormant.is_active = False
+            dormant.save(update_fields=['is_active'])
+            peer = User.objects.create_user('pref-peer-super', password='x')
+            scope = PrefixScope.objects.create(title='s')
+            payload = PrefixPayload.objects.create(title='p')
+            PrefixRow.objects.create(scope=scope, content=payload)
+            read = _permission(PrefixPayload, 'read_payload_super')
+            PrefixGrant.objects.create(scope=scope, user=dormant, permission=read)
+            PrefixGrant.objects.create(scope=scope, user=peer, permission=read)
+
+            def allows(user, *, override, **flags):
+                registry = TrustsRegistry()
+                if override:
+                    registry.set_user_override(
+                        'superuser', lambda u: u.is_active & u.is_superuser,
+                    )
+                grant = Ref(PrefixGrant)
+                registry.register(
+                    content=grant.scope.rows.content,
+                    user=grant.user,
+                    permission=grant.permission,
+                )
+                handle = BackendHandle(
+                    'super-prefix', registry, PlanQueryCompiler(),
+                )
+                chosen = filter_by_permitted_content(
+                    PrefixScope.objects.all(), user, read,
+                    content=payload, handles=(handle,), **flags,
+                )
+                return chosen.filter(pk=scope.pk).exists()
+
+            self.assertFalse(allows(active, override=False))
+            self.assertTrue(allows(peer, override=False))
+            self.assertFalse(allows(dormant, override=False))
+            self.assertTrue(allows(
+                dormant, override=False, skip_is_active=True,
+            ))
+            self.assertTrue(allows(active, override=True))
+            self.assertFalse(allows(
+                active, override=True, skip_superuser=True,
+            ))
+            self.assertFalse(allows(dormant, override=True))
+            self.assertTrue(allows(
+                dormant, override=True, skip_is_active=True,
+            ))
+            self.assertTrue(allows(peer, override=True))
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(PrefixGrant)
+                editor.delete_model(PrefixRow)
+                editor.delete_model(PrefixPayload)
+                editor.delete_model(PrefixScope)
+
+
+class PlainUserWithoutSuperuserTest(TransactionTestCase):
+    def test_user_model_without_is_superuser_matches_when_no_rule_names_it(self):
+        class PlainPrincipal(models.Model):
+            username = models.CharField(max_length=40, unique=True)
+            is_active = models.BooleanField(default=True)
+            is_anonymous = AbstractBaseUser.is_anonymous
+            is_authenticated = AbstractBaseUser.is_authenticated
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PlainNote(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class PlainNoteGrant(models.Model):
+            user = models.ForeignKey(PlainPrincipal, on_delete=models.CASCADE)
+            note = models.ForeignKey(PlainNote, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        self.assertFalse(any(
+            field.name == 'is_superuser'
+            for field in PlainPrincipal._meta.local_fields
+        ))
+        from django.apps import apps
+
+        config = apps.get_app_config('myapp')
+        original = config.registries[DOCUMENT_BACKEND]
+        sentinel = getattr(config, '_document_grant_registry_id', None)
+        with connection.schema_editor() as editor:
+            editor.create_model(PlainPrincipal)
+            editor.create_model(PlainNote)
+            editor.create_model(PlainNoteGrant)
+        try:
+            registry = TrustsRegistry()
+            isolate_live_registry(config, registry, DOCUMENT_BACKEND)
+            handle = BackendHandle(
+                DOCUMENT_BACKEND, registry, PlanQueryCompiler(),
+            )
+            handle.register(
+                trust=PlainNoteGrant,
+                user='user',
+                permission='permission',
+                content='note',
+            )
+            permission = _permission(PlainNote, 'change_plainnote')
+            note = PlainNote.objects.create(title='plain')
+            holder = PlainPrincipal.objects.create(
+                username='holder-plain', is_active=True,
+            )
+            outsider = PlainPrincipal.objects.create(
+                username='outsider-plain', is_active=True,
+            )
+            quiet = PlainPrincipal.objects.create(
+                username='quiet-plain', is_active=False,
+            )
+            PlainNoteGrant.objects.create(
+                user=holder, note=note, permission=permission,
+            )
+            PlainNoteGrant.objects.create(
+                user=quiet, note=note, permission=permission,
+            )
+            self.assertTrue(registry.has_permission(holder, note, permission))
+            self.assertFalse(registry.has_permission(outsider, note, permission))
+            self.assertFalse(registry.has_permission(quiet, note, permission))
+
+            class PlainManager(PermittedUsersManagerMixin, models.Manager):
+                pass
+
+            manager = PlainManager()
+            manager.model = PlainPrincipal
+            manager.name = 'objects'
+            found = set(manager.permitted(note, permission).values_list(
+                'pk', flat=True,
+            ))
+            self.assertEqual(found, {holder.pk})
+            sql = str(manager.permitted(note, permission).query)
+            self.assertNotIn('is_superuser', sql)
+            self.assertIn('is_active', sql)
+        finally:
+            config.registries[DOCUMENT_BACKEND] = original
+            config._document_grant_registry_id = sentinel
+            with connection.schema_editor() as editor:
+                editor.delete_model(PlainNoteGrant)
+                editor.delete_model(PlainNote)
+                editor.delete_model(PlainPrincipal)
+
+
+_STOCK_CALLS = (
+    ('has_perm', ('auth.view_user',), {'skip_is_active': True}),
+    ('ahas_perm', ('auth.view_user',), {'skip_is_active': True}),
+    ('has_perms', (['auth.view_user'],), {'skip_superuser': True}),
+    ('ahas_perms', (['auth.view_user'],), {'skip_superuser': True}),
+    ('has_module_perms', ('auth',), {'skip_is_active': True}),
+    ('ahas_module_perms', ('auth',), {'skip_is_active': True}),
+    ('get_user_permissions', (), {'skip_is_active': True}),
+    ('aget_user_permissions', (), {'skip_is_active': True}),
+    ('get_group_permissions', (), {'skip_is_active': True}),
+    ('aget_group_permissions', (), {'skip_is_active': True}),
+    ('get_all_permissions', (), {'skip_is_active': True}),
+    ('aget_all_permissions', (), {'skip_is_active': True}),
+)
+
+
+@override_settings(ROOT_URLCONF='tests.core.test_user_conditions')
+class StockPermissionBoundaryTest(TestCase):
+    def test_stock_methods_async_variants_and_admin_stay_unchanged(self):
+        User = get_user_model()
+        root = User.objects.create_superuser(
+            'stock-root', password='x', email='stock-root@example.com',
+        )
+        dormant = User.objects.create_superuser(
+            'stock-dormant', password='x', email='stock-dormant@example.com',
+        )
+        dormant.is_active = False
+        dormant.save(update_fields=['is_active'])
+        doc = Document.objects.create(title='stock-boundary')
+        code = 'myapp.change_document'
+        self.assertTrue(root.has_perm(code, doc))
+        self.assertTrue(root.has_perm('auth.view_user'))
+        self.assertTrue(root.has_perms([code]))
+        self.assertTrue(root.has_module_perms('auth'))
+        self.assertFalse(dormant.has_perm(code, doc))
+        self.assertFalse(dormant.has_module_perms('auth'))
+        self.assertFalse(DocumentBackend().has_perm(root, code, doc))
+        self.assertEqual(
+            async_to_sync(root.ahas_perm)(code, doc),
+            root.has_perm(code, doc),
+        )
+        self.assertEqual(
+            async_to_sync(root.ahas_perms)([code]),
+            root.has_perms([code]),
+        )
+        self.assertEqual(
+            async_to_sync(root.ahas_module_perms)('auth'),
+            root.has_module_perms('auth'),
+        )
+        self.assertEqual(
+            async_to_sync(root.aget_all_permissions)(doc),
+            root.get_all_permissions(doc),
+        )
+        self.assertEqual(
+            async_to_sync(root.aget_user_permissions)(),
+            root.get_user_permissions(),
+        )
+        self.assertEqual(
+            async_to_sync(root.aget_group_permissions)(doc),
+            root.get_group_permissions(doc),
+        )
+        self.assertEqual(
+            async_to_sync(dormant.ahas_perm)(code, doc),
+            False,
+        )
+        for name, args, kwargs in _STOCK_CALLS:
+            method = getattr(root, name)
+            self.assertNotIn('skip_is_active', inspect.signature(method).parameters)
+            invoke = async_to_sync(method) if name.startswith('a') else method
+            with self.assertRaises(TypeError):
+                invoke(*args, **kwargs)
+        self.client.force_login(root)
+        self.assertEqual(self.client.get(reverse('admin:index')).status_code, 200)
+        self.assertEqual(
+            self.client.get(reverse('admin:auth_user_changelist')).status_code,
+            200,
+        )
+        self.client.force_login(dormant)
+        self.assertEqual(self.client.get(reverse('admin:index')).status_code, 302)
