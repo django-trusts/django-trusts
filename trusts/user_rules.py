@@ -54,6 +54,20 @@ def condition_targets(on):
     return frozenset((on,))
 
 
+def normalize_override_on(on):
+    """Overrides accept only the checked user.
+
+    Omit ``on`` or pass ``"user"``. ``"sponsor"`` and ``"*"`` raise.
+    Sponsor authority stays an ordinary grant.
+    """
+    if on == 'user':
+        return 'user'
+    raise TrustsConfigurationError(
+        'User override on= applies only to the checked user. '
+        'Omit on= or pass on="user", not %r.' % (on,)
+    )
+
+
 def normalize_on(on):
     """``*``, ``user``, ``sponsor``, or a non-empty tuple of those names.
 

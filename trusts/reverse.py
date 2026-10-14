@@ -115,9 +115,26 @@ def trusts_mixin_predicate(backend, content, perm, *, skip_is_active=False,
         )
         if delegated is not None:
             exists = delegated if exists is None else (_as_q(exists) | delegated)
-    if exists is None:
-        return None
+    from trusts.core import (
+        _bound_permission_identity,
+        _outer_user_override_q,
+        _skip_names,
+    )
+
     user_model = _plan_user_model(plan, content)
+    names = _skip_names(skip_is_active, skipped)
+    override = _outer_user_override_q(
+        getattr(plan, 'user_override', None), user_model, names,
+    )
+    if exists is None and override is None:
+        return None
+    if override is not None:
+        permission_model = plan.permission_model
+        if permission_model is None and not isinstance(binding, Model):
+            permission_model = Permission
+        override = override & _bound_permission_identity(
+            binding, content.__class__, permission_model,
+        )
     eligibility = _trusts_eligibility_q(
         user_model, skip_is_active=skip_is_active,
         user_conditions=getattr(plan, 'user_conditions', None),
@@ -125,7 +142,12 @@ def trusts_mixin_predicate(backend, content, perm, *, skip_is_active=False,
     )
     if eligibility is None:
         return None
-    predicate = eligibility & _as_q(exists)
+    if exists is None:
+        predicate = eligibility & override
+    elif override is None:
+        predicate = eligibility & _as_q(exists)
+    else:
+        predicate = eligibility & (_as_q(exists) | override)
     if condition:
         overlay = _named_filter_q(
             backend, content, perm, condition[0], user_model,
@@ -173,7 +195,22 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             exists = (
                 delegated if exists is None else (_as_q(exists) | delegated)
             )
-    if exists is None:
+    from trusts.core import (
+        _bound_permission_identity,
+        _outer_user_override_q,
+        _skip_names,
+    )
+
+    override = _outer_user_override_q(
+        getattr(plan, 'user_override', None),
+        user_model,
+        _skip_names(),
+    )
+    if override is not None:
+        override = override & _bound_permission_identity(
+            permission, content.__class__, plan.permission_model,
+        )
+    if exists is None and override is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
@@ -184,7 +221,12 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
     )
     if eligibility is None:
         return user_model._default_manager.all().filter(pk__isnull=True)
-    predicate = eligibility & _as_q(exists)
+    if exists is None:
+        predicate = eligibility & override
+    elif override is None:
+        predicate = eligibility & _as_q(exists)
+    else:
+        predicate = eligibility & (_as_q(exists) | override)
     from trusts._bind_once import bind_once
 
     return bind_once(

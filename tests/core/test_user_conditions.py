@@ -7,7 +7,15 @@ from django.db import connection, models
 from django.test import TestCase, TransactionTestCase
 
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.core import Ref, TrustsConfigurationError, TrustsRegistry
+from trusts._bind_once import bind_once
+from trusts.core import (
+    BackendHandle,
+    PlanQueryCompiler,
+    Ref,
+    TrustsConfigurationError,
+    TrustsRegistry,
+    granted,
+)
 
 
 def _permission(model, codename):
@@ -114,5 +122,151 @@ class UserConditionRegistrationTest(TransactionTestCase):
                 )
         finally:
             with connection.schema_editor() as editor:
+                editor.delete_model(Grant)
+                editor.delete_model(Note)
+
+
+class UserOverrideTest(TransactionTestCase):
+    def test_checked_user_override_or_ordinary_grant(self):
+        class Note(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Grant(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Link(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(Note)
+            editor.create_model(Grant)
+            editor.create_model(Link)
+        try:
+            User = get_user_model()
+            holder = User.objects.create_user('over-holder', password='x')
+            superuser = User.objects.create_superuser(
+                'over-super', password='x', email='s@example.com',
+            )
+            inactive = User.objects.create_superuser(
+                'over-inactive', password='x', email='i@example.com',
+            )
+            inactive.is_active = False
+            inactive.save(update_fields=['is_active'])
+            delegate = User.objects.create_user('over-delegate', password='x')
+            note = Note.objects.create(title='n')
+            read = _permission(Note, 'read_note_user_override')
+            other = _permission(User, 'view_user_override_other')
+            Grant.objects.create(note=note, user=holder, permission=read)
+            Link.objects.create(note=note, delegate=delegate, sponsor=superuser)
+
+            registry = TrustsRegistry()
+            grant = Ref(Grant)
+            registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            link = Ref(Link)
+            registry.register_delegation(
+                content=link.note, delegate=link.delegate, sponsor=link.sponsor,
+            )
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_user_override(
+                    'superuser', lambda u: u.is_superuser, on='sponsor',
+                )
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_user_override(
+                    'superuser', lambda u: u.is_superuser, on='*',
+                )
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_user_override('missing', None)
+            registry.set_user_override(
+                'superuser',
+                lambda u: u.is_active & u.is_superuser,
+            )
+            replaced = registry.set_user_override(
+                'staff', lambda u: u.is_staff, on='user',
+            )
+            self.assertEqual(replaced.name, 'staff')
+            registry.set_user_override(
+                'superuser',
+                lambda u: u.is_active & u.is_superuser,
+            )
+
+            allowed = registry.permissions_for(superuser, note)
+            allowed_ids = set(allowed.values_list('pk', flat=True))
+            self.assertIn(read.pk, allowed_ids)
+            self.assertNotIn(other.pk, allowed_ids)
+            self.assertIn('is_superuser', str(allowed.query))
+            self.assertTrue(registry.has_permission(superuser, note, read))
+            self.assertFalse(registry.has_permission(superuser, note, other))
+            self.assertEqual(
+                set(registry.permissions_for(holder, note).values_list(
+                    'pk', flat=True,
+                )),
+                {read.pk},
+            )
+            self.assertFalse(registry.has_permission(delegate, note, read))
+            self.assertEqual(
+                list(registry.permissions_for(inactive, note)), [],
+            )
+            skipped = registry.permissions_for(
+                inactive, note, skip_is_active=True,
+            )
+            self.assertEqual(list(skipped), [])
+            self.assertIn('is_superuser', str(skipped.query))
+            without = registry.permissions_for(
+                superuser, note, skip_superuser=True,
+            )
+            self.assertEqual(list(without), [])
+            self.assertNotIn('is_superuser', str(without.query))
+
+            handle = BackendHandle(
+                'user-override', registry, PlanQueryCompiler(),
+            )
+
+            def holds(user):
+                predicate = granted((handle,), note, user, read)
+                if predicate is None:
+                    return False
+                return bind_once(Note.objects.filter(
+                    pk=note.pk,
+                ).filter(predicate)).exists()
+
+            self.assertTrue(holds(superuser))
+            self.assertTrue(holds(holder))
+            self.assertFalse(holds(delegate))
+            Grant.objects.create(note=note, user=superuser, permission=read)
+            self.assertTrue(holds(delegate))
+            Grant.objects.filter(user=superuser).delete()
+
+            registry.set_user_override('superuser', None)
+            self.assertFalse(registry.has_permission(superuser, note, read))
+            self.assertTrue(registry.has_permission(holder, note, read))
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_user_override('superuser', None)
+            registry.freeze()
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_user_override(
+                    'superuser', lambda u: u.is_superuser,
+                )
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(Link)
                 editor.delete_model(Grant)
                 editor.delete_model(Note)

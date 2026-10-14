@@ -140,6 +140,7 @@ class PlanQueryCompiler(object):
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
             user_conditions=getattr(plan, 'user_conditions', None),
+            user_override=getattr(plan, 'user_override', None),
         ).content_exists(
             user, permission, skip_is_active=skip_is_active, skipped=skipped,
         )
@@ -262,6 +263,8 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
         permission_model = permission._meta.concrete_model
     parts = []
     delegation_groups = []
+    override_plans = []
+    seen_overrides = set()
     content_identity = _candidate_model(candidates)
     for handle in handles:
         plan = _plan_for_permission(handle, candidates, user, permission)
@@ -270,6 +273,13 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
                 tuple(plan.delegations),
                 getattr(plan, 'user_conditions', None),
             ))
+        if (
+            kind == 'complete'
+            and (plan.records or plan.delegations)
+            and id(handle.registry) not in seen_overrides
+        ):
+            seen_overrides.add(id(handle.registry))
+            override_plans.append(plan)
         if kind == 'complete':
             fn = handle.compiler.complete_exists
         else:
@@ -295,6 +305,23 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
             )
             if delegated is not None:
                 parts.append(delegated)
+    if kind == 'complete':
+        names = _skip_names(skip_is_active, skipped)
+        for plan in override_plans:
+            branch = _forward_user_override_q(
+                getattr(plan, 'user_override', None),
+                user,
+                getattr(plan, 'user_conditions', None),
+                permission=permission,
+                content_model=content_identity,
+                permission_model=(
+                    permission_model or plan.permission_model
+                ),
+                names=names,
+                identity='bound',
+            )
+            if branch is not None:
+                parts.append(branch)
     if not parts:
         return None
     if len(parts) == 1:
@@ -619,11 +646,19 @@ def _compile_permitted_content_queryset(
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
+    override_plans = []
+    seen_overrides = set()
     content_identity = _candidate_model(content)
     for handle in handles:
         plan = _plan_for_permission(handle, content, user, permission)
         if getattr(plan, 'content_identity', None) is not None:
             content_identity = plan.content_identity
+        if (
+            (plan.records or plan.delegations)
+            and id(handle.registry) not in seen_overrides
+        ):
+            seen_overrides.add(id(handle.registry))
+            override_plans.append(plan)
         conditions = getattr(plan, 'user_conditions', None)
         for record in plan.records:
             for lookup, target_attname in _scope_prefix_lookups(
@@ -651,6 +686,23 @@ def _compile_permitted_content_queryset(
     if not parts:
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
+    names = _skip_names(skip_is_active, skipped)
+    for plan in override_plans:
+        branch = _forward_user_override_q(
+            getattr(plan, 'user_override', None),
+            user,
+            getattr(plan, 'user_conditions', None),
+            permission=permission,
+            content_model=content_identity,
+            permission_model=(
+                permission._meta.concrete_model
+                if isinstance(permission, Model) else None
+            ),
+            names=names,
+            identity='bound',
+        )
+        if branch is not None:
+            granted_q = granted_q | branch
     return bind_once(queryset.filter(granted_q).distinct())
 
 
@@ -791,11 +843,16 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     parts = []
     permission_model = None
     applicable = False
+    override_plans = []
+    seen_overrides = set()
     for handle in handles:
         plan = handle.registry.plan_for(candidates, user=user)
         if not _compiler_applies(handle.compiler, plan):
             continue
         applicable = True
+        if kind == 'complete' and id(handle.registry) not in seen_overrides:
+            seen_overrides.add(id(handle.registry))
+            override_plans.append(plan)
         if plan.permission_model is not None:
             if permission_model is None:
                 permission_model = plan.permission_model
@@ -852,6 +909,22 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
                         'Applicable registrations must share one '
                         'permission model.'
                     )
+    if kind == 'complete' and permission_model is not None:
+        names = _skip_names(skip_is_active, skipped)
+        content_model = _candidate_model(candidates)
+        for plan in override_plans:
+            branch = _forward_user_override_q(
+                getattr(plan, 'user_override', None),
+                user,
+                getattr(plan, 'user_conditions', None),
+                permission=perm_expr,
+                content_model=content_model,
+                permission_model=permission_model,
+                names=names,
+                identity='bound',
+            )
+            if branch is not None:
+                parts.append(branch)
     if not applicable or permission_model is None:
         return None
     if not parts:
@@ -1953,6 +2026,104 @@ def _skip_names(skip_is_active=False, skipped=()):
     if skip_is_active:
         names.add('is_active')
     return frozenset(names)
+
+
+def _active_user_override(slot, names):
+    if slot is None or slot.name in names:
+        return None
+    return slot
+
+
+def _outer_permission_identity(permission_model, content_model):
+    """Content-type predicate on an outer ``auth.Permission`` row."""
+    if (
+        permission_model is None
+        or content_model is None
+        or not _permission_terminal_is_auth_permission(permission_model)
+    ):
+        return Q()
+    app_label, model_name = _content_type_identity(content_model)
+    return Q(**{
+        'content_type__app_label': app_label,
+        'content_type__model': model_name,
+    })
+
+
+def _bound_permission_identity(permission, content_model, permission_model):
+    """The bound permission row is this content's ``auth.Permission``.
+
+    Other permission terminals add nothing, matching the ordinary grant.
+    """
+    if (
+        permission is None
+        or permission_model is None
+        or content_model is None
+        or not _permission_terminal_is_auth_permission(permission_model)
+    ):
+        return Q()
+    app_label, model_name = _content_type_identity(content_model)
+    from django.contrib.auth.models import Permission
+
+    identity = permission.pk if isinstance(permission, Model) else permission
+    return Exists(Permission.objects.filter(
+        pk=identity,
+        content_type__app_label=app_label,
+        content_type__model=model_name,
+    ))
+
+
+def _forward_user_override_q(slot, user, conditions, *, permission,
+                             content_model, permission_model, names,
+                             identity):
+    """``conditions AND override`` for the checked user, or ``None``.
+
+    Callers OR this with the ordinary grant. It is not a sponsor grant.
+    ``identity='outer'`` qualifies an outer permission queryset.
+    ``identity='bound'`` qualifies a permission value already in the query.
+    """
+    slot = _active_user_override(slot, names)
+    if slot is None or not isinstance(user, Model):
+        return None
+    from trusts.user_rules import (
+        _compile_expr,
+        _expr_availability,
+        compile_user_rules,
+    )
+
+    model = user._meta.concrete_model
+    if _expr_availability(model, slot.expr) != 'ok':
+        raise TrustsConfigurationError(
+            'User override %r needs a concrete BooleanField on %s.'
+            % (slot.name, model._meta.label)
+        )
+    rules = compile_user_rules(
+        model, '', conditions, role='user', skipped=names, missing='omit',
+    )
+    matched = Exists(model._default_manager.filter(pk=user.pk).filter(
+        (rules or Q()) & _compile_expr('', slot.expr),
+    ))
+    if identity == 'outer':
+        return matched & _outer_permission_identity(
+            permission_model, content_model,
+        )
+    return matched & _bound_permission_identity(
+        permission, content_model, permission_model,
+    )
+
+
+def _outer_user_override_q(slot, model, names):
+    """Override expression on a reverse candidate user."""
+    slot = _active_user_override(slot, names)
+    if slot is None:
+        return None
+    from trusts.user_rules import _compile_expr, _expr_availability
+
+    if _expr_availability(model, slot.expr) != 'ok':
+        raise TrustsConfigurationError(
+            'User override %r needs a concrete BooleanField on %s.'
+            % (slot.name, model._meta.label)
+        )
+    return _compile_expr('', slot.expr)
 
 
 def _default_is_active_q(model, path, *, skip_is_active=False,
@@ -3788,6 +3959,7 @@ class RelationPlan:
     permission_model: type | None = None
     content_identity: type | None = None
     user_conditions: tuple | None = None
+    user_override: object | None = None
 
     def _bound_root_qs(self, record, *, skip_is_active=False, skipped=(),
                        **bindings):
@@ -3893,6 +4065,17 @@ class RelationPlan:
             'user_field', content=content, permission=permission,
         )
 
+    def _checked_override(self, user, *, permission, content_model, names,
+                          identity):
+        return _forward_user_override_q(
+            self.user_override, user, self.user_conditions,
+            permission=permission,
+            content_model=content_model,
+            permission_model=self.permission_model,
+            names=names,
+            identity=identity,
+        )
+
     def common_permissions(self, user, content, *, skip_is_active=False,
                            skipped=()):
         """Trustee permissions held on every candidate through this plan.
@@ -3911,12 +4094,26 @@ class RelationPlan:
             user, OuterRef(OuterRef('pk')), skip_is_active=skip_is_active,
             skipped=skipped,
         )
+        names = _skip_names(skip_is_active, skipped)
+        branch = self._checked_override(
+            user, permission=None, content_model=_candidate_model(content),
+            names=names, identity='outer',
+        )
         if exists is None:
-            return self.permission_model._default_manager.none()
+            if branch is None:
+                return self.permission_model._default_manager.none()
+            return bind_once(self.permission_model._default_manager.filter(
+                Exists(qs) & branch,
+            ).distinct())
+        if branch is None:
+            return bind_once(self.permission_model._default_manager.filter(
+                Exists(qs),
+            ).exclude(
+                Exists(qs.filter(~Q(exists))),
+            ).distinct())
+        grant = Exists(qs) & ~Exists(qs.filter(~Q(exists)))
         return bind_once(self.permission_model._default_manager.filter(
-            Exists(qs),
-        ).exclude(
-            Exists(qs.filter(~Q(exists))),
+            grant | (Exists(qs) & branch),
         ).distinct())
 
     def permissions(self, user, content, *, skip_is_active=False, skipped=()):
@@ -3929,7 +4126,14 @@ class RelationPlan:
             'permission_field', user=user, content=content,
             skip_is_active=skip_is_active, skipped=skipped,
         )
-        return bind_once(self.permission_model._default_manager.filter(exists).distinct())
+        branch = self._checked_override(
+            user, permission=None, content_model=content.__class__,
+            names=_skip_names(skip_is_active, skipped), identity='outer',
+        )
+        predicate = exists if branch is None else (exists | branch)
+        return bind_once(self.permission_model._default_manager.filter(
+            predicate,
+        ).distinct())
 
     def has_permission(self, user, content, permission, *,
                        skip_is_active=False, skipped=()):
@@ -3945,9 +4149,14 @@ class RelationPlan:
             'permission_field', user=user, content=content,
             skip_is_active=skip_is_active, skipped=skipped,
         )
+        branch = self._checked_override(
+            user, permission=None, content_model=content.__class__,
+            names=_skip_names(skip_is_active, skipped), identity='outer',
+        )
+        predicate = exists if branch is None else (exists | branch)
         return bind_once(self.permission_model._default_manager.filter(
             pk=permission.pk,
-        ).filter(exists)).exists()
+        ).filter(predicate)).exists()
 
     def filter_content(self, queryset, user, permission, *,
                        skip_is_active=False, skipped=()):
@@ -3955,9 +4164,17 @@ class RelationPlan:
         exists = self.content_exists(
             user, permission, skip_is_active=skip_is_active, skipped=skipped,
         )
+        branch = self._checked_override(
+            user, permission=permission, content_model=queryset.model,
+            names=_skip_names(skip_is_active, skipped), identity='bound',
+        )
         if exists is None:
-            return queryset.none()
-        return bind_once(queryset.filter(exists).distinct())
+            if branch is None:
+                return queryset.none()
+            return bind_once(queryset.filter(branch).distinct())
+        if branch is None:
+            return bind_once(queryset.filter(exists).distinct())
+        return bind_once(queryset.filter(exists | branch).distinct())
 
 
 class TrustsRegistry(object):
@@ -3993,6 +4210,7 @@ class TrustsRegistry(object):
         self._frozen = False
         self._condition_lookup = None
         self._user_conditions = None
+        self._user_override = None
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
 
@@ -4181,6 +4399,56 @@ class TrustsRegistry(object):
             ):
                 assert_concrete_booleans(model, rule.expr, rule.name)
 
+    def set_user_override(self, name, expr, on='user'):
+        """Store the one checked-user override, or clear it with ``None``.
+
+        A new name and expression replace the previous slot. ``None``
+        must name the current override. ``on="sponsor"`` and ``on="*"``
+        raise. Sponsor authority is unchanged.
+        """
+        from trusts.user_rules import (
+            UserCondition,
+            assert_concrete_booleans,
+            normalize_override_on,
+            walk_user_lambda,
+        )
+        from django.contrib.auth import get_user_model
+
+        if self._frozen:
+            raise TrustsConfigurationError(
+                'Cannot set a user override on a frozen TrustsRegistry.'
+            )
+        if not isinstance(name, str) or not name.isidentifier():
+            raise TrustsConfigurationError(
+                'User override name must be an identifier, not %r.' % (name,)
+            )
+        normalize_override_on(on)
+        if expr is None:
+            current = self._user_override
+            if current is None or current.name != name:
+                raise TrustsConfigurationError(
+                    'User override %r is not the current override.' % (name,)
+                )
+            self._user_override = None
+            return None
+        walked = walk_user_lambda(expr)
+        models = self._models_for_user_condition(frozenset(('user',)))
+        if not models:
+            models = (get_user_model(),)
+        for model in models:
+            assert_concrete_booleans(model, walked, name)
+        self._user_override = UserCondition(name, walked, 'user')
+        return self._user_override
+
+    def _recheck_user_override(self):
+        slot = self._user_override
+        if slot is None:
+            return
+        from trusts.user_rules import assert_concrete_booleans
+
+        for model in self._models_for_user_condition(frozenset(('user',))):
+            assert_concrete_booleans(model, slot.expr, slot.name)
+
     def freeze(self):
         """Seal relation and condition registration on this instance."""
         self._frozen = True
@@ -4320,6 +4588,7 @@ class TrustsRegistry(object):
             self._delegations_by_root[root] = [record]
         self._delegation_order.append(record)
         self._recheck_user_conditions()
+        self._recheck_user_override()
         return record
 
     def register(self, *, content, user, permission=None, group=None,
@@ -4464,6 +4733,7 @@ class TrustsRegistry(object):
             self._by_root[root] = [record]
         self._order.append(record)
         self._recheck_user_conditions()
+        self._recheck_user_override()
         return record
 
     def _records_for(self, content_model, user_model=None, permission_model=None):
@@ -4529,6 +4799,7 @@ class TrustsRegistry(object):
             permission_model=plan_permission,
             content_identity=_candidate_model(content),
             user_conditions=self._stored_user_conditions(),
+            user_override=self._user_override,
         )
 
     def permissions_for(self, user, content, *, skip_is_active=False, **skip_flags):
