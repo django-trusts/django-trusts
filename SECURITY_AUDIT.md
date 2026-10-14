@@ -65,6 +65,10 @@ The registration APIs define permission sources and restrictions:
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
 types, constants, and combinations are intended to be rejected during setup.
+Every registered user-rule attribute must resolve to a concrete database
+field. Python properties such as Django's `is_authenticated` and
+`is_anonymous` are rejected at registration, even when they return constants;
+there is no instance-evaluation exception in this contract.
 Registration closes when the configured registry freezes; late mutation is
 rejected.
 

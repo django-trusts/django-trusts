@@ -553,10 +553,16 @@ User conditions and overrides
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 User conditions and overrides apply to all permission inquiries through
-the registry. The default conditions, ``is_active``, ``is_authenticated``,
-and ``is_registered``, require an active, authenticated user with a saved
-user row. No user override is registered by default. Conditions and
-overrides are compiled into permission SQL.
+the registry. The default conditions, ``is_active`` and ``is_registered``,
+require an active user with a saved user row. ``is_registered`` is the
+library-supplied saved-primary-key condition. No user override is registered
+by default. Conditions and overrides are compiled into permission SQL.
+
+Every user-supplied rule must resolve its user attributes to concrete database
+fields. Registration rejects a Python property such as Django's
+``is_authenticated`` or ``is_anonymous``, even when the property would return
+a constant. There is no instance-evaluation exception: ``check_instance`` is
+outside this contract and tracked separately in issue #313.
 
 Configure conditions on ``backend.registry`` in ``AppConfig.ready()``.
 For example, replace the activity condition:
@@ -576,7 +582,7 @@ remove it:
 
    registry.register_user_condition("is_active", None)
 
-The same call removes ``is_authenticated`` or ``is_registered`` by name.
+The same call removes ``is_registered`` by name.
 
 To skip a condition for one inquiry, use ``skip_<name>=True``. For example,
 inspect an inactive user's grants:
@@ -603,9 +609,7 @@ to let active superusers pass without an ordinary permission grant:
    registry.set_user_override(
        "superuser",
        lambda u: (
-           u.is_authenticated
-           & ~u.is_anonymous
-           & u.is_active
+           u.is_active
            & u.is_superuser
        ),
    )

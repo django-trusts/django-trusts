@@ -182,6 +182,10 @@ default conditions shortened to ``is_active`` and a registered
 
    is_active[*] & (superuser[user] | ordinary)
 
+Registration accepts only rules that compile completely to SQL over concrete
+user fields. A Python property such as ``is_authenticated`` or
+``is_anonymous`` is rejected at registration, even when it returns a constant.
+
 A rule registered with ``("user", "sponsor")`` is recorded as ``*``.
 Skipped rules do not appear in the expression, for any of their targets. A
 skipped condition contributes no restriction; a skipped override contributes

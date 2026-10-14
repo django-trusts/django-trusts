@@ -41,13 +41,14 @@ Migration-bot checklist:
 
 Named [user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides)
 replace built-in activity checks and implicit Trusts superuser shortcuts.
-The default conditions require an active, authenticated user with a saved
-user row. No superuser override is registered by default.
+The default conditions require an active user with a saved user row. No
+superuser override is registered by default.
 
 | Old | New |
 | --- | --- |
 | `allow_inactive_user=True` or `allow_inactive=True` | `skip_is_active=True` on Trusts inquiry APIs |
 | Built-in user restrictions | Named conditions on `backend.registry`; replace an expression or pass `None` to remove it |
+| Python `is_authenticated` / `is_anonymous` checks | No default rule uses those properties. A custom equivalent is accepted only when it resolves to a concrete database field |
 | Trusts shortcuts supply superuser access | Register `set_user_override("superuser", ...)` explicitly if required; use `skip_superuser=True` to inspect ordinary grants |
 
 Applications relying on implicit superuser access must register the override
@@ -60,6 +61,11 @@ The registry stores one user-override slot. Setting a new override replaces
 the previous name and expression. Passing `None` clears the slot only when the
 name matches the current override; any other name raises an error.
 
+Condition and override expressions must compile completely to SQL over
+concrete user fields. Registration rejects Python properties such as Django's
+`is_authenticated` and `is_anonymous`, even when they return constants. There
+is no `check_instance` mode in this contract.
+
 Migration-bot checklist:
 
 - replace `allow_inactive_user` and `allow_inactive` with `skip_is_active`
@@ -68,6 +74,8 @@ Migration-bot checklist:
 - find reliance on `is_superuser` in view guards, reverse inquiries, and adapters
 - review `register_user_condition(`, `set_user_override(`, custom user models,
   and candidate-manager filters
+- replace `is_authenticated` and `is_anonymous` in registered user rules with
+  concrete user fields, or remove those terms
 - verify override replacement and name-matched removal behavior
 - regenerate policy locks and verify default and skipped-rule results
 
