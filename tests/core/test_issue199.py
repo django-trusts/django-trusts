@@ -6,13 +6,15 @@ and ``TrustsImplementationConfig.ready()`` only. Does not invent a
 ``_trust_perm_cache`` shape, or patch private match/compiler helpers.
 """
 
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import SimpleTestCase, TestCase, override_settings
 
 import tests as tests_module
-from tests.backends import HostTrustModelBackend
+from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
@@ -108,6 +110,40 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             self.assertFalse(
                 self.document_backend.has_perm(anonymous, PERM, self.document),
             )
+
+    def test_unowned_backend_rejects_identity_before_registry(self):
+        from trusts.query import is_active_principal
+
+        backend = MixinOnlyBackend()
+        anonymous = AnonymousUser()
+        unauthenticated = _UnauthenticatedPrincipal()
+        self.assertFalse(is_active_principal(None))
+        with patch('trusts.apps.implementation_configs', return_value=()):
+            with self.assertNumQueries(0):
+                self.assertFalse(
+                    backend.has_perm(None, PERM, self.document),
+                )
+                self.assertFalse(
+                    backend.has_perm(anonymous, PERM, self.document),
+                )
+                self.assertFalse(
+                    backend.has_perm(
+                        anonymous, PERM, self.document, skip_is_active=True,
+                    ),
+                )
+                self.assertFalse(
+                    backend.has_perm(unauthenticated, PERM, self.document),
+                )
+                self.assertEqual(
+                    backend.get_all_permissions(anonymous, self.document),
+                    set(),
+                )
+                self.assertEqual(
+                    backend.get_group_permissions(
+                        unauthenticated, self.document,
+                    ),
+                    set(),
+                )
 
     def test_unsupported_object_enumeration_is_empty_at_zero_sql(self):
         mapping = {'pk': self.document.pk, 'title': self.document.title}

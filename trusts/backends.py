@@ -15,6 +15,7 @@ from trusts.conditions import (
 from trusts.conditions._ir import evaluate_registered_expression
 from trusts.query import (
     is_active_principal,
+    user_identity_denied,
 )
 from trusts.core import (
     PlanQueryCompiler,
@@ -244,8 +245,16 @@ class TrustModelBackendMixin(object):
         return _inquiry_skipped(skip_is_active, **skip_flags)
 
     def _principal_allows(self, user_obj, skipped):
+        """Reject anonymous and unauthenticated users before the registry.
+
+        Those identities, and ``None``, need no owner and no SQL. A
+        remaining user then consults the owned registry for whether
+        ``is_active`` still applies. The split itself is #313.
+        """
         from trusts.user_rules import enforces_is_active
 
+        if user_obj is None or user_identity_denied(user_obj):
+            return False
         conditions = self._own_handle().registry._stored_user_conditions()
         enforce = enforces_is_active(conditions, skipped)
         return is_active_principal(
