@@ -52,16 +52,16 @@ class AuthorizedQuerySet(QuerySet):
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
         from trusts.apps import _relationship_implementation_handles
-        from trusts.core import TrustsConfigurationError, granted
+        from trusts.core import TrustsConfigurationError, bind_checked_user, granted
 
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
             )
-        from trusts.core import user_skip_params
 
         handles = _relationship_implementation_handles()
-        inquiry = user_skip_params(user, skip_flags, handles=handles)
+        inquiry = bind_checked_user(
+            user, skip_flags=skip_flags, handles=handles)
         if user is None:
             raise TrustsConfigurationError(
                 'user must be a model instance, not None.'

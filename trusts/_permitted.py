@@ -324,9 +324,10 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.core import user_skip_params
+    from trusts.core import bind_checked_user
 
-    inquiry = user_skip_params(user, skip_flags, handles=handles)
+    inquiry = bind_checked_user(
+        user, skip_flags=skip_flags, handles=handles)
     if inquiry.denied:
         return queryset.none()
     skipped = inquiry.values

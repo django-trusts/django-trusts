@@ -40,12 +40,12 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     from django.contrib.auth import get_backends, get_user_model
 
     from trusts.apps import _relationship_implementation_handles
-    from trusts.core import user_skip_params
+    from trusts.core import bind_checked_user
 
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    inquiry = user_skip_params(
-        None, skip_flags,
+    inquiry = bind_checked_user(
+        None, skip_flags=skip_flags,
         handles=_relationship_implementation_handles(),
         require_user=False,
     )
@@ -94,6 +94,26 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     return bind_once(user_queryset.filter(combined).distinct())
 
 
+def _reverse_checked(plan, exists, user_model, permission, content, values,
+                     permission_model):
+    """Closed user fragment, override, and eligibility for a reverse row."""
+    from trusts.core import _bound_permission_identity, bind_checked_user
+
+    checked = bind_checked_user(
+        user_model,
+        None if exists is None else _as_q(exists),
+        plan=plan,
+        closed=True,
+        identity=_bound_permission_identity(
+            permission, content.__class__, permission_model,
+        ),
+        values=values,
+    )
+    if checked.predicate is None:
+        return None
+    return _trusts_eligibility_q(user_model) & checked.predicate
+
+
 def trusts_mixin_predicate(backend, content, perm, *,
                            skipped=()):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
@@ -122,25 +142,15 @@ def trusts_mixin_predicate(backend, content, perm, *,
         )
         if delegated is not None:
             exists = delegated if exists is None else (_as_q(exists) | delegated)
-    from trusts.core import _bound_permission_identity, user_predicate
-
     user_model = _plan_user_model(plan, content)
     permission_model = plan.permission_model
     if permission_model is None and not isinstance(binding, Model):
         permission_model = Permission
-    predicate = user_predicate(
-        None if exists is None else _as_q(exists),
-        user_model,
-        plan.user_rules_closed,
-        plan.user_override_q,
-        skipped,
-        _bound_permission_identity(
-            binding, content.__class__, permission_model,
-        ),
+    predicate = _reverse_checked(
+        plan, exists, user_model, binding, content, skipped, permission_model,
     )
     if predicate is None:
         return None
-    predicate = _trusts_eligibility_q(user_model) & predicate
     if condition:
         overlay = _named_filter_q(
             backend, content, perm, condition[0], user_model,
@@ -187,26 +197,17 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             exists = (
                 delegated if exists is None else (_as_q(exists) | delegated)
             )
-    from trusts.core import _bound_permission_identity, user_predicate
-
     if plan.user_rules_closed is None:
         return user_model._default_manager.all().filter(pk__isnull=True)
-    predicate = user_predicate(
-        None if exists is None else _as_q(exists),
-        user_model,
-        plan.user_rules_closed,
-        plan.user_override_q,
-        {},
-        _bound_permission_identity(
-            permission, content.__class__, plan.permission_model,
-        ),
+    predicate = _reverse_checked(
+        plan, exists, user_model, permission, content, {},
+        plan.permission_model,
     )
     if predicate is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    predicate = _trusts_eligibility_q(user_model) & predicate
     from trusts._bind_once import bind_once
 
     return bind_once(
@@ -644,7 +645,7 @@ def _trusts_eligibility_q(model):
     """Anonymous and authenticated columns on a reverse candidate user.
 
     Registered user conditions and the override are bound by
-    ``user_predicate``. Persisted rows use the stock
+    ``bind_checked_user``. Persisted rows use the stock
     anonymous/authenticated properties unless those names are concrete
     fields. The predicate is standard boolean SQL.
     """

@@ -70,7 +70,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
     from django.apps import apps as django_apps
     from trusts.apps import _relationship_implementation_handles
-    from trusts.core import user_skip_params
+    from trusts.core import bind_checked_user
 
     handles = _relationship_implementation_handles()
 
@@ -89,7 +89,8 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
         handles, model, conditions, api='authorization_required',
     )
 
-    inquiry = user_skip_params(user, skip_flags, handles=handles)
+    inquiry = bind_checked_user(
+        user, skip_flags=skip_flags, handles=handles)
     if inquiry.denied:
         raise PermissionDenied
     skipped = inquiry.values
