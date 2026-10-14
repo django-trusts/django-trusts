@@ -1,6 +1,7 @@
 """One placeholder per inquiry value, and ``is_active`` in the statement (#300)."""
 
 import re
+from collections import Counter
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -49,6 +50,15 @@ def _document_rows():
     return document['backends'][0]['contents'][0]
 
 
+def _repeat_count(params):
+    """Extra copies of one full token.
+
+    Two ``True`` values with different sources are distinct.
+    """
+    counts = Counter(params)
+    return sum(count - 1 for count in counts.values() if count > 1)
+
+
 class Issue300SuiteRegistrationTest(SimpleTestCase):
     def test_module_is_on_kernel_and_pair_suites(self):
         self.assertIn('tests.core.test_issue300', KERNEL_SUITE)
@@ -65,20 +75,15 @@ class Issue300LockfileTest(SimpleTestCase):
             self.assertEqual(row['sql'].count('%s'), len(row['params']), key)
             self.assertIn('trusts_bind', row['sql'])
             self.assertIn('SELECT 1 AS "a"', row['sql'])
-            hints = [param.get('hint') for param in row['params']]
-            self.assertIn('content type app', hints)
-            self.assertIn('content type model', hints)
-            seen = set()
-            for param in row['params']:
-                if 'bind' in param:
-                    token = ('bind', param['bind'], param.get('hint'))
-                else:
-                    token = ('const', param.get('hint'), repr(param.get('const')))
-                self.assertNotIn(token, seen, key)
-                seen.add(token)
+            self.assertEqual(_repeat_count(row['params']), 0, key)
+            self.assertIn('$content.app_label="documents"', row['params'])
+            self.assertIn('$content.model="document"', row['params'])
         users = content['get_permitted_users']
-        self.assertIn({'const': True, 'hint': 'active'}, users['params'])
-        self.assertIn('"is_active" = %s', users['sql'])
+        self.assertEqual(users['params'].count('user.is_active=True'), 1)
+        self.assertIn(
+            '"is_active" = ("trusts_bind"."is_active")', users['sql'],
+        )
+        self.assertNotIn('"is_active" = %s', users['sql'])
         self.assertNotIn('allow_inactive', users['sql'])
 
     def test_flag_off_records_the_plain_queryset(self):
@@ -92,6 +97,7 @@ class Issue300LockfileTest(SimpleTestCase):
             self.assertNotIn('SELECT 1 AS "a"', row['sql'])
             self.assertIn('SELECT %s AS "a"', row['sql'])
             self.assertEqual(row['sql'].count('%s'), len(row['params']))
+            self.assertFalse(any('allow inactive' in param for param in row['params']))
         users = content['get_permitted_users']
         self.assertIn('"is_active" = %s', users['sql'])
         self.assertGreater(
@@ -159,20 +165,35 @@ class Issue300BindOnceTest(SimpleTestCase):
         again = bind_once(bound)
         self.assertIs(again, bound)
 
-    def test_outer_ref_stays_correlated_and_is_active_stays_a_parameter(self):
+    def test_outer_ref_stays_correlated_and_is_active_is_bound_once(self):
         queryset = User.objects.filter(id=OuterRef('pk')).filter(is_active=True)
         bound = bind_once(queryset)
-        self.assertNotIn(BIND_ALIAS, bound.query.alias_map)
         where = str(bound.query.where)
         self.assertIn('OuterRef', where)
-        self.assertIn('is_active', where)
+        self.assertIn(BIND_ALIAS, bound.query.alias_map)
+        active = bound.query.alias_map[BIND_ALIAS]
+        self.assertEqual(
+            [column.label for column in active.columns],
+            ['active'],
+        )
+        self.assertEqual(active.columns[0].value, True)
+        repeated = User.objects.filter(is_active=True)
+        for _index in range(3):
+            repeated = repeated.filter(is_active=True)
+        repeated_sql, repeated_params = bind_once(repeated).query.sql_with_params()
+        self.assertEqual(list(repeated_params), [True])
+        self.assertEqual(repeated_sql.count('%s'), 1)
+        self.assertEqual(
+            repeated_sql.count('"is_active" = ("trusts_bind"."is_active")'),
+            4,
+        )
         table_sql, table_params = bind_once(
             User.objects.filter(id=4).filter(is_active=True),
         ).query.sql_with_params()
         self.assertIn('trusts_bind', table_sql)
         self.assertIn('is_active', table_sql)
         self.assertEqual(table_params.count(4), 1)
-        self.assertIn(True, table_params)
+        self.assertEqual(list(table_params).count(True), 1)
         self.assertEqual(len(table_params), 2)
 
     def test_setting_defaults_to_true_and_false_skips_the_bind_row(self):
@@ -300,10 +321,12 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                     self.skipTest('%s driver is not installed' % engine)
                 sql, params = query.get_compiler(connection=connection).as_sql()
                 quote = connection.ops.quote_name('is_active')
-                self.assertIn('%s = %%s' % quote, sql)
+                self.assertIn('%s = (' % quote, sql)
+                self.assertIn('trusts_bind', sql)
+                self.assertNotIn('%s = %%s' % quote, sql)
                 self.assertNotIn('%s = true' % quote, sql.lower())
                 self.assertNotIn('%s = 1' % quote, sql)
-                self.assertIn(True, params)
+                self.assertEqual(list(params).count(True), 1)
 
     def test_flag_off_compiles_the_plain_is_active_comparison(self):
         with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -620,3 +643,107 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                         r'["`]depth["`]\s*<\s*\(%s\)',
                         key,
                     )
+
+
+class ReviewManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().annotate(
+            review_annotation=Value(1, output_field=IntegerField()),
+        )
+
+
+class ReviewDocument(models.Model):
+    title = models.CharField(max_length=40)
+    published = models.BooleanField(default=False)
+    objects = ReviewManager()
+
+    class Meta:
+        app_label = 'documents'
+
+
+class ReviewGrant(models.Model):
+    document = models.ForeignKey(ReviewDocument, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = 'documents'
+
+
+def _published(user, permission, obj):
+    del user, permission
+    return obj.published == True
+
+
+class Issue300ManagerAnnotationTest(SimpleTestCase):
+    def test_value_annotation_stays_in_the_lockfile_for_both_settings(self):
+        from trusts.core import _compile_granted
+        from trusts.policy_lock import _content_manager, _role_sentinel
+
+        for enabled in (True, False):
+            with self.subTest(TRUSTS_SQL_BIND_ONCE=enabled):
+                with override_settings(TRUSTS_SQL_BIND_ONCE=enabled):
+                    handle = BackendHandle(
+                        path='documents.backends.ReviewBackend',
+                        registry=TrustsRegistry(),
+                        compiler=PlanQueryCompiler(),
+                    )
+                    handle.register(
+                        trust=ReviewGrant,
+                        user='user',
+                        permission='permission',
+                        content='document',
+                    )
+                    handle.add_named_filter(
+                        ReviewDocument, 'published', _published,
+                    )
+                    document = _load_policy_sql_document(
+                        render_policy_sql_bytes(handles=[handle]),
+                    )
+                    content = document['backends'][0]['contents'][0]
+                    permitted = content['permitted']
+                    named = content['named_filters'][0]
+                    records = handle.registry.plan_for(ReviewDocument).records
+                    user = _role_sentinel(records[0], 'user', 'default')
+                    permission = _role_sentinel(
+                        records[0], 'permission', 'default',
+                    )
+                    queryset = _content_manager(ReviewDocument).all()
+                    granted = _compile_granted(
+                        (handle,), queryset, user, permission,
+                        kind='complete', sponsor_handles=(handle,),
+                    )
+                    raw_sql, raw_params = bind_once(
+                        queryset.filter(granted).distinct(),
+                    ).query.sql_with_params()
+                    self._assert_cardinality_and_order(
+                        permitted, raw_params,
+                    )
+                    self.assertEqual(raw_sql.count('%s'), len(raw_params))
+                    self.assertIn('review_annotation=1', permitted['params'])
+                    self.assertEqual(
+                        permitted['params'].count('review_annotation=1'), 1,
+                    )
+                    named_sql, named_params = (
+                        ReviewDocument.objects.filter(published=True)
+                        .query.sql_with_params()
+                    )
+                    self._assert_cardinality_and_order(named, named_params)
+                    self.assertEqual(named_sql.count('%s'), len(named_params))
+                    self.assertIn('review_annotation=1', named['params'])
+                    self.assertEqual(len(named['params']), 2)
+
+    def _assert_cardinality_and_order(self, row, raw_params):
+        tokens = row['params']
+        self.assertEqual(row['sql'].count('%s'), len(tokens))
+        self.assertEqual(len(tokens), len(list(raw_params)))
+        for token, raw in zip(tokens, raw_params):
+            if '=' not in token:
+                continue
+            self.assertEqual(_presented_const_for(token), raw)
+
+
+def _presented_const_for(token):
+    from trusts.policy_lock import _presented_const
+
+    return _presented_const(token)

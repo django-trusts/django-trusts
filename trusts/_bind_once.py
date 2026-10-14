@@ -570,6 +570,18 @@ class _Walk(object):
     def _visit_lookup(self, node):
         if _is_along(node.lhs):
             self._note_along(node.lhs, _lhs_apply(node, node.lhs))
+            if (
+                node.rhs_is_direct_value()
+                and node.rhs is True
+                and _rhs_is_emitted(node, True, self.connection)
+            ):
+                # Every walk's match flag is the same True. One column,
+                # referenced from each comparison.
+                self.hits.append(_Hit(
+                    True, 'const', 'along match', BooleanField(),
+                    lambda ref, lookup=node: setattr(lookup, 'rhs', ref),
+                ))
+                return
             if not node.rhs_is_direct_value():
                 self.visit(node.rhs)
             return
@@ -585,12 +597,32 @@ class _Walk(object):
         self.visit(node.rhs)
 
     def _note_lookup_value(self, node, raw):
+        # A JSON primary key sentinel is a dict. It is still the content
+        # call input, so it has to join the bind row instead of being
+        # recorded as a constant. An ``__in`` list stays on the lookup.
+        candidate = raw.value if isinstance(raw, Value) else raw
+        if (
+            isinstance(candidate, dict)
+            and getattr(node, 'lookup_name', None) == 'exact'
+            and _is_content_pk(node)
+        ):
+            self.hits.append(_Hit(
+                candidate, 'const', 'content pk', _lookup_output(node),
+                lambda ref, lookup=node: setattr(lookup, 'rhs', ref),
+            ))
+            return
         plain = _plain_value(raw)
         if plain is _SKIP or not _rhs_is_emitted(node, plain, self.connection):
             return
         kind, label = _classify_lookup(node, plain, self.root_model)
         if kind == 'eligibility':
-            node.rhs = BoundBool(plain, label)
+            # One column for every copy of this boolean. The comparison is
+            # ``column = trusts_bind.<name>``, so PostgreSQL still emits an
+            # equality instead of a bare boolean column.
+            self.hits.append(_Hit(
+                plain, kind, label, _lookup_output(node) or BooleanField(),
+                lambda ref, lookup=node: setattr(lookup, 'rhs', ref),
+            ))
             return
         if kind != 'bind' and kind != 'const':
             return
@@ -610,7 +642,12 @@ class _Walk(object):
             return
         kind, label = _classify_key(key, plain, self.root_model)
         if kind == 'eligibility':
-            parent.children[index] = (key, BoundBool(plain, label))
+            self.hits.append(_Hit(
+                plain, kind, label, BooleanField(),
+                lambda ref, parent=parent, index=index, key=key: (
+                    parent.children.__setitem__(index, (key, ref))
+                ),
+            ))
             return
         if kind != 'bind' and kind != 'const':
             return
@@ -1059,7 +1096,7 @@ class BindTable(object):
     def __init__(self, columns):
         self.table_name = BIND_ALIAS
         self.table_alias = BIND_ALIAS
-        self.columns = tuple(columns)
+        self.columns = _role_first(columns)
         self._symbols = []
 
     def as_sql(self, compiler, connection):
@@ -1112,6 +1149,28 @@ class BindTable(object):
 
     def __hash__(self):
         return hash(self.identity)
+
+
+def _role_first(columns):
+    """User, permission, then content. Skip a role that is not used.
+
+    Other columns keep the order they were registered. A content primary
+    key constant is the content call input, so it sorts with content.
+    """
+    def key(item):
+        index, column = item
+        if column.kind == 'bind':
+            role = column.label.split('.', 1)[0]
+            rank = {'user': 0, 'permission': 1, 'content': 2}.get(role)
+            if rank is not None:
+                return (rank, index)
+        if column.kind == 'const' and column.label == 'content pk':
+            return (2, index)
+        return (3, index)
+
+    return tuple(
+        column for _, column in sorted(enumerate(columns), key=key)
+    )
 
 
 class BoundBool(Value):
@@ -1253,14 +1312,19 @@ def _literalize_exists(sql, params):
 
 
 def _param_is_exists_one(param):
+    """True when this placeholder is the ``SELECT %s AS "a"`` sentinel.
+
+    The match is the constant ``1`` at that SQL position. A caller
+    annotation such as ``review_annotation=Value(1)`` is a different
+    placeholder and is not stripped.
+    """
     if param == 1 and not isinstance(param, bool):
         return True
     payload = getattr(param, 'payload', None)
-    return (
-        isinstance(payload, dict)
-        and payload.get('hint') == 'exists marker'
-        and payload.get('const') == 1
-    )
+    if not isinstance(payload, dict):
+        return False
+    const = payload.get('const')
+    return const == 1 and not isinstance(const, bool)
 
 
 def strip_exists_marker(query):

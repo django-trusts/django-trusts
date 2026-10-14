@@ -69,24 +69,24 @@ The following abridged example shows the schema:
                permission: {path: "permission", model: "auth.Permission", target: "id"}
                content: {path: "document", model: "documents.Document", target: "id"}
            permitted:
-             params: [{bind: "user.id", hint: "$user"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
+             params: ["$user.id", "$permission.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
              sql: |-
                SELECT DISTINCT ...
            has_perm:
-             params: [{bind: "user.id", hint: "$user"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: 1, hint: "content pk"}]
+             params: ["$user.id", "$permission.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
              sql: |-
                SELECT ... WHERE candidate-primary-key AND grant-exists
            get_all_permissions:
-             params: [{const: 1, hint: "content pk"}, {bind: "user.id", hint: "$user"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
+             params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
-             params: [{bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: true, hint: "active"}]
+             params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\""]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
              - id: "documents__Document__non_confidential"
-               params: [{const: true, hint: "confidential"}]
+               params: ["confidential=True"]
                sql: |-
                  SELECT ... WHERE non-confidential-predicate
 
@@ -110,8 +110,9 @@ records that path (for example ``permissions`` or ``team__permissions``),
 
 When the permission terminal's concrete model is ``auth.Permission``,
 each inquiry's grant also requires that row's ``app_label`` and ``model``
-to be the protected model's content identity. Those two values are
-``const`` parameters in the same statement. A proxy model would use its
+to be the protected model's content identity. Those two values stay
+bound parameters, written ``$content.app_label="..."`` and
+``$content.model="..."``. A proxy model would use its
 own identity. Any other permission terminal, including a custom model
 with a ``content_type`` foreign key, does not gain the predicate and
 stays a primary-key comparison. The codename is not parsed to choose the
@@ -123,8 +124,8 @@ object and one permission, compiled to the users that backend can grant.
 The locked statement is that backend branch only. It carries the backend's
 eligibility predicate and the complete-grant ``EXISTS``. It does not include
 Django's check that an active superuser has every permission, and it does not OR other
-authentication backends. The content primary key is a ``content.<target>``
-bind. The permission row is a ``permission.<target>`` bind. The candidate
+authentication backends. The content primary key is the call input ``$content.<target>``.
+The permission row is ``$permission.<target>``. The candidate
 user is the outer row. ``content.get_permitted_users(perm)`` and optional
 ``User.objects.permitted(content, perm)`` share this one policy entry
 because they use the same reverse compiler; the document does not duplicate
@@ -155,7 +156,7 @@ explicit conditions, the :ref:`user.is_active checks <user-is-active-checks>`,
 and the sponsor's ordinary-grant predicate in the document and generated SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
-used ``along=``. The depth cap stays a ``const`` with hint ``along bound``.
+used ``along=``. The depth cap is the bound constant ``$along_bound=<n>``.
 The delegate is allowed only where the delegation walk and the sponsor's
 ordinary authority both reach the requested object. When only one side uses
 ``along=``, the other side matches that object exactly.
@@ -182,7 +183,7 @@ permitted sheet sits under it.
 The statement is the queryset ``filter_by_permitted_content`` compiles for
 that model. The parameter values are the values in that statement. An
 ``along=`` walk uses the same bounded ``WITH RECURSIVE`` query as the
-object check. The depth cap is a ``const`` with hint ``along bound``. A
+object check. The depth cap is the bound constant ``$along_bound=<n>``. A
 prefix at the walk site is compared with the walk. An ancestor of the walk
 site stays the value stored on the grant. A one-level delegation keeps a
 row only where the delegation and the sponsor's ordinary permission both
@@ -199,18 +200,20 @@ dots to ``__`` and adds the content field, for example
 ``documents__DocumentPermission__document``. Conditions append ``__cond``
 because the registration stored a condition (``record.condition`` is not
 ``None``). That entry then includes the condition as one double-quoted
-Python-like line. Field paths stay bare. ``permission in <collection>``
-uses the registered permission column as its member. ``==`` compares two
+Python-like line. Field paths stay bare. Membership uses the same
+token as the permission parameter: ``$permission.<target> in <collection>``
+(``$permission.id in permissions``, ``$permission.id in
+team__allowed_operations``, ``$permission.code in caps`` when the
+permission identity is ``code``). The grant's permission-role column
+equals that call input. ``==`` compares two
 columns. ``and`` joins them, with parentheses only around a nested group.
-The delegated inquiry permission is the request-time value ``$permission``
-(``permissions == $permission``). A registration without a condition omits
-that key.
+A registration without a condition omits that key.
 
 ``Along`` adds ``__along_{path}_{shape}_{bound}``, where ``path`` uses the
 registered Django relationship segments. Each recursive trust row also records
 ``along`` with the complete registered ``path``, resolved ``shape``, and
-integer ``bound``. The recursive SQL records the bound as a ``const`` parameter,
-not a runtime ``bind``. For repeated bases, the first ID keeps the unsuffixed
+integer ``bound``. The recursive SQL records the bound as
+``$along_bound=<n>``, not a call input. For repeated bases, the first ID keeps the unsuffixed
 base and the second and later IDs add ``__2``, ``__3``, and so on. Named-filter
 IDs combine the content-model label and filter code. Filter codes must match
 ``[A-Za-z0-9_]+`` or export fails.
@@ -228,21 +231,33 @@ bound, so their reviewed identifiers and metadata remain distinct.
 Backend rows are sorted by backend path, independent of
 ``AUTHENTICATION_BACKENDS`` order. Content rows follow first-seen trust content,
 followed by filter-only contents. Trusts preserve ``register()`` order, named
-filters preserve ``add_named_filter()`` order, and parameters preserve compiler
-order.
+filters preserve ``add_named_filter()`` order. Each ``params`` line
+lists one string per ``%s``, in that order. ``trusts_bind`` columns are
+ordered user, permission, then content, skipping a role the statement
+does not use. Remaining columns keep registration order.
 
 Constants and generated YAML
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``bind`` entries name runtime values without storing them. Each parameter
-also carries a ``hint``: ``$user``, ``$permission``, ``$content``, or
-``$user.<target>`` when the bind is a request-time role, and a short label
-for a constant (``content type app``, ``content type model``, ``content pk``,
-``along bound``, ``active``, ``along match``, or the compared field). ``bind`` and
-``const`` values and their order are unchanged.
-Constants are mapped between Python and SQL types so their values and type
-information are available for inspection. These mappings are data, not YAML
-object tags.
+``params`` is one flow line. There is no parallel hint line. A call
+input is a bare token: ``$user.id``, ``$permission.id``, ``$content.id``.
+A non-id target stays dotted (``$user.code``, ``$content.ident``,
+``$content.pk_value``). A bound constant is ``source=value``:
+``$content.app_label="documents"``, ``$content.model="document"``,
+``user.is_active=True`` (no ``$`` on the field), ``$along_bound=2``,
+``$along_match=True``, or the compared field (``confidential=True``,
+``amount=1.5``). A content primary key is the call input
+``$content.<target>``, sorted with content. The whole token is one
+double-quoted YAML string.
+
+Bools spell ``True`` / ``False``. Strings use JSON quoting. Integers
+are decimal. Finite floats use the canonical float spelling, so
+``-0.0`` keeps its sign. Bytes, decimals, UUIDs, dates, times,
+datetimes, timedeltas, non-finite floats, and model identities are the
+JSON form of a tagged mapping inside that same token. These mappings
+are data, not YAML object tags. The only literal in the SQL is the
+``EXISTS`` marker ``SELECT 1``; it is not a parameter. Every other
+value stays a bound ``%s``.
 
 The writer uses the installed supported ``PyYAML`` release. Output is UTF-8
 without a byte-order mark, uses LF endings, fixed key order, double-quoted

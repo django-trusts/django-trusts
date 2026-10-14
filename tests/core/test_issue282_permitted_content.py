@@ -36,18 +36,20 @@ def _request(user):
 
 
 def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
-    """The lockfile statement is the SQL and values Django runs.
+    """The lockfile statement is the SQL Django runs.
 
-    Constants in the lockfile are those values. The SQL text is that
-    statement broken between tokens. Nothing is rewritten into another
-    inquiry.
+    A ``source=value`` token is that executed constant. A bare
+    ``$user.id`` style token is a call input and is not compared to
+    the sentinel. The SQL text is that statement broken between tokens.
     """
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
     from trusts.policy_lock import (
+        _CALL_INPUT,
         _json_const,
         _load_policy_sql_document,
+        _presented_const,
         _role_sentinel,
         render_policy_sql_bytes,
     )
@@ -102,11 +104,11 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     )
     test.assertEqual(row['sql'].count('%s'), len(row['params']))
     test.assertEqual(len(row['params']), len(raw_params))
-    for symbol, value in zip(row['params'], raw_params):
-        if 'const' in symbol:
-            test.assertEqual(symbol['const'], _json_const(value))
-        else:
-            test.assertEqual(set(symbol), {'bind', 'hint'})
+    for token, value in zip(row['params'], raw_params):
+        parsed = _presented_const(token)
+        if parsed is _CALL_INPUT:
+            continue
+        test.assertEqual(parsed, _json_const(value))
     return row
 
 
@@ -441,8 +443,8 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
         )
         self.assertIn('WITH RECURSIVE', row['sql'])
         self.assertEqual(
-            [param for param in row['params'] if param.get('hint') == 'along bound'],
-            [{'const': 1, 'hint': 'along bound'}],
+            [param for param in row['params'] if param.startswith('$along_bound=')],
+            ['$along_bound=1'],
         )
 
 
@@ -1128,12 +1130,9 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         self.assertIn('i282d_delegation', row['sql'])
         bounds = [
             param for param in row['params']
-            if param.get('hint') == 'along bound'
+            if param.startswith('$along_bound=')
         ]
-        self.assertEqual(
-            bounds,
-            [{'const': 1, 'hint': 'along bound'}],
-        )
+        self.assertEqual(bounds, ['$along_bound=1'])
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
