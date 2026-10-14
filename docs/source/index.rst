@@ -594,8 +594,9 @@ Django's stock ``PermissionsMixin.has_perm()`` and permission-enumeration
 methods do not forward Trusts-specific skip keywords. Use a Trusts inquiry API
 when a skip is needed.
 
-Register an override to let active superusers pass without an ordinary
-permission grant:
+``set_user_override()`` stores one override slot. Setting a new override
+replaces the previous name and expression. For example, register an override
+to let active superusers pass without an ordinary permission grant:
 
 .. code-block:: python
 
@@ -672,11 +673,13 @@ Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
        "documents.change_document", user, skip_superuser=True,
    )
 
-Pass ``None`` to remove the override:
+Pass the current override's name with ``None`` to clear the slot:
 
 .. code-block:: python
 
    registry.set_user_override("superuser", None)
+
+Passing ``None`` with any other name raises an error.
 
 Django's ``PermissionsMixin.has_perm()`` returns ``True`` for an active
 superuser before it calls any authentication backend. This is Django behavior;

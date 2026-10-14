@@ -56,6 +56,10 @@ compiler adapters, permission caches, and policy locks. Django's native
 `PermissionsMixin.has_perm()` shortcut remains outside registry control; see
 the [Django backend boundary](SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
 
+The registry stores one user-override slot. Setting a new override replaces
+the previous name and expression. Passing `None` clears the slot only when the
+name matches the current override; any other name raises an error.
+
 Migration-bot checklist:
 
 - replace `allow_inactive_user` and `allow_inactive` with `skip_is_active`
@@ -64,6 +68,7 @@ Migration-bot checklist:
 - find reliance on `is_superuser` in view guards, reverse inquiries, and adapters
 - review `register_user_condition(`, `set_user_override(`, custom user models,
   and candidate-manager filters
+- verify override replacement and name-matched removal behavior
 - regenerate policy locks and verify default and skipped-rule results
 
 ## Permission content type must match the object (#267)
