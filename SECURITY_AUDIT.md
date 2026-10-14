@@ -226,13 +226,15 @@ Audit the following boundaries:
 
 - the exact delegation row must bind its delegate, sponsor, content, and
   condition state; rows must not borrow fields from one another;
-- the sponsor predicate is the live OR-union of applicable ordinary grants,
-  including other configured Trusts handles;
+- by default, the sponsor predicate is the live OR-union of applicable
+  ordinary grants, including other configured Trusts handles; an override
+  explicitly targeted to the sponsor is an additional alternative;
 - the current compiler excludes delegated registrations from the sponsor
-  union, preventing an unbounded chain or cycle; this implementation boundary
-  does not rule out a future bounded multi-level or recursive design;
+  ordinary-grant union, preventing an unbounded chain or cycle; this
+  implementation boundary does not rule out a future bounded multi-level or
+  recursive design;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
-  permission the sponsor does not hold;
+  permission the sponsor-authority predicate does not provide;
 - delegate and sponsor eligibility must be enforced inside the shared plan,
   without loading the sponsor or issuing a second authorization inquiry;
 - the actor's independent ordinary grant remains a separate OR branch;
@@ -241,11 +243,12 @@ Audit the following boundaries:
 - object checks, permitted querysets, enumeration, reverse inquiry, and policy
   SQL must agree and remain one queryset statement per inquiry.
 
-A delegated registration rejects `along=` as unsupported.
-[Issue #282](https://github.com/django-trusts/django-trusts/issues/282) tracks
-delegated hierarchical reach. An ordinary
-sponsor grant may still use `along=`, and its effective bounded reach
-participates in the live sponsor-authority ceiling.
+A delegated registration may use the same bounded `along=` grammar as an
+ordinary registration. Its relationship walk and the sponsor-authority
+predicate must authorize the same object. When sponsor authority comes from an
+ordinary grant, that grant's effective bounded reach participates in the
+ceiling. An explicitly sponsor-targeted override has no relationship walk of
+its own. A delegation cannot sponsor another delegation.
 
 Delegation remains inside the registered declarative policy and its correlated
 sponsor-authority predicate. An application-level nested call to
