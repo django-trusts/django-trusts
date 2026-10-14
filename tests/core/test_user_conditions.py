@@ -738,8 +738,8 @@ class SkipKeywordTest(TransactionTestCase):
             )
 
             denied = registry.permissions_for(alice, note)
-            self.assertEqual(list(denied), [])
-            self.assertIn('is_superuser', str(denied.query))
+            with self.assertNumQueries(0):
+                self.assertEqual(list(denied), [])
             skipped = registry.permissions_for(alice, note, skip_staff=True)
             self.assertEqual(
                 set(skipped.values_list('pk', flat=True)), {read.pk},
