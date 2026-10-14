@@ -1002,7 +1002,7 @@ class SkipKeywordInquiryTest(KernelHostRequiredMixin, TestCase):
         )
 
 
-class StaffSurfaceTest(TestCase):
+class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
     """A custom staff condition is enforced and skippable on each inquiry."""
 
     def setUp(self):
@@ -1332,7 +1332,7 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
     }
 
 
-class SuperuserSurfaceTest(TestCase):
+class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
     """Active and inactive superusers, with and without the override."""
 
     def setUp(self):
@@ -1425,7 +1425,7 @@ def _guard_request(user):
     return request
 
 
-class AuthorizationRequiredSuperuserTest(TestCase):
+class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
     """The view guard follows the override. It does not copy ``has_perm``."""
 
     def setUp(self):
@@ -1628,7 +1628,7 @@ class SuperuserPrefixFilterTest(TransactionTestCase):
                 editor.delete_model(PrefixScope)
 
 
-class PlainUserWithoutSuperuserTest(TransactionTestCase):
+class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase):
     def test_user_model_without_is_superuser_matches_when_no_rule_names_it(self):
         class PlainPrincipal(models.Model):
             username = models.CharField(max_length=40, unique=True)
@@ -1738,7 +1738,7 @@ _STOCK_CALLS = (
 
 
 @override_settings(ROOT_URLCONF='tests.core.test_user_conditions')
-class StockPermissionBoundaryTest(TestCase):
+class StockPermissionBoundaryTest(KernelHostRequiredMixin, TestCase):
     def test_stock_methods_async_variants_and_admin_stay_unchanged(self):
         User = get_user_model()
         root = User.objects.create_superuser(

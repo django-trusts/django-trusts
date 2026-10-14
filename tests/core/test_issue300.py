@@ -14,6 +14,7 @@ from django.db.models.sql.query import Query
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext, isolate_apps
 
+from tests.core import KernelHostRequiredMixin
 from tests.core.test_issue147.test_sql_export import (
     Document as GuideDocument,
     _document_handle,
@@ -128,7 +129,7 @@ class Issue300EligibilitySqlTest(SimpleTestCase):
         self.assertNotIn('is_active', eligibility)
 
 
-class Issue300BooleanFieldTest(TestCase):
+class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
     def test_authorized_denies_a_non_model_without_is_active_and_none_raises(self):
         class Authenticated(object):
             is_authenticated = True
