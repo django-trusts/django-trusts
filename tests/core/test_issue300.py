@@ -1,9 +1,15 @@
 """One placeholder per inquiry value, and ``is_active`` in the statement (#300)."""
 
+from unittest.mock import patch
+
+import django
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.db.models import IntegerField, OuterRef, Value
+from django.db.models.sql.query import Query
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 
 from tests.core.test_issue147.test_sql_export import (
     Document as GuideDocument,
@@ -11,6 +17,7 @@ from tests.core.test_issue147.test_sql_export import (
 )
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+import trusts._bind_once as bind_once_module
 from trusts._bind_once import (
     BIND_ALIAS,
     BindRef,
@@ -298,3 +305,101 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
         self.assertEqual(plain_sql, raw_sql)
         self.assertEqual(list(plain_params), list(raw_params))
         self.assertNotIn('trusts_bind', plain_sql)
+
+
+class Issue300ShapeFallbackTest(TestCase):
+    def setUp(self):
+        bind_once_module._warned = False
+
+    def tearDown(self):
+        bind_once_module._warned = False
+
+    def test_unexpected_shape_matches_the_plain_path(self):
+        user = User.objects.create_user(username='shape-300', password='x')
+        outsider = User.objects.create_user(username='shape-300-out', password='x')
+        queryset = User.objects.filter(id=user.pk).filter(pk=user.pk)
+        queryset.query.combined_queries = []
+        plain = User.objects.filter(id=user.pk).filter(pk=user.pk)
+        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+            plain_bound = bind_once(plain)
+        with self.assertLogs('trusts', level='WARNING') as logs:
+            returned = bind_once(queryset)
+            again = User.objects.filter(id=user.pk).filter(pk=user.pk)
+            again.query.combined_queries = []
+            bind_once(again)
+        self.assertEqual(len(logs.records), 1)
+        message = logs.records[0].getMessage()
+        self.assertIn('combined_queries', message)
+        self.assertIn('list', message)
+        self.assertIn(django.get_version(), message)
+        self.assertIs(returned, queryset)
+        self.assertEqual(
+            returned.query.sql_with_params(),
+            plain_bound.query.sql_with_params(),
+        )
+        self.assertEqual(list(returned), [user])
+        self.assertEqual(list(plain_bound), [user])
+        self.assertNotIn(outsider, list(returned))
+        self.assertEqual(returned.exists(), plain_bound.exists())
+
+    def test_unexpected_shape_records_the_plain_policy_sql(self):
+        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+            plain = _document_rows()
+        old = Query.combined_queries
+        Query.combined_queries = []
+        try:
+            with self.assertLogs('trusts', level='WARNING') as logs:
+                fallback = _document_rows()
+                _document_rows()
+        finally:
+            Query.combined_queries = old
+        self.assertEqual(len(logs.records), 1)
+        message = logs.records[0].getMessage()
+        self.assertIn('combined_queries', message)
+        self.assertIn(django.get_version(), message)
+        self.assertEqual(fallback, plain)
+        for key in (
+            'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
+        ):
+            self.assertNotIn('trusts_bind', fallback[key]['sql'], key)
+            self.assertIn('SELECT %s AS "a"', fallback[key]['sql'], key)
+
+    def test_rewrite_error_returns_the_original_queryset(self):
+        user = User.objects.create_user(username='rewrite-300', password='x')
+        queryset = User.objects.filter(id=user.pk).filter(pk=user.pk)
+        before = queryset.query.sql_with_params()
+
+        def boom(*args, **kwargs):
+            raise RuntimeError('bind row failed')
+
+        with patch('trusts._bind_once._install', boom):
+            with self.assertLogs('trusts', level='WARNING') as logs:
+                returned = bind_once(queryset)
+                other = User.objects.filter(id=user.pk).filter(pk=user.pk)
+                bind_once(other)
+        self.assertEqual(len(logs.records), 1)
+        message = logs.records[0].getMessage()
+        self.assertIn('RuntimeError', message)
+        self.assertIn('bind row failed', message)
+        self.assertIn(django.get_version(), message)
+        self.assertIs(returned, queryset)
+        self.assertEqual(returned.query.sql_with_params(), before)
+        self.assertNotIn('trusts_bind', before[0])
+        self.assertEqual(list(returned), [user])
+        with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+            plain = bind_once(User.objects.filter(id=user.pk).filter(pk=user.pk))
+        self.assertEqual(returned.query.sql_with_params(), plain.query.sql_with_params())
+
+    def test_exists_keeps_the_bound_sql(self):
+        user = User.objects.create_user(username='exists-300', password='x')
+        bound = bind_once(User.objects.filter(id=user.pk).filter(pk=user.pk))
+        with CaptureQueriesContext(connection) as captured:
+            self.assertTrue(bound.exists())
+        sql = captured.captured_queries[-1]['sql']
+        self.assertIn('SELECT 1 AS "a"', sql)
+        self.assertNotIn('SELECT ? AS "a"', sql)
+        self.assertNotIn('SELECT %s AS "a"', sql)
+        self.assertIn(' AS "user_id") "trusts_bind"', sql)
+        self.assertEqual(
+            sql.count('"auth_user"."id" = ("trusts_bind"."user_id")'), 2, sql,
+        )

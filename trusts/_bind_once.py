@@ -7,17 +7,23 @@ lockfile records.
 
 ``TRUSTS_SQL_BIND_ONCE`` defaults to true. Set it to false and ``bind_once``
 returns the queryset unchanged, so the lockfile shows the plain SQL.
+
+If the queryset does not have the Django query structure this pass reads,
+or the rewrite fails, the original queryset is returned unchanged and one
+warning is logged. The lockfile then records that plain SQL.
 """
 
 import copy
+import logging
 import re
+import weakref
 
 from django.db.models import BooleanField, Exists, IntegerField, QuerySet, Value
-from django.db.models.expressions import Expression
+from django.db.models.expressions import BaseExpression, Expression, F
 from django.db.models.lookups import Lookup
 from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
-from django.db.models.sql.where import WhereNode
+from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
 
 BIND_ALIAS = 'trusts_bind'
@@ -35,6 +41,10 @@ _USER_FIELDS = frozenset((
     'user', 'user_id', 'delegate', 'delegate_id', 'sponsor', 'sponsor_id',
 ))
 _PERMISSION_FIELDS = frozenset(('permission', 'permission_id'))
+_TERMINALS = (NothingNode, ExtraWhere)
+_BOUND_QUERY_CLASSES = {}
+_fallbacks = weakref.WeakSet()
+_warned = False
 
 
 def trusts_bind_once():
@@ -54,56 +64,341 @@ def bind_once(queryset, *also):
     Extra trees (a grant ``Q`` that is not yet on ``queryset``) are
     rewritten against the same row and returned after the queryset.
     When the setting is off, every argument is returned unchanged.
+    ``exists()`` on the queryset this returns keeps the bound statement,
+    including the literal ``SELECT 1`` marker.
+
+    A queryset whose Django query structure does not match, or a rewrite
+    that fails, is returned unchanged. The warning is logged once.
     """
     if not trusts_bind_once():
-        return (queryset, *also) if also else queryset
+        return _pack(queryset, also)
     query = getattr(queryset, 'query', None)
-    if isinstance(query, Query) and BIND_ALIAS in getattr(query, 'alias_map', {}):
-        return (queryset, *also) if also else queryset
-    prepared, extras = _prepare(queryset, also)
-    root = getattr(getattr(prepared, 'query', None), 'model', None)
-    walk = _Walk(root, _connection_for(prepared))
-    walk.visit(_query_of(prepared))
-    for extra in extras:
-        walk.visit(extra)
-    walk.finish(_query_of(prepared))
-    if also:
-        return (prepared, *extras)
-    return prepared
-
-
-def execute_exists(queryset):
-    """``EXISTS`` on the bound-once statement, or the plain one when off."""
-    if not trusts_bind_once():
-        return queryset.exists()
-    return query_exists(bind_once(queryset))
+    alias_map = getattr(query, 'alias_map', None)
+    if (
+        isinstance(query, Query)
+        and isinstance(alias_map, dict)
+        and BIND_ALIAS in alias_map
+    ):
+        return _pack(queryset, also)
+    try:
+        problem = _shape_problem(queryset, also)
+        if problem is not None:
+            return _fallback(queryset, also, problem)
+        prepared, extras = _rewrite(queryset, also)
+    except Exception as exc:
+        return _fallback(queryset, also, _exception_detail(exc))
+    return _pack(prepared, extras)
 
 
 def bound_exists_query(queryset):
     """The ``EXISTS`` query the lockfile compiles for ``queryset``."""
     if not trusts_bind_once():
         return queryset.query.exists()
-    return strip_exists_marker(bind_once(queryset).query.exists())
+    bound = bind_once(queryset)
+    if bound in _fallbacks:
+        return bound.query.exists()
+    return strip_exists_marker(bound.query.exists())
+
+
+def _pack(queryset, extras):
+    if extras:
+        return (queryset, *extras)
+    return queryset
+
+
+def _fallback(queryset, also, detail):
+    _warn_once(detail)
+    for obj in (queryset, *also):
+        try:
+            _fallbacks.add(obj)
+        except TypeError:
+            pass
+    return _pack(queryset, also)
+
+
+def _warn_once(detail):
+    global _warned
+    if _warned:
+        return
+    _warned = True
+    import django
+
+    logging.getLogger('trusts').warning(
+        'bind_once left the queryset unchanged: %s (Django %s).',
+        detail,
+        django.get_version(),
+    )
+
+
+def _exception_detail(exc):
+    message = str(exc).strip()
+    name = type(exc).__name__
+    if message:
+        return '%s: %s' % (name, message)
+    return name
+
+
+def _bound_has_results(self, using):
+    exists_query = strip_exists_marker(self.exists())
+    compiler = exists_query.get_compiler(using=using)
+    return compiler.has_results()
+
+
+def _arm_exists(queryset):
+    query = queryset.query
+    cls = query.__class__
+    if getattr(cls, '_trusts_bound_has_results', False):
+        return
+    bound = _BOUND_QUERY_CLASSES.get(cls)
+    if bound is None:
+        bound = type(cls.__name__, (cls,), {
+            'has_results': _bound_has_results,
+            '_trusts_bound_has_results': True,
+        })
+        _BOUND_QUERY_CLASSES[cls] = bound
+    query.__class__ = bound
+
+
+def _shape_problem(queryset, also):
+    """Describe the first Django query structure this pass does not know.
+
+    ``None`` means the tree matches the attributes, classes, and node
+    types the rewrite reads.
+    """
+    query = getattr(queryset, 'query', None)
+    if not isinstance(query, Query):
+        return 'queryset.query is %s, not a Query' % type(query).__name__
+    problem = _compiler_shape(queryset, query)
+    if problem is not None:
+        return problem
+    seen = set()
+    problem = _walk_shape(query, seen)
+    if problem is not None:
+        return problem
+    for extra in also:
+        problem = _walk_shape(extra, seen)
+        if problem is not None:
+            return problem
+    return None
+
+
+def _compiler_shape(queryset, query):
+    alias = getattr(queryset, 'db', None) or 'default'
+    compiler = query.get_compiler(using=alias)
+    if not callable(getattr(compiler, 'quote_name', None)):
+        return 'SQLCompiler.quote_name is missing'
+    if not callable(getattr(compiler, 'compile', None)):
+        return 'SQLCompiler.compile is missing'
+    ops = getattr(compiler.connection, 'ops', None)
+    method = getattr(
+        ops, 'conditional_expression_supported_in_where_clause', None,
+    )
+    if not callable(method):
+        return (
+            'DatabaseOperations.conditional_expression_supported_in_where_clause '
+            'is missing'
+        )
+    return None
+
+
+def _walk_shape(node, seen):
+    if node is None or isinstance(node, (str, bytes, int, float, bool)):
+        return None
+    if isinstance(node, _TERMINALS) or isinstance(node, F):
+        if isinstance(node, F) and not isinstance(getattr(node, 'name', None), (str, F)):
+            return 'F.name is %s, not a string or an F reference' % type(
+                getattr(node, 'name', None)
+            ).__name__
+        return None
+    if id(node) in seen:
+        return None
+    seen.add(id(node))
+    if isinstance(node, Query):
+        return _query_shape(node, seen)
+    if isinstance(node, Lookup):
+        return _lookup_shape(node, seen)
+    if isinstance(node, (WhereNode, Q)):
+        return _node_shape(node, seen)
+    if isinstance(node, tuple):
+        if len(node) == 2 and isinstance(node[0], str):
+            return _walk_value(node[1], seen)
+        return 'query child is a %s-tuple, not a lookup pair' % len(node)
+    get_source = getattr(node, 'get_source_expressions', None)
+    if not callable(get_source):
+        return (
+            '%s has no get_source_expressions' % type(node).__name__
+        )
+    sources = get_source()
+    if not isinstance(sources, (list, tuple)):
+        return (
+            '%s.get_source_expressions returned %s, not a list'
+            % (type(node).__name__, type(sources).__name__)
+        )
+    if sources and not callable(getattr(node, 'set_source_expressions', None)):
+        return '%s.set_source_expressions is missing' % type(node).__name__
+    for source in sources:
+        problem = _walk_shape(source, seen)
+        if problem is not None:
+            return problem
+    return None
+
+
+def _query_shape(query, seen):
+    if not isinstance(getattr(query, 'alias_map', None), dict):
+        return 'Query.alias_map is %s, not a dict' % type(
+            getattr(query, 'alias_map', None)
+        ).__name__
+    if not isinstance(getattr(query, 'alias_refcount', None), dict):
+        return 'Query.alias_refcount is %s, not a dict' % type(
+            getattr(query, 'alias_refcount', None)
+        ).__name__
+    for alias, count in query.alias_refcount.items():
+        if not isinstance(alias, str) or not isinstance(count, int):
+            return 'Query.alias_refcount entry %r is not a string and an int' % (
+                alias,
+            )
+    if not isinstance(getattr(query, 'table_map', None), dict):
+        return 'Query.table_map is %s, not a dict' % type(
+            getattr(query, 'table_map', None)
+        ).__name__
+    for table, aliases in query.table_map.items():
+        if not isinstance(table, str) or not isinstance(aliases, list):
+            return 'Query.table_map entry %r is not a string and a list' % (
+                table,
+            )
+    where = getattr(query, 'where', None)
+    if not isinstance(where, WhereNode):
+        return 'Query.where is %s, not a WhereNode' % type(where).__name__
+    annotations = getattr(query, 'annotations', None)
+    if not isinstance(annotations, dict):
+        return 'Query.annotations is %s, not a dict' % type(annotations).__name__
+    for key, annotation in annotations.items():
+        if not isinstance(key, str):
+            return 'annotation alias is %s, not a str' % type(key).__name__
+        if annotation is not None and not isinstance(annotation, BaseExpression):
+            return 'annotation %r is %s, not an expression' % (
+                key, type(annotation).__name__,
+            )
+    combined = getattr(query, 'combined_queries', None)
+    if not isinstance(combined, tuple):
+        return 'Query.combined_queries is %s, not a tuple' % type(combined).__name__
+    if not hasattr(query, 'model'):
+        return 'Query.model is missing'
+    for name in ('clone', 'exists', 'get_initial_alias'):
+        if not callable(getattr(query, name, None)):
+            return 'Query.%s is missing' % name
+    problem = _walk_shape(where, seen)
+    if problem is not None:
+        return problem
+    for annotation in annotations.values():
+        problem = _walk_shape(annotation, seen)
+        if problem is not None:
+            return problem
+    for part in combined:
+        if not isinstance(part, Query):
+            return 'combined query is %s, not a Query' % type(part).__name__
+        problem = _walk_shape(part, seen)
+        if problem is not None:
+            return problem
+    return None
+
+
+def _node_shape(node, seen):
+    children = getattr(node, 'children', None)
+    if not isinstance(children, list):
+        return '%s.children is %s, not a list' % (
+            type(node).__name__, type(children).__name__,
+        )
+    connector = getattr(node, 'connector', None)
+    if not isinstance(connector, str):
+        return '%s.connector is %s, not a str' % (
+            type(node).__name__, type(connector).__name__,
+        )
+    if not isinstance(getattr(node, 'negated', None), bool):
+        return '%s.negated is not a bool' % type(node).__name__
+    if not callable(getattr(type(node), 'create', None)):
+        return '%s.create is missing' % type(node).__name__
+    for child in children:
+        problem = _walk_shape(child, seen)
+        if problem is not None:
+            return problem
+    return None
+
+
+def _walk_value(value, seen):
+    """A ``Q`` pair's value. Plain values stay. Expressions are walked."""
+    if value is None or isinstance(value, (
+        str, bytes, int, float, bool, list, tuple, set, dict, QuerySet,
+    )):
+        return None
+    if isinstance(value, (Query, Lookup, WhereNode, Q, BaseExpression)):
+        return _walk_shape(value, seen)
+    if (
+        hasattr(value, 'resolve_expression')
+        or hasattr(value, 'as_sql')
+        or hasattr(value, 'get_source_expressions')
+    ):
+        return _walk_shape(value, seen)
+    return None
+
+
+def _lookup_shape(node, seen):
+    if not hasattr(node, 'lhs') or not hasattr(node, 'rhs'):
+        return 'Lookup is missing lhs or rhs'
+    if not callable(getattr(node, 'rhs_is_direct_value', None)):
+        return 'Lookup.rhs_is_direct_value is missing'
+    lookup_name = getattr(node, 'lookup_name', None)
+    if lookup_name is not None and not isinstance(lookup_name, str):
+        return 'Lookup.lookup_name is %s, not a str' % type(lookup_name).__name__
+    problem = _walk_shape(node.lhs, seen)
+    if problem is not None:
+        return problem
+    if node.rhs_is_direct_value():
+        if isinstance(node.rhs, Value) and not hasattr(node.rhs, 'value'):
+            return 'Value is missing value'
+        return None
+    return _walk_shape(node.rhs, seen)
+
+
+class _QueryHolder(object):
+    """Owns a cloned query without touching the caller's object."""
+
+    def __init__(self, db, query):
+        self.db = db
+        self.query = query
+
+
+def _rewrite(queryset, also):
+    prepared, extras = _prepare(queryset, also)
+    root = getattr(prepared.query, 'model', None)
+    walk = _Walk(root, _connection_for(prepared))
+    walk.visit(prepared.query)
+    for extra in extras:
+        walk.visit(extra)
+    walk.finish(prepared.query)
+    _arm_exists(prepared)
+    if isinstance(queryset, QuerySet):
+        return prepared, extras
+    queryset.query = prepared.query
+    return queryset, extras
 
 
 def _prepare(queryset, also):
+    extras = tuple(_own_expr(item) for item in also)
     if isinstance(queryset, QuerySet):
         prepared = queryset._chain()
         prepared.query = _own_query(prepared.query)
-    elif isinstance(getattr(queryset, 'query', None), Query):
-        prepared = queryset
-        prepared.query = _own_query(queryset.query)
-    else:
-        from trusts.core import TrustsConfigurationError
+        return prepared, extras
+    query = getattr(queryset, 'query', None)
+    if isinstance(query, Query):
+        return _QueryHolder(
+            getattr(queryset, 'db', None), _own_query(query),
+        ), extras
+    from trusts.core import TrustsConfigurationError
 
-        raise TrustsConfigurationError(
-            'bind_once expected a queryset, not %r.' % (queryset,)
-        )
-    return prepared, tuple(_own_expr(item) for item in also)
-
-
-def _query_of(queryset):
-    return queryset.query
+    raise TrustsConfigurationError(
+        'bind_once expected a queryset, not %r.' % (queryset,)
+    )
 
 
 def _connection_for(queryset):
@@ -881,13 +1176,6 @@ def strip_exists_marker(query):
         query.annotations['a'] = SqlInt(1)
         query._annotation_select_cache = None
     return query
-
-
-def query_exists(queryset):
-    """Evaluate ``queryset.exists()`` with a literal exists marker."""
-    query = strip_exists_marker(queryset.query.exists())
-    compiler = query.get_compiler(using=queryset.db)
-    return compiler.has_results()
 
 
 class LiteralExists(Exists):

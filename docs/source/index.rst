@@ -777,7 +777,10 @@ lockfile key remains ``get_permitted_users``. For the direct
 bind table in the statement above. Leave it on. Set it to false only
 when that SQL misbehaves: django-trusts then runs the plain queryset,
 and the lockfile records that plain SQL. Set it back to true when the
-plain statement is no longer needed.
+plain statement is no longer needed. If the queryset does not have the
+Django query structure the rewrite reads, django-trusts leaves the
+queryset unchanged, logs one warning, and the lockfile records that
+same plain SQL.
 
 Several trusts for the same content within one backend are OR alternatives.
 django-trusts issues one SQL statement for each permission inquiry and combines
