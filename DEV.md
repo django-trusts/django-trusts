@@ -180,8 +180,11 @@ documented choices and the boundaries the docs intentionally leave
 unspecified. Implementation PRs normally do not edit user docs. When implementation exposes a mismatch, the implementor
 posts an evidence-backed doc-change request. The doc writer decides whether it
 is a valid contract change, a documentation defect, or an implementation
-misunderstanding, and updates the docs when warranted. Keep implementation
-notes and proof in PR comments or development docs, not permanent user docs.
+misunderstanding, and updates the docs when warranted. If implementation leads
+to a significant contract change, the docs PR should generally remain unmerged
+until the project owner has had a chance to review the revised contract. Keep
+implementation notes and proof in PR comments or development docs, not
+permanent user docs.
 
 ## Writing docs
 
