@@ -756,10 +756,10 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
     permission = _require_instance(permission, 'permission')
     from trusts.query import user_identity_denied, stored_user_is_inactive
 
-    skipped = _inquiry_skipped(skip_is_active, **skip_flags)
-    if not handles:
+    skipped = _skipped_for_handles(handles, skip_is_active, skip_flags, user)
+    if not handles or user_identity_denied(user):
         return queryset.none()
-    if user_identity_denied(user) or (
+    if (
         stored_user_is_inactive(user)
         and _handles_enforce_is_active(handles, skipped)
     ):
@@ -1992,10 +1992,62 @@ def _permission_content_type_filters(record, content_identity):
     }
 
 
-def _inquiry_skipped(skip_is_active=False, **flags):
+def _inquiry_skipped(skip_is_active=False, *, known=None, **flags):
     from trusts.user_rules import collect_skipped
 
-    return collect_skipped(skip_is_active, **flags)
+    return collect_skipped(skip_is_active, known=known, **flags)
+
+
+def _registry_skipped(registry, user, skip_is_active, skip_flags):
+    """Parse skip keywords for one registry.
+
+    A remaining user is checked against that registry's condition and
+    override names. Anonymous and unauthenticated users are not.
+    """
+    from trusts.query import user_identity_denied
+
+    known = None
+    if user is not None and not user_identity_denied(user):
+        known = registry._known_skip_names()
+    return _inquiry_skipped(skip_is_active, known=known, **skip_flags)
+
+
+def _known_skip_names(handles):
+    """Condition and override names on the registries these handles own.
+
+    No registry yet means the built-in ``is_active`` condition only.
+    """
+    from trusts.user_rules import BUILTIN_USER_CONDITIONS, condition_names
+
+    names = set()
+    saw = False
+    for handle in handles:
+        registry = getattr(handle, 'registry', None)
+        if registry is None:
+            continue
+        saw = True
+        names.update(condition_names(
+            registry._stored_user_conditions(),
+            getattr(registry, '_user_override', None),
+        ))
+    if not saw:
+        names.update(rule.name for rule in BUILTIN_USER_CONDITIONS)
+    return frozenset(names)
+
+
+def _skipped_for_handles(handles, skip_is_active, skip_flags, user):
+    """Parse skip keywords, then require registered names for a real user.
+
+    Anonymous and unauthenticated users are denied before a registry
+    lookup, so an unknown ``skip_*`` keyword is not consulted for them.
+    """
+    from trusts.query import user_identity_denied
+
+    if user is None or user_identity_denied(user):
+        return _inquiry_skipped(skip_is_active, **skip_flags)
+    return _inquiry_skipped(
+        skip_is_active, known=_known_skip_names(handles), **skip_flags,
+    )
 
 
 def _activity_denied(user, conditions, skipped):
@@ -2022,6 +2074,12 @@ def _handles_enforce_is_active(handles, skipped):
 
 
 def _skip_names(skip_is_active=False, skipped=()):
+    """Union ``skipped`` with the explicit ``skip_is_active`` flag.
+
+    Inquiry entry points already store the condition name in ``skipped``.
+    ``granted()`` and the compiler still take the flag, so a true flag
+    also names the ``is_active`` condition.
+    """
     names = set(skipped or ())
     if skip_is_active:
         names.add('is_active')
@@ -4299,6 +4357,14 @@ class TrustsRegistry(object):
             return None
         return tuple(self._user_conditions.values())
 
+    def _known_skip_names(self):
+        """Condition names, plus the override name, that ``skip_<name>`` accepts."""
+        from trusts.user_rules import condition_names
+
+        return condition_names(
+            self._stored_user_conditions(), self._user_override,
+        )
+
     def register_user_condition(self, name, expr, on='*'):
         """Register, replace, or remove one named user condition.
 
@@ -4308,19 +4374,22 @@ class TrustsRegistry(object):
         expression. ``None`` removes that name and no other. ``on`` is
         ``*`` (the default), ``user``, ``sponsor``, or a non-empty tuple
         of those two. The lambda is walked once into concrete boolean
-        fields, ``&``, and ``~``.
+        fields, ``&``, and ``~``. The skip keyword on the inquiry APIs
+        is ``skip_<name>``. The name must be an identifier and must not
+        collide with an inquiry keyword.
         """
-        from trusts.user_rules import BUILTIN_USER_CONDITIONS, normalize_on
+        from trusts.user_rules import (
+            BUILTIN_USER_CONDITIONS,
+            normalize_on,
+            validate_user_rule_name,
+        )
 
         if self._frozen:
             raise TrustsConfigurationError(
                 'Cannot register a user condition on a frozen TrustsRegistry.'
             )
         self._reject_rules_after_registration()
-        if not isinstance(name, str) or not name.isidentifier():
-            raise TrustsConfigurationError(
-                'User condition name must be an identifier, not %r.' % (name,)
-            )
+        validate_user_rule_name(name, kind='condition')
         target = normalize_on(on)
         created = self._user_conditions is None
         self._materialize_user_conditions(BUILTIN_USER_CONDITIONS)
@@ -4413,12 +4482,13 @@ class TrustsRegistry(object):
         ``TrustsConfigurationError``. A new name and expression replace
         the previous slot. ``None`` must name the current override.
         ``on="sponsor"`` and ``on="*"`` raise. Sponsor authority is
-        unchanged.
+        unchanged. The skip keyword is ``skip_<name>``.
         """
         from trusts.user_rules import (
             UserCondition,
             assert_concrete_booleans,
             normalize_override_on,
+            validate_user_rule_name,
             walk_user_lambda,
         )
         from django.contrib.auth import get_user_model
@@ -4428,10 +4498,7 @@ class TrustsRegistry(object):
                 'Cannot set a user override on a frozen TrustsRegistry.'
             )
         self._reject_rules_after_registration()
-        if not isinstance(name, str) or not name.isidentifier():
-            raise TrustsConfigurationError(
-                'User override name must be an identifier, not %r.' % (name,)
-            )
+        validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
         if expr is None:
             current = self._user_override
@@ -4808,7 +4875,7 @@ class TrustsRegistry(object):
         content = _require_instance(content, 'content')
         from trusts.query import user_identity_denied
 
-        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
+        skipped = _registry_skipped(self, user, skip_is_active, skip_flags)
         plan = self.plan_for(content, user=user)
         if user_identity_denied(user) or _activity_denied(
             user, plan.user_conditions, skipped,
@@ -4828,7 +4895,7 @@ class TrustsRegistry(object):
         permission = _require_instance(permission, 'permission')
         from trusts.query import user_identity_denied
 
-        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
+        skipped = _registry_skipped(self, user, skip_is_active, skip_flags)
         plan = self.plan_for(
             content, user=user, permission=permission,
         )
@@ -4855,7 +4922,7 @@ class TrustsRegistry(object):
         permission = _require_instance(permission, 'permission')
         from trusts.query import user_identity_denied
 
-        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
+        skipped = _registry_skipped(self, user, skip_is_active, skip_flags)
         plan = self.plan_for(
             queryset, user=user, permission=permission,
         )

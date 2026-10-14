@@ -420,7 +420,8 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
 `.authorized` does not call it; both inquiries apply the `is_active` check
-(or skip it with `skip_is_active=True`) without sharing permission-input
+(or skip a registered condition with `skip_<name>=True`; `skip_is_active=True`
+is the keyword for `is_active`) without sharing permission-input
 validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.

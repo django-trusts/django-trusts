@@ -65,8 +65,9 @@ Migration-bot checklist:
 ## `skip_is_active` (#273)
 
 `allow_inactive_user` and `allow_inactive` are both `skip_is_active`.
-Content, permission, boolean, and user-list inquiries use that one keyword.
-It still skips only the built-in `is_active` checks.
+Content, permission, boolean, and user-list inquiries use that keyword for
+the built-in `is_active` condition. A registered user condition uses
+`skip_<name>` on these same calls.
 
 | Old | New |
 | --- | --- |

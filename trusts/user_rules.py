@@ -95,26 +95,72 @@ def normalize_on(on):
     )
 
 
-def collect_skipped(skip_is_active=False, **flags):
+# Inquiry parameters. A condition name, and the ``skip_<name>`` keyword
+# derived from it, must not reuse one of these. ``skip_is_active`` is
+# absent on purpose: it is the keyword for the ``is_active`` condition.
+_INQUIRY_KEYWORDS = frozenset({
+    'user', 'user_obj', 'permission', 'perm', 'permext', 'content', 'obj',
+    'extra_q', 'conditions', 'queryset', 'handles', 'kind', 'candidates',
+    'plan', 'sponsor_handles', 'permission_model', 'skipped', 'skip_flags',
+})
+
+
+def validate_user_rule_name(name, *, kind):
+    """Fail when ``name`` cannot become the keyword ``skip_<name>``."""
+    label = 'User condition' if kind == 'condition' else 'User override'
+    if not isinstance(name, str) or not name.isidentifier():
+        raise TrustsConfigurationError(
+            '%s name must be an identifier, not %r.' % (label, name)
+        )
+    flag = 'skip_%s' % name
+    if name in _INQUIRY_KEYWORDS or flag in _INQUIRY_KEYWORDS:
+        raise TrustsConfigurationError(
+            '%s name %r collides with an inquiry keyword.' % (label, name)
+        )
+
+
+def condition_names(conditions, override=None):
+    """Registered condition names, plus the override name when one is set."""
+    rules = BUILTIN_USER_CONDITIONS if conditions is None else conditions
+    names = {rule.name for rule in rules}
+    if override is not None:
+        names.add(override.name)
+    return frozenset(names)
+
+
+def collect_skipped(skip_is_active=False, *, known=None, **flags):
     """Names whose ``skip_<name>=True`` drops that condition.
 
-    ``skip_is_active`` is the explicit keyword. Other ``skip_<name>``
-    booleans name further conditions. A non-boolean or an unrelated
-    keyword fails before SQL.
+    Each keyword is ``skip_`` plus a registered condition name. The
+    built-in ``is_active`` condition is what makes ``skip_is_active``
+    accepted. ``known`` is that name set; a ``skip_*`` keyword outside
+    it raises ``TypeError``. A non-boolean or an unrelated keyword
+    fails before SQL. The default ``skip_is_active=False`` is the
+    signature default and is not treated as a request.
     """
     from trusts.query import require_mode_flag
 
     require_mode_flag(skip_is_active, 'skip_is_active')
-    names = set()
+    requested = []
     if skip_is_active:
-        names.add('is_active')
+        requested.append('skip_is_active'[len('skip_'):])
     for key, value in flags.items():
-        if not key.startswith('skip_') or len(key) <= len('skip_'):
+        if (
+            not key.startswith('skip_')
+            or not key[len('skip_'):].isidentifier()
+        ):
             raise TypeError('Unexpected keyword argument %r.' % (key,))
         require_mode_flag(value, key)
+        suffix = key[len('skip_'):]
+        if known is not None and suffix not in known:
+            raise TypeError('Unknown skip keyword %r.' % (key,))
         if value:
-            names.add(key[len('skip_'):])
-    return frozenset(names)
+            requested.append(suffix)
+    if known is not None:
+        for name in requested:
+            if name not in known:
+                raise TypeError('Unknown skip keyword %r.' % ('skip_%s' % name,))
+    return frozenset(requested)
 
 
 def enforces_is_active(conditions, skipped, *, role='user'):

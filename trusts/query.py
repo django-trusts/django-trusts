@@ -24,7 +24,7 @@ def is_active_principal(user, *, skip_is_active=False):
 
 
 def require_mode_flag(value, name):
-    """``skip_is_active`` must be a real boolean."""
+    """A skip keyword must be a real boolean."""
     if not isinstance(value, bool):
         raise TypeError('%s must be a bool, not %r.' % (name, value))
     return value
@@ -81,10 +81,12 @@ class AuthorizedQuerySet(QuerySet):
     method does not parse ``:condition``, does not call
     ``is_active_principal``, and does not call ``get_permission``.
 
-    An authenticated user whose ``is_active`` is false receives an empty
-    queryset unless ``skip_is_active`` is true. Anonymous and
-    unauthenticated users receive an empty queryset even when
-    ``skip_is_active`` is true, before ``granted()``. ``None`` still
+    An authenticated user who fails a registered user condition receives
+    an empty queryset unless that condition's ``skip_<name>`` keyword is
+    true. ``skip_is_active`` is the keyword for the built-in ``is_active``
+    condition. Anonymous and unauthenticated users receive an empty
+    queryset even when a skip keyword is true, before ``granted()``.
+    ``None`` still
     fails at the grant binding, which is not a positive result. The public
     content-list inquiry is
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
@@ -100,7 +102,7 @@ class AuthorizedQuerySet(QuerySet):
         from trusts.core import (
             TrustsConfigurationError,
             _handles_enforce_is_active,
-            _inquiry_skipped,
+            _skipped_for_handles,
             granted,
         )
 
@@ -108,8 +110,10 @@ class AuthorizedQuerySet(QuerySet):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
             )
-        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
         handles = _relationship_implementation_handles()
+        skipped = _skipped_for_handles(
+            handles, skip_is_active, skip_flags, user,
+        )
         if user_identity_denied(user):
             return self.none()
         if (
@@ -157,8 +161,10 @@ class PermittedQuerySetMixin:
         saved ``auth.Permission`` instance. The protected model is
         ``self.model``. The codename is not parsed to guess a model.
         ``conditions`` is an exact tuple of queryable names, ANDed.
-        Anonymous users, and inactive users unless ``skip_is_active``,
-        receive an empty queryset. Malformed input and incomplete
+        Anonymous users, and users who fail a registered condition unless
+        that condition's ``skip_<name>`` keyword is true, receive an empty
+        queryset. ``skip_is_active`` is the keyword for the built-in
+        ``is_active`` condition. Malformed input and incomplete
         configuration raise before that shortcut and before SQL.
 
         A relationship-family backend participates only when it has an

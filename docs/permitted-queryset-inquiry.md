@@ -199,7 +199,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
-- the user is anonymous, unauthenticated, or inactive, unless `skip_is_active=True`; or
+- the user is anonymous, unauthenticated, or inactive, unless `skip_is_active=True` (or `skip_<name>=True` for another registered condition); or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another
   application label.

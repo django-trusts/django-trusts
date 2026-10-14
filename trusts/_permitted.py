@@ -327,9 +327,9 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.core import _handles_enforce_is_active, _inquiry_skipped
+    from trusts.core import _handles_enforce_is_active, _skipped_for_handles
 
-    skipped = _inquiry_skipped(skip_is_active, **skip_flags)
+    skipped = _skipped_for_handles(handles, skip_is_active, skip_flags, user)
     enforce = _handles_enforce_is_active(handles, skipped)
     if not is_active_principal(
         user,

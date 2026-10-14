@@ -1,11 +1,14 @@
 """Named user conditions compiled into permission SQL (#312)."""
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import TestCase, TransactionTestCase
 
+from tests.core import KernelHostRequiredMixin
+from tests.myapp.backends import DocumentBackend
+from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts._bind_once import bind_once
 from trusts.core import (
@@ -688,3 +691,171 @@ class UserRuleOrderTest(TestCase):
             )
         self.assertEqual(empty_delegation._delegation_order, [])
         self.assertEqual(empty_delegation._delegations_by_root, {})
+
+
+class SkipKeywordTest(TransactionTestCase):
+    def test_custom_condition_skip_keyword(self):
+        class SkipNote(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class SkipGrant(models.Model):
+            note = models.ForeignKey(SkipNote, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(SkipNote)
+            editor.create_model(SkipGrant)
+        try:
+            User = get_user_model()
+            alice = User.objects.create_user('skip-alice', password='x')
+            note = SkipNote.objects.create(title='n')
+            read = _permission(SkipNote, 'read_note_skip_keyword')
+            SkipGrant.objects.create(note=note, user=alice, permission=read)
+            registry = TrustsRegistry()
+            registry.register_user_condition(
+                'staff', lambda u: u.is_superuser,
+            )
+            grant = Ref(SkipGrant)
+            registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+
+            denied = registry.permissions_for(alice, note)
+            self.assertEqual(list(denied), [])
+            self.assertIn('is_superuser', str(denied.query))
+            skipped = registry.permissions_for(alice, note, skip_staff=True)
+            self.assertEqual(
+                set(skipped.values_list('pk', flat=True)), {read.pk},
+            )
+            self.assertNotIn('is_superuser', str(skipped.query))
+            self.assertIn('is_active', str(skipped.query))
+            self.assertTrue(
+                registry.has_permission(alice, note, read, skip_staff=True),
+            )
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(SkipGrant)
+                editor.delete_model(SkipNote)
+
+    def test_unknown_skip_keyword_raises(self):
+        class UnknownNote(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class UnknownGrant(models.Model):
+            note = models.ForeignKey(UnknownNote, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(UnknownNote)
+            editor.create_model(UnknownGrant)
+        try:
+            User = get_user_model()
+            alice = User.objects.create_user('skip-unknown', password='x')
+            inactive = User.objects.create_user('skip-unknown-off', password='x')
+            inactive.is_active = False
+            inactive.save(update_fields=['is_active'])
+            note = UnknownNote.objects.create(title='n')
+            read = _permission(UnknownNote, 'read_note_unknown_skip')
+            UnknownGrant.objects.create(note=note, user=alice, permission=read)
+            registry = TrustsRegistry()
+            grant = Ref(UnknownGrant)
+            registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            for value in (True, False):
+                with self.assertRaises(TypeError) as ctx:
+                    registry.permissions_for(alice, note, skip_nope=value)
+                self.assertIn('skip_nope', str(ctx.exception))
+            with self.assertRaises(TypeError) as ctx:
+                registry.permissions_for(inactive, note, skip_nope=True)
+            self.assertIn('skip_nope', str(ctx.exception))
+
+            removed = TrustsRegistry()
+            removed.register_user_condition('is_active', None)
+            removed.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            with self.assertRaises(TypeError) as ctx:
+                removed.permissions_for(alice, note, skip_is_active=True)
+            self.assertIn('skip_is_active', str(ctx.exception))
+            self.assertEqual(
+                set(removed.permissions_for(alice, note).values_list(
+                    'pk', flat=True,
+                )),
+                {read.pk},
+            )
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(UnknownGrant)
+                editor.delete_model(UnknownNote)
+
+
+class SkipKeywordNameTest(TestCase):
+    def test_condition_name_must_be_an_identifier(self):
+        registry = TrustsRegistry()
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.register_user_condition(
+                'not-a-name', lambda u: u.is_active,
+            )
+        self.assertIn('identifier', str(ctx.exception))
+        self.assertIsNone(registry._user_conditions)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.register_user_condition('flags', lambda u: u.is_active)
+        self.assertIn('collides', str(ctx.exception))
+        self.assertIsNone(registry._user_conditions)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.set_user_override('user', lambda u: u.is_superuser)
+        self.assertIn('collides', str(ctx.exception))
+        self.assertIsNone(registry._user_override)
+        registry.register_user_condition('staff', lambda u: u.is_staff)
+        self.assertEqual(
+            tuple(rule.name for rule in registry.user_conditions()),
+            ('is_active', 'staff'),
+        )
+
+
+class SkipKeywordInquiryTest(KernelHostRequiredMixin, TestCase):
+    def test_unknown_skip_keyword_on_inquiry_apis(self):
+        from django.contrib.auth.models import Permission as AuthPermission
+
+        from trusts.query import PermittedQuerySet
+
+        User = get_user_model()
+        alice = User.objects.create_user('skip-inquiry', password='x')
+        ct = ContentType.objects.get_for_model(Document)
+        change, _created = AuthPermission.objects.get_or_create(
+            content_type=ct, codename='change_document',
+            defaults={'name': 'change'},
+        )
+        document = Document.objects.create(title='skip-inquiry')
+        backend = DocumentBackend()
+        with self.assertRaises(TypeError) as ctx:
+            backend.has_perm(alice, 'myapp.change_document', document, skip_nope=True)
+        self.assertIn('skip_nope', str(ctx.exception))
+        with self.assertRaises(TypeError):
+            Document.objects.authorized(alice, change, skip_nope=False)
+        permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
+        with self.assertRaises(TypeError):
+            permitted.permitted(change, alice, skip_nope=True)
+        with self.assertRaises(TypeError):
+            document.get_permitted_users(change, skip_nope=True)
+        self.assertFalse(
+            backend.has_perm(
+                AnonymousUser(), 'myapp.change_document', document,
+                skip_nope=True,
+            ),
+        )

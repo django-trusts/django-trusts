@@ -147,9 +147,10 @@ By default, membership in either queryset matches `user.has_perm(perm, content)`
 For an `auth.Permission` instance, use its `app_label.codename` string in
 `has_perm()`; supported strings and custom permission instances are unchanged.
 Reverse compilation still uses the canonical permission row.
-`skip_is_active=True` skips only Trusts' built-in `is_active` checks. Custom
-backend contributions are unchanged, and stock `user.has_perm()` cannot
-forward this keyword.
+`skip_<name>=True` drops that registered user condition.
+`skip_is_active=True` is the keyword for Trusts' built-in `is_active`
+checks. Custom backend contributions are unchanged, and stock
+`user.has_perm()` cannot forward this keyword.
 
 This is stronger than the Trusts-only contract of
 `Model.objects.authorized(user, permission)`. The reverse inquiry must not

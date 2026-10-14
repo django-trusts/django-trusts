@@ -93,7 +93,8 @@ without that check. Python actor checks were not automatically represented in SQ
 That forward gap is closed. Inquiries that used to reject an inactive user in
 Python before SQL now also compare a concrete `is_active` column in the grant
 SQL that runs. The lockfile records that SQL and the token `user.is_active=True`.
-There is no separate rule key. `skip_is_active=True` omits the comparison. A
+There is no separate rule key. `skip_<name>=True` omits that registered
+condition. The built-in condition's keyword is `skip_is_active=True`. A
 user model with no concrete `is_active` column does not gain a term. The schema
 version stays 1.
 
@@ -122,7 +123,8 @@ Thomas clarified the public keyword by the returned answer (review
 supersedes the narrower exception that initially named only
 `filter_by_permitted_content`. Internal helpers can propagate one boolean flag;
 public adapters map their documented keyword explicitly. Those two names
-are now the one keyword `skip_is_active` on every row below.
+are now `skip_<name>` for each registered user condition. The built-in
+`is_active` condition's keyword is `skip_is_active` on every row below.
 
 | Public inquiry | Keyword |
 | --- | --- |

@@ -490,8 +490,9 @@ the same model.
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``skip_is_active`` is the same option as the other content
-inquiries.
+backends. ``skip_is_active`` is the keyword for the built-in
+``is_active`` condition, the same option as the other content inquiries.
+Another registered condition uses ``skip_<name>``.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -572,11 +573,14 @@ against a user model; a non-model user object is not a SQL principal.
 Including inactive users
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-To include inactive users in an inquiry, pass keyword-only
-``skip_is_active=True`` (the default is ``False``). The same keyword is
-used for content, permissions, booleans, and user lists. It skips only the
-built-in ``is_active`` checks for the user, delegate, and sponsor. Explicit
-conditions and candidate-queryset filters still apply.
+To include users who fail a registered user condition, pass that
+condition's keyword-only ``skip_<name>=True``. The built-in ``is_active``
+condition's keyword is ``skip_is_active`` (the default is ``False``).
+The same keywords are used for content, permissions, booleans, and user
+lists. ``skip_is_active=True`` skips the built-in ``is_active`` checks for
+the user, delegate, and sponsor. An unknown ``skip_*`` keyword raises
+``TypeError``. Explicit conditions and candidate-queryset filters still
+apply.
 For example, inspect a suspended user's grants before reactivating them:
 
 .. code-block:: python

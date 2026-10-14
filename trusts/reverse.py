@@ -31,18 +31,25 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     Django's active-superuser rule is OR-ed with each configured backend
     that can contribute an exact reverse predicate. The ``is_active``
     check applies inside the Trusts-owned branch only. A custom predicate
-    is not wrapped. ``skip_is_active=True`` is forwarded only to the
+    is not wrapped. ``skip_<name>=True`` drops that registered user
+    condition on the Trusts-owned branch. ``skip_is_active`` is the
+    keyword for the ``is_active`` condition and is forwarded only to the
     Trusts-owned mixin method. The superuser contributor still requires an
     active superuser. An unsupported object-permission backend raises
     before SQL.
     """
     from django.contrib.auth import get_backends, get_user_model
 
-    from trusts.core import _inquiry_skipped
+    from trusts.apps import _relationship_implementation_handles
+    from trusts.core import _inquiry_skipped, _known_skip_names
 
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    skipped = _inquiry_skipped(skip_is_active, **skip_flags)
+    skipped = _inquiry_skipped(
+        skip_is_active,
+        known=_known_skip_names(_relationship_implementation_handles()),
+        **skip_flags,
+    )
     if user_queryset is None:
         user_queryset = get_user_model()._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
