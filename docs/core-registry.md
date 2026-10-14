@@ -439,11 +439,11 @@ it hangs off a walk-site row the walk reaches. An ancestor of the walk
 site stays the row stored on that grant, including when an ordinary sponsor
 grant supplies the sponsor-authority predicate. A one-level delegation keeps
 a prefix only when the delegation and the complete sponsor-authority predicate
-both reach it. When that predicate is satisfied by an ordinary grant, its
-`along=` walk or exact match must reach the prefix. A second delegation level
-does not. A delegated `along=` whose content suffix is longer than one reverse
-hop raises `TrustsConfigurationError`. An ordinary sponsor grant's `along=`
-has that same limit. `queryset.model` equal to the
+both reach it. Each contributing ordinary sponsor grant's `along=` walk or
+exact match must reach the prefix. A second delegation level does not. A
+delegated `along=` whose content suffix is longer than one reverse hop raises
+`TrustsConfigurationError`. An ordinary sponsor grant's `along=` has that
+same limit. `queryset.model` equal to the
 content terminal is allowed when a proper prefix step of that same model
 exists (self-referential trees). A terminal-only path, an unknown
 terminal, empty handles, or a scope model not on the path return

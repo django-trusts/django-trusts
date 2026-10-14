@@ -13,7 +13,7 @@ development branch; What's New records release-train changes.
 
 The fixed user eligibility and superuser discussions below are historical.
 [User conditions and overrides](../source/index.rst#user-conditions-and-overrides)
-supersede those parts. The relationship and default ordinary-sponsor ceiling
+supersede those parts. The relationship and ordinary-sponsor ceiling
 remain.
 
 The public `register()` API has two different authorization modes. They must
@@ -99,12 +99,12 @@ content terminal or gateway.
 
 A delegated registration accepts the same `along=` walk as an ordinary
 registration. The delegate is allowed on an object only when that walk
-reaches the object and the sponsor-authority predicate also reaches it. By
-default that predicate uses ordinary grants. If the delegation has no
-`along=`, the delegation row must name that object. If the applicable
-ordinary sponsor grant has no `along=`, that grant must name that object.
-When both relationship and ordinary-grant sides walk, the delegate gets only
-the objects both walks reach. A longer content suffix than one reverse hop is not one
+reaches the object and the sponsor-authority predicate also reaches it. That
+predicate is the OR-union of applicable ordinary grants. If the delegation has
+no `along=`, the delegation row must name that object. If the applicable
+ordinary sponsor grant has no `along=`, that grant must name that object. When
+both relationship and ordinary-grant sides walk, the delegate gets only the
+objects both walks reach. A longer content suffix than one reverse hop is not one
 column on the content row; compiling that delegated walk raises
 `TrustsConfigurationError` before a grant, on a forward check and on
 reverse inquiry. The sponsor comparison keeps the full root-relative
@@ -247,11 +247,12 @@ queryset, reverse-inquiry, or policy-SQL behavior.
 
 ## Separate prerequisites and policy decisions
 
-This feature contract does not settle whether active-superuser status supplies
-direct or sponsor-side authority. [Issue #273][issue-273] owns that decision.
-The compiler must represent the chosen policy at the direct-actor and
-sponsor-authority composition points rather than inheriting it accidentally
-from a nested `has_perm()` call.
+This feature contract does not add implicit superuser authority. A checked-user
+override may supply direct authority under the user-rule contract, but sponsor
+authority remains the ordinary-grant union described above. The compiler must
+not inherit either Django's superuser shortcut or another backend's result from
+a nested `has_perm()` call. [Issue #273][issue-273] records the Trusts-owned
+superuser boundary.
 
 Real expiry and revocation rules also require the existing registration
 condition language to express null tests and ordered comparison against a

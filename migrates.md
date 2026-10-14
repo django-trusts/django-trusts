@@ -41,8 +41,9 @@ Migration-bot checklist:
 
 Named [user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides)
 replace built-in activity checks and implicit Trusts superuser shortcuts.
-The default conditions require an active user with a saved user row. No
-superuser override is registered by default.
+The only default condition is `is_active`. Permission SQL already joins users
+by primary key, so only saved users can match. No superuser override is
+registered by default.
 
 | Old | New |
 | --- | --- |
@@ -60,6 +61,9 @@ the [Django backend boundary](SECURITY_AUDIT.md#django-auths-checks-before-calli
 The registry stores one user-override slot. Setting a new override replaces
 the previous name and expression. Passing `None` clears the slot only when the
 name matches the current override; any other name raises an error.
+The override applies only to the checked user. Passing `on="sponsor"` or
+`on="*"` when registering an override raises an error; sponsor authority comes
+only from ordinary grants.
 
 Condition and override expressions must compile completely to SQL over
 concrete user fields. Registration rejects Python properties such as Django's
@@ -77,6 +81,7 @@ Migration-bot checklist:
 - replace `is_authenticated` and `is_anonymous` in registered user rules with
   concrete user fields, or remove those terms
 - verify override replacement and name-matched removal behavior
+- reject sponsor-targeted overrides and keep sponsor authority on ordinary grants
 - regenerate policy locks and verify default and skipped-rule results
 
 ## Permission content type must match the object (#267)

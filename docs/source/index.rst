@@ -307,9 +307,9 @@ Delegate live authority
 The delegated registration makes ``delegate`` the current actor and
 ``sponsor`` the source of live authority. For a requested permission,
 django-trusts requires the same delegation row, its selected content and
-condition, and sponsor authority on that content. By default, that authority
-comes from the sponsor's ordinary grants. User-rule targeting and alternate
-sponsor authority are described in :ref:`user conditions and overrides
+condition, and sponsor authority on that content. That authority comes only
+from the sponsor's ordinary grants. Conditions that apply to the
+sponsor are described in :ref:`user conditions and overrides
 <user-conditions-and-overrides>`. The actor's own ordinary grants remain
 available as independent alternatives.
 
@@ -360,9 +360,9 @@ A sponsor's ordinary grant may use ``along=``. That bounded walk is part of
 the sponsor's live authority on every object it reaches, including when the
 check is a delegation. A delegated registration may use ``along=`` on the
 same call. The delegate is allowed on an object only when the delegation walk
-and the sponsor-authority predicate both reach that object. When sponsor
-authority comes from an ordinary grant, its ``along=`` walk or exact match
-must reach the object. A delegate cannot sponsor a further delegation.
+and the sponsor-authority predicate both reach that object. Each contributing
+ordinary sponsor grant's ``along=`` walk or exact match must reach the object.
+A delegate cannot sponsor a further delegation.
 
 
 Configure Django
@@ -553,10 +553,10 @@ User conditions and overrides
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 User conditions and overrides apply to all permission inquiries through
-the registry. The default conditions, ``is_active`` and ``is_registered``,
-require an active user with a saved user row. ``is_registered`` is the
-library-supplied saved-primary-key condition. No user override is registered
-by default. Conditions and overrides are compiled into permission SQL.
+the registry. The only default condition is ``is_active``. No user override
+is registered by default. Permission SQL identifies users by persisted primary
+key, so only saved users can match without a separate condition. Conditions
+and overrides are compiled into permission SQL.
 
 Every user-supplied rule must resolve its user attributes to concrete database
 fields. Registration rejects a Python property such as Django's
@@ -575,14 +575,11 @@ For example, replace the activity condition:
        lambda u: u.is_active,
    )
 
-Registering the same name replaces that condition. Pass ``None`` to
-remove it:
+Registering the same name replaces that condition. Pass ``None`` to remove it:
 
 .. code-block:: python
 
    registry.register_user_condition("is_active", None)
-
-The same call removes ``is_registered`` by name.
 
 To skip a condition for one inquiry, use ``skip_<name>=True``. For example,
 inspect an inactive user's grants:
@@ -620,13 +617,12 @@ override's own requirements.
 By default, a user condition applies to every user whose authority
 participates in the result. For an ordinary permission check, that is the
 user being checked. A delegated proof also checks its sponsor. Use
-``on="user"``, ``on="sponsor"``, or a tuple to narrow a rule. User overrides
-default to ``on="user"``, so an override can grant the checked user access
-but cannot supply a sponsor's authority. An override explicitly registered
-with ``on="sponsor"`` or ``on="*"`` is a separate alternative that may supply
-sponsor authority on the same content and requested permission. That override
-has no relationship walk of its own; its own expression and all applicable
-sponsor conditions still have to pass.
+``on="user"``, ``on="sponsor"``, or a tuple to narrow a condition.
+
+A user override applies only to the checked user. Omit ``on=`` or pass
+``on="user"``. Registering an override with ``on="sponsor"`` or ``on="*"``
+raises an error. An override can replace the checked user's ordinary grant
+proof, but sponsor authority always comes from the sponsor's ordinary grants.
 
 .. list-table::
    :header-rows: 1
@@ -634,22 +630,23 @@ sponsor conditions still have to pass.
    * - ``on=``
      - Checked user
      - Sponsor in a delegated proof
-   * - ``"*"`` (default for conditions)
+   * - ``"*"`` (conditions only; default)
      - Yes
      - Yes
-   * - ``"user"`` (default for overrides)
+   * - ``"user"`` (conditions or overrides)
      - Yes
      - No
-   * - ``"sponsor"``
+   * - ``"sponsor"`` (conditions only)
      - No
      - Yes
-   * - ``("user", "sponsor")``
+   * - ``("user", "sponsor")`` (conditions only)
      - Yes
      - Yes (same as ``"*"``)
 
-Only ``"*"``, ``"user"``, ``"sponsor"``, or a non-empty tuple of
-``"user"`` and ``"sponsor"`` are accepted. Registration raises an error for
-any other value, an empty tuple, or a tuple mixing ``"*"`` with names.
+For conditions, only ``"*"``, ``"user"``, ``"sponsor"``, or a non-empty
+tuple of ``"user"`` and ``"sponsor"`` are accepted. Condition registration
+raises an error for any other value, an empty tuple, or a tuple mixing ``"*"``
+with names. Overrides accept only the checked-user target described above.
 
 ``skip_<name>=True`` removes that rule for every user its ``on=`` names. For
 example, ``skip_is_active=True`` skips the activity check for both the

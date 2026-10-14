@@ -148,17 +148,16 @@ A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 ``{path: "...", model: "...", target: "..."}``. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
-combines all applicable sponsor-authority alternatives with OR. Reviewers
-should verify the delegate/sponsor direction, the relationship's explicit
-conditions, and the complete sponsor-authority predicate in the document and
-generated SQL.
+combines all applicable ordinary sponsor grants with OR. Reviewers should
+verify the delegate/sponsor direction, the relationship's explicit conditions,
+and the complete sponsor-authority predicate in the document and generated
+SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
 used ``along=``. The depth cap stays a ``const`` with hint ``along bound``.
 The delegate is allowed only where the delegation walk and the complete
-sponsor-authority predicate both reach the requested object. When sponsor
-authority comes from an ordinary grant, its ``along=`` walk or exact match
-must reach that object.
+sponsor-authority predicate both reach the requested object. Each contributing
+ordinary grant's ``along=`` walk or exact match must reach that object.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
@@ -186,7 +185,7 @@ Registration accepts only rules that compile completely to SQL over concrete
 user fields. A Python property such as ``is_authenticated`` or
 ``is_anonymous`` is rejected at registration, even when it returns a constant.
 
-A rule registered with ``("user", "sponsor")`` is recorded as ``*``.
+A condition registered with ``("user", "sponsor")`` is recorded as ``*``.
 Skipped rules do not appear in the expression, for any of their targets. A
 skipped condition contributes no restriction; a skipped override contributes
 no grant. With ``skip_is_active=True`` the entry above records
