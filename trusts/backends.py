@@ -13,10 +13,6 @@ from trusts.conditions import (
     permission_has_condition,
 )
 from trusts.conditions._ir import evaluate_registered_expression
-from trusts.query import (
-    single_field_condition_denied,
-    user_identity_denied,
-)
 from trusts.core import (
     PlanQueryCompiler,
     _compile_common_permissions,
@@ -109,20 +105,30 @@ class TrustModelBackendMixin(object):
         Returns a set of permission strings that this user has through his/her
         groups.
         """
-        skipped = self._skipped_inquiry(user_obj, skip_flags)
-        if obj is None or not self._principal_allows(user_obj, skipped):
+        from trusts.core import user_skip_params
+
+        inquiry = user_skip_params(
+            user_obj, skip_flags,
+            registry=lambda: self._own_handle().registry,
+        )
+        if obj is None or inquiry.denied:
             return set()
 
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
             return self._path_permissions(
                 user_obj, obj, kind='group',
-                skipped=skipped,
+                skipped=inquiry.values,
             )
         return set()
 
     def get_all_permissions(self, user_obj, obj=None, **skip_flags):
-        skipped = self._skipped_inquiry(user_obj, skip_flags)
-        if obj is None or not self._principal_allows(user_obj, skipped):
+        from trusts.core import user_skip_params
+
+        inquiry = user_skip_params(
+            user_obj, skip_flags,
+            registry=lambda: self._own_handle().registry,
+        )
+        if obj is None or inquiry.denied:
             return set()
 
         self._ensure_perm_cache(user_obj)
@@ -130,7 +136,7 @@ class TrustModelBackendMixin(object):
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
             return self._path_permissions(
                 user_obj, obj, kind='complete',
-                skipped=skipped,
+                skipped=inquiry.values,
             )
         return set()
 
@@ -232,49 +238,25 @@ class TrustModelBackendMixin(object):
             return False
         return matched
 
-    def _skipped_inquiry(self, user_obj, skip_flags):
-        """Parse skip keywords. A remaining user is checked on this registry.
-
-        Anonymous, unauthenticated, and ``None`` are parsed without a
-        registry lookup, so an unknown ``skip_*`` keyword is not
-        consulted for them.
-        """
-        from trusts.core import _inquiry_skipped
-
-        if user_obj is None or user_identity_denied(user_obj):
-            return _inquiry_skipped(**skip_flags)
-        return _inquiry_skipped(
-            known=self._own_handle().registry._known_skip_names(),
-            **skip_flags,
-        )
-
-    def _principal_allows(self, user_obj, skipped):
-        """Reject anonymous and unauthenticated users before the registry.
-
-        Those identities, and ``None``, need no owner and no SQL. A
-        remaining user is denied when a registered single-field condition
-        fails. The split itself is #313.
-        """
-        if user_obj is None or user_identity_denied(user_obj):
-            return False
-        conditions = self._own_handle().registry._stored_user_conditions()
-        return not single_field_condition_denied(
-            user_obj, conditions, skipped, role='user',
-        )
-
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check for one permission string.
 
         The string uses the historical codename split to choose the row.
         When that row is an ``auth.Permission``, a content-type mismatch
         with ``obj`` is ``False``. Another permission terminal stays
-        primary-key identity inside the plan. ``skip_<name>`` drops that
-        registered user condition. Django's ``user.has_perm`` does not
-        forward these keywords.
+        primary-key identity inside the plan. ``skip_<name>`` is a bound
+        parameter on that registered user condition.
+        Django's ``user.has_perm`` does not forward these keywords.
         """
-        skipped = self._skipped_inquiry(user_obj, skip_flags)
-        if obj is None or not self._principal_allows(user_obj, skipped):
+        from trusts.core import user_skip_params
+
+        inquiry = user_skip_params(
+            user_obj, skip_flags,
+            registry=lambda: self._own_handle().registry,
+        )
+        if obj is None or inquiry.denied:
             return False
+        skipped = inquiry.values
 
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
@@ -322,8 +304,8 @@ class TrustModelBackendMixin(object):
         fallback for a path that cannot be reversed. An ``Along``
         registration derives walk-site identities from the bound content,
         walks the inverse graph once without the outer user, and joins
-        eligible grants outside that walk. ``skipped`` names the
-        registered conditions already dropped by ``skip_<name>``.
+        eligible grants outside that walk. ``skipped`` is the bound
+        ``skip_<name>`` parameter map.
         """
         from trusts.reverse import trusts_mixin_predicate
 

@@ -109,7 +109,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
     def test_content_enumeration_and_boolean_with_skip_is_active(self):
         self._deactivate(self.alice)
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(5):
             self.assertFalse(
                 Document.objects.authorized(self.alice, self.change).exists()
             )
@@ -369,7 +369,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 _pks(registry.filter_authorized(Note.objects.all(), alice, read)),
                 {note.pk},
             )
-            with self.assertNumQueries(0):
+            with self.assertNumQueries(3):
                 self.assertEqual(
                     list(registry.permissions_for(inactive, note)), [],
                 )
@@ -418,7 +418,11 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 inactive, note, skip_is_active=True,
             )
             self.assertEqual(_pks(skipped), {read.pk})
-            self.assertNotIn('is_active', str(skipped.query))
+            self.assertEqual(
+                skipped.query.sql_with_params()[0],
+                registry.permissions_for(alice, note).query.sql_with_params()[0],
+            )
+            self.assertIn('is_active', str(skipped.query))
 
             scope_registry = TrustsRegistry()
             scope_grant = Ref(FolderGrant)
@@ -435,7 +439,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 )),
                 {folder.pk},
             )
-            with self.assertNumQueries(0):
+            with self.assertNumQueries(1):
                 self.assertFalse(filter_by_permitted_content(
                     Folder.objects.all(), inactive, read,
                     content=Note, handles=(handle,),

@@ -15,7 +15,6 @@ from django.db.models import Subquery
 
 from trusts._bind_once import bind_once
 from trusts.core import TrustsConfigurationError, _ordinary_records, granted
-from trusts.query import user_identity_denied
 
 
 def _guard_permission_string(permission, *, api):
@@ -314,7 +313,7 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
 
     ``handles`` selects the backends. Core passes relationship-family
     implementation handles. Input and configuration are validated before
-    the anonymous and inactive shortcut, and before SQL. A well-formed
+    the anonymous denial, and before SQL. A well-formed
     permission for another content type is an empty queryset. This call
     does not register a ``trusts.E008`` guard and does not copy Django's
     active-superuser shortcut.
@@ -325,13 +324,12 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.core import _handles_condition_denied, _skipped_for_handles
+    from trusts.core import user_skip_params
 
-    skipped = _skipped_for_handles(handles, skip_flags, user)
-    if user is None or user_identity_denied(user):
+    inquiry = user_skip_params(user, skip_flags, handles=handles)
+    if inquiry.denied:
         return queryset.none()
-    if _handles_condition_denied(handles, user, skipped):
-        return queryset.none()
+    skipped = inquiry.values
     granted_q = _authorization_grant_q(
         handles,
         queryset,

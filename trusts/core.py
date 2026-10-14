@@ -262,24 +262,10 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     parts = []
-    delegation_groups = []
-    override_plans = []
-    seen_overrides = set()
     content_identity = _candidate_model(candidates)
+    sponsor_records = None
     for handle in handles:
         plan = _plan_for_permission(handle, candidates, user, permission)
-        if kind == 'complete' and getattr(plan, 'delegations', None):
-            delegation_groups.append((
-                tuple(plan.delegations),
-                getattr(plan, 'user_conditions', None),
-            ))
-        if (
-            kind == 'complete'
-            and (plan.records or plan.delegations)
-            and id(handle.registry) not in seen_overrides
-        ):
-            seen_overrides.add(id(handle.registry))
-            override_plans.append(plan)
         if kind == 'complete':
             fn = handle.compiler.complete_exists
         else:
@@ -288,39 +274,40 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
             handle.compiler, fn, plan, candidates, user, permission,
             skipped=skipped,
         ))
-        if part is None:
-            continue
-        parts.append(part)
-    if kind == 'complete' and delegation_groups:
-        sponsor_records = _ordinary_records(
-            sponsor_handles, candidates, permission_model,
-        )
-        for grouped, conditions in delegation_groups:
+        delegated = None
+        if kind == 'complete' and getattr(plan, 'delegations', None):
+            if sponsor_records is None:
+                sponsor_records = _ordinary_records(
+                    sponsor_handles, candidates, permission_model,
+                )
             delegated = _delegated_content_exists(
-                grouped, sponsor_records, user, permission,
+                tuple(plan.delegations), sponsor_records, user, permission,
                 content_identity=content_identity,
-                user_conditions=conditions,
+                user_conditions=getattr(plan, 'user_conditions', None),
                 skipped=skipped,
             )
-            if delegated is not None:
-                parts.append(delegated)
-    if kind == 'complete':
-        names = _skip_names(skipped)
-        for plan in override_plans:
-            branch = _forward_user_override_q(
-                getattr(plan, 'user_override', None),
-                user,
-                getattr(plan, 'user_conditions', None),
-                permission=permission,
-                content_model=content_identity,
-                permission_model=(
-                    permission_model or plan.permission_model
-                ),
-                names=names,
-                identity='bound',
+        grant = _or_q(part, delegated)
+        override = None
+        identity = None
+        if kind == 'complete' and (plan.records or plan.delegations):
+            override = getattr(plan, 'user_override', None)
+            identity = _bound_permission_identity(
+                permission,
+                content_identity,
+                permission_model or plan.permission_model,
             )
-            if branch is not None:
-                parts.append(branch)
+        if grant is None and override is None:
+            continue
+        wrapped = attach_user_grant(
+            grant,
+            user=user,
+            conditions=getattr(plan, 'user_conditions', None),
+            override=override,
+            values=skipped,
+            identity=identity,
+        )
+        if wrapped is not None:
+            parts.append(wrapped)
     if not parts:
         return None
     if len(parts) == 1:
@@ -573,11 +560,6 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     combined = Q(**{
         record.delegate_field: _bind_terminal(user, 'delegate'),
     })
-    combined &= _delegate_is_active_q(
-        record, user,
-        user_conditions=user_conditions,
-        skipped=skipped,
-    )
     combined &= _delegation_prefix_reach_q(
         record, user, lookup, target_attname, candidate, position,
     )
@@ -640,32 +622,25 @@ def _compile_permitted_content_queryset(
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
-    override_plans = []
-    seen_overrides = set()
     content_identity = _candidate_model(content)
     for handle in handles:
         plan = _plan_for_permission(handle, content, user, permission)
         if getattr(plan, 'content_identity', None) is not None:
             content_identity = plan.content_identity
-        if (
-            (plan.records or plan.delegations)
-            and id(handle.registry) not in seen_overrides
-        ):
-            seen_overrides.add(id(handle.registry))
-            override_plans.append(plan)
         conditions = getattr(plan, 'user_conditions', None)
+        plan_parts = []
         for record in plan.records:
             for lookup, target_attname in _scope_prefix_lookups(
                 record, scope_model,
             ):
-                parts.append(_ordinary_prefix_predicate(
+                plan_parts.append(_ordinary_prefix_predicate(
                     record, lookup, target_attname, user, permission,
                     content_identity,
                     user_conditions=conditions,
                     skipped=skipped,
                 ))
         if getattr(plan, 'delegations', None):
-            parts.extend(_delegated_prefix_predicates(
+            plan_parts.extend(_delegated_prefix_predicates(
                 tuple(plan.delegations),
                 _ordinary_records(
                     sponsor_handles, content, permission._meta.concrete_model,
@@ -675,26 +650,37 @@ def _compile_permitted_content_queryset(
                 user_conditions=conditions,
                 skipped=skipped,
             ))
+        grant = None
+        if plan_parts:
+            grant = (
+                plan_parts[0] if len(plan_parts) == 1
+                else reduce(or_, plan_parts)
+            )
+        override = (
+            getattr(plan, 'user_override', None)
+            if plan.records or plan.delegations else None
+        )
+        if grant is None and override is None:
+            continue
+        identity = _bound_permission_identity(
+            permission,
+            content_identity,
+            permission._meta.concrete_model
+            if isinstance(permission, Model) else plan.permission_model,
+        )
+        wrapped = attach_user_grant(
+            grant,
+            user=user,
+            conditions=conditions,
+            override=override,
+            values=skipped,
+            identity=identity,
+        )
+        if wrapped is not None:
+            parts.append(wrapped)
     if not parts:
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
-    names = _skip_names(skipped)
-    for plan in override_plans:
-        branch = _forward_user_override_q(
-            getattr(plan, 'user_override', None),
-            user,
-            getattr(plan, 'user_conditions', None),
-            permission=permission,
-            content_model=content_identity,
-            permission_model=(
-                permission._meta.concrete_model
-                if isinstance(permission, Model) else None
-            ),
-            names=names,
-            identity='bound',
-        )
-        if branch is not None:
-            granted_q = granted_q | branch
     return bind_once(queryset.filter(granted_q).distinct())
 
 
@@ -746,13 +732,10 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
-    from trusts.query import user_identity_denied
-
-    skipped = _skipped_for_handles(handles, skip_flags, user)
-    if not handles or user_identity_denied(user):
+    inquiry = user_skip_params(user, skip_flags, handles=handles)
+    if not handles or inquiry.denied:
         return queryset.none()
-    if _handles_condition_denied(handles, user, skipped):
-        return queryset.none()
+    skipped = inquiry.values
     return _compile_permitted_content_queryset(
         queryset, user, permission, content=content, handles=handles,
         sponsor_handles=handles,
@@ -830,16 +813,11 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     parts = []
     permission_model = None
     applicable = False
-    override_plans = []
-    seen_overrides = set()
     for handle in handles:
         plan = handle.registry.plan_for(candidates, user=user)
         if not _compiler_applies(handle.compiler, plan):
             continue
         applicable = True
-        if kind == 'complete' and id(handle.registry) not in seen_overrides:
-            seen_overrides.add(id(handle.registry))
-            override_plans.append(plan)
         if plan.permission_model is not None:
             if permission_model is None:
                 permission_model = plan.permission_model
@@ -860,10 +838,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
             handle.compiler, fn, plan, qs, user, perm_expr,
             skipped=skipped,
         ))
-        if part is None:
-            pass
-        else:
-            parts.append(part)
+        delegated = None
         if kind == 'complete' and getattr(plan, 'delegations', None):
             sponsor_records = _ordinary_records(sponsor_handles, candidates)
             compatible_records = _compatible_sponsor_records(
@@ -876,7 +851,6 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
                 skipped=skipped,
             )
             if delegated is not None:
-                parts.append(delegated)
                 applicable = True
                 terminals = {
                     (record.permission_model, record.permission_target)
@@ -895,22 +869,28 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
                         'Applicable registrations must share one '
                         'permission model.'
                     )
-    if kind == 'complete' and permission_model is not None:
-        names = _skip_names(skipped)
-        content_model = _candidate_model(candidates)
-        for plan in override_plans:
-            branch = _forward_user_override_q(
-                getattr(plan, 'user_override', None),
-                user,
-                getattr(plan, 'user_conditions', None),
-                permission=perm_expr,
-                content_model=content_model,
-                permission_model=permission_model,
-                names=names,
-                identity='bound',
+        grant = _or_q(part, delegated)
+        override = None
+        identity = None
+        if kind == 'complete' and (plan.records or plan.delegations):
+            override = getattr(plan, 'user_override', None)
+            identity = _bound_permission_identity(
+                perm_expr,
+                _candidate_model(candidates),
+                permission_model or plan.permission_model,
             )
-            if branch is not None:
-                parts.append(branch)
+        if grant is None and override is None:
+            continue
+        wrapped = attach_user_grant(
+            grant,
+            user=user,
+            conditions=getattr(plan, 'user_conditions', None),
+            override=override,
+            values=skipped,
+            identity=identity,
+        )
+        if wrapped is not None:
+            parts.append(wrapped)
     if not applicable or permission_model is None:
         return None
     if not parts:
@@ -935,15 +915,49 @@ def common_permissions(handles, candidates, user, *, kind='complete',
     ``_compile_common_permissions`` on ``self._own_handle()``.
     Only relationship-family handles participate.
     ``RelationPlan.common_permissions`` is not this function.
-    ``skip_<name>`` drops that registered condition or the override.
+    ``skip_<name>`` is a bound parameter on the registered rules.
+    Anonymous, unauthenticated, and ``None`` are an empty queryset when
+    a handle applies, and ``None`` only when no handle applies.
     """
     participating = _relationship_handles(handles)
-    skipped = _skipped_for_handles(participating, skip_flags, user)
+    inquiry = user_skip_params(user, skip_flags, handles=participating)
+    if inquiry.denied:
+        return _anonymous_common_permissions(participating, candidates)
     return _compile_common_permissions(
         participating, candidates, user, kind=kind,
         sponsor_handles=participating,
-        skipped=skipped,
+        skipped=inquiry.values,
     )
+
+
+def _anonymous_common_permissions(handles, candidates):
+    """Empty permission queryset for an inquiry denied before SQL.
+
+    ``None`` stays the undeclared-fallback signal when no handle applies.
+    An applicable handle does not compile a grant for this user.
+    """
+    permission_model = None
+    applicable = False
+    for handle in handles:
+        registry = getattr(handle, 'registry', None)
+        if registry is None:
+            continue
+        plan = registry.plan_for(candidates)
+        if not _compiler_applies(getattr(handle, 'compiler', None), plan):
+            continue
+        if not plan.records and not plan.delegations:
+            continue
+        applicable = True
+        if plan.permission_model is not None:
+            permission_model = plan.permission_model
+            break
+    if not applicable:
+        return None
+    if permission_model is None:
+        from django.contrib.auth.models import Permission
+
+        permission_model = Permission
+    return permission_model._default_manager.none()
 
 
 def _is_model_class(value):
@@ -1982,24 +1996,47 @@ def _permission_content_type_filters(record, content_identity):
     }
 
 
-def _inquiry_skipped(*, known=None, **flags):
-    from trusts.user_rules import collect_skipped
+class SkipParams(object):
+    """Skip-parameter values for one inquiry, or an anonymous denial."""
 
-    return collect_skipped(known=known, **flags)
+    __slots__ = ('denied', 'values')
+
+    def __init__(self, denied, values):
+        self.denied = denied
+        self.values = values
 
 
-def _registry_skipped(registry, user, skip_flags):
-    """Parse skip keywords for one registry.
+def user_skip_params(user, skip_flags, *, handles=None, registry=None,
+                     require_user=True):
+    """Validate ``skip_*`` keywords and return their bound values.
 
-    A remaining user is checked against that registry's condition and
-    override names. Anonymous and unauthenticated users are not.
+    One parser for anonymous handling, unknown names, and non-bool
+    values. A remaining user is checked against the registered
+    condition and override names. Anonymous, unauthenticated, and
+    ``None`` are denied before SQL, and an unknown ``skip_*`` is not
+    consulted for them. ``require_user=False`` is the reverse inquiry:
+    there is no principal to deny, and unknown names still raise.
+    The returned values do not change the SQL shape.
     """
     from trusts.query import user_identity_denied
+    from trusts.user_rules import collect_skipped
 
-    known = None
-    if user is not None and not user_identity_denied(user):
+    denied = require_user and (
+        user is None or user_identity_denied(user)
+    )
+    if denied:
+        collect_skipped(**skip_flags)
+        return SkipParams(True, {})
+    if callable(registry):
+        registry = registry()
+    if registry is not None:
         known = registry._known_skip_names()
-    return _inquiry_skipped(known=known, **skip_flags)
+    else:
+        known = _known_skip_names(handles or ())
+    selected = collect_skipped(known=known, **skip_flags)
+    return SkipParams(False, {
+        name: name in selected for name in known
+    })
 
 
 def _known_skip_names(handles):
@@ -2023,56 +2060,6 @@ def _known_skip_names(handles):
     if not saw:
         names.update(rule.name for rule in BUILTIN_USER_CONDITIONS)
     return frozenset(names)
-
-
-def _skipped_for_handles(handles, skip_flags, user):
-    """Parse skip keywords, then require registered names for a real user.
-
-    Anonymous and unauthenticated users are denied before a registry
-    lookup, so an unknown ``skip_*`` keyword is not consulted for them.
-    """
-    from trusts.query import user_identity_denied
-
-    if user is None or user_identity_denied(user):
-        return _inquiry_skipped(**skip_flags)
-    return _inquiry_skipped(
-        known=_known_skip_names(handles), **skip_flags,
-    )
-
-
-def _activity_denied(user, conditions, skipped):
-    """Python fast denial for single-field conditions on the checked user."""
-    from trusts.query import single_field_condition_denied
-
-    return single_field_condition_denied(
-        user, conditions, skipped, role='user',
-    )
-
-
-def _handles_condition_denied(handles, user, skipped, *, role='user'):
-    """True when any handle's single-field condition fails for ``user``."""
-    from trusts.query import single_field_condition_denied
-
-    for handle in handles:
-        registry = getattr(handle, 'registry', None)
-        if registry is None:
-            continue
-        if single_field_condition_denied(
-            user, registry._stored_user_conditions(), skipped, role=role,
-        ):
-            return True
-    return False
-
-
-def _skip_names(skipped=()):
-    """Return the skipped condition and override names."""
-    return frozenset(skipped or ())
-
-
-def _active_user_override(slot, names):
-    if slot is None or slot.name in names:
-        return None
-    return slot
 
 
 def _outer_permission_identity(permission_model, content_model):
@@ -2113,94 +2100,57 @@ def _bound_permission_identity(permission, content_model, permission_model):
     ))
 
 
-def _forward_user_override_q(slot, user, conditions, *, permission,
-                             content_model, permission_model, names,
-                             identity):
-    """``conditions AND override`` for the checked user, or ``None``.
+def _or_q(left, right):
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left | right
 
-    Callers OR this with the ordinary grant. It is not a sponsor grant.
-    ``identity='outer'`` qualifies an outer permission queryset.
-    ``identity='bound'`` qualifies a permission value already in the query.
+
+def attach_user_grant(grant, *, user, conditions, override, values,
+                      identity=None, missing='omit'):
+    """Checked-user conditions AND (override OR ``grant``).
+
+    Conditions are ``(skip_<name> OR condition)``. The override is
+    ``(NOT skip_<name> AND override)``. Both are compiled from the
+    registered rules. ``values`` only fills the skip parameters.
+    ``identity`` is ANDed onto the override branch. A missing checked-user
+    column is omitted. ``missing='closed'`` fails the whole predicate
+    when a required column is absent. ``user`` is a model instance for a
+    forward check, or a user model class for a reverse candidate row.
     """
-    slot = _active_user_override(slot, names)
-    if slot is None or not isinstance(user, Model):
-        return None
-    from trusts.user_rules import (
-        _compile_expr,
-        _expr_availability,
-        compile_user_rules,
-    )
+    from trusts.user_rules import compile_override_q, compile_user_rules
 
-    model = user._meta.concrete_model
-    if _expr_availability(model, slot.expr) != 'ok':
-        raise TrustsConfigurationError(
-            'User override %r needs a concrete BooleanField on %s.'
-            % (slot.name, model._meta.label)
-        )
+    if isinstance(user, Model):
+        model = user._meta.concrete_model
+        path = ''
+        user_filter = model._default_manager.filter(pk=user.pk)
+        correlate = True
+    else:
+        model = user
+        path = ''
+        user_filter = None
+        correlate = False
     rules = compile_user_rules(
-        model, '', conditions, role='user', skipped=names, missing='omit',
+        model, path, conditions, role='user', values=values, missing=missing,
     )
-    matched = Exists(model._default_manager.filter(pk=user.pk).filter(
-        (rules or Q()) & _compile_expr('', slot.expr),
-    ))
-    if identity == 'outer':
-        return matched & _outer_permission_identity(
-            permission_model, content_model,
-        )
-    return matched & _bound_permission_identity(
-        permission, content_model, permission_model,
-    )
-
-
-def _outer_user_override_q(slot, model, names):
-    """Override expression on a reverse candidate user."""
-    slot = _active_user_override(slot, names)
-    if slot is None:
+    if rules is None:
         return None
-    from trusts.user_rules import _compile_expr, _expr_availability
-
-    if _expr_availability(model, slot.expr) != 'ok':
-        raise TrustsConfigurationError(
-            'User override %r needs a concrete BooleanField on %s.'
-            % (slot.name, model._meta.label)
-        )
-    return _compile_expr('', slot.expr)
-
-
-def _default_is_active_q(model, path, *,
-                         user_conditions=None, skipped=()):
-    """Checked-user conditions as SQL, including the default ``is_active``.
-
-    A missing column adds nothing, so a statement that does not compare
-    that field does not invent a term. ``skip_<name>`` omits that condition.
-    """
-    from trusts.user_rules import compile_user_rules
-
-    if not path:
-        return Q()
-    compiled = compile_user_rules(
-        model, path, user_conditions, role='user',
-        skipped=_skip_names(skipped), missing='omit',
-    )
-    if compiled is None:
-        return Q()
-    return compiled
-
-
-def _delegate_is_active_q(record, user, *,
-                          user_conditions=None, skipped=()):
-    """Checked-delegate conditions when the delegate is a model instance.
-
-    An ``OuterRef`` delegate is the reverse candidate; that queryset already
-    carries the checked-user conditions. This helper does not add a second term.
-    """
-    if not isinstance(user, Model):
-        return Q()
-    return _default_is_active_q(
-        record.delegate_model, record.delegate_field,
-        user_conditions=user_conditions,
-        skipped=skipped,
-    )
+    override_q = compile_override_q(model, path, override, values)
+    if correlate:
+        if rules:
+            rules = Exists(user_filter.filter(rules))
+        if override_q is not None:
+            override_q = Exists(user_filter.filter(override_q))
+    if override_q is not None and identity is not None:
+        override_q = override_q & identity
+    combined = _or_q(grant, override_q)
+    if combined is None:
+        return None
+    if not rules:
+        return combined
+    return rules & combined
 
 
 def _record_predicate(record, correlation=None, *, content_identity=None,
@@ -2220,13 +2170,6 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
         )
     filters.update(_permission_content_type_filters(record, content_identity))
     combined = Q(**filters)
-    user_value = bindings.get('user')
-    if isinstance(user_value, Model):
-        combined &= _default_is_active_q(
-            record.user_model, record.user_field,
-            user_conditions=user_conditions,
-            skipped=skipped,
-        )
     compiled = _compile_predicate(record.condition, record)
     if compiled is not None:
         combined &= compiled
@@ -2263,16 +2206,16 @@ def _principal_eligibility_q(model, path, *,
     """Sponsor identity and user conditions through ``path``.
 
     Sponsor-targeted conditions, including the default ``is_active``, are
-    SQL. A required condition whose column is missing fails closed.
-    ``skip_<name>`` omits that condition and does not require its column.
-    Anonymous/authenticated attributes use their runtime defaults when
-    they are not concrete fields. Standard SQL only.
+    ``(skip_<name> OR condition)``. A missing column fails closed; that
+    is a property of the model, not of the skip parameter. Anonymous and
+    authenticated attributes use their runtime defaults when they are
+    not concrete fields. Standard SQL only.
     """
     from trusts.user_rules import compile_user_rules
 
     rules = compile_user_rules(
         model, path, user_conditions, role='sponsor',
-        skipped=_skip_names(skipped), missing='closed',
+        values=skipped, missing='closed',
     )
     if rules is None:
         return None
@@ -2518,17 +2461,6 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
                               *, content_identity=None,
                               user_conditions=None, skipped=()):
     """Candidate-content predicate for one-level delegated authority."""
-    from trusts.query import single_field_condition_denied, user_identity_denied
-
-    names = _skip_names(skipped)
-    if (
-        user is None
-        or user_identity_denied(user)
-        or single_field_condition_denied(
-            user, user_conditions, names, role='user',
-        )
-    ):
-        return None
     parts = []
     for record in delegations:
         sponsor_q = _delegation_sponsor_q(
@@ -2546,11 +2478,6 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
         combined = Q(**{
             record.delegate_field: _bind_terminal(user, 'delegate'),
         })
-        combined &= _delegate_is_active_q(
-            record, user,
-            user_conditions=user_conditions,
-            skipped=skipped,
-        )
         combined &= _delegation_reaches(record, forward=True, user=user)
         condition = _compile_predicate(
             record.condition, record, permission=permission,
@@ -4094,17 +4021,6 @@ class RelationPlan:
             'user_field', content=content, permission=permission,
         )
 
-    def _checked_override(self, user, *, permission, content_model, names,
-                          identity):
-        return _forward_user_override_q(
-            self.user_override, user, self.user_conditions,
-            permission=permission,
-            content_model=content_model,
-            permission_model=self.permission_model,
-            names=names,
-            identity=identity,
-        )
-
     def common_permissions(self, user, content, *,
                            skipped=()):
         """Trustee permissions held on every candidate through this plan.
@@ -4123,26 +4039,24 @@ class RelationPlan:
             user, OuterRef(OuterRef('pk')),
             skipped=skipped,
         )
-        names = _skip_names(skipped)
-        branch = self._checked_override(
-            user, permission=None, content_model=_candidate_model(content),
-            names=names, identity='outer',
+        ordinary = None
+        if exists is not None:
+            ordinary = Exists(qs) & ~Exists(qs.filter(~Q(exists)))
+        identity = Exists(qs) & _outer_permission_identity(
+            self.permission_model, _candidate_model(content),
         )
-        if exists is None:
-            if branch is None:
-                return self.permission_model._default_manager.none()
-            return bind_once(self.permission_model._default_manager.filter(
-                Exists(qs) & branch,
-            ).distinct())
-        if branch is None:
-            return bind_once(self.permission_model._default_manager.filter(
-                Exists(qs),
-            ).exclude(
-                Exists(qs.filter(~Q(exists))),
-            ).distinct())
-        grant = Exists(qs) & ~Exists(qs.filter(~Q(exists)))
+        predicate = attach_user_grant(
+            ordinary,
+            user=user,
+            conditions=self.user_conditions,
+            override=self.user_override,
+            values=skipped,
+            identity=identity,
+        )
+        if predicate is None:
+            return self.permission_model._default_manager.none()
         return bind_once(self.permission_model._default_manager.filter(
-            grant | (Exists(qs) & branch),
+            predicate,
         ).distinct())
 
     def permissions(self, user, content, *, skipped=()):
@@ -4155,11 +4069,18 @@ class RelationPlan:
             'permission_field', user=user, content=content,
             skipped=skipped,
         )
-        branch = self._checked_override(
-            user, permission=None, content_model=content.__class__,
-            names=_skip_names(skipped), identity='outer',
+        predicate = attach_user_grant(
+            exists,
+            user=user,
+            conditions=self.user_conditions,
+            override=self.user_override,
+            values=skipped,
+            identity=_outer_permission_identity(
+                self.permission_model, content.__class__,
+            ),
         )
-        predicate = exists if branch is None else (exists | branch)
+        if predicate is None:
+            return self.permission_model._default_manager.none()
         return bind_once(self.permission_model._default_manager.filter(
             predicate,
         ).distinct())
@@ -4178,11 +4099,18 @@ class RelationPlan:
             'permission_field', user=user, content=content,
             skipped=skipped,
         )
-        branch = self._checked_override(
-            user, permission=None, content_model=content.__class__,
-            names=_skip_names(skipped), identity='outer',
+        predicate = attach_user_grant(
+            exists,
+            user=user,
+            conditions=self.user_conditions,
+            override=self.user_override,
+            values=skipped,
+            identity=_outer_permission_identity(
+                self.permission_model, content.__class__,
+            ),
         )
-        predicate = exists if branch is None else (exists | branch)
+        if predicate is None:
+            return False
         return bind_once(self.permission_model._default_manager.filter(
             pk=permission.pk,
         ).filter(predicate)).exists()
@@ -4193,17 +4121,19 @@ class RelationPlan:
         exists = self.content_exists(
             user, permission, skipped=skipped,
         )
-        branch = self._checked_override(
-            user, permission=permission, content_model=queryset.model,
-            names=_skip_names(skipped), identity='bound',
+        predicate = attach_user_grant(
+            exists,
+            user=user,
+            conditions=self.user_conditions,
+            override=self.user_override,
+            values=skipped,
+            identity=_bound_permission_identity(
+                permission, queryset.model, self.permission_model,
+            ),
         )
-        if exists is None:
-            if branch is None:
-                return queryset.none()
-            return bind_once(queryset.filter(branch).distinct())
-        if branch is None:
-            return bind_once(queryset.filter(exists).distinct())
-        return bind_once(queryset.filter(exists | branch).distinct())
+        if predicate is None:
+            return queryset.none()
+        return bind_once(queryset.filter(predicate).distinct())
 
 
 class TrustsRegistry(object):
@@ -4863,16 +4793,13 @@ class TrustsRegistry(object):
         """Distinct permission rows granted to ``user`` on ``content``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
-        from trusts.query import user_identity_denied
-
-        skipped = _registry_skipped(self, user, skip_flags)
+        inquiry = user_skip_params(user, skip_flags, registry=self)
         plan = self.plan_for(content, user=user)
-        if user_identity_denied(user) or _activity_denied(
-            user, plan.user_conditions, skipped,
-        ):
+        if inquiry.denied:
             if not plan.records or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
+        skipped = inquiry.values
         return plan.permissions(
             user, content,
             skipped=skipped,
@@ -4883,16 +4810,13 @@ class TrustsRegistry(object):
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
-        from trusts.query import user_identity_denied
-
-        skipped = _registry_skipped(self, user, skip_flags)
+        inquiry = user_skip_params(user, skip_flags, registry=self)
         plan = self.plan_for(
             content, user=user, permission=permission,
         )
-        if user_identity_denied(user) or _activity_denied(
-            user, plan.user_conditions, skipped,
-        ):
+        if inquiry.denied:
             return False
+        skipped = inquiry.values
         return plan.has_permission(
             user, content, permission,
             skipped=skipped,
@@ -4909,16 +4833,13 @@ class TrustsRegistry(object):
             )
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
-        from trusts.query import user_identity_denied
-
-        skipped = _registry_skipped(self, user, skip_flags)
+        inquiry = user_skip_params(user, skip_flags, registry=self)
         plan = self.plan_for(
             queryset, user=user, permission=permission,
         )
-        if user_identity_denied(user) or _activity_denied(
-            user, plan.user_conditions, skipped,
-        ):
+        if inquiry.denied:
             return queryset.none()
+        skipped = inquiry.values
         return plan.filter_content(
             queryset, user, permission,
             skipped=skipped,

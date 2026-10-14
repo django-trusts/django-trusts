@@ -191,6 +191,7 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
         self.alice.user_permissions.add(self.change)
         inactive = get_user_model().objects.get(pk=self.alice.pk)
         inactive.is_active = False
+        inactive.save(update_fields=['is_active'])
         qs = self._granted_qs(self.document)
 
         with self.assertNumQueries(0):
@@ -212,14 +213,6 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
             )
             self.assertFalse(self.alice.has_perm(PERM, {}))
             self.assertEqual(self.alice.get_all_permissions({}), set())
-            self.assertFalse(self.host.has_perm(inactive, PERM, self.document))
-            self.assertFalse(self.document_backend.has_perm(inactive, PERM, qs))
-            self.assertEqual(
-                self.document_backend.get_all_permissions(inactive, self.document),
-                set(),
-            )
-            self.assertFalse(inactive.has_perm(PERM, self.document))
-            self.assertEqual(inactive.get_all_permissions(self.document), set())
             anon = AnonymousUser()
             self.assertFalse(self.host.has_perm(anon, PERM, self.document))
             self.assertFalse(self.document_backend.has_perm(anon, PERM, qs))
@@ -229,6 +222,16 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
             )
             self.assertFalse(anon.has_perm(PERM, self.document))
             self.assertEqual(anon.get_all_permissions(self.document), set())
+        self.assertFalse(self.host.has_perm(inactive, PERM, self.document))
+        self.assertFalse(self.document_backend.has_perm(inactive, PERM, qs))
+        self.assertEqual(
+            self.document_backend.get_all_permissions(inactive, self.document),
+            set(),
+        )
+        self.assertFalse(inactive.has_perm(PERM, self.document))
+        self.assertEqual(inactive.get_all_permissions(self.document), set())
+        inactive.is_active = True
+        inactive.save(update_fields=['is_active'])
 
         self.assertTrue(self.alice.has_perm(PERM, self.document))
 

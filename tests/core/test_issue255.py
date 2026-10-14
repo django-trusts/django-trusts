@@ -336,35 +336,38 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertEqual(content['permitted']['params'], [
             '$user.id',
             '$permission.id',
+            'user.is_active=True',
             '$along_bound=2',
             '$content.app_label="documents"',
             '$content.model="folder"',
-            'user.is_active=True',
             '$along_match=True',
+            'skip_is_active=False',
         ])
         self.assertEqual(content['has_perm']['params'], [
             '$user.id',
             '$permission.id',
             '$content.id',
+            'user.is_active=True',
             '$along_bound=2',
             '$content.app_label="documents"',
             '$content.model="folder"',
-            'user.is_active=True',
             '$along_match=True',
+            'skip_is_active=False',
         ])
         self.assertEqual(content['get_all_permissions']['params'], [
             '$user.id',
             '$content.id',
+            'user.is_active=True',
             '$along_bound=2',
             '$content.app_label="documents"',
             '$content.model="folder"',
-            'user.is_active=True',
             '$along_match=True',
+            'skip_is_active=False',
         ])
         # One ordered list for the ORed reverse statement. Both walks
         # share one bind row. Permission and content come first, then
-        # the depth ceiling and content type. Inactive users are
-        # excluded by ``is_active`` equality.
+        # the depth ceiling and content type. ``is_active`` and
+        # ``skip_is_active`` stay in that one statement.
         self.assertEqual(reverse['params'], [
             '$permission.id',
             '$content.id',
@@ -373,6 +376,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             '$content.app_label="documents"',
             '$content.model="folder"',
             '$along_match=True',
+            'skip_is_active=False',
             '$along_match=True',
             '$along_match=True',
         ])
@@ -454,11 +458,12 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertEqual(content['permitted']['params'], [
             '$user.id',
             '$permission.id',
+            'user.is_active=True',
             '$along_bound=8',
             '$content.app_label="documents"',
             '$content.model="walknode"',
-            'user.is_active=True',
             '$along_match=True',
+            'skip_is_active=False',
         ])
 
     def test_along_reverse_uuid_to_field_binds_content_ident(self):
@@ -517,6 +522,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             '$content.app_label="documents"',
             '$content.model="uuidnode"',
             '$along_match=True',
+            'skip_is_active=False',
             '$along_match=True',
         ])
         self.assertNotIn('$content.id', reverse['params'])

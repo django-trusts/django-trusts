@@ -331,7 +331,7 @@ class AuthorizedQuerySetLiveTest(TestCase):
     def test_inactive_user_is_empty_unless_auditing(self):
         self.alice.is_active = False
         self.alice.save()
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             denied = Document.objects.authorized(self.alice, self.change)
             self.assertFalse(denied.exists())
         audited = Document.objects.authorized(

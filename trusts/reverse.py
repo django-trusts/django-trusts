@@ -31,23 +31,25 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     is OR-ed. A registered user override is part of the Trusts-owned
     predicate, not a separate superuser grant. The ``is_active`` check
     applies inside the Trusts-owned branch only. A custom predicate is
-    not wrapped. ``skip_<name>=True`` drops that registered user
-    condition. The resulting names are forwarded only to the Trusts-owned
-    mixin method. Django's ``PermissionsMixin.has_perm`` early return is
+    not wrapped. ``skip_<name>=True`` sets that bound parameter. The
+    values are forwarded only to the Trusts-owned mixin method.
+    Django's ``PermissionsMixin.has_perm`` early return is
     not copied here. An unsupported object-permission backend raises
     before SQL.
     """
     from django.contrib.auth import get_backends, get_user_model
 
     from trusts.apps import _relationship_implementation_handles
-    from trusts.core import _inquiry_skipped, _known_skip_names
+    from trusts.core import user_skip_params
 
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    skipped = _inquiry_skipped(
-        known=_known_skip_names(_relationship_implementation_handles()),
-        **skip_flags,
+    inquiry = user_skip_params(
+        None, skip_flags,
+        handles=_relationship_implementation_handles(),
+        require_user=False,
     )
+    skipped = inquiry.values
     if user_queryset is None:
         user_queryset = get_user_model()._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
@@ -121,39 +123,26 @@ def trusts_mixin_predicate(backend, content, perm, *,
         )
         if delegated is not None:
             exists = delegated if exists is None else (_as_q(exists) | delegated)
-    from trusts.core import (
-        _bound_permission_identity,
-        _outer_user_override_q,
-        _skip_names,
-    )
+    from trusts.core import _bound_permission_identity, attach_user_grant
 
     user_model = _plan_user_model(plan, content)
-    names = _skip_names(skipped)
-    override = _outer_user_override_q(
-        getattr(plan, 'user_override', None), user_model, names,
-    )
-    if exists is None and override is None:
-        return None
-    if override is not None:
-        permission_model = plan.permission_model
-        if permission_model is None and not isinstance(binding, Model):
-            permission_model = Permission
-        override = override & _bound_permission_identity(
+    permission_model = plan.permission_model
+    if permission_model is None and not isinstance(binding, Model):
+        permission_model = Permission
+    predicate = attach_user_grant(
+        None if exists is None else _as_q(exists),
+        user=user_model,
+        conditions=getattr(plan, 'user_conditions', None),
+        override=getattr(plan, 'user_override', None),
+        values=skipped,
+        identity=_bound_permission_identity(
             binding, content.__class__, permission_model,
-        )
-    eligibility = _trusts_eligibility_q(
-        user_model,
-        user_conditions=getattr(plan, 'user_conditions', None),
-        skipped=skipped,
+        ),
+        missing='closed',
     )
-    if eligibility is None:
+    if predicate is None:
         return None
-    if exists is None:
-        predicate = eligibility & override
-    elif override is None:
-        predicate = eligibility & _as_q(exists)
-    else:
-        predicate = eligibility & (_as_q(exists) | override)
+    predicate = _trusts_eligibility_q(user_model) & predicate
     if condition:
         overlay = _named_filter_q(
             backend, content, perm, condition[0], user_model,
@@ -201,38 +190,30 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             exists = (
                 delegated if exists is None else (_as_q(exists) | delegated)
             )
-    from trusts.core import (
-        _bound_permission_identity,
-        _outer_user_override_q,
-        _skip_names,
-    )
+    from trusts.core import _bound_permission_identity, attach_user_grant
+    from trusts.user_rules import compile_user_rules
 
-    override = _outer_user_override_q(
-        getattr(plan, 'user_override', None),
-        user_model,
-        _skip_names(),
-    )
-    if override is not None:
-        override = override & _bound_permission_identity(
+    conditions = getattr(plan, 'user_conditions', None)
+    if compile_user_rules(
+        user_model, '', conditions, role='user', values={}, missing='closed',
+    ) is None:
+        return user_model._default_manager.all().filter(pk__isnull=True)
+    predicate = attach_user_grant(
+        None if exists is None else _as_q(exists),
+        user=user_model,
+        conditions=conditions,
+        override=getattr(plan, 'user_override', None),
+        values={},
+        identity=_bound_permission_identity(
             permission, content.__class__, plan.permission_model,
-        )
-    if exists is None and override is None:
+        ),
+    )
+    if predicate is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    eligibility = _trusts_eligibility_q(
-        user_model,
-        user_conditions=getattr(plan, 'user_conditions', None),
-    )
-    if eligibility is None:
-        return user_model._default_manager.all().filter(pk__isnull=True)
-    if exists is None:
-        predicate = eligibility & override
-    elif override is None:
-        predicate = eligibility & _as_q(exists)
-    else:
-        predicate = eligibility & (_as_q(exists) | override)
+    predicate = _trusts_eligibility_q(user_model) & predicate
     from trusts._bind_once import bind_once
 
     return bind_once(
@@ -666,36 +647,17 @@ def _principal_presence(model, name):
     )
 
 
-def _trusts_eligibility_q(model, *, user_conditions=None,
-                          skipped=()):
-    """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
+def _trusts_eligibility_q(model):
+    """Anonymous and authenticated columns on a reverse candidate user.
 
-    The checked-user shortcut denies anonymous, unauthenticated, and
-    inactive users. A missing ``is_active`` uses the same default as
-    ``getattr(user, 'is_active', False)`` and contributes no users.
-    A name in ``skipped`` omits that condition and does not fail closed
-    when its column is absent. Persisted rows use the stock
+    Registered user conditions and the override are compiled by
+    ``attach_user_grant``. Persisted rows use the stock
     anonymous/authenticated properties unless those names are concrete
     fields. The predicate is standard boolean SQL.
     """
-    from trusts.core import _skip_names
-    from trusts.user_rules import compile_user_rules
-
-    names = _skip_names(skipped)
     anonymous = _principal_presence(model, 'is_anonymous')
     authenticated = _principal_presence(model, 'is_authenticated')
-    if user_conditions is None:
-        active = _principal_presence(model, 'is_active')
-        if 'is_active' not in names and active != 'field':
-            return None
-        predicate = Q() if 'is_active' in names else Q(is_active=True)
-    else:
-        predicate = compile_user_rules(
-            model, '', user_conditions, role='user', skipped=names,
-            missing='closed',
-        )
-        if predicate is None:
-            return None
+    predicate = Q()
     if anonymous == 'field':
         predicate &= Q(is_anonymous=False)
     if authenticated == 'field':

@@ -1455,6 +1455,11 @@ def _symbol_for_new_param(node, query=None):
             {'const': _json_const(node.bound)}, 'along bound',
         )
     from trusts._bind_once import BoundBool
+    from trusts.user_rules import SkipFlag
+    if isinstance(node, SkipFlag):
+        return _with_hint(
+            {'const': _json_const(node.value)}, 'skip_%s' % node.name,
+        )
     if isinstance(node, BoundBool):
         return _with_hint(
             {'const': _json_const(node.value)}, node.hint,

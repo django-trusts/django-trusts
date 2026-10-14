@@ -1,12 +1,17 @@
 """Named user conditions compiled to concrete boolean SQL.
 
 A condition is a lambda walked once at registration. The walk accepts
-concrete boolean field lookups, ``&``, and ``~``. The lockfile records
-the SQL that comparison becomes. There is no separate rule key.
+concrete boolean field lookups, ``&``, and ``~``. Each condition is
+compiled once as ``(skip_<name> OR condition)``. The override is
+``(NOT skip_<override> AND override)``, ORed with ordinary grants and
+delegation. The skip flag is a bound parameter, so the SQL shape does
+not change when a call skips a rule. The lockfile records that one
+statement. There is no separate rule key.
 """
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Q
+from django.db.models import BooleanField, Q
+from django.db.models.expressions import RawSQL
 
 from trusts.core import TrustsConfigurationError
 
@@ -129,7 +134,7 @@ def condition_names(conditions, override=None):
 
 
 def collect_skipped(*, known=None, **flags):
-    """Names whose ``skip_<name>=True`` drops that condition.
+    """Names whose ``skip_<name>=True`` sets that skip parameter.
 
     Each keyword is ``skip_`` plus a registered condition name, or the
     current override name. The built-in ``is_active`` condition is what
@@ -323,30 +328,68 @@ def _compile_expr(path, expr):
     )
 
 
-def compile_user_rules(model, path, conditions, *, role, skipped, missing='omit'):
+class SkipFlag(RawSQL):
+    """Bound boolean for one ``skip_<name>`` parameter.
+
+    The statement is always one placeholder. ``RawSQL`` is accepted in
+    a ``WHERE`` clause on backends without a native boolean, so the
+    comparison is not rewritten to ``placeholder = True``. Callers
+    change ``value`` without changing that statement.
+    """
+
+    conditional = True
+
+    def __init__(self, name, value):
+        self.name = name
+        self.value = bool(value)
+        super().__init__('%s', (self.value,), output_field=BooleanField())
+
+    def __repr__(self):
+        return 'SkipFlag(%s=%s)' % (self.name, self.value)
+
+
+def compile_user_rules(model, path, conditions, *, role, values, missing='omit'):
     """SQL for the conditions that apply to ``role``.
 
-    ``conditions is None`` is the built-in ``is_active`` rule. ``missing``
-    is ``omit`` for the checked user (no invented term) and ``closed`` for
-    a sponsor eligibility check that cannot see the column. Returns ``None``
-    when ``missing`` is ``closed`` and a required field is absent.
+    Each condition is ``(skip_<name> OR condition)``. ``values`` maps a
+    rule name to whether that call skips it. ``conditions is None`` is
+    the built-in ``is_active`` rule. ``missing`` is ``omit`` for the
+    checked user (no invented term) and ``closed`` for a sponsor check
+    that cannot see the column. Returns ``None`` when ``missing`` is
+    ``closed`` and a required field is absent.
     """
     rules = BUILTIN_USER_CONDITIONS if conditions is None else tuple(conditions)
-    skipped = frozenset(skipped or ())
+    values = values or {}
     parts = []
     for rule in rules:
         if role not in condition_targets(rule.on):
-            continue
-        if rule.name in skipped:
             continue
         if _expr_availability(model, rule.expr) == 'missing':
             if missing == 'closed':
                 return None
             continue
-        parts.append(_compile_expr(path, rule.expr))
+        flag = SkipFlag(rule.name, bool(values.get(rule.name, False)))
+        parts.append(Q(flag) | _compile_expr(path, rule.expr))
     if not parts:
         return Q()
     combined = parts[0]
     for part in parts[1:]:
         combined &= part
     return combined
+
+
+def compile_override_q(model, path, slot, values):
+    """``(NOT skip_<override> AND override)`` on ``model``, or ``None``.
+
+    A missing concrete boolean raises. The skip flag is a bound
+    parameter, so skipping the override does not remove the expression.
+    """
+    if slot is None:
+        return None
+    if _expr_availability(model, slot.expr) != 'ok':
+        raise TrustsConfigurationError(
+            'User override %r needs a concrete BooleanField on %s.'
+            % (slot.name, model._meta.label)
+        )
+    flag = SkipFlag(slot.name, bool((values or {}).get(slot.name, False)))
+    return ~Q(flag) & _compile_expr(path, slot.expr)

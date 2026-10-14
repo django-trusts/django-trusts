@@ -171,7 +171,7 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
         with self.assertNumQueries(0):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(anonymous), pk=self.open_doc.pk)
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(2):
             with self.assertRaises(PermissionDenied):
                 _edit(_request(self.inactive), pk=self.open_doc.pk)
 

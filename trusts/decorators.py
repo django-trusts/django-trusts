@@ -12,8 +12,7 @@ from trusts._permitted import (
     _permission_binding,
 )
 from trusts._bind_once import bind_once
-from trusts.core import TrustsConfigurationError, _handles_condition_denied
-from trusts.query import user_identity_denied
+from trusts.core import TrustsConfigurationError
 
 
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
@@ -71,7 +70,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
     from django.apps import apps as django_apps
     from trusts.apps import _relationship_implementation_handles
-    from trusts.core import _skipped_for_handles
+    from trusts.core import user_skip_params
 
     handles = _relationship_implementation_handles()
 
@@ -90,13 +89,10 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
         handles, model, conditions, api='authorization_required',
     )
 
-    skipped = _skipped_for_handles(handles, skip_flags, user)
-    if (
-        user is None
-        or user_identity_denied(user)
-        or _handles_condition_denied(handles, user, skipped)
-    ):
+    inquiry = user_skip_params(user, skip_flags, handles=handles)
+    if inquiry.denied:
         raise PermissionDenied
+    skipped = inquiry.values
 
     candidates = model._default_manager.filter(pk=pk)
     app_label, codename = permission.split('.', 1)
@@ -147,8 +143,8 @@ def authorization_required(model, permission, conditions=(), **skip_flags):
 
     An active superuser is allowed only when a registered user override
     passes, or when an ordinary grant does. ``skip_<name>`` keywords
-    are forwarded to that same inquiry. ``skip_<override>`` drops the
-    override and leaves ordinary grants in place.
+    are forwarded to that same inquiry. ``skip_<override>`` turns off
+    the override parameter and leaves ordinary grants in place.
 
     ``PermittedQuerySet.permitted`` is the queryset form of this
     permission codec and condition rule. It has no HTTP status.

@@ -88,6 +88,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
     def test_none_and_unauthenticated_principals_deny_at_zero_sql(self):
         inactive = get_user_model().objects.get(pk=self.alice.pk)
         inactive.is_active = False
+        inactive.save(update_fields=['is_active'])
         unauthenticated = _UnauthenticatedPrincipal()
         anonymous = AnonymousUser()
 
@@ -105,11 +106,11 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                 self.host.has_perm(unauthenticated, PERM, self.document),
             )
             self.assertFalse(
-                self.document_backend.has_perm(inactive, PERM, self.document),
-            )
-            self.assertFalse(
                 self.document_backend.has_perm(anonymous, PERM, self.document),
             )
+        self.assertFalse(
+            self.document_backend.has_perm(inactive, PERM, self.document),
+        )
 
     def test_unowned_backend_rejects_identity_before_registry(self):
         backend = MixinOnlyBackend()

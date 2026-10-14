@@ -122,14 +122,19 @@ class UserConditionRegistrationTest(TransactionTestCase):
             active_sql = str(registry.permissions_for(alice, note).query)
             self.assertIn('is_active', active_sql)
             self.assertIn('is_superuser', active_sql)
+            plain = registry.permissions_for(alice, note)
             skipped = registry.permissions_for(
                 inactive, note, skip_staff=True, skip_is_active=True,
             )
             self.assertEqual(
                 set(skipped.values_list('pk', flat=True)), {read.pk},
             )
-            self.assertNotIn('is_superuser', str(skipped.query))
-            self.assertNotIn('is_active', str(skipped.query))
+            self.assertEqual(
+                skipped.query.sql_with_params()[0],
+                plain.query.sql_with_params()[0],
+            )
+            self.assertIn('is_superuser', str(skipped.query))
+            self.assertIn('is_active', str(skipped.query))
 
             open_registry = TrustsRegistry()
             open_registry.register_user_condition('is_active', None)
@@ -270,7 +275,11 @@ class UserOverrideTest(TransactionTestCase):
                 superuser, note, skip_superuser=True,
             )
             self.assertEqual(list(without), [])
-            self.assertNotIn('is_superuser', str(without.query))
+            self.assertEqual(
+                without.query.sql_with_params()[0],
+                allowed.query.sql_with_params()[0],
+            )
+            self.assertIn('is_superuser', str(without.query))
 
             handle = BackendHandle(
                 'user-override', registry, PlanQueryCompiler(),
@@ -384,11 +393,12 @@ class UserConditionTargetTest(TransactionTestCase):
                 return registry
 
             def holds(handle, user, **skip):
-                from trusts.user_rules import collect_skipped
+                from trusts.core import user_skip_params
 
+                inquiry = user_skip_params(user, skip, handles=(handle,))
                 predicate = granted(
                     (handle,), note, user, read,
-                    skipped=collect_skipped(**skip),
+                    skipped=inquiry.values,
                 )
                 if predicate is None:
                     return False
@@ -397,15 +407,16 @@ class UserConditionTargetTest(TransactionTestCase):
                 ).filter(predicate)).exists()
 
             def sql_for(handle, user, **skip):
-                from trusts.user_rules import collect_skipped
+                from trusts.core import user_skip_params
 
+                inquiry = user_skip_params(user, skip, handles=(handle,))
                 predicate = granted(
                     (handle,), note, user, read,
-                    skipped=collect_skipped(**skip),
+                    skipped=inquiry.values,
                 )
-                return str(bind_once(TargetNote.objects.filter(
+                return bind_once(TargetNote.objects.filter(
                     pk=note.pk,
-                ).filter(predicate)).query)
+                ).filter(predicate)).query.sql_with_params()[0]
 
             staff_delegate = User.objects.create_user('tgt-staff-del', password='x')
             staff_delegate.is_staff = True
@@ -494,7 +505,8 @@ class UserConditionTargetTest(TransactionTestCase):
             self.assertTrue(holds(both_handle, actor, skip_is_active=True))
             self.assertTrue(holds(both_handle, inactive, skip_is_active=True))
             skipped_sql = sql_for(both_handle, actor, skip_is_active=True)
-            self.assertNotIn('is_active', skipped_sql)
+            self.assertEqual(skipped_sql, sql_for(both_handle, actor))
+            self.assertIn('is_active', skipped_sql)
 
             removed = open_registry(
                 lambda registry: registry.register_user_condition('is_active', None),
@@ -761,13 +773,17 @@ class SkipKeywordTest(TransactionTestCase):
             )
 
             denied = registry.permissions_for(alice, note)
-            with self.assertNumQueries(0):
+            with self.assertNumQueries(1):
                 self.assertEqual(list(denied), [])
             skipped = registry.permissions_for(alice, note, skip_staff=True)
             self.assertEqual(
                 set(skipped.values_list('pk', flat=True)), {read.pk},
             )
-            self.assertNotIn('is_superuser', str(skipped.query))
+            self.assertEqual(
+                skipped.query.sql_with_params()[0],
+                denied.query.sql_with_params()[0],
+            )
+            self.assertIn('is_superuser', str(skipped.query))
             self.assertIn('is_active', str(skipped.query))
             self.assertTrue(
                 registry.has_permission(alice, note, read, skip_staff=True),
@@ -884,7 +900,11 @@ class SkipKeywordTest(TransactionTestCase):
             self.assertIn('is_staff', str(allowed.query))
             skipped = registry.permissions_for(staff, note, skip_staff=True)
             self.assertEqual(list(skipped), [])
-            self.assertNotIn('is_staff', str(skipped.query))
+            self.assertEqual(
+                skipped.query.sql_with_params()[0],
+                allowed.query.sql_with_params()[0],
+            )
+            self.assertIn('is_staff', str(skipped.query))
             self.assertEqual(list(registry.permissions_for(superuser, note)), [])
             with self.assertRaises(TypeError) as ctx:
                 registry.permissions_for(staff, note, skip_superuser=True)
@@ -1026,7 +1046,7 @@ class StaffSurfaceTest(TestCase):
         self.config._document_grant_registry_id = self.original_sentinel
 
     def test_staff_is_enforced_and_skippable(self):
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             self.assertFalse(
                 self.backend.has_perm(self.plain, self.perm, self.doc),
             )
@@ -1042,7 +1062,7 @@ class StaffSurfaceTest(TestCase):
             self.backend.has_perm(self.staff, self.perm, self.other),
         )
 
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             self.assertFalse(
                 Document.objects.authorized(self.plain, self.change).exists(),
             )
@@ -1060,7 +1080,7 @@ class StaffSurfaceTest(TestCase):
         )
 
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(1):
             self.assertFalse(
                 permitted.permitted(self.change, self.plain).exists(),
             )
@@ -1088,7 +1108,11 @@ class StaffSurfaceTest(TestCase):
             (handle,), self.doc, self.plain, skip_staff=True,
         )
         self.assertIn(self.change.pk, set(skipped.values_list('pk', flat=True)))
-        self.assertNotIn('is_staff', str(skipped.query))
+        self.assertEqual(
+            skipped.query.sql_with_params()[0],
+            denied.query.sql_with_params()[0],
+        )
+        self.assertIn('is_staff', str(skipped.query))
 
         self.assertNotIn(
             self.plain.pk,
@@ -1104,8 +1128,13 @@ class StaffSurfaceTest(TestCase):
         skipped_users = self.doc.get_permitted_users(
             self.change, skip_staff=True,
         )
+        denied_shape = self.doc.get_permitted_users(self.change)
+        self.assertEqual(
+            skipped_users.query.sql_with_params()[0],
+            denied_shape.query.sql_with_params()[0],
+        )
         where = str(skipped_users.query).split('WHERE', 1)[-1]
-        self.assertNotIn('is_staff', where)
+        self.assertIn('is_staff', where)
         denied_users = self.doc.get_permitted_users(self.change)
         self.assertIn('is_staff', str(denied_users.query).split('WHERE', 1)[-1])
 
@@ -1150,6 +1179,9 @@ class StaffSurfaceTest(TestCase):
         raw = render_policy_sql_bytes(handles=[handle])
         self.assertIn(b'user.is_staff=True', raw)
         self.assertIn(b'user.is_superuser=True', raw)
+        self.assertIn(b'skip_is_active=False', raw)
+        self.assertIn(b'skip_staff=False', raw)
+        self.assertIn(b'skip_superuser=False', raw)
         from trusts.reverse import lock_permitted_users_queryset
 
         queryset = lock_permitted_users_queryset(
@@ -1225,7 +1257,7 @@ class StaffPrefixFilterTest(TransactionTestCase):
                 Scope.objects.all(), plain, read,
                 content=payload, handles=(handle,),
             )
-            with self.assertNumQueries(0):
+            with self.assertNumQueries(1):
                 self.assertFalse(denied.exists())
             self.assertEqual(
                 set(filter_by_permitted_content(
@@ -1441,7 +1473,7 @@ class AuthorizationRequiredSuperuserTest(TestCase):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.active), pk=self.doc.pk)
         self.assertTrue(self.active.has_perm(self.perm, self.doc))
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(2):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.dormant), pk=self.doc.pk)
         audited = self._view(skip_is_active=True)
@@ -1469,7 +1501,7 @@ class AuthorizationRequiredSuperuserTest(TestCase):
             self.assertEqual(
                 view(_guard_request(self.active), pk=self.doc.pk), 'ok',
             )
-        with self.assertNumQueries(0):
+        with self.assertNumQueries(2):
             with self.assertRaises(PermissionDenied):
                 view(_guard_request(self.dormant), pk=self.doc.pk)
 

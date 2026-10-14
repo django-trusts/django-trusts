@@ -105,27 +105,26 @@ class AuthorizedQuerySet(QuerySet):
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
         from trusts.apps import _relationship_implementation_handles
-        from trusts.core import (
-            TrustsConfigurationError,
-            _handles_condition_denied,
-            _skipped_for_handles,
-            granted,
-        )
+        from trusts.core import TrustsConfigurationError, granted
 
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
             )
+        from trusts.core import user_skip_params
+
         handles = _relationship_implementation_handles()
-        skipped = _skipped_for_handles(handles, skip_flags, user)
-        if user_identity_denied(user):
-            return self.none()
-        if _handles_condition_denied(handles, user, skipped):
+        inquiry = user_skip_params(user, skip_flags, handles=handles)
+        if user is None:
+            raise TrustsConfigurationError(
+                'user must be a model instance, not None.'
+            )
+        if inquiry.denied:
             return self.none()
         granted_q = granted(
             handles,
             self, user, permission, kind='complete',
-            skipped=skipped,
+            skipped=inquiry.values,
         )
         if granted_q is None:
             return self.none()
