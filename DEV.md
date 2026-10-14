@@ -161,6 +161,22 @@ clean dependency or release boundaries and size the resulting tasks
 independently. A task that grows to 13 during implementation follows the same
 rule.
 
+## Docs-first development
+
+For a user-visible feature, first test feasibility: walk every affected path,
+identify likely pitfalls, and draft the smallest user-doc change. Refine a
+representative snippet until the behavior is clear, then open a docs PR as the
+proposed contract. Keep it draft; user docs normally merge with or after the
+implementation so `dev` does not promise behavior it does not provide.
+
+The implementor reviews that contract before coding, surfaces contradictions
+or missing cases, and implements against it. Implementation PRs normally do
+not edit user docs. When implementation exposes a mismatch, the implementor
+posts an evidence-backed doc-change request. The doc writer decides whether it
+is a valid contract change, a documentation defect, or an implementation
+misunderstanding, and updates the docs when warranted. Keep implementation
+notes and proof in PR comments or development docs, not permanent user docs.
+
 ## Writing docs
 
 - Write in plain English, the way Django's docs read.
