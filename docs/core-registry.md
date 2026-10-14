@@ -409,7 +409,7 @@ These additive APIs are the instance-only / metadata-driven surfaces that
 later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `filter_by_user_content_perm`, the app label, or the historical compiler.
 
-`AuthorizedQuerySet.authorized(user, permission, extra_q=None, *, allow_inactive_user=False)` and
+`AuthorizedQuerySet.authorized(user, permission, extra_q=None, *, skip_is_active=False)` and
 `AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse
@@ -420,12 +420,12 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
 `.authorized` does not call it; both inquiries apply the `is_active` check
-(or skip it with `allow_inactive_user=True`) without sharing permission-input
+(or skip it with `skip_is_active=True`) without sharing permission-input
 validation.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
-`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
+`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, skip_is_active=False)`
 in `trusts.core` filters rows of an intermediate model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. The function compiles `EXISTS` of root rows

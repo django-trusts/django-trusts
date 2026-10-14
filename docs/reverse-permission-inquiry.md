@@ -5,7 +5,7 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the recursive agreement boundary below.
 
-Both adapters use the [`is_active` check and `allow_inactive` argument](source/index.rst#user-is-active-checks).
+Both adapters use the [`is_active` check and `skip_is_active` argument](source/index.rst#user-is-active-checks).
 
 ## Decision
 
@@ -17,7 +17,7 @@ users = User.objects.permitted(document, perm)
 ```
 
 Both accept exactly one saved content object, one permission, and the
-keyword-only `allow_inactive=False` argument, call one
+keyword-only `skip_is_active=False` argument, call one
 internal reverse-query compiler, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
@@ -139,7 +139,7 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must agree when called with the same `allow_inactive` value. Each supported
+must agree when called with the same `skip_is_active` value. Each supported
 backend contribution retains its own eligibility rules, composed with the
 same candidate queryset and Django's superuser check.
 
@@ -147,7 +147,7 @@ By default, membership in either queryset matches `user.has_perm(perm, content)`
 For an `auth.Permission` instance, use its `app_label.codename` string in
 `has_perm()`; supported strings and custom permission instances are unchanged.
 Reverse compilation still uses the canonical permission row.
-`allow_inactive=True` skips only Trusts' built-in `is_active` checks. Custom
+`skip_is_active=True` skips only Trusts' built-in `is_active` checks. Custom
 backend contributions are unchanged, and stock `user.has_perm()` cannot
 forward this keyword.
 
@@ -235,7 +235,7 @@ WHERE
 ```
 
 The named predicates are conceptual SQL placeholders, not Python callbacks.
-`user.is_active` is included only when `allow_inactive` is false.
+`user.is_active` is included only when `skip_is_active` is false.
 Backend branches retain their explicit conditions. Django's superuser
 check is unchanged.
 
@@ -308,9 +308,9 @@ Implementation must cover:
 - preservation of an application's existing user manager and queryset class;
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
-With `allow_inactive=False`, compare the result row for row with `has_perm()`
+With `skip_is_active=False`, compare the result row for row with `has_perm()`
 for the same candidate users and normalized permission in every behavioral
-fixture. With `allow_inactive=True`, verify that only Trusts-owned
+fixture. With `skip_is_active=True`, verify that only Trusts-owned
 `is_active` checks are skipped.
 
 ## Non-goals

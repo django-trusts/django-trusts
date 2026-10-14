@@ -255,7 +255,7 @@ def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
 
 
 def _authorization_grant_q(handles, candidates, user, model, permission,
-                           conditions, binding, *, api, allow_inactive=False):
+                           conditions, binding, *, api, skip_is_active=False):
     """OR each auth-Permission backend's grant composed with its own names.
 
     A backend participates only when it has an applicable exact
@@ -280,7 +280,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
                 (handle,), candidates, user, binding, kind='complete',
                 sponsor_handles=handles,
                 permission_model=Permission,
-                allow_inactive=allow_inactive,
+                skip_is_active=skip_is_active,
             )
             if part is None:
                 continue
@@ -290,7 +290,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             (handle,), candidates, user, binding, kind='complete',
             sponsor_handles=handles,
             permission_model=Permission,
-            allow_inactive=allow_inactive,
+            skip_is_active=skip_is_active,
         )
         if part is None:
             continue
@@ -308,7 +308,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
 
 
 def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
-                       allow_inactive=False):
+                       skip_is_active=False):
     """Lazy filtered queryset of rows ``user`` may access.
 
     ``handles`` selects the backends. Core passes relationship-family
@@ -325,8 +325,8 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
         handles, model, conditions, api='permitted',
     )
     from trusts.query import require_mode_flag
-    require_mode_flag(allow_inactive, 'allow_inactive_user')
-    if not is_active_principal(user, allow_inactive=allow_inactive):
+    require_mode_flag(skip_is_active, 'skip_is_active')
+    if not is_active_principal(user, skip_is_active=skip_is_active):
         return queryset.none()
     granted_q = _authorization_grant_q(
         handles,
@@ -337,7 +337,7 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
         conditions,
         _permitted_binding(model, normalized),
         api='permitted',
-        allow_inactive=allow_inactive,
+        skip_is_active=skip_is_active,
     )
     if granted_q is None:
         return queryset.none()

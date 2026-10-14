@@ -84,7 +84,7 @@ class Issue300LockfileTest(SimpleTestCase):
             '"is_active" = ("trusts_bind"."is_active")', users['sql'],
         )
         self.assertNotIn('"is_active" = %s', users['sql'])
-        self.assertNotIn('allow_inactive', users['sql'])
+        self.assertNotIn('skip_is_active', users['sql'])
 
     def test_flag_off_records_the_plain_queryset(self):
         with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -109,17 +109,17 @@ class Issue300LockfileTest(SimpleTestCase):
 class Issue300EligibilitySqlTest(SimpleTestCase):
     def test_is_active_equality_is_added_only_when_inactive_users_are_denied(self):
         denied = User.objects.filter(
-            _trusts_eligibility_q(User, allow_inactive=False),
+            _trusts_eligibility_q(User, skip_is_active=False),
         )
         included = User.objects.filter(
-            _trusts_eligibility_q(User, allow_inactive=True),
+            _trusts_eligibility_q(User, skip_is_active=True),
         )
         denied_where = str(denied.query.where)
         included_where = str(included.query.where)
         self.assertIn('is_active', denied_where)
         self.assertNotIn('is_active', included_where)
-        self.assertNotIn('allow_inactive', denied_where)
-        self.assertNotIn('allow_inactive', included_where)
+        self.assertNotIn('skip_is_active', denied_where)
+        self.assertNotIn('skip_is_active', included_where)
         self.assertNotIn('OR', denied_where)
 
 
@@ -307,7 +307,7 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
 
     def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
         query = bind_once(User.objects.filter(
-            _trusts_eligibility_q(User, allow_inactive=False),
+            _trusts_eligibility_q(User, skip_is_active=False),
         )).query
         engines = (
             'django.db.backends.sqlite3',

@@ -484,13 +484,13 @@ the same model.
 
    def filter_by_permitted_content(
        queryset, user, permission, *, content, handles=None,
-       allow_inactive_user=False,
+       skip_is_active=False,
    ):
        ...
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``allow_inactive_user`` is the same option as the other content
+backends. ``skip_is_active`` is the same option as the other content
 inquiries.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
@@ -572,25 +572,25 @@ against a user model; a non-model user object is not a SQL principal.
 Including inactive users
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-To include inactive users in an inquiry, use the keyword-only option
-(default ``False``). Inquiries returning content, permissions, or a boolean
-use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
-It skips only the built-in ``is_active`` checks for the user, delegate, and
-sponsor. Explicit conditions and candidate-queryset filters still apply.
+To include inactive users in an inquiry, pass keyword-only
+``skip_is_active=True`` (the default is ``False``). The same keyword is
+used for content, permissions, booleans, and user lists. It skips only the
+built-in ``is_active`` checks for the user, delegate, and sponsor. Explicit
+conditions and candidate-queryset filters still apply.
 For example, inspect a suspended user's grants before reactivating them:
 
 .. code-block:: python
 
    documents = Document.objects.permitted(
-       "documents.change_document", suspended_user, allow_inactive_user=True,
+       "documents.change_document", suspended_user, skip_is_active=True,
    )
    users = document.get_permitted_users(
-       "documents.change_document", allow_inactive=True,
+       "documents.change_document", skip_is_active=True,
    )
 
-Stock Django user methods do not forward either keyword. Use the Trusts
+Stock Django user methods do not forward ``skip_is_active``. Use the Trusts
 adapters; view guards and login behavior are unchanged. Custom backends retain
-their own rules and do not receive either keyword.
+their own rules and do not receive the keyword.
 
 Protect a view with the Trusts-only primary-key guard:
 

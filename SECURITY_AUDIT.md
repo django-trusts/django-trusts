@@ -157,20 +157,20 @@ For actor `u`, content `c`, and permission `p`, every projection compiles the
 same shape:
 
 ```text
-(allow_inactive_user OR u.is_active)
+(skip_is_active OR u.is_active)
 AND (
     ordinary(u, c, p)
     OR EXISTS delegation d:
         d.delegate = u
         AND d.content = c
         AND delegated_condition(d, p)
-        AND (allow_inactive_user OR d.sponsor.is_active)
+        AND (skip_is_active OR d.sponsor.is_active)
         AND ordinary(d.sponsor, c, p)
 )
 ```
 
 The `is_active` checks follow the [shared inquiry rule](docs/source/index.rst#user-is-active-checks).
-Explicit registration conditions remain restrictions whether or not `allow_inactive_user=True`.
+Explicit registration conditions remain restrictions whether or not `skip_is_active=True`.
 
 Audit the following boundaries:
 

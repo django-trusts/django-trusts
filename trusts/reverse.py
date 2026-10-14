@@ -23,7 +23,7 @@ _OBJECT_BLIND_BACKENDS = None
 
 
 def compile_permitted_users(content, perm, *, user_queryset=None,
-                            allow_inactive=False):
+                            skip_is_active=False):
     """Lazy user queryset for one saved content object and one permission.
 
     The candidate rows are ``user_queryset`` when given (the optional
@@ -31,7 +31,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     Django's active-superuser rule is OR-ed with each configured backend
     that can contribute an exact reverse predicate. The ``is_active``
     check applies inside the Trusts-owned branch only. A custom predicate
-    is not wrapped. ``allow_inactive=True`` is forwarded only to the
+    is not wrapped. ``skip_is_active=True`` is forwarded only to the
     Trusts-owned mixin method. The superuser contributor still requires an
     active superuser. An unsupported object-permission backend raises
     before SQL.
@@ -42,7 +42,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
 
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    require_mode_flag(allow_inactive, 'allow_inactive')
+    require_mode_flag(skip_is_active, 'skip_is_active')
     if user_queryset is None:
         user_queryset = get_user_model()._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
@@ -60,7 +60,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         involved.append(Permission)
     for backend in backends:
         predicate = _backend_predicate(
-            backend, content, perm, allow_inactive=allow_inactive,
+            backend, content, perm, skip_is_active=skip_is_active,
         )
         if predicate is None:
             continue
@@ -84,7 +84,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     return bind_once(user_queryset.filter(combined).distinct())
 
 
-def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
+def trusts_mixin_predicate(backend, content, perm, *, skip_is_active=False):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
     from trusts.apps import _relationship_implementation_handles
 
@@ -107,7 +107,7 @@ def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
             content_identity=getattr(plan, 'content_identity', None),
-            allow_inactive=allow_inactive,
+            skip_is_active=skip_is_active,
         )
         if delegated is not None:
             exists = delegated if exists is None else (_as_q(exists) | delegated)
@@ -115,7 +115,7 @@ def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
         return None
     user_model = _plan_user_model(plan, content)
     eligibility = _trusts_eligibility_q(
-        user_model, allow_inactive=allow_inactive,
+        user_model, skip_is_active=skip_is_active,
     )
     if eligibility is None:
         return None
@@ -254,10 +254,10 @@ def _object_blind_backends():
 def _trusts_owned_reverse_hook(backend):
     """True when the reverse hook is the mixin method, not an override.
 
-    ``allow_inactive=True`` is passed only through that Trusts-owned
+    ``skip_is_active=True`` is passed only through that Trusts-owned
     method. Other hooks are called as
     ``permitted_users_predicate(content, perm)``. Trusts does not require
-    them to accept ``allow_inactive`` and does not raise when they do not.
+    them to accept ``skip_is_active`` and does not raise when they do not.
     """
     from trusts.backends import TrustModelBackendMixin
 
@@ -269,13 +269,13 @@ def _trusts_owned_reverse_hook(backend):
     )
 
 
-def _backend_predicate(backend, content, perm, *, allow_inactive=False):
+def _backend_predicate(backend, content, perm, *, skip_is_active=False):
     if getattr(backend, 'trusts_object_permissions', None) is False:
         return None
     if _declares_reverse_hook(backend):
-        if allow_inactive and _trusts_owned_reverse_hook(backend):
+        if skip_is_active and _trusts_owned_reverse_hook(backend):
             return backend.permitted_users_predicate(
-                content, perm, allow_inactive=True,
+                content, perm, skip_is_active=True,
             )
         return backend.permitted_users_predicate(content, perm)
     if type(backend) in _object_blind_backends():
@@ -627,13 +627,13 @@ def _principal_presence(model, name):
     )
 
 
-def _trusts_eligibility_q(model, *, allow_inactive=False):
+def _trusts_eligibility_q(model, *, skip_is_active=False):
     """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
 
     ``is_active_principal`` denies anonymous, unauthenticated, and inactive
     users. A missing ``is_active`` uses the same default as
     ``getattr(user, 'is_active', False)`` and contributes no users.
-    ``allow_inactive`` omits the ``is_active`` equality and does not fail
+    ``skip_is_active`` omits the ``is_active`` equality and does not fail
     closed when that column is absent. Persisted rows use the stock
     anonymous/authenticated properties unless those names are concrete
     fields. The predicate is standard boolean SQL.
@@ -641,9 +641,9 @@ def _trusts_eligibility_q(model, *, allow_inactive=False):
     active = _principal_presence(model, 'is_active')
     anonymous = _principal_presence(model, 'is_anonymous')
     authenticated = _principal_presence(model, 'is_authenticated')
-    if not allow_inactive and active != 'field':
+    if not skip_is_active and active != 'field':
         return None
-    predicate = Q() if allow_inactive else Q(is_active=True)
+    predicate = Q() if skip_is_active else Q(is_active=True)
     if anonymous == 'field':
         predicate &= Q(is_anonymous=False)
     if authenticated == 'field':

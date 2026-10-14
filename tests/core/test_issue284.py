@@ -1,10 +1,9 @@
 """Inactive users on Trusts inquiries (#284).
 
 Default Trusts inquiries deny a user whose ``is_active`` is false.
-``allow_inactive_user=True`` and ``allow_inactive=True`` skip only that
-built-in check. Anonymous and unauthenticated users stay denied when
-either keyword is true. Superuser shortcuts and explicit conditions stay
-in place.
+``skip_is_active=True`` skips only that built-in check. Anonymous and
+unauthenticated users stay denied when it is true. Superuser shortcuts
+and explicit conditions stay in place.
 """
 
 import datetime
@@ -107,7 +106,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         user.is_active = False
         user.save(update_fields=['is_active'])
 
-    def test_content_enumeration_and_boolean_with_allow_inactive_user(self):
+    def test_content_enumeration_and_boolean_with_skip_is_active(self):
         self._deactivate(self.alice)
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
         with self.assertNumQueries(0):
@@ -131,53 +130,53 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
             )
         self.assertEqual(
             _pks(Document.objects.authorized(
-                self.alice, self.change, allow_inactive_user=True,
+                self.alice, self.change, skip_is_active=True,
             )),
             {self.open_doc.pk, self.secret.pk},
         )
         self.assertEqual(
             _pks(permitted.permitted(
-                self.change, self.alice, allow_inactive_user=True,
+                self.change, self.alice, skip_is_active=True,
             )),
             {self.open_doc.pk, self.secret.pk},
         )
         self.assertEqual(
             _pks(permitted.permitted(
                 PERM, self.alice, conditions=('non_confidential',),
-                allow_inactive_user=True,
+                skip_is_active=True,
             )),
             {self.open_doc.pk},
         )
         self.assertTrue(self.backend.has_perm(
-            self.alice, PERM, self.open_doc, allow_inactive_user=True,
+            self.alice, PERM, self.open_doc, skip_is_active=True,
         ))
         self.assertIn(
             PERM,
             self.backend.get_all_permissions(
-                self.alice, self.open_doc, allow_inactive_user=True,
+                self.alice, self.open_doc, skip_is_active=True,
             ),
         )
         self.assertFalse(self.alice.has_perm(PERM, self.open_doc))
         with self.assertRaises(TypeError):
-            self.alice.has_perm(PERM, self.open_doc, allow_inactive_user=True)
+            self.alice.has_perm(PERM, self.open_doc, skip_is_active=True)
 
-    def test_anonymous_stays_denied_with_allow_inactive_user(self):
+    def test_anonymous_stays_denied_with_skip_is_active(self):
         anonymous = AnonymousUser()
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
         with self.assertNumQueries(0):
             self.assertEqual(
                 _pks(permitted.permitted(
-                    self.change, anonymous, allow_inactive_user=True,
+                    self.change, anonymous, skip_is_active=True,
                 )),
                 set(),
             )
             self.assertFalse(self.backend.has_perm(
-                anonymous, PERM, self.open_doc, allow_inactive_user=True,
+                anonymous, PERM, self.open_doc, skip_is_active=True,
             ))
             with patch('trusts.core.granted') as compiled:
                 denied = Document.objects.authorized(anonymous, self.change)
                 audited = Document.objects.authorized(
-                    anonymous, self.change, allow_inactive_user=True,
+                    anonymous, self.change, skip_is_active=True,
                 )
                 self.assertEqual(_pks(denied), set())
                 self.assertEqual(_pks(audited), set())
@@ -190,15 +189,15 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         )
         self.assertFalse(self.inactive_super.has_perm(PERM, self.open_doc))
         self.assertFalse(self.backend.has_perm(
-            self.inactive_super, PERM, self.open_doc, allow_inactive_user=True,
+            self.inactive_super, PERM, self.open_doc, skip_is_active=True,
         ))
         self.assertFalse(
             Document.objects.authorized(
-                self.inactive_super, self.change, allow_inactive_user=True,
+                self.inactive_super, self.change, skip_is_active=True,
             ).exists()
         )
 
-    def test_user_list_includes_inactive_grant_only_with_allow_inactive(self):
+    def test_user_list_includes_inactive_grant_only_with_skip_is_active(self):
         self._deactivate(self.alice)
 
         class Listing(PermittedUsersManagerMixin, type(get_user_model().objects)):
@@ -208,10 +207,10 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         listing.model = get_user_model()
         default_users = _pks(self.open_doc.get_permitted_users(self.change))
         audited_users = _pks(self.open_doc.get_permitted_users(
-            self.change, allow_inactive=True,
+            self.change, skip_is_active=True,
         ))
         via_manager = _pks(listing.permitted(
-            self.open_doc, self.change, allow_inactive=True,
+            self.open_doc, self.change, skip_is_active=True,
         ))
         self.assertNotIn(self.alice.pk, default_users)
         self.assertIn(self.sponsor.pk, default_users)
@@ -221,11 +220,11 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         self.assertNotIn(self.inactive_super.pk, default_users)
         self.assertNotIn(self.inactive_super.pk, audited_users)
 
-    def test_inactive_delegate_and_sponsor_fail_closed_unless_allow_inactive(self):
+    def test_inactive_delegate_and_sponsor_fail_closed_unless_skip_is_active(self):
         self._deactivate(self.delegate)
         self.assertFalse(self.delegate.has_perm(PERM, self.open_doc))
         self.assertTrue(self.backend.has_perm(
-            self.delegate, PERM, self.open_doc, allow_inactive_user=True,
+            self.delegate, PERM, self.open_doc, skip_is_active=True,
         ))
         self.assertNotIn(
             self.delegate,
@@ -234,7 +233,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(
             self.delegate,
             set(self.open_doc.get_permitted_users(
-                self.change, allow_inactive=True,
+                self.change, skip_is_active=True,
             )),
         )
         self.delegate.is_active = True
@@ -242,7 +241,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         self._deactivate(self.sponsor)
         self.assertFalse(self.delegate.has_perm(PERM, self.open_doc))
         self.assertTrue(self.backend.has_perm(
-            self.delegate, PERM, self.open_doc, allow_inactive_user=True,
+            self.delegate, PERM, self.open_doc, skip_is_active=True,
         ))
         self.assertNotIn(
             self.delegate,
@@ -251,21 +250,21 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(
             self.delegate,
             set(self.open_doc.get_permitted_users(
-                self.change, allow_inactive=True,
+                self.change, skip_is_active=True,
             )),
         )
 
-    def test_allow_inactive_flag_must_be_a_bool_before_sql(self):
+    def test_skip_is_active_flag_must_be_a_bool_before_sql(self):
         with self.assertNumQueries(0):
             with self.assertRaises(TypeError):
                 Document.objects.authorized(
-                    self.alice, self.change, allow_inactive_user=1,
+                    self.alice, self.change, skip_is_active=1,
                 )
             with self.assertRaises(TypeError):
-                self.open_doc.get_permitted_users(self.change, allow_inactive=1)
+                self.open_doc.get_permitted_users(self.change, skip_is_active=1)
             with self.assertRaises(TypeError):
                 self.backend.has_perm(
-                    self.alice, PERM, self.open_doc, allow_inactive_user='yes',
+                    self.alice, PERM, self.open_doc, skip_is_active='yes',
                 )
 
 
@@ -381,17 +380,17 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 )
             self.assertEqual(
                 _pks(registry.permissions_for(
-                    inactive, note, allow_inactive_user=True,
+                    inactive, note, skip_is_active=True,
                 )),
                 {read.pk},
             )
             self.assertTrue(registry.has_permission(
-                inactive, note, read, allow_inactive_user=True,
+                inactive, note, read, skip_is_active=True,
             ))
             self.assertEqual(
                 _pks(registry.filter_authorized(
                     Note.objects.all(), inactive, read,
-                    allow_inactive_user=True,
+                    skip_is_active=True,
                 )),
                 {note.pk},
             )
@@ -435,7 +434,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 _pks(filter_by_permitted_content(
                     Folder.objects.all(), inactive, read,
                     content=Note, handles=(handle,),
-                    allow_inactive_user=True,
+                    skip_is_active=True,
                 )),
                 {folder.pk},
             )
@@ -537,7 +536,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                     for holder in (anonymous, guest):
                         for include_inactive in (False, True):
                             rows = AuthorizedQuerySet(Note).authorized(
-                                holder, read, allow_inactive_user=include_inactive,
+                                holder, read, skip_is_active=include_inactive,
                             )
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
@@ -574,35 +573,35 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                     for include_inactive in (False, True):
                         self.assertEqual(
                             list(registry.permissions_for(
-                                holder, note, allow_inactive_user=include_inactive,
+                                holder, note, skip_is_active=include_inactive,
                             )),
                             [],
                         )
                         self.assertFalse(registry.has_permission(
-                            holder, note, read, allow_inactive_user=include_inactive,
+                            holder, note, read, skip_is_active=include_inactive,
                         ))
                         self.assertFalse(registry.filter_authorized(
                             Note.objects.all(), holder, read,
-                            allow_inactive_user=include_inactive,
+                            skip_is_active=include_inactive,
                         ).exists())
                         self.assertFalse(filter_by_permitted_content(
                             Folder.objects.all(), holder, read,
                             content=Note, handles=(handle,),
-                            allow_inactive_user=include_inactive,
+                            skip_is_active=include_inactive,
                         ).exists())
                         self.assertFalse(backend.has_perm(
                             holder, 'myapp.change_document', note,
-                            allow_inactive_user=include_inactive,
+                            skip_is_active=include_inactive,
                         ))
                         self.assertEqual(
                             backend.get_all_permissions(
-                                holder, note, allow_inactive_user=include_inactive,
+                                holder, note, skip_is_active=include_inactive,
                             ),
                             set(),
                         )
                         self.assertEqual(
                             backend.get_group_permissions(
-                                holder, note, allow_inactive_user=include_inactive,
+                                holder, note, skip_is_active=include_inactive,
                             ),
                             set(),
                         )
@@ -615,7 +614,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                     for holder in (anonymous, guest):
                         self.assertEqual(
                             list(permitted.permitted(
-                                change, holder, allow_inactive_user=True,
+                                change, holder, skip_is_active=True,
                             )),
                             [],
                         )
@@ -826,24 +825,24 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.sponsor, self.code, self.sheet,
         ))
         self.assertTrue(self.backend.has_perm(
-            self.delegate, self.code, self.sheet, allow_inactive_user=True,
+            self.delegate, self.code, self.sheet, skip_is_active=True,
         ))
         self.assertTrue(self.backend.has_perm(
-            self.sponsor, self.code, self.sheet, allow_inactive_user=True,
+            self.sponsor, self.code, self.sheet, skip_is_active=True,
         ))
         self.assertNotIn(self.delegate.pk, self._user_pks(self.code))
         self.assertNotIn(self.sponsor.pk, self._user_pks(self.code))
-        included = self._user_pks(self.code, allow_inactive=True)
+        included = self._user_pks(self.code, skip_is_active=True)
         self.assertIn(self.delegate.pk, included)
         self.assertIn(self.sponsor.pk, included)
         self.assertEqual(self._scope_pks(self.delegate), set())
         self.assertEqual(
-            self._scope_pks(self.delegate, allow_inactive_user=True),
+            self._scope_pks(self.delegate, skip_is_active=True),
             {self.cabinet.pk},
         )
         self.assertEqual(self._scope_pks(self.sponsor), set())
         self.assertEqual(
-            self._scope_pks(self.sponsor, allow_inactive_user=True),
+            self._scope_pks(self.sponsor, skip_is_active=True),
             {self.cabinet.pk},
         )
 
@@ -859,9 +858,9 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self._deactivate(self.delegate)
         self._deactivate(self.sponsor)
         self.assertFalse(self.backend.has_perm(
-            self.delegate, self.code, self.sheet, allow_inactive_user=True,
+            self.delegate, self.code, self.sheet, skip_is_active=True,
         ))
-        included = self._user_pks(self.code, allow_inactive=True)
+        included = self._user_pks(self.code, skip_is_active=True)
         self.assertNotIn(self.delegate.pk, included)
         self.assertIn(self.sponsor.pk, included)
 
@@ -882,10 +881,10 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self._deactivate(self.sponsor)
         for user in (self.delegate, self.sponsor):
             self.assertFalse(self.backend.has_perm(
-                user, self.code, self.sheet, allow_inactive_user=True,
+                user, self.code, self.sheet, skip_is_active=True,
             ))
             self.assertNotIn(
-                user.pk, self._user_pks(self.code, allow_inactive=True),
+                user.pk, self._user_pks(self.code, skip_is_active=True),
             )
 
     def test_unexpired_named_filter_denies_when_the_dates_differ(self):
@@ -896,10 +895,10 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self.assertIn(self.delegate.pk, self._user_pks(filtered))
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
         self.assertTrue(self.backend.has_perm(
-            self.delegate, filtered, self.sheet, allow_inactive_user=True,
+            self.delegate, filtered, self.sheet, skip_is_active=True,
         ))
         self.assertIn(
-            self.delegate.pk, self._user_pks(filtered, allow_inactive=True),
+            self.delegate.pk, self._user_pks(filtered, skip_is_active=True),
         )
         self.sheet.expires_on = self.earlier
         self.sheet.save(update_fields=['expires_on'])
@@ -926,13 +925,13 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self._deactivate(self.sponsor)
         for user in (self.delegate, self.sponsor):
             self.assertFalse(self.backend.has_perm(
-                user, filtered, self.sheet, allow_inactive_user=True,
+                user, filtered, self.sheet, skip_is_active=True,
             ))
             self.assertNotIn(
-                user.pk, self._user_pks(filtered, allow_inactive=True),
+                user.pk, self._user_pks(filtered, skip_is_active=True),
             )
         self.assertTrue(self.backend.has_perm(
-            self.sponsor, self.code, self.sheet, allow_inactive_user=True,
+            self.sponsor, self.code, self.sheet, skip_is_active=True,
         ))
 
     def test_active_only_named_filter_keeps_an_inactive_user_denied(self):
@@ -941,21 +940,21 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.cara, self.filtered, self.sheet,
         ))
         self.assertFalse(self.backend.has_perm(
-            self.cara, self.filtered, self.sheet, allow_inactive_user=True,
+            self.cara, self.filtered, self.sheet, skip_is_active=True,
         ))
         self.assertTrue(self.backend.has_perm(
-            self.cara, self.code, self.sheet, allow_inactive_user=True,
+            self.cara, self.code, self.sheet, skip_is_active=True,
         ))
         self.assertTrue(self.backend.has_perm(
             self.nora, self.filtered, self.sheet,
         ))
         self.assertNotIn(
-            self.cara.pk, self._user_pks(self.filtered, allow_inactive=True),
+            self.cara.pk, self._user_pks(self.filtered, skip_is_active=True),
         )
         self.assertIn(self.nora.pk, self._user_pks(self.filtered))
         self.assertEqual(self._scope_pks(self.cara), set())
         self.assertEqual(
-            self._scope_pks(self.cara, allow_inactive_user=True),
+            self._scope_pks(self.cara, skip_is_active=True),
             {self.cabinet.pk},
         )
         self.assertEqual(self._scope_pks(self.nora), {self.cabinet.pk})

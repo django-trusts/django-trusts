@@ -1,6 +1,6 @@
 # Permitted content queryset inquiry
 
-Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)`
+Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), *, skip_is_active=False)`
 is implemented on `PermittedQuerySet`.
 
 The [`is_active` check and examples](source/index.rst#user-is-active-checks)
@@ -28,7 +28,7 @@ parser, and it is not the reverse inquiry answered by
 ## Public API
 
 ```python
-queryset.permitted(permission, user, conditions=(), *, allow_inactive_user=False)
+queryset.permitted(permission, user, conditions=(), *, skip_is_active=False)
 ```
 
 The method lives on the queryset, so it stays available after `filter()`:
@@ -199,7 +199,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
-- the user is anonymous, unauthenticated, or inactive, unless `allow_inactive_user=True`; or
+- the user is anonymous, unauthenticated, or inactive, unless `skip_is_active=True`; or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another
   application label.

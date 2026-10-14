@@ -164,12 +164,12 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
         ) as called:
             result = filter_authorized_scopes(
                 queryset, user, permission, content=content,
-                handles=handles, allow_inactive_user=True,
+                handles=handles, skip_is_active=True,
             )
         self.assertIs(result, sentinel)
         called.assert_called_once_with(
             queryset, user, permission, content=content,
-            handles=handles, allow_inactive_user=True,
+            handles=handles, skip_is_active=True,
         )
 
 
@@ -279,7 +279,7 @@ class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
             )
         authorized.assert_called_once_with(
             queryset, 'user', 'permission', extra_q='extra',
-            allow_inactive_user=False,
+            skip_is_active=False,
         )
         self.assertEqual(manager.application_method(), 'application-owned')
 
@@ -336,7 +336,7 @@ class AuthorizedQuerySetLiveTest(TestCase):
                 denied = Document.objects.authorized(self.alice, self.change)
                 self.assertFalse(denied.exists())
             audited = Document.objects.authorized(
-                self.alice, self.change, allow_inactive_user=True,
+                self.alice, self.change, skip_is_active=True,
             )
         active.assert_not_called()
         self.assertEqual(_pks(audited), {self.doc_a.pk})
@@ -367,7 +367,7 @@ class AuthorizedQuerySetLiveTest(TestCase):
             with patch('trusts.core.granted') as compiled:
                 denied = Document.objects.authorized(AnonymousUser(), self.change)
                 audited = Document.objects.authorized(
-                    AnonymousUser(), self.change, allow_inactive_user=True,
+                    AnonymousUser(), self.change, skip_is_active=True,
                 )
                 self.assertFalse(denied.exists())
                 self.assertFalse(audited.exists())

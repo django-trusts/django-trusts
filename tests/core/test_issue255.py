@@ -4,7 +4,7 @@ One saved content object and one permission. The private compiler and
 both public adapters return the same rows as ``user.has_perm`` for the
 candidate user queryset. Construction is zero SQL. Evaluation is one
 statement. Core does not add an ``is_active`` exclusion around a custom
-reverse predicate. ``allow_inactive=True`` is passed only to the
+reverse predicate. ``skip_is_active=True`` is passed only to the
 Trusts-owned mixin method.
 """
 
@@ -119,7 +119,7 @@ class StarInactiveGrantBackend(object):
 
 
 class ModeAwareGrantBackend(object):
-    """Names ``allow_inactive`` and records the value it receives."""
+    """Names ``skip_is_active`` and records the value it receives."""
 
     received = 'unset'
 
@@ -129,8 +129,8 @@ class ModeAwareGrantBackend(object):
     def has_perm(self, user_obj, perm, obj=None):
         return False
 
-    def permitted_users_predicate(self, content, perm, *, allow_inactive=False):
-        type(self).received = allow_inactive
+    def permitted_users_predicate(self, content, perm, *, skip_is_active=False):
+        type(self).received = skip_is_active
         from django.db.models import Q
         return Q(username__startswith='mode-aware-')
 
@@ -759,7 +759,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         Trusts guarantees the ``is_active`` check only for its own grants.
         The inactive custom grant stays, in agreement with ``has_perm``.
         The inactive Trusts-owned grant is included only with
-        ``allow_inactive=True``. The custom hook is not required to accept
+        ``skip_is_active=True``. The custom hook is not required to accept
         that keyword, and the call does not raise.
         """
         backends = settings.AUTHENTICATION_BACKENDS + (
@@ -775,7 +775,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             with self.assertNumQueries(0):
                 chosen = self.document.get_permitted_users(self.change)
                 widened = self.document.get_permitted_users(
-                    self.change, allow_inactive=True,
+                    self.change, skip_is_active=True,
                 )
             with self.assertNumQueries(1):
                 found = _pks(chosen)
@@ -795,10 +795,10 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.alice.pk, widened_pks)
         self.assertIn(self.inactive.pk, widened_pks)
 
-    def test_legacy_reverse_hook_is_called_without_allow_inactive(self):
-        """A custom hook is called without ``allow_inactive``.
+    def test_legacy_reverse_hook_is_called_without_skip_is_active(self):
+        """A custom hook is called without ``skip_is_active``.
 
-        ``allow_inactive=True`` does not raise and does not pass the
+        ``skip_is_active=True`` does not raise and does not pass the
         keyword. The inactive user named by the predicate stays in the
         result.
         """
@@ -816,7 +816,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=backends):
             with self.assertNumQueries(0):
                 self.document.get_permitted_users(
-                    self.change, allow_inactive=True,
+                    self.change, skip_is_active=True,
                 )
         self.assertEqual(InactiveGrantBackend.calls, 1)
         self.assertEqual(StarInactiveGrantBackend.calls, 1)
@@ -826,7 +826,7 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=star_only):
             with self.assertNumQueries(0):
                 widened = self.document.get_permitted_users(
-                    self.change, allow_inactive=True,
+                    self.change, skip_is_active=True,
                 )
             with self.assertNumQueries(0):
                 chosen = self.document.get_permitted_users(self.change)
@@ -837,12 +837,12 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(star_user.pk, widened_pks)
         self.assertIn(self.alice.pk, found)
 
-    def test_mode_aware_reverse_hook_is_called_without_allow_inactive(self):
-        """A custom hook is called without ``allow_inactive``.
+    def test_mode_aware_reverse_hook_is_called_without_skip_is_active(self):
+        """A custom hook is called without ``skip_is_active``.
 
         Naming the parameter does not make Trusts pass it. The candidate
         queryset filter still applies. The Trusts-owned grant uses
-        ``allow_inactive=True`` on its own branch.
+        ``skip_is_active=True`` on its own branch.
         """
         User = get_user_model()
         inactive = User.objects.create_user('mode-aware-inactive', password='x')
@@ -868,11 +868,11 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
             ModeAwareGrantBackend.received = 'unset'
             with self.assertNumQueries(0):
                 audited_qs = listing.permitted(
-                    self.document, self.change, allow_inactive=True,
+                    self.document, self.change, skip_is_active=True,
                 )
             self.assertIs(ModeAwareGrantBackend.received, False)
             unfiltered = self.document.get_permitted_users(
-                self.change, allow_inactive=True,
+                self.change, skip_is_active=True,
             )
         self.assertIsInstance(default_qs, ModeAwareQuerySet)
         self.assertIsInstance(audited_qs, ModeAwareQuerySet)

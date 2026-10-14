@@ -31,7 +31,7 @@ the new one.
 
 | | Old | New |
 | --- | --- | --- |
-| Rows with permitted content under them | `filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` | `filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` |
+| Rows with permitted content under them | `filter_authorized_scopes(queryset, user, permission, *, content, handles=None, skip_is_active=False)` | `filter_by_permitted_content(queryset, user, permission, *, content, handles=None, skip_is_active=False)` |
 
 Migration-bot checklist:
 
@@ -48,9 +48,8 @@ Their default results change for an inactive user:
 | --- | --- |
 | Ordinary `.authorized()`, `permissions_for`, `has_permission`, `filter_authorized`, and `filter_authorized_scopes` can produce a positive result for an inactive user | The same default inquiry returns false/empty |
 
-Use the optional keyword in the usage guide when those calls intentionally inspect
-stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;
-user-list inquiries use `allow_inactive`.
+Use `skip_is_active=True` in the usage guide when those calls intentionally
+inspect stored grants.
 Existing permission inputs, query shapes, and positional arguments remain.
 Review affected compiler/backend overrides and regenerate policy locks with
 the runtime change.
@@ -58,10 +57,25 @@ the runtime change.
 Migration-bot checklist:
 
 - `.authorized(`, `permissions_for(`, `has_permission(`, and `filter_authorized(`
-- `filter_authorized_scopes(` and its `allow_inactive_user` keyword
+- `filter_authorized_scopes(` and its `skip_is_active` keyword
 - `.permitted(`, `get_permitted_users(`, and backend inquiry overrides
 - custom reverse/compiler hooks and candidate-manager `is_active` filters
 - permission-result caches, if present, and `trusts_policy_sql`
+
+## `skip_is_active` (#273)
+
+`allow_inactive_user` and `allow_inactive` are both `skip_is_active`.
+Content, permission, boolean, and user-list inquiries use that one keyword.
+It still skips only the built-in `is_active` checks.
+
+| Old | New |
+| --- | --- |
+| `allow_inactive_user=True` | `skip_is_active=True` |
+| `allow_inactive=True` | `skip_is_active=True` |
+
+Migration-bot checklist:
+
+- replace `allow_inactive_user` and `allow_inactive` with `skip_is_active`
 
 ## Permission content type must match the object (#267)
 
