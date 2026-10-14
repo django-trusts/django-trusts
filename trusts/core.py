@@ -123,9 +123,7 @@ class PlanQueryCompiler(object):
                         skipped=()):
         if not plan.records:
             return None
-        return plan.content_exists(
-            user, permission, skipped=skipped,
-        )
+        return plan.content_exists(user, permission)
 
     def group_exists(self, plan, candidates, user, permission, *,
                      skipped=()):
@@ -139,11 +137,7 @@ class PlanQueryCompiler(object):
             records=grouped,
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
-            user_conditions=getattr(plan, 'user_conditions', None),
-            user_override=getattr(plan, 'user_override', None),
-        ).content_exists(
-            user, permission, skipped=skipped,
-        )
+        ).content_exists(user, permission)
 
 
 def compiler_for_class(cls):
@@ -248,6 +242,26 @@ def _relationship_handles(handles):
     return _relationship_family_handles(handles)
 
 
+def _wrap_checked_user(grant, plan, user, values, permission, content_identity,
+                       permission_model, *, complete):
+    """Conditions AND (override OR ``grant``) for one plan."""
+    override = None
+    identity = None
+    if complete and (plan.records or plan.delegations):
+        override = getattr(plan, 'user_override', None)
+        identity = _bound_permission_identity(
+            permission, content_identity,
+            permission_model or plan.permission_model,
+        )
+    if grant is None and override is None:
+        return None
+    return attach_user_grant(
+        grant, user=user,
+        conditions=getattr(plan, 'user_conditions', None),
+        override=override, values=values, identity=identity,
+    )
+
+
 def _compile_granted(handles, candidates, user, permission, *, kind='complete',
                      sponsor_handles=None, permission_model=None,
                      skipped=()):
@@ -286,25 +300,9 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
                 user_conditions=getattr(plan, 'user_conditions', None),
                 skipped=skipped,
             )
-        grant = _or_q(part, delegated)
-        override = None
-        identity = None
-        if kind == 'complete' and (plan.records or plan.delegations):
-            override = getattr(plan, 'user_override', None)
-            identity = _bound_permission_identity(
-                permission,
-                content_identity,
-                permission_model or plan.permission_model,
-            )
-        if grant is None and override is None:
-            continue
-        wrapped = attach_user_grant(
-            grant,
-            user=user,
-            conditions=getattr(plan, 'user_conditions', None),
-            override=override,
-            values=skipped,
-            identity=identity,
+        wrapped = _wrap_checked_user(
+            _or_q(part, delegated), plan, user, skipped, permission,
+            content_identity, permission_model, complete=(kind == 'complete'),
         )
         if wrapped is not None:
             parts.append(wrapped)
@@ -428,8 +426,7 @@ def _prefix_partial_suffix(record, lookup):
 
 
 def _exact_prefix_exists(record, lookup, target_attname, user, permission,
-                        content_identity, *,
-                        user_conditions=None, skipped=()):
+                        content_identity):
     """Grant row whose stored prefix is the outer row."""
     inner = _bind_record_qs(
         record,
@@ -437,22 +434,17 @@ def _exact_prefix_exists(record, lookup, target_attname, user, permission,
         permission=permission,
         correlation=Q(**{lookup: OuterRef(target_attname)}),
         content_identity=content_identity,
-        user_conditions=user_conditions,
-        skipped=skipped,
     )
     return Exists(inner)
 
 
 def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
-                              content_identity, *,
-                              user_conditions=None, skipped=()):
+                              content_identity):
     """One ordinary permitted-content predicate, including an ``along=`` walk."""
     position = _prefix_walk_position(record, lookup)
     if position in ('exact', 'before'):
         return _exact_prefix_exists(
             record, lookup, target_attname, user, permission, content_identity,
-            user_conditions=user_conditions,
-            skipped=skipped,
         )
     suffix = None
     if position == 'after':
@@ -461,8 +453,6 @@ def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
         record, user, permission, target_attname,
         content_identity=content_identity,
         suffix_lookup=suffix,
-        user_conditions=user_conditions,
-        skipped=skipped,
     )
 
 
@@ -636,8 +626,6 @@ def _compile_permitted_content_queryset(
                 plan_parts.append(_ordinary_prefix_predicate(
                     record, lookup, target_attname, user, permission,
                     content_identity,
-                    user_conditions=conditions,
-                    skipped=skipped,
                 ))
         if getattr(plan, 'delegations', None):
             plan_parts.extend(_delegated_prefix_predicates(
@@ -656,25 +644,11 @@ def _compile_permitted_content_queryset(
                 plan_parts[0] if len(plan_parts) == 1
                 else reduce(or_, plan_parts)
             )
-        override = (
-            getattr(plan, 'user_override', None)
-            if plan.records or plan.delegations else None
-        )
-        if grant is None and override is None:
-            continue
-        identity = _bound_permission_identity(
-            permission,
-            content_identity,
+        wrapped = _wrap_checked_user(
+            grant, plan, user, skipped, permission, content_identity,
             permission._meta.concrete_model
             if isinstance(permission, Model) else plan.permission_model,
-        )
-        wrapped = attach_user_grant(
-            grant,
-            user=user,
-            conditions=conditions,
-            override=override,
-            values=skipped,
-            identity=identity,
+            complete=True,
         )
         if wrapped is not None:
             parts.append(wrapped)
@@ -869,25 +843,10 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
                         'Applicable registrations must share one '
                         'permission model.'
                     )
-        grant = _or_q(part, delegated)
-        override = None
-        identity = None
-        if kind == 'complete' and (plan.records or plan.delegations):
-            override = getattr(plan, 'user_override', None)
-            identity = _bound_permission_identity(
-                perm_expr,
-                _candidate_model(candidates),
-                permission_model or plan.permission_model,
-            )
-        if grant is None and override is None:
-            continue
-        wrapped = attach_user_grant(
-            grant,
-            user=user,
-            conditions=getattr(plan, 'user_conditions', None),
-            override=override,
-            values=skipped,
-            identity=identity,
+        wrapped = _wrap_checked_user(
+            _or_q(part, delegated), plan, user, skipped, perm_expr,
+            _candidate_model(candidates), permission_model,
+            complete=(kind == 'complete'),
         )
         if wrapped is not None:
             parts.append(wrapped)
@@ -1997,7 +1956,7 @@ def _permission_content_type_filters(record, content_identity):
 
 
 class SkipParams(object):
-    """Skip-parameter values for one inquiry, or an anonymous denial."""
+    """Bound skip values for one inquiry, or an anonymous denial."""
 
     __slots__ = ('denied', 'values')
 
@@ -2010,22 +1969,22 @@ def user_skip_params(user, skip_flags, *, handles=None, registry=None,
                      require_user=True):
     """Validate ``skip_*`` keywords and return their bound values.
 
-    One parser for anonymous handling, unknown names, and non-bool
-    values. A remaining user is checked against the registered
-    condition and override names. Anonymous, unauthenticated, and
-    ``None`` are denied before SQL, and an unknown ``skip_*`` is not
-    consulted for them. ``require_user=False`` is the reverse inquiry:
-    there is no principal to deny, and unknown names still raise.
-    The returned values do not change the SQL shape.
+    Anonymous, unauthenticated, and ``None`` are denied before SQL.
+    An unknown ``skip_*`` is not consulted for that denial.
+    ``require_user=False`` is the reverse inquiry.
     """
-    from trusts.query import user_identity_denied
-    from trusts.user_rules import collect_skipped
+    from trusts.query import require_mode_flag, user_identity_denied
 
+    selected = {}
+    for key, value in skip_flags.items():
+        if not key.startswith('skip_') or not key[5:].isidentifier():
+            raise TypeError('Unexpected keyword argument %r.' % (key,))
+        require_mode_flag(value, key)
+        selected[key[5:]] = value
     denied = require_user and (
         user is None or user_identity_denied(user)
     )
     if denied:
-        collect_skipped(**skip_flags)
         return SkipParams(True, {})
     if callable(registry):
         registry = registry()
@@ -2033,9 +1992,11 @@ def user_skip_params(user, skip_flags, *, handles=None, registry=None,
         known = registry._known_skip_names()
     else:
         known = _known_skip_names(handles or ())
-    selected = collect_skipped(known=known, **skip_flags)
+    unknown = next((name for name in selected if name not in known), None)
+    if unknown is not None:
+        raise TypeError('Unknown skip keyword %r.' % ('skip_%s' % unknown,))
     return SkipParams(False, {
-        name: name in selected for name in known
+        name: selected.get(name, False) for name in known
     })
 
 
@@ -2112,13 +2073,8 @@ def attach_user_grant(grant, *, user, conditions, override, values,
                       identity=None, missing='omit'):
     """Checked-user conditions AND (override OR ``grant``).
 
-    Conditions are ``(skip_<name> OR condition)``. The override is
-    ``(NOT skip_<name> AND override)``. Both are compiled from the
-    registered rules. ``values`` only fills the skip parameters.
-    ``identity`` is ANDed onto the override branch. A missing checked-user
-    column is omitted. ``missing='closed'`` fails the whole predicate
-    when a required column is absent. ``user`` is a model instance for a
-    forward check, or a user model class for a reverse candidate row.
+    ``user`` is an instance (forward) or a model class (reverse).
+    ``missing='closed'`` fails when a required column is absent.
     """
     from trusts.user_rules import compile_override_q, compile_user_rules
 
@@ -2154,7 +2110,6 @@ def attach_user_grant(grant, *, user, conditions, override, values,
 
 
 def _record_predicate(record, correlation=None, *, content_identity=None,
-                      user_conditions=None, skipped=(),
                       **bindings):
     """Bindings, condition, and correlation as one ``Q``.
 
@@ -2179,7 +2134,6 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
 
 
 def _bind_record_qs(record, correlation=None, *, content_identity=None,
-                    user_conditions=None, skipped=(),
                     **bindings):
     """Root rows for one record. One ``filter()`` for every predicate."""
     return record.root._default_manager.filter(
@@ -2187,8 +2141,6 @@ def _bind_record_qs(record, correlation=None, *, content_identity=None,
             record,
             correlation=correlation,
             content_identity=content_identity,
-            user_conditions=user_conditions,
-            skipped=skipped,
             **bindings,
         ),
     )
@@ -2203,13 +2155,10 @@ def _shift_outer_ref(value):
 
 def _principal_eligibility_q(model, path, *,
                              user_conditions=None, skipped=()):
-    """Sponsor identity and user conditions through ``path``.
+    """Sponsor ``(skip_<name> OR condition)`` plus identity columns.
 
-    Sponsor-targeted conditions, including the default ``is_active``, are
-    ``(skip_<name> OR condition)``. A missing column fails closed; that
-    is a property of the model, not of the skip parameter. Anonymous and
-    authenticated attributes use their runtime defaults when they are
-    not concrete fields. Standard SQL only.
+    A missing condition column fails closed. Anonymous and authenticated
+    attributes use their runtime defaults when they are not concrete fields.
     """
     from trusts.user_rules import compile_user_rules
 
@@ -3516,8 +3465,7 @@ class _PrefixInForwardWalk(Expression):
     subquery = True
 
     def __init__(self, record, user, permission, attname, *,
-                 content_identity=None, suffix_lookup=None,
-                 user_conditions=None, skipped=()):
+                 content_identity=None, suffix_lookup=None):
         super().__init__(output_field=BooleanField())
         walk = record.along
         seed = _bind_record_qs(
@@ -3526,8 +3474,6 @@ class _PrefixInForwardWalk(Expression):
             permission=permission,
             correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
             content_identity=content_identity,
-            user_conditions=user_conditions,
-            skipped=skipped,
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -3647,8 +3593,7 @@ class GrantReach(Expression):
     subquery = True
 
     def __init__(self, record, user, permission, content=None, *,
-                 content_identity=None,
-                 user_conditions=None, skipped=()):
+                 content_identity=None):
         super().__init__(output_field=BooleanField())
         self.record = record
         self.content = content
@@ -3663,8 +3608,6 @@ class GrantReach(Expression):
                 user=user,
                 permission=permission,
                 content_identity=content_identity,
-                user_conditions=user_conditions,
-                skipped=skipped,
             )
             self.grant_query = grant.query.clone()
             self.grant_query.subquery = True
@@ -3675,8 +3618,6 @@ class GrantReach(Expression):
             permission=permission,
             correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
             content_identity=content_identity,
-            user_conditions=user_conditions,
-            skipped=skipped,
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -3922,18 +3863,14 @@ class RelationPlan:
     user_conditions: tuple | None = None
     user_override: object | None = None
 
-    def _bound_root_qs(self, record, *, skipped=(),
-                       **bindings):
+    def _bound_root_qs(self, record, **bindings):
         return _bind_record_qs(
             record,
             content_identity=self.content_identity,
-            user_conditions=self.user_conditions,
-            skipped=skipped,
             **bindings,
         )
 
-    def _correlated_exists(self, terminal_field_attr, *,
-                           skipped=(), **bindings):
+    def _correlated_exists(self, terminal_field_attr, **bindings):
         parts = []
         for record in self.records:
             if record.along is not None:
@@ -3941,16 +3878,12 @@ class RelationPlan:
                     parts.append(GrantReach(
                         record, bindings['user'], bindings['permission'],
                         content_identity=self.content_identity,
-                        user_conditions=self.user_conditions,
-                        skipped=skipped,
                     ))
                 elif terminal_field_attr == 'user_field':
                     parts.append(GrantReach(
                         record, OuterRef(record.user_target),
                         bindings['permission'], content=bindings['content'],
                         content_identity=self.content_identity,
-                        user_conditions=self.user_conditions,
-                        skipped=skipped,
                     ))
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
@@ -3958,8 +3891,6 @@ class RelationPlan:
                         record, bindings['user'], OuterRef(target),
                         content=bindings['content'],
                         content_identity=self.content_identity,
-                        user_conditions=self.user_conditions,
-                        skipped=skipped,
                     ))
                 continue
             terminal = getattr(record, terminal_field_attr)
@@ -3967,7 +3898,6 @@ class RelationPlan:
             inner = self._bound_root_qs(
                 record,
                 correlation=Q(**{terminal: OuterRef(target)}),
-                skipped=skipped,
                 **bindings,
             )
             parts.append(Exists(inner))
@@ -3977,8 +3907,13 @@ class RelationPlan:
             return parts[0]
         return reduce(or_, parts)
 
-    def content_exists(self, user, permission, *,
-                       skipped=()):
+    def _with_rules(self, grant, user, values, identity=None):
+        return attach_user_grant(
+            grant, user=user, conditions=self.user_conditions,
+            override=self.user_override, values=values, identity=identity,
+        )
+
+    def content_exists(self, user, permission):
         """Candidate-row ``EXISTS`` correlating content through this plan.
 
         Later readers may OR this predicate with another predicate on the
@@ -3995,7 +3930,6 @@ class RelationPlan:
             return None
         return self._correlated_exists(
             'content_field', user=user, permission=permission,
-            skipped=skipped,
         )
 
     def user_exists(self, content, permission):
@@ -4035,24 +3969,14 @@ class RelationPlan:
                 return ()
             return self.permission_model._default_manager.none()
         qs = candidate_queryset(content)
-        exists = self.content_exists(
-            user, OuterRef(OuterRef('pk')),
-            skipped=skipped,
-        )
+        exists = self.content_exists(user, OuterRef(OuterRef('pk')))
         ordinary = None
         if exists is not None:
             ordinary = Exists(qs) & ~Exists(qs.filter(~Q(exists)))
         identity = Exists(qs) & _outer_permission_identity(
             self.permission_model, _candidate_model(content),
         )
-        predicate = attach_user_grant(
-            ordinary,
-            user=user,
-            conditions=self.user_conditions,
-            override=self.user_override,
-            values=skipped,
-            identity=identity,
-        )
+        predicate = self._with_rules(ordinary, user, skipped, identity)
         if predicate is None:
             return self.permission_model._default_manager.none()
         return bind_once(self.permission_model._default_manager.filter(
@@ -4067,15 +3991,10 @@ class RelationPlan:
             return ()
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
-            skipped=skipped,
         )
-        predicate = attach_user_grant(
-            exists,
-            user=user,
-            conditions=self.user_conditions,
-            override=self.user_override,
-            values=skipped,
-            identity=_outer_permission_identity(
+        predicate = self._with_rules(
+            exists, user, skipped,
+            _outer_permission_identity(
                 self.permission_model, content.__class__,
             ),
         )
@@ -4097,15 +4016,10 @@ class RelationPlan:
             return False
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
-            skipped=skipped,
         )
-        predicate = attach_user_grant(
-            exists,
-            user=user,
-            conditions=self.user_conditions,
-            override=self.user_override,
-            values=skipped,
-            identity=_outer_permission_identity(
+        predicate = self._with_rules(
+            exists, user, skipped,
+            _outer_permission_identity(
                 self.permission_model, content.__class__,
             ),
         )
@@ -4118,16 +4032,10 @@ class RelationPlan:
     def filter_content(self, queryset, user, permission, *,
                        skipped=()):
         """Lazy queryset of candidate rows correlated to the same plan."""
-        exists = self.content_exists(
-            user, permission, skipped=skipped,
-        )
-        predicate = attach_user_grant(
-            exists,
-            user=user,
-            conditions=self.user_conditions,
-            override=self.user_override,
-            values=skipped,
-            identity=_bound_permission_identity(
+        exists = self.content_exists(user, permission)
+        predicate = self._with_rules(
+            exists, user, skipped,
+            _bound_permission_identity(
                 permission, queryset.model, self.permission_model,
             ),
         )
@@ -4256,126 +4164,93 @@ class TrustsRegistry(object):
         return tuple(self._user_conditions.values())
 
     def _known_skip_names(self):
-        """Condition names, plus the override name, that ``skip_<name>`` accepts."""
         from trusts.user_rules import condition_names
 
         return condition_names(
             self._stored_user_conditions(), self._user_override,
         )
 
-    def _has_condition_name(self, name):
-        if self._user_conditions is None:
-            from trusts.user_rules import BUILTIN_USER_CONDITIONS
-            return any(rule.name == name for rule in BUILTIN_USER_CONDITIONS)
-        return name in self._user_conditions
-
-    def register_user_condition(self, name, expr, on='*'):
-        """Register, replace, or remove one named user condition.
-
-        Call this before ``register()`` or ``register_delegation()``.
-        Either call after a registration raises
-        ``TrustsConfigurationError``. The same name replaces the previous
-        expression. ``None`` removes that name and no other. ``on`` is
-        ``*`` (the default), ``user``, ``sponsor``, or a non-empty tuple
-        of those two. The lambda is walked once into concrete boolean
-        fields, ``&``, and ``~``. The skip keyword on the inquiry APIs
-        is ``skip_<name>``. The name must be an identifier and must not
-        collide with an inquiry keyword or with the user override.
-        """
-        from trusts.user_rules import (
-            BUILTIN_USER_CONDITIONS,
-            normalize_on,
-            validate_user_rule_name,
-        )
-
+    def _open_for_rules(self, kind):
         if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register a user condition on a frozen TrustsRegistry.'
+            verb = (
+                'register a user condition' if kind == 'condition'
+                else 'set a user override'
             )
-        self._reject_rules_after_registration()
-        validate_user_rule_name(name, kind='condition')
-        if (
-            expr is not None
-            and self._user_override is not None
-            and self._user_override.name == name
-        ):
             raise TrustsConfigurationError(
-                'User condition name %r collides with the user override.'
-                % (name,)
+                'Cannot %s on a frozen TrustsRegistry.' % verb
             )
-        target = normalize_on(on)
-        created = self._user_conditions is None
-        self._materialize_user_conditions(BUILTIN_USER_CONDITIONS)
-        try:
-            return self._store_user_condition(name, expr, target)
-        except TrustsConfigurationError:
-            if created:
-                self._user_conditions = None
-            raise
-
-    def _store_user_condition(self, name, expr, target):
-        from trusts.user_rules import (
-            UserCondition,
-            assert_concrete_booleans,
-            walk_user_lambda,
-        )
-        from django.contrib.auth import get_user_model
-
-        if expr is None:
-            if name not in self._user_conditions:
-                raise TrustsConfigurationError(
-                    'User condition %r is not registered.' % (name,)
-                )
-            del self._user_conditions[name]
-            return None
-        walked = walk_user_lambda(expr)
-        assert_concrete_booleans(get_user_model(), walked, name)
-        self._user_conditions[name] = UserCondition(name, walked, target)
-        return self._user_conditions[name]
-
-    def _materialize_user_conditions(self, builtin):
-        if self._user_conditions is not None:
-            return
-        self._user_conditions = {rule.name: rule for rule in builtin}
-
-    def _reject_rules_after_registration(self):
         if self._order or self._delegation_order:
             raise TrustsConfigurationError(
                 'Set user conditions and the user override before '
                 'register() or register_delegation().'
             )
 
-    def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
-        """Fail before install when the fixed rules do not fit these models.
+    def register_user_condition(self, name, expr, on='*'):
+        """Register, replace, or remove one named user condition.
 
-        The unmodified built-in ``is_active`` comparison is omitted when a
-        model has no such column. Every other condition, and the override
-        on the checked user or delegate, must be a concrete boolean.
+        Call this before ``register()`` or ``register_delegation()``.
+        ``None`` removes that name. ``on`` is ``*``, ``user``, ``sponsor``,
+        or a non-empty tuple of those two. The lambda is walked once.
         """
         from trusts.user_rules import (
             BUILTIN_USER_CONDITIONS,
-            FieldRef,
-            assert_concrete_booleans,
-            condition_targets,
+            UserCondition,
+            concrete_rule,
+            normalize_on,
+            validate_user_rule_name,
         )
 
-        rules = (
-            BUILTIN_USER_CONDITIONS if self._user_conditions is None
-            else tuple(self._user_conditions.values())
-        )
-        for rule in rules:
+        self._open_for_rules('condition')
+        validate_user_rule_name(name, kind='condition')
+        target = normalize_on(on)
+        if (
+            expr is not None and self._user_override is not None
+            and self._user_override.name == name
+        ):
+            raise TrustsConfigurationError(
+                'User condition name %r collides with the user override.'
+                % (name,)
+            )
+        created = self._user_conditions is None
+        if created:
+            self._user_conditions = {
+                rule.name: rule for rule in BUILTIN_USER_CONDITIONS
+            }
+        try:
+            if expr is None:
+                if name not in self._user_conditions:
+                    raise TrustsConfigurationError(
+                        'User condition %r is not registered.' % (name,)
+                    )
+                del self._user_conditions[name]
+                return None
+            rule = UserCondition(name, concrete_rule(expr, name), target)
+        except TrustsConfigurationError:
+            if created:
+                self._user_conditions = None
+            raise
+        self._user_conditions[name] = rule
+        return rule
+
+    def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
+        """Fail when a fixed rule is not a concrete boolean on these models.
+
+        The unmodified built-in ``is_active`` comparison is omitted when a
+        model has no such column.
+        """
+        from trusts.user_rules import assert_concrete_booleans, rule_applies
+
+        for rule in self.user_conditions():
+            expr = rule.expr
             if (
-                rule.name == 'is_active'
-                and rule.on == '*'
-                and isinstance(rule.expr, FieldRef)
-                and rule.expr.name == 'is_active'
+                rule.name == 'is_active' and rule.on == '*'
+                and expr.kind == 'field' and expr.name == 'is_active'
             ):
                 continue
-            targets = condition_targets(rule.on)
             models = []
-            if user_model is not None and 'user' in targets:
+            if user_model is not None and rule_applies(rule.on, 'user'):
                 models.append(user_model)
-            if sponsor_model is not None and 'sponsor' in targets:
+            if sponsor_model is not None and rule_applies(rule.on, 'sponsor'):
                 models.append(sponsor_model)
             for model in models:
                 assert_concrete_booleans(
@@ -4391,31 +4266,22 @@ class TrustsRegistry(object):
         """Store the one checked-user override, or clear it with ``None``.
 
         Call this before ``register()`` or ``register_delegation()``.
-        Either call after a registration raises
-        ``TrustsConfigurationError``. A new name and expression replace
-        the previous slot. ``None`` must name the current override.
-        ``on="sponsor"`` and ``on="*"`` raise. Sponsor authority is
-        unchanged. The skip keyword is ``skip_<name>``, the same form as
-        a user condition. The name cannot match a registered condition.
-        Replacing the override stops accepting the previous name.
+        ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
+        registered condition.
         """
         from trusts.user_rules import (
             UserCondition,
-            assert_concrete_booleans,
+            concrete_rule,
             normalize_override_on,
             validate_user_rule_name,
-            walk_user_lambda,
         )
-        from django.contrib.auth import get_user_model
 
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot set a user override on a frozen TrustsRegistry.'
-            )
-        self._reject_rules_after_registration()
+        self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
         normalize_override_on(on)
-        if expr is not None and self._has_condition_name(name):
+        if expr is not None and any(
+            rule.name == name for rule in self.user_conditions()
+        ):
             raise TrustsConfigurationError(
                 'User override name %r collides with a user condition.'
                 % (name,)
@@ -4428,9 +4294,9 @@ class TrustsRegistry(object):
                 )
             self._user_override = None
             return None
-        walked = walk_user_lambda(expr)
-        assert_concrete_booleans(get_user_model(), walked, name)
-        self._user_override = UserCondition(name, walked, 'user')
+        self._user_override = UserCondition(
+            name, concrete_rule(expr, name), 'user',
+        )
         return self._user_override
 
     def freeze(self):

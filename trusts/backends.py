@@ -100,17 +100,20 @@ class TrustModelBackendMixin(object):
             return set()
         return _perm_codes(qs)
 
+    def _skip_inquiry(self, user_obj, skip_flags):
+        from trusts.core import user_skip_params
+
+        return user_skip_params(
+            user_obj, skip_flags,
+            registry=lambda: self._own_handle().registry,
+        )
+
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
         """
         Returns a set of permission strings that this user has through his/her
         groups.
         """
-        from trusts.core import user_skip_params
-
-        inquiry = user_skip_params(
-            user_obj, skip_flags,
-            registry=lambda: self._own_handle().registry,
-        )
+        inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return set()
 
@@ -122,12 +125,7 @@ class TrustModelBackendMixin(object):
         return set()
 
     def get_all_permissions(self, user_obj, obj=None, **skip_flags):
-        from trusts.core import user_skip_params
-
-        inquiry = user_skip_params(
-            user_obj, skip_flags,
-            registry=lambda: self._own_handle().registry,
-        )
+        inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return set()
 
@@ -248,12 +246,7 @@ class TrustModelBackendMixin(object):
         parameter on that registered user condition.
         Django's ``user.has_perm`` does not forward these keywords.
         """
-        from trusts.core import user_skip_params
-
-        inquiry = user_skip_params(
-            user_obj, skip_flags,
-            registry=lambda: self._own_handle().registry,
-        )
+        inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return False
         skipped = inquiry.values

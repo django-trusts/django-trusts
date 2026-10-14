@@ -12,59 +12,6 @@ def require_mode_flag(value, name):
     return value
 
 
-def single_field_condition_denied(user, conditions, skipped, *, role='user'):
-    """True when one single-field condition for ``role`` fails on ``user``.
-
-    A model missing the field is not a denial, matching checked-user SQL
-    that omits a missing column. A user-like non-model missing the field
-    uses ``False``. Any other non-model missing the field is not a denial.
-    ``&`` stays in SQL. A false checked-user override is not a denial:
-    conditions are AND-ed outside ``override OR ordinary OR delegation``,
-    so a false override must not hide an ordinary grant.
-    """
-    from trusts.user_rules import (
-        BUILTIN_USER_CONDITIONS,
-        FieldRef,
-        NotExpr,
-        condition_targets,
-    )
-
-    rules = BUILTIN_USER_CONDITIONS if conditions is None else conditions
-    skipped = frozenset(skipped or ())
-    for rule in rules:
-        if rule.name in skipped or role not in condition_targets(rule.on):
-            continue
-        expr = rule.expr
-        negated = False
-        if isinstance(expr, NotExpr) and isinstance(expr.inner, FieldRef):
-            negated = True
-            expr = expr.inner
-        if not isinstance(expr, FieldRef):
-            continue
-        if _field_value_denies(user, expr.name, negated=negated):
-            return True
-    return False
-
-
-def _field_value_denies(user, field_name, *, negated):
-    if user is None:
-        return False
-    present = hasattr(user, field_name)
-    if isinstance(user, Model) and not present:
-        return False
-    if (
-        not isinstance(user, Model)
-        and not present
-        and not hasattr(user, 'is_authenticated')
-        and not hasattr(user, 'is_anonymous')
-    ):
-        return False
-    value = bool(getattr(user, field_name, False))
-    if negated:
-        return value
-    return not value
-
-
 def user_identity_denied(user):
     """Anonymous and unauthenticated users are denied even when
     ``skip_is_active`` is true.

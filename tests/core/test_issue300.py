@@ -39,7 +39,6 @@ from trusts.core import (
     granted,
 )
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import single_field_condition_denied
 from trusts.reverse import _trusts_eligibility_q
 
 
@@ -142,8 +141,6 @@ class Issue300BooleanFieldTest(TestCase):
             codename='change_document',
             defaults={'name': 'Can change document'},
         )
-        self.assertTrue(single_field_condition_denied(Authenticated(), None, ()))
-        self.assertFalse(single_field_condition_denied(object(), None, ()))
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 Document.objects.authorized(Authenticated(), permission)
