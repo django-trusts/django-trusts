@@ -590,6 +590,10 @@ inspect an inactive user's grants:
        "documents.change_document", skip_is_active=True,
    )
 
+Django's stock ``PermissionsMixin.has_perm()`` and permission-enumeration
+methods do not forward Trusts-specific skip keywords. Use a Trusts inquiry API
+when a skip is needed.
+
 Register an override to let active superusers pass without an ordinary
 permission grant:
 
@@ -678,8 +682,9 @@ Django's ``PermissionsMixin.has_perm()`` returns ``True`` for an active
 superuser before it calls any authentication backend. This is Django behavior;
 Trusts does not change it. Trusts' own inquiries and policy SQL do not grant
 based on ``is_superuser`` unless the application registers the superuser
-override. Registering it makes Trusts' inquiries match the default
-``has_perm()`` superuser behavior.
+override. For a valid Trusts inquiry, registering it matches the default
+``has_perm()`` choice to grant an active superuser. Trusts still performs its
+required validation, content-identity, candidate, and condition checks.
 
 An application can instead use a custom user model and override ``has_perm()``
 and ``has_module_perms()`` so they skip Django's superuser early return and

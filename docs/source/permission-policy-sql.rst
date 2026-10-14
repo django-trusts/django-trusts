@@ -155,9 +155,10 @@ generated SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
 used ``along=``. The depth cap stays a ``const`` with hint ``along bound``.
-The delegate is allowed only where the delegation walk and the sponsor's
-ordinary authority both reach the requested object. When only one side uses
-``along=``, the other side matches that object exactly.
+The delegate is allowed only where the delegation walk and the complete
+sponsor-authority predicate both reach the requested object. When sponsor
+authority comes from an ordinary grant, its ``along=`` walk or exact match
+must reach that object.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.

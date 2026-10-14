@@ -436,12 +436,13 @@ permission, and ORs applicable records. An `along=` registration
 uses that same bounded walk: a prefix at the walk site is kept when
 its identity is in the walk, and a later proper prefix is kept when
 it hangs off a walk-site row the walk reaches. An ancestor of the walk
-site stays the row stored on that grant, including when the sponsor's
-ordinary grant is the walk. A one-level delegation
-keeps a prefix only when the delegation and the sponsor's ordinary
-permission both reach it. A second delegation level does not. A
-delegated `along=` whose content suffix is longer than one reverse hop
-raises `TrustsConfigurationError`. The sponsor's ordinary `along=`
+site stays the row stored on that grant, including when an ordinary sponsor
+grant supplies the sponsor-authority predicate. A one-level delegation keeps
+a prefix only when the delegation and the complete sponsor-authority predicate
+both reach it. When that predicate is satisfied by an ordinary grant, its
+`along=` walk or exact match must reach the prefix. A second delegation level
+does not. A delegated `along=` whose content suffix is longer than one reverse
+hop raises `TrustsConfigurationError`. An ordinary sponsor grant's `along=`
 has that same limit. `queryset.model` equal to the
 content terminal is allowed when a proper prefix step of that same model
 exists (self-referential trees). A terminal-only path, an unknown
