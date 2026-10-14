@@ -2480,13 +2480,16 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
                               *, content_identity=None, skip_is_active=False,
                               user_conditions=None, skipped=()):
     """Candidate-content predicate for one-level delegated authority."""
+    from trusts.query import stored_user_is_inactive, user_identity_denied
+    from trusts.user_rules import enforces_is_active
+
+    names = _skip_names(skip_is_active, skipped)
     if (
         user is None
-        or getattr(user, 'is_anonymous', False)
-        or not getattr(user, 'is_authenticated', True)
+        or user_identity_denied(user)
         or (
-            not skip_is_active
-            and not getattr(user, 'is_active', False)
+            stored_user_is_inactive(user)
+            and enforces_is_active(user_conditions, names, role='user')
         )
     ):
         return None

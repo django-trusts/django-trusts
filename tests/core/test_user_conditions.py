@@ -270,3 +270,171 @@ class UserOverrideTest(TransactionTestCase):
                 editor.delete_model(Link)
                 editor.delete_model(Grant)
                 editor.delete_model(Note)
+
+
+class UserConditionTargetTest(TransactionTestCase):
+    def test_on_selects_checked_user_or_ordinary_sponsor(self):
+        class TargetNote(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class TargetGrant(models.Model):
+            note = models.ForeignKey(TargetNote, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class TargetLink(models.Model):
+            note = models.ForeignKey(TargetNote, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(TargetNote)
+            editor.create_model(TargetGrant)
+            editor.create_model(TargetLink)
+        try:
+            User = get_user_model()
+            staff = User.objects.create_user('tgt-staff', password='x')
+            staff.is_staff = True
+            staff.save(update_fields=['is_staff'])
+            plain = User.objects.create_user('tgt-plain', password='x')
+            actor = User.objects.create_user('tgt-actor', password='x')
+            superuser = User.objects.create_superuser(
+                'tgt-super', password='x', email='t@example.com',
+            )
+            inactive = User.objects.create_user('tgt-inactive', password='x')
+            inactive.is_active = False
+            inactive.save(update_fields=['is_active'])
+            note = TargetNote.objects.create(title='n')
+            read = _permission(TargetNote, 'read_target_note')
+            for user in (staff, plain, superuser, inactive):
+                TargetGrant.objects.create(note=note, user=user, permission=read)
+
+            registry = TrustsRegistry()
+            grant = Ref(TargetGrant)
+            registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            link = Ref(TargetLink)
+            registry.register_delegation(
+                content=link.note, delegate=link.delegate, sponsor=link.sponsor,
+            )
+            handle = BackendHandle(
+                'user-target', registry, PlanQueryCompiler(),
+            )
+
+            def holds(user):
+                predicate = granted((handle,), note, user, read)
+                if predicate is None:
+                    return False
+                return bind_once(TargetNote.objects.filter(
+                    pk=note.pk,
+                ).filter(predicate)).exists()
+
+            def sql_for(user):
+                predicate = granted((handle,), note, user, read)
+                return str(bind_once(TargetNote.objects.filter(
+                    pk=note.pk,
+                ).filter(predicate)).query)
+
+            staff_delegate = User.objects.create_user('tgt-staff-del', password='x')
+            staff_delegate.is_staff = True
+            staff_delegate.save(update_fields=['is_staff'])
+            registry.register_user_condition(
+                'staff', lambda u: u.is_staff, on='user',
+            )
+            TargetLink.objects.create(
+                note=note, delegate=staff_delegate, sponsor=plain,
+            )
+            self.assertTrue(holds(staff))
+            self.assertFalse(holds(plain))
+            self.assertTrue(holds(staff_delegate))
+            self.assertFalse(holds(actor))
+            delegated_sql = sql_for(staff_delegate)
+            self.assertIn('is_staff', delegated_sql)
+            self.assertNotIn('sponsor__is_staff', delegated_sql)
+            self.assertIn('delegate', delegated_sql)
+            own = str(registry.permissions_for(staff, note).query)
+            self.assertIn('is_staff', own)
+
+            registry.register_user_condition('staff', None)
+            registry.register_user_condition(
+                'sponsor_not_super', lambda u: ~u.is_superuser, on='sponsor',
+            )
+            TargetLink.objects.all().delete()
+            TargetLink.objects.create(
+                note=note, delegate=actor, sponsor=superuser,
+            )
+            self.assertFalse(holds(actor))
+            sponsor_sql = sql_for(actor)
+            self.assertIn('is_superuser', sponsor_sql)
+            self.assertNotIn('delegate__is_superuser', sponsor_sql)
+            TargetLink.objects.all().delete()
+            TargetLink.objects.create(
+                note=note, delegate=actor, sponsor=plain,
+            )
+            self.assertTrue(holds(actor))
+            self.assertTrue(holds(superuser))
+            checked = str(registry.permissions_for(superuser, note).query)
+            self.assertNotIn('is_superuser', checked)
+
+            registry.register_user_condition('sponsor_not_super', None)
+            registry.register_user_condition(
+                'is_active', lambda u: u.is_active, on='user',
+            )
+            TargetLink.objects.all().delete()
+            TargetLink.objects.create(
+                note=note, delegate=actor, sponsor=inactive,
+            )
+            self.assertTrue(holds(actor))
+            self.assertFalse(holds(inactive))
+            registry.register_user_condition(
+                'is_active', lambda u: u.is_active, on='sponsor',
+            )
+            self.assertTrue(holds(inactive))
+            self.assertFalse(holds(actor))
+            registry.register_user_condition(
+                'is_active', lambda u: u.is_active, on='*',
+            )
+            self.assertFalse(holds(actor))
+            self.assertFalse(holds(inactive))
+
+            def holds_skipping(user):
+                predicate = granted(
+                    (handle,), note, user, read, skip_is_active=True,
+                )
+                if predicate is None:
+                    return False
+                return bind_once(TargetNote.objects.filter(
+                    pk=note.pk,
+                ).filter(predicate)).exists()
+
+            self.assertTrue(holds_skipping(actor))
+            self.assertTrue(holds_skipping(inactive))
+            skipped_sql = str(bind_once(TargetNote.objects.filter(
+                pk=note.pk,
+            ).filter(granted(
+                (handle,), note, actor, read, skip_is_active=True,
+            ))).query)
+            self.assertNotIn('is_active', skipped_sql)
+
+            registry.register_user_condition('is_active', None)
+            self.assertTrue(holds(inactive))
+            self.assertTrue(holds(actor))
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(TargetLink)
+                editor.delete_model(TargetGrant)
+                editor.delete_model(TargetNote)
