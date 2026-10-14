@@ -566,7 +566,8 @@ by default, including ordinary and delegated grants, permission enumeration,
 reverse user listing, and ``filter_by_permitted_content``. Anonymous and
 unauthenticated users cannot supply persisted grants
 and receive no positive permission result. Input and configuration errors
-still raise before a denied result is returned.
+still raise before a denied result is returned. Permission SQL is compiled
+against a user model; a non-model user object is not a SQL principal.
 
 Including inactive users
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -750,9 +751,36 @@ lockfile key remains ``get_permitted_users``. For the direct
 .. code-block:: yaml
 
    get_permitted_users:
-     params: [{const: true}, {const: 1}, {bind: "content.id"}, {bind: "permission.id"}, {const: "documents"}, {const: "document"}]
+     params: [{bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: true, hint: "active"}]
      sql: |-
-       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined" FROM "auth_user" WHERE ("auth_user"."is_active" = %s AND EXISTS(SELECT %s AS "a" FROM "documents_documentpermission" "U0" INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id") INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id") WHERE ("U0"."document_id" = %s AND "U0"."permission_id" = %s AND "U3"."app_label" = %s AND "U3"."model" = %s AND "U0"."user_id" = ("auth_user"."id")) LIMIT 1))
+       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
+       FROM "auth_user"
+       CROSS JOIN (
+         SELECT %s AS "content_id", %s AS "permission_id", %s AS "app_label", %s AS "model"
+       ) "trusts_bind"
+       WHERE ("auth_user"."is_active" = %s
+         AND EXISTS (
+           SELECT 1 AS "a"
+           FROM "documents_documentpermission" "U0"
+           INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
+           INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id")
+           WHERE ("U0"."document_id" = ("trusts_bind"."content_id")
+               AND "U0"."permission_id" = ("trusts_bind"."permission_id")
+               AND "U3"."app_label" = ("trusts_bind"."app_label")
+               AND "U3"."model" = ("trusts_bind"."model")
+               AND "U0"."user_id" = ("auth_user"."id")
+           )
+           LIMIT 1
+         ) )
+
+``TRUSTS_SQL_BIND_ONCE`` defaults to true. It is the switch for the one-row
+bind table in the statement above. Leave it on. Set it to false only
+when that SQL misbehaves: django-trusts then runs the plain queryset,
+and the lockfile records that plain SQL. Set it back to true when the
+plain statement is no longer needed. If the queryset does not have the
+Django query structure the rewrite reads, django-trusts leaves the
+queryset unchanged, logs one warning, and the lockfile records that
+same plain SQL.
 
 Several trusts for the same content within one backend are OR alternatives.
 django-trusts issues one SQL statement for each permission inquiry and combines

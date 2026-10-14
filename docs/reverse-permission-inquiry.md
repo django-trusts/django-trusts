@@ -227,7 +227,7 @@ FROM user
 WHERE
     django_superuser_check(user)
     OR (
-        (allow_inactive OR user.is_active)
+        user.is_active
         AND trusts_complete_grant_predicate(user, permission, content)
     )
     OR custom_backend_complete_predicate(user, permission, content)
@@ -235,6 +235,7 @@ WHERE
 ```
 
 The named predicates are conceptual SQL placeholders, not Python callbacks.
+`user.is_active` is included only when `allow_inactive` is false.
 Backend branches retain their explicit conditions. Django's superuser
 check is unchanged.
 

@@ -13,6 +13,7 @@ from operator import or_
 from django.contrib.auth.models import Permission
 from django.db.models import Subquery
 
+from trusts._bind_once import bind_once
 from trusts.core import TrustsConfigurationError, _ordinary_records, granted
 from trusts.query import is_active_principal
 
@@ -340,4 +341,4 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     )
     if granted_q is None:
         return queryset.none()
-    return queryset.filter(granted_q).distinct()
+    return bind_once(queryset.filter(granted_q).distinct())

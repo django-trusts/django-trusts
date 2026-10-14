@@ -579,6 +579,8 @@ def _role_sentinel(record, role, alias):
 def _compile_permitted(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
+    from trusts._bind_once import bind_once
+
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
     queryset = _content_manager(model).all()
@@ -590,7 +592,7 @@ def _compile_permitted(handle, alias, records, model, handles):
         raise TrustsConfigurationError(
             'Policy SQL found no grant for %s.' % _model_label(model)
         )
-    queryset = queryset.filter(granted).distinct()
+    queryset = bind_once(queryset.filter(granted).distinct())
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
     )
@@ -598,6 +600,8 @@ def _compile_permitted(handle, alias, records, model, handles):
 
 def _compile_has_perm(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
+
+    from trusts._bind_once import bound_exists_query
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -611,8 +615,9 @@ def _compile_has_perm(handle, alias, records, model, handles):
             'Policy SQL found no grant for %s.' % _model_label(model)
         )
     exists = _content_manager(model).filter(pk=instance.pk).filter(granted)
+    compiled = bound_exists_query(exists)
     return _compile_queryset(
-        _Query(exists.query.exists()),
+        _Query(compiled),
         alias, record=records[0], expr=None, records=records,
     )
 
@@ -1285,11 +1290,19 @@ def _classify_compiled(node, sql, params):
 
 
 def _symbol_for_new_param(node):
+    from trusts._bind_once import BindTable
     from trusts.core import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )
 
+    if isinstance(node, BindTable):
+        column = node.next_column()
+        if column.kind == 'bind':
+            return _with_hint({'bind': column.label}, _request_hint(column.label))
+        return _with_hint(
+            {'const': _json_const(column.value)}, column.label,
+        )
     if isinstance(node, (GrantReach, _PrefixInForwardWalk)):
         return _with_hint(
             {'const': _json_const(node.record.along.bound)}, 'along bound',
@@ -1305,6 +1318,11 @@ def _symbol_for_new_param(node):
     if isinstance(node, _IdentInReach):
         return _with_hint(
             {'const': _json_const(node.bound)}, 'along bound',
+        )
+    from trusts._bind_once import BoundBool
+    if isinstance(node, BoundBool):
+        return _with_hint(
+            {'const': _json_const(node.value)}, node.hint,
         )
     if isinstance(node, Value):
         return _with_hint(
@@ -1369,6 +1387,9 @@ def _const_hint(node, value):
         return 'literal'
     if isinstance(node, Lookup):
         lhs = getattr(node, 'lhs', None)
+        from trusts._bind_once import _AlongOnce
+        if isinstance(lhs, _AlongOnce):
+            lhs = lhs.inner
         if isinstance(lhs, (
             GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
             _PrefixInForwardWalk,

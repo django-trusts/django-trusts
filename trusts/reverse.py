@@ -79,7 +79,9 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     combined = parts[0]
     for part in parts[1:]:
         combined |= part
-    return user_queryset.filter(combined).distinct()
+    from trusts._bind_once import bind_once
+
+    return bind_once(user_queryset.filter(combined).distinct())
 
 
 def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
@@ -143,6 +145,7 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
+    user_model = _plan_user_model(plan, content)
     exists = plan.user_exists(content, permission) if plan.records else None
     if plan.delegations:
         sponsor_handles = (handle,) if handles is None else tuple(handles)
@@ -160,20 +163,23 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             content_identity=getattr(plan, 'content_identity', None),
         )
         if delegated is not None:
-            exists = delegated if exists is None else (_as_q(exists) | delegated)
+            exists = (
+                delegated if exists is None else (_as_q(exists) | delegated)
+            )
     if exists is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    user_model = _plan_user_model(plan, content)
     eligibility = _trusts_eligibility_q(user_model)
     if eligibility is None:
-        # ``none()`` does not render. ``pk IS NULL`` is the same empty
-        # set for a saved primary key and stays classifiable.
         return user_model._default_manager.all().filter(pk__isnull=True)
     predicate = eligibility & _as_q(exists)
-    return user_model._default_manager.all().filter(predicate).distinct()
+    from trusts._bind_once import bind_once
+
+    return bind_once(
+        user_model._default_manager.all().filter(predicate).distinct(),
+    )
 
 
 def _plan_user_model(plan, content):

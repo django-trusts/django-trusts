@@ -11,6 +11,7 @@ from trusts._permitted import (
     _guard_permission_string,
     _permission_binding,
 )
+from trusts._bind_once import bind_once
 from trusts.core import TrustsConfigurationError
 from trusts.query import is_active_principal
 
@@ -115,11 +116,15 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
         api='authorization_required',
     )
     if granted_q is None:
+        matched = None
+    else:
+        matched = bind_once(candidates.filter(granted_q))
+        if matched.exists():
+            return
+    if matched is None:
         if candidates.exists():
             raise PermissionDenied
         raise Http404
-    if candidates.filter(granted_q).exists():
-        return
     if candidates.exists():
         raise PermissionDenied
     raise Http404

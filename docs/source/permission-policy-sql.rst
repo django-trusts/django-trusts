@@ -69,19 +69,19 @@ The following abridged example shows the schema:
                permission: {path: "permission", model: "auth.Permission", target: "id"}
                content: {path: "document", model: "documents.Document", target: "id"}
            permitted:
-             params: [{const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
+             params: [{bind: "user.id", hint: "$user"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
              sql: |-
                SELECT DISTINCT ...
            has_perm:
-             params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
+             params: [{bind: "user.id", hint: "$user"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: 1, hint: "content pk"}]
              sql: |-
                SELECT ... WHERE candidate-primary-key AND grant-exists
            get_all_permissions:
-             params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {bind: "user.id", hint: "$user"}]
+             params: [{const: 1, hint: "content pk"}, {bind: "user.id", hint: "$user"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
-             params: [{const: true, hint: "active"}, {const: 1, hint: "exists marker"}, {bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}]
+             params: [{bind: "content.id", hint: "$content"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "document", hint: "content type model"}, {const: true, hint: "active"}]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
@@ -237,10 +237,9 @@ Constants and generated YAML
 ``bind`` entries name runtime values without storing them. Each parameter
 also carries a ``hint``: ``$user``, ``$permission``, ``$content``, or
 ``$user.<target>`` when the bind is a request-time role, and a short label
-for a constant (``exists marker``, ``content type app``, ``content type
-model``, ``content pk``, ``along bound``, ``active``, or the compared
-field, or ``along match``). ``bind`` and ``const`` values and their
-order are unchanged.
+for a constant (``content type app``, ``content type model``, ``content pk``,
+``along bound``, ``active``, ``along match``, or the compared field). ``bind`` and
+``const`` values and their order are unchanged.
 Constants are mapped between Python and SQL types so their values and type
 information are available for inspection. These mappings are data, not YAML
 object tags.

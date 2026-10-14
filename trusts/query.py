@@ -2,6 +2,8 @@
 
 from django.db.models import Manager, Model, QuerySet
 
+from trusts._bind_once import bind_once
+
 
 def is_active_principal(user, *, allow_inactive=False):
     """Match ``User.has_perm``: anonymous and inactive users are denied.
@@ -31,14 +33,29 @@ def require_mode_flag(value, name):
 def stored_user_is_inactive(user, *, allow_inactive=False):
     """Whether a stored user's built-in ``is_active`` rejects the inquiry.
 
-    ``allow_inactive=True`` skips the check. A user with no ``is_active``
-    attribute is not inactive, so schema-neutral terminals keep their
-    current results. Anonymous and unauthenticated denial stays with the
-    caller.
+    ``allow_inactive=True`` skips the check. ``None`` is not inactive so
+    ``authorized(None)`` still fails at grant binding. A model with no
+    ``is_active`` is not inactive: a schema-neutral terminal keeps its
+    result, and permission SQL reports that model separately. A non-model
+    that presents as a user (``is_authenticated`` or ``is_anonymous``) and
+    has no ``is_active`` is denied, the same default as ``has_perm``.
+    Any other non-model is not inactive, so grant binding still raises.
+    Anonymous and unauthenticated denial stays with the caller. A user
+    object that is not a model instance is not a SQL principal; permission
+    SQL is compiled against the user model.
     """
-    if allow_inactive or user is None or not hasattr(user, 'is_active'):
+    if allow_inactive or user is None:
         return False
-    return not bool(user.is_active)
+    if isinstance(user, Model) and not hasattr(user, 'is_active'):
+        return False
+    if (
+        not isinstance(user, Model)
+        and not hasattr(user, 'is_active')
+        and not hasattr(user, 'is_authenticated')
+        and not hasattr(user, 'is_anonymous')
+    ):
+        return False
+    return not bool(getattr(user, 'is_active', False))
 
 
 def user_identity_denied(user):
@@ -100,7 +117,7 @@ class AuthorizedQuerySet(QuerySet):
             return self.none()
         if extra_q is not None:
             granted_q = granted_q & extra_q
-        return self.filter(granted_q).distinct()
+        return bind_once(self.filter(granted_q).distinct())
 
 
 class AuthorizedManagerMixin:
