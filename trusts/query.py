@@ -61,6 +61,59 @@ def stored_user_is_inactive(user, *, skipped=()):
     return not bool(getattr(user, 'is_active', False))
 
 
+def single_field_condition_denied(user, conditions, skipped, *, role='user'):
+    """True when one single-field condition for ``role`` fails on ``user``.
+
+    A model missing the field is not a denial, matching checked-user SQL
+    that omits a missing column. A user-like non-model missing the field
+    uses ``False``. Any other non-model missing the field is not a denial.
+    ``&`` stays in SQL. A false checked-user override is not a denial:
+    conditions are AND-ed outside ``override OR ordinary OR delegation``,
+    so a false override must not hide an ordinary grant.
+    """
+    from trusts.user_rules import (
+        BUILTIN_USER_CONDITIONS,
+        FieldRef,
+        NotExpr,
+        condition_targets,
+    )
+
+    rules = BUILTIN_USER_CONDITIONS if conditions is None else conditions
+    skipped = frozenset(skipped or ())
+    for rule in rules:
+        if rule.name in skipped or role not in condition_targets(rule.on):
+            continue
+        expr = rule.expr
+        negated = False
+        if isinstance(expr, NotExpr) and isinstance(expr.inner, FieldRef):
+            negated = True
+            expr = expr.inner
+        if not isinstance(expr, FieldRef):
+            continue
+        if _field_value_denies(user, expr.name, negated=negated):
+            return True
+    return False
+
+
+def _field_value_denies(user, field_name, *, negated):
+    if user is None:
+        return False
+    present = hasattr(user, field_name)
+    if isinstance(user, Model) and not present:
+        return False
+    if (
+        not isinstance(user, Model)
+        and not present
+        and not hasattr(user, 'is_authenticated')
+        and not hasattr(user, 'is_anonymous')
+    ):
+        return False
+    value = bool(getattr(user, field_name, False))
+    if negated:
+        return value
+    return not value
+
+
 def user_identity_denied(user):
     """Anonymous and unauthenticated users are denied even when
     ``skip_is_active`` is true.
@@ -103,7 +156,7 @@ class AuthorizedQuerySet(QuerySet):
         from trusts.apps import _relationship_implementation_handles
         from trusts.core import (
             TrustsConfigurationError,
-            _handles_enforce_is_active,
+            _handles_condition_denied,
             _skipped_for_handles,
             granted,
         )
@@ -116,10 +169,7 @@ class AuthorizedQuerySet(QuerySet):
         skipped = _skipped_for_handles(handles, skip_flags, user)
         if user_identity_denied(user):
             return self.none()
-        if (
-            stored_user_is_inactive(user)
-            and _handles_enforce_is_active(handles, skipped)
-        ):
+        if _handles_condition_denied(handles, user, skipped):
             return self.none()
         granted_q = granted(
             handles,

@@ -12,8 +12,8 @@ from trusts._permitted import (
     _permission_binding,
 )
 from trusts._bind_once import bind_once
-from trusts.core import TrustsConfigurationError
-from trusts.query import is_active_principal
+from trusts.core import TrustsConfigurationError, _handles_condition_denied
+from trusts.query import user_identity_denied
 
 
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
@@ -85,7 +85,11 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
         and getattr(user, 'is_superuser', False)
         and not getattr(user, 'is_anonymous', False)
     )
-    if not is_superuser and not is_active_principal(user):
+    if not is_superuser and (
+        user is None
+        or user_identity_denied(user)
+        or _handles_condition_denied(handles, user, ())
+    ):
         raise PermissionDenied
 
     if not django_apps.ready:

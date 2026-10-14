@@ -746,15 +746,12 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
-    from trusts.query import user_identity_denied, stored_user_is_inactive
+    from trusts.query import user_identity_denied
 
     skipped = _skipped_for_handles(handles, skip_flags, user)
     if not handles or user_identity_denied(user):
         return queryset.none()
-    if (
-        stored_user_is_inactive(user)
-        and _handles_enforce_is_active(handles, skipped)
-    ):
+    if _handles_condition_denied(handles, user, skipped):
         return queryset.none()
     return _compile_permitted_content_queryset(
         queryset, user, permission, content=content, handles=handles,
@@ -2040,12 +2037,11 @@ def _skipped_for_handles(handles, skip_flags, user):
 
 
 def _activity_denied(user, conditions, skipped):
-    """Python fast denial for the built-in activity condition."""
-    from trusts.query import stored_user_is_inactive
-    from trusts.user_rules import enforces_is_active
+    """Python fast denial for single-field conditions on the checked user."""
+    from trusts.query import single_field_condition_denied
 
-    return stored_user_is_inactive(user) and enforces_is_active(
-        conditions, skipped,
+    return single_field_condition_denied(
+        user, conditions, skipped, role='user',
     )
 
 
@@ -2058,6 +2054,21 @@ def _handles_enforce_is_active(handles, skipped):
             continue
         conditions = registry._stored_user_conditions()
         if enforces_is_active(conditions, skipped):
+            return True
+    return False
+
+
+def _handles_condition_denied(handles, user, skipped, *, role='user'):
+    """True when any handle's single-field condition fails for ``user``."""
+    from trusts.query import single_field_condition_denied
+
+    for handle in handles:
+        registry = getattr(handle, 'registry', None)
+        if registry is None:
+            continue
+        if single_field_condition_denied(
+            user, registry._stored_user_conditions(), skipped, role=role,
+        ):
             return True
     return False
 
@@ -2516,16 +2527,14 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
                               *, content_identity=None,
                               user_conditions=None, skipped=()):
     """Candidate-content predicate for one-level delegated authority."""
-    from trusts.query import stored_user_is_inactive, user_identity_denied
-    from trusts.user_rules import enforces_is_active
+    from trusts.query import single_field_condition_denied, user_identity_denied
 
     names = _skip_names(skipped)
     if (
         user is None
         or user_identity_denied(user)
-        or (
-            stored_user_is_inactive(user)
-            and enforces_is_active(user_conditions, names, role='user')
+        or single_field_condition_denied(
+            user, user_conditions, names, role='user',
         )
     ):
         return None

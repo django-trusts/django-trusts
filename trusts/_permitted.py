@@ -15,7 +15,7 @@ from django.db.models import Subquery
 
 from trusts._bind_once import bind_once
 from trusts.core import TrustsConfigurationError, _ordinary_records, granted
-from trusts.query import is_active_principal
+from trusts.query import user_identity_denied
 
 
 def _guard_permission_string(permission, *, api):
@@ -325,12 +325,12 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.core import _handles_enforce_is_active, _skipped_for_handles
+    from trusts.core import _handles_condition_denied, _skipped_for_handles
 
     skipped = _skipped_for_handles(handles, skip_flags, user)
-    enforce = _handles_enforce_is_active(handles, skipped)
-    names = skipped if enforce else frozenset(set(skipped) | {'is_active'})
-    if not is_active_principal(user, skipped=names):
+    if user is None or user_identity_denied(user):
+        return queryset.none()
+    if _handles_condition_denied(handles, user, skipped):
         return queryset.none()
     granted_q = _authorization_grant_q(
         handles,

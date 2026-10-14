@@ -14,7 +14,7 @@ from trusts.conditions import (
 )
 from trusts.conditions._ir import evaluate_registered_expression
 from trusts.query import (
-    is_active_principal,
+    single_field_condition_denied,
     user_identity_denied,
 )
 from trusts.core import (
@@ -252,17 +252,15 @@ class TrustModelBackendMixin(object):
         """Reject anonymous and unauthenticated users before the registry.
 
         Those identities, and ``None``, need no owner and no SQL. A
-        remaining user then consults the owned registry for whether
-        ``is_active`` still applies. The split itself is #313.
+        remaining user is denied when a registered single-field condition
+        fails. The split itself is #313.
         """
-        from trusts.user_rules import enforces_is_active
-
         if user_obj is None or user_identity_denied(user_obj):
             return False
         conditions = self._own_handle().registry._stored_user_conditions()
-        enforce = enforces_is_active(conditions, skipped)
-        names = skipped if enforce else frozenset(set(skipped) | {'is_active'})
-        return is_active_principal(user_obj, skipped=names)
+        return not single_field_condition_denied(
+            user_obj, conditions, skipped, role='user',
+        )
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check for one permission string.
