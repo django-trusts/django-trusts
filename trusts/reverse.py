@@ -63,7 +63,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
         involved.append(Permission)
     for backend in backends:
         predicate = _backend_predicate(
-            backend, content, perm, skip_is_active='is_active' in skipped,
+            backend, content, perm,
             skipped=skipped,
         )
         if predicate is None:
@@ -88,7 +88,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     return bind_once(user_queryset.filter(combined).distinct())
 
 
-def trusts_mixin_predicate(backend, content, perm, *, skip_is_active=False,
+def trusts_mixin_predicate(backend, content, perm, *,
                            skipped=()):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
     from trusts.apps import _relationship_implementation_handles
@@ -112,7 +112,6 @@ def trusts_mixin_predicate(backend, content, perm, *, skip_is_active=False,
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
             content_identity=getattr(plan, 'content_identity', None),
-            skip_is_active=skip_is_active,
             user_conditions=getattr(plan, 'user_conditions', None),
             skipped=skipped,
         )
@@ -125,7 +124,7 @@ def trusts_mixin_predicate(backend, content, perm, *, skip_is_active=False,
     )
 
     user_model = _plan_user_model(plan, content)
-    names = _skip_names(skip_is_active, skipped)
+    names = _skip_names(skipped)
     override = _outer_user_override_q(
         getattr(plan, 'user_override', None), user_model, names,
     )
@@ -139,7 +138,7 @@ def trusts_mixin_predicate(backend, content, perm, *, skip_is_active=False,
             binding, content.__class__, permission_model,
         )
     eligibility = _trusts_eligibility_q(
-        user_model, skip_is_active=skip_is_active,
+        user_model,
         user_conditions=getattr(plan, 'user_conditions', None),
         skipped=skipped,
     )
@@ -324,7 +323,7 @@ def _trusts_owned_reverse_hook(backend):
     )
 
 
-def _backend_predicate(backend, content, perm, *, skip_is_active=False,
+def _backend_predicate(backend, content, perm, *,
                        skipped=()):
     if getattr(backend, 'trusts_object_permissions', None) is False:
         return None
@@ -683,22 +682,22 @@ def _principal_presence(model, name):
     )
 
 
-def _trusts_eligibility_q(model, *, skip_is_active=False, user_conditions=None,
+def _trusts_eligibility_q(model, *, user_conditions=None,
                           skipped=()):
     """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
 
     ``is_active_principal`` denies anonymous, unauthenticated, and inactive
     users. A missing ``is_active`` uses the same default as
     ``getattr(user, 'is_active', False)`` and contributes no users.
-    ``skip_is_active`` omits the ``is_active`` equality and does not fail
-    closed when that column is absent. Persisted rows use the stock
+    A name in ``skipped`` omits that condition and does not fail closed
+    when its column is absent. Persisted rows use the stock
     anonymous/authenticated properties unless those names are concrete
     fields. The predicate is standard boolean SQL.
     """
     from trusts.core import _skip_names
     from trusts.user_rules import compile_user_rules
 
-    names = _skip_names(skip_is_active, skipped)
+    names = _skip_names(skipped)
     anonymous = _principal_presence(model, 'is_anonymous')
     authenticated = _principal_presence(model, 'is_authenticated')
     if user_conditions is None:

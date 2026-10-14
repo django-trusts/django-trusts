@@ -109,10 +109,10 @@ class Issue300LockfileTest(SimpleTestCase):
 class Issue300EligibilitySqlTest(SimpleTestCase):
     def test_is_active_equality_is_added_only_when_inactive_users_are_denied(self):
         denied = User.objects.filter(
-            _trusts_eligibility_q(User, skip_is_active=False),
+            _trusts_eligibility_q(User, skipped=()),
         )
         included = User.objects.filter(
-            _trusts_eligibility_q(User, skip_is_active=True),
+            _trusts_eligibility_q(User, skipped=frozenset({'is_active'})),
         )
         denied_where = str(denied.query.where)
         included_where = str(included.query.where)
@@ -307,7 +307,7 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
 
     def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
         query = bind_once(User.objects.filter(
-            _trusts_eligibility_q(User, skip_is_active=False),
+            _trusts_eligibility_q(User, skipped=()),
         )).query
         engines = (
             'django.db.backends.sqlite3',

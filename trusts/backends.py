@@ -90,7 +90,7 @@ class TrustModelBackendMixin(object):
             setattr(user_obj, '_trust_perm_cache', dict())
         return getattr(user_obj, '_trust_perm_cache')
 
-    def _path_permissions(self, user_obj, obj, *, kind, skip_is_active=False,
+    def _path_permissions(self, user_obj, obj, *, kind,
                           skipped=()):
         from trusts.apps import _relationship_implementation_handles
 
@@ -98,7 +98,6 @@ class TrustModelBackendMixin(object):
         qs = _compile_common_permissions(
             (handle,), obj, user_obj, kind=kind,
             sponsor_handles=_relationship_implementation_handles(),
-            skip_is_active=skip_is_active,
             skipped=skipped,
         )
         if qs is None:
@@ -117,7 +116,6 @@ class TrustModelBackendMixin(object):
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
             return self._path_permissions(
                 user_obj, obj, kind='group',
-                skip_is_active='is_active' in skipped,
                 skipped=skipped,
             )
         return set()
@@ -132,7 +130,6 @@ class TrustModelBackendMixin(object):
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
             return self._path_permissions(
                 user_obj, obj, kind='complete',
-                skip_is_active='is_active' in skipped,
                 skipped=skipped,
             )
         return set()
@@ -204,7 +201,7 @@ class TrustModelBackendMixin(object):
         return record, extra_q
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                             skip_is_active=False, skipped=()):
+                             skipped=()):
         from trusts.apps import _relationship_implementation_handles
 
         handle = self._own_handle()
@@ -213,7 +210,6 @@ class TrustModelBackendMixin(object):
             (handle,), obj, user_obj, binding, kind='complete', extra_q=extra_q,
             sponsor_handles=_relationship_implementation_handles(),
             permission_model=Permission,
-            skip_is_active=skip_is_active,
             skipped=skipped,
         )
         if matched is None:
@@ -221,7 +217,7 @@ class TrustModelBackendMixin(object):
         return matched
 
     def _instance_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                           skip_is_active=False, skipped=()):
+                           skipped=()):
         from trusts.apps import _relationship_implementation_handles
 
         handle = self._own_handle()
@@ -230,7 +226,6 @@ class TrustModelBackendMixin(object):
             handle, obj, user_obj, binding, kind='complete', extra_q=extra_q,
             sponsor_handles=_relationship_implementation_handles(),
             permission_model=Permission,
-            skip_is_active=skip_is_active,
             skipped=skipped,
         )
         if matched is None:
@@ -266,10 +261,8 @@ class TrustModelBackendMixin(object):
             return False
         conditions = self._own_handle().registry._stored_user_conditions()
         enforce = enforces_is_active(conditions, skipped)
-        return is_active_principal(
-            user_obj,
-            skip_is_active=(not enforce) or ('is_active' in skipped),
-        )
+        names = skipped if enforce else frozenset(set(skipped) | {'is_active'})
+        return is_active_principal(user_obj, skipped=names)
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check for one permission string.
@@ -301,13 +294,11 @@ class TrustModelBackendMixin(object):
         if isinstance(obj, QuerySet):
             positive = self._collection_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
-                skip_is_active='is_active' in skipped,
                 skipped=skipped,
             )
         else:
             positive = self._instance_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
-                skip_is_active='is_active' in skipped,
                 skipped=skipped,
             )
         if not positive:
@@ -340,6 +331,5 @@ class TrustModelBackendMixin(object):
 
         return trusts_mixin_predicate(
             self, content, perm,
-            skip_is_active='is_active' in frozenset(skipped or ()),
             skipped=skipped,
         )

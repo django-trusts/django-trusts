@@ -255,7 +255,7 @@ def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
 
 
 def _authorization_grant_q(handles, candidates, user, model, permission,
-                           conditions, binding, *, api, skip_is_active=False,
+                           conditions, binding, *, api,
                            skipped=()):
     """OR each auth-Permission backend's grant composed with its own names.
 
@@ -281,7 +281,6 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
                 (handle,), candidates, user, binding, kind='complete',
                 sponsor_handles=handles,
                 permission_model=Permission,
-                skip_is_active=skip_is_active,
                 skipped=skipped,
             )
             if part is None:
@@ -292,7 +291,6 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             (handle,), candidates, user, binding, kind='complete',
             sponsor_handles=handles,
             permission_model=Permission,
-            skip_is_active=skip_is_active,
             skipped=skipped,
         )
         if part is None:
@@ -331,10 +329,8 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
 
     skipped = _skipped_for_handles(handles, skip_flags, user)
     enforce = _handles_enforce_is_active(handles, skipped)
-    if not is_active_principal(
-        user,
-        skip_is_active=(not enforce) or ('is_active' in skipped),
-    ):
+    names = skipped if enforce else frozenset(set(skipped) | {'is_active'})
+    if not is_active_principal(user, skipped=names):
         return queryset.none()
     granted_q = _authorization_grant_q(
         handles,
@@ -345,7 +341,6 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
         conditions,
         _permitted_binding(model, normalized),
         api='permitted',
-        skip_is_active='is_active' in skipped,
         skipped=skipped,
     )
     if granted_q is None:

@@ -361,7 +361,12 @@ class UserConditionTargetTest(TransactionTestCase):
                 return registry
 
             def holds(handle, user, **skip):
-                predicate = granted((handle,), note, user, read, **skip)
+                from trusts.user_rules import collect_skipped
+
+                predicate = granted(
+                    (handle,), note, user, read,
+                    skipped=collect_skipped(**skip),
+                )
                 if predicate is None:
                     return False
                 return bind_once(TargetNote.objects.filter(
@@ -369,7 +374,12 @@ class UserConditionTargetTest(TransactionTestCase):
                 ).filter(predicate)).exists()
 
             def sql_for(handle, user, **skip):
-                predicate = granted((handle,), note, user, read, **skip)
+                from trusts.user_rules import collect_skipped
+
+                predicate = granted(
+                    (handle,), note, user, read,
+                    skipped=collect_skipped(**skip),
+                )
                 return str(bind_once(TargetNote.objects.filter(
                     pk=note.pk,
                 ).filter(predicate)).query)
