@@ -89,7 +89,8 @@ class TrustModelBackendMixin(object):
             setattr(user_obj, '_trust_perm_cache', dict())
         return getattr(user_obj, '_trust_perm_cache')
 
-    def _path_permissions(self, user_obj, obj, *, kind, skip_is_active=False):
+    def _path_permissions(self, user_obj, obj, *, kind, skip_is_active=False,
+                          skipped=()):
         from trusts.apps import _relationship_implementation_handles
 
         handle = self._own_handle()
@@ -97,40 +98,34 @@ class TrustModelBackendMixin(object):
             (handle,), obj, user_obj, kind=kind,
             sponsor_handles=_relationship_implementation_handles(),
             skip_is_active=skip_is_active,
+            skipped=skipped,
         )
         if qs is None:
             return set()
         return _perm_codes(qs)
 
     def get_group_permissions(self, user_obj, obj=None, *,
-                              skip_is_active=False):
+                              skip_is_active=False, **skip_flags):
         """
         Returns a set of permission strings that this user has through his/her
         groups.
         """
-        from trusts.query import require_mode_flag
-
-        require_mode_flag(skip_is_active, 'skip_is_active')
-        if obj is None or not is_active_principal(
-            user_obj, skip_is_active=skip_is_active,
-        ):
+        skipped = self._inquiry_skipped(skip_is_active, **skip_flags)
+        if obj is None or not self._principal_allows(user_obj, skipped):
             return set()
 
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
             return self._path_permissions(
                 user_obj, obj, kind='group',
                 skip_is_active=skip_is_active,
+                skipped=skipped,
             )
         return set()
 
     def get_all_permissions(self, user_obj, obj=None, *,
-                            skip_is_active=False):
-        from trusts.query import require_mode_flag
-
-        require_mode_flag(skip_is_active, 'skip_is_active')
-        if obj is None or not is_active_principal(
-            user_obj, skip_is_active=skip_is_active,
-        ):
+                            skip_is_active=False, **skip_flags):
+        skipped = self._inquiry_skipped(skip_is_active, **skip_flags)
+        if obj is None or not self._principal_allows(user_obj, skipped):
             return set()
 
         self._ensure_perm_cache(user_obj)
@@ -139,6 +134,7 @@ class TrustModelBackendMixin(object):
             return self._path_permissions(
                 user_obj, obj, kind='complete',
                 skip_is_active=skip_is_active,
+                skipped=skipped,
             )
         return set()
 
@@ -209,7 +205,7 @@ class TrustModelBackendMixin(object):
         return record, extra_q
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                             skip_is_active=False):
+                             skip_is_active=False, skipped=()):
         from trusts.apps import _relationship_implementation_handles
 
         handle = self._own_handle()
@@ -219,13 +215,14 @@ class TrustModelBackendMixin(object):
             sponsor_handles=_relationship_implementation_handles(),
             permission_model=Permission,
             skip_is_active=skip_is_active,
+            skipped=skipped,
         )
         if matched is None:
             return False
         return matched
 
     def _instance_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                           skip_is_active=False):
+                           skip_is_active=False, skipped=()):
         from trusts.apps import _relationship_implementation_handles
 
         handle = self._own_handle()
@@ -235,13 +232,29 @@ class TrustModelBackendMixin(object):
             sponsor_handles=_relationship_implementation_handles(),
             permission_model=Permission,
             skip_is_active=skip_is_active,
+            skipped=skipped,
         )
         if matched is None:
             return False
         return matched
 
+    def _inquiry_skipped(self, skip_is_active, **skip_flags):
+        from trusts.core import _inquiry_skipped
+
+        return _inquiry_skipped(skip_is_active, **skip_flags)
+
+    def _principal_allows(self, user_obj, skipped):
+        from trusts.user_rules import enforces_is_active
+
+        conditions = self._own_handle().registry._stored_user_conditions()
+        enforce = enforces_is_active(conditions, skipped)
+        return is_active_principal(
+            user_obj,
+            skip_is_active=(not enforce) or ('is_active' in skipped),
+        )
+
     def has_perm(self, user_obj, permext, obj=None, *,
-                 skip_is_active=False):
+                 skip_is_active=False, **skip_flags):
         """Object check for one permission string.
 
         The string uses the historical codename split to choose the row.
@@ -251,12 +264,8 @@ class TrustModelBackendMixin(object):
         skips only the built-in ``is_active`` check. Django's
         ``user.has_perm`` does not forward it.
         """
-        from trusts.query import require_mode_flag
-
-        require_mode_flag(skip_is_active, 'skip_is_active')
-        if obj is None or not is_active_principal(
-            user_obj, skip_is_active=skip_is_active,
-        ):
+        skipped = self._inquiry_skipped(skip_is_active, **skip_flags)
+        if obj is None or not self._principal_allows(user_obj, skipped):
             return False
 
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
@@ -276,11 +285,13 @@ class TrustModelBackendMixin(object):
             positive = self._collection_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
                 skip_is_active=skip_is_active,
+                skipped=skipped,
             )
         else:
             positive = self._instance_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
                 skip_is_active=skip_is_active,
+                skipped=skipped,
             )
         if not positive:
             return False
@@ -298,7 +309,8 @@ class TrustModelBackendMixin(object):
         """
         return isinstance(perm, Permission)
 
-    def permitted_users_predicate(self, content, perm, *, skip_is_active=False):
+    def permitted_users_predicate(self, content, perm, *, skip_is_active=False,
+                                  skipped=()):
         """``Q`` over candidate users, or ``None`` when this path does not apply.
 
         ``None`` contributes no grant. It is not an empty-queryset
@@ -311,5 +323,5 @@ class TrustModelBackendMixin(object):
         from trusts.reverse import trusts_mixin_predicate
 
         return trusts_mixin_predicate(
-            self, content, perm, skip_is_active=skip_is_active,
+            self, content, perm, skip_is_active=skip_is_active, skipped=skipped,
         )

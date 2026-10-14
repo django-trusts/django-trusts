@@ -95,23 +95,33 @@ class AuthorizedQuerySet(QuerySet):
     """
 
     def authorized(self, user, permission, extra_q=None, *,
-                   skip_is_active=False):
+                   skip_is_active=False, **skip_flags):
         from trusts.apps import _relationship_implementation_handles
-        from trusts.core import TrustsConfigurationError, granted
+        from trusts.core import (
+            TrustsConfigurationError,
+            _handles_enforce_is_active,
+            _inquiry_skipped,
+            granted,
+        )
 
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
             )
-        require_mode_flag(skip_is_active, 'skip_is_active')
+        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
+        handles = _relationship_implementation_handles()
         if user_identity_denied(user):
             return self.none()
-        if stored_user_is_inactive(user, skip_is_active=skip_is_active):
+        if (
+            stored_user_is_inactive(user)
+            and _handles_enforce_is_active(handles, skipped)
+        ):
             return self.none()
         granted_q = granted(
-            _relationship_implementation_handles(),
+            handles,
             self, user, permission, kind='complete',
             skip_is_active=skip_is_active,
+            skipped=skipped,
         )
         if granted_q is None:
             return self.none()
@@ -124,10 +134,10 @@ class AuthorizedManagerMixin:
     """Add ``authorized()`` without replacing an application's manager."""
 
     def authorized(self, user, permission, extra_q=None, *,
-                   skip_is_active=False):
+                   skip_is_active=False, **skip_flags):
         return AuthorizedQuerySet.authorized(
             self.get_queryset(), user, permission, extra_q=extra_q,
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, **skip_flags,
         )
 
 
@@ -140,7 +150,7 @@ class PermittedQuerySetMixin:
     """
 
     def permitted(self, permission, user, conditions=(), *,
-                  skip_is_active=False):
+                  skip_is_active=False, **skip_flags):
         """Rows in this queryset ``user`` may access for ``permission``.
 
         ``permission`` is one full ``app_label.codename`` string or one
@@ -167,6 +177,7 @@ class PermittedQuerySetMixin:
             conditions,
             handles=_relationship_implementation_handles(),
             skip_is_active=skip_is_active,
+            **skip_flags,
         )
 
 
@@ -185,11 +196,11 @@ class PermittedUsersMixin:
     method: ``Content.objects`` keeps returning content rows.
     """
 
-    def get_permitted_users(self, perm, *, skip_is_active=False):
+    def get_permitted_users(self, perm, *, skip_is_active=False, **skip_flags):
         from trusts.reverse import compile_permitted_users
 
         return compile_permitted_users(
-            self, perm, skip_is_active=skip_is_active,
+            self, perm, skip_is_active=skip_is_active, **skip_flags,
         )
 
 
@@ -205,12 +216,12 @@ class PermittedUsersManagerMixin:
     user-manager change.
     """
 
-    def permitted(self, content, perm, *, skip_is_active=False):
+    def permitted(self, content, perm, *, skip_is_active=False, **skip_flags):
         from trusts.reverse import compile_permitted_users
 
         return compile_permitted_users(
             content, perm, user_queryset=self.get_queryset(),
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, **skip_flags,
         )
 
 

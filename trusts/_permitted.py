@@ -255,7 +255,8 @@ def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
 
 
 def _authorization_grant_q(handles, candidates, user, model, permission,
-                           conditions, binding, *, api, skip_is_active=False):
+                           conditions, binding, *, api, skip_is_active=False,
+                           skipped=()):
     """OR each auth-Permission backend's grant composed with its own names.
 
     A backend participates only when it has an applicable exact
@@ -281,6 +282,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
                 sponsor_handles=handles,
                 permission_model=Permission,
                 skip_is_active=skip_is_active,
+                skipped=skipped,
             )
             if part is None:
                 continue
@@ -291,6 +293,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             sponsor_handles=handles,
             permission_model=Permission,
             skip_is_active=skip_is_active,
+            skipped=skipped,
         )
         if part is None:
             continue
@@ -308,7 +311,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
 
 
 def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
-                       skip_is_active=False):
+                       skip_is_active=False, **skip_flags):
     """Lazy filtered queryset of rows ``user`` may access.
 
     ``handles`` selects the backends. Core passes relationship-family
@@ -324,9 +327,14 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.query import require_mode_flag
-    require_mode_flag(skip_is_active, 'skip_is_active')
-    if not is_active_principal(user, skip_is_active=skip_is_active):
+    from trusts.core import _handles_enforce_is_active, _inquiry_skipped
+
+    skipped = _inquiry_skipped(skip_is_active, **skip_flags)
+    enforce = _handles_enforce_is_active(handles, skipped)
+    if not is_active_principal(
+        user,
+        skip_is_active=(not enforce) or ('is_active' in skipped),
+    ):
         return queryset.none()
     granted_q = _authorization_grant_q(
         handles,
@@ -338,6 +346,7 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
         _permitted_binding(model, normalized),
         api='permitted',
         skip_is_active=skip_is_active,
+        skipped=skipped,
     )
     if granted_q is None:
         return queryset.none()

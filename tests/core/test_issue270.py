@@ -103,13 +103,20 @@ class PermittedQuerySetSurfaceTest(SimpleTestCase):
         parameters = inspect.signature(AuthorizedQuerySet.authorized).parameters
         self.assertEqual(
             list(parameters),
-            ['self', 'user', 'permission', 'extra_q', 'skip_is_active'],
+            [
+                'self', 'user', 'permission', 'extra_q', 'skip_is_active',
+                'skip_flags',
+            ],
         )
         self.assertIsNone(parameters['extra_q'].default)
         self.assertEqual(parameters['skip_is_active'].default, False)
         self.assertEqual(
             parameters['skip_is_active'].kind,
             inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertEqual(
+            parameters['skip_flags'].kind,
+            inspect.Parameter.VAR_KEYWORD,
         )
 
 

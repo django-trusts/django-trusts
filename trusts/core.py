@@ -120,15 +120,15 @@ class PlanQueryCompiler(object):
         )
 
     def complete_exists(self, plan, candidates, user, permission, *,
-                        skip_is_active=False):
+                        skip_is_active=False, skipped=()):
         if not plan.records:
             return None
         return plan.content_exists(
-            user, permission, skip_is_active=skip_is_active,
+            user, permission, skip_is_active=skip_is_active, skipped=skipped,
         )
 
     def group_exists(self, plan, candidates, user, permission, *,
-                     skip_is_active=False):
+                     skip_is_active=False, skipped=()):
         grouped = tuple(
             record for record in plan.records
             if getattr(record, 'via_group', False)
@@ -139,7 +139,10 @@ class PlanQueryCompiler(object):
             records=grouped,
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
-        ).content_exists(user, permission, skip_is_active=skip_is_active)
+            user_conditions=getattr(plan, 'user_conditions', None),
+        ).content_exists(
+            user, permission, skip_is_active=skip_is_active, skipped=skipped,
+        )
 
 
 def compiler_for_class(cls):
@@ -224,16 +227,16 @@ def _compiler_applies(compiler, plan):
 
 
 def _plan_exists(compiler, fn, plan, candidates, user, permission, *,
-                 skip_is_active):
-    """Call a plan compiler, passing ``skip_is_active`` only to the default.
+                 skip_is_active, skipped=()):
+    """Call a plan compiler, passing skip names only to the default.
 
     Custom compilers keep the four-argument protocol. The default plan
-    compiler folds the built-in activity comparison into the grant SQL.
+    compiler folds user conditions into the grant SQL.
     """
     if isinstance(compiler, PlanQueryCompiler):
         return fn(
             plan, candidates, user, permission,
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, skipped=skipped,
         )
     return fn(plan, candidates, user, permission)
 
@@ -246,7 +249,7 @@ def _relationship_handles(handles):
 
 def _compile_granted(handles, candidates, user, permission, *, kind='complete',
                      sponsor_handles=None, permission_model=None,
-                     skip_is_active=False):
+                     skip_is_active=False, skipped=()):
     """OR ordinary predicates and one-level delegated predicates.
 
     ``handles`` owns the direct and delegation branches being projected.
@@ -258,33 +261,40 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     parts = []
-    delegations = []
+    delegation_groups = []
     content_identity = _candidate_model(candidates)
     for handle in handles:
         plan = _plan_for_permission(handle, candidates, user, permission)
-        delegations.extend(getattr(plan, 'delegations', ()) or ())
+        if kind == 'complete' and getattr(plan, 'delegations', None):
+            delegation_groups.append((
+                tuple(plan.delegations),
+                getattr(plan, 'user_conditions', None),
+            ))
         if kind == 'complete':
             fn = handle.compiler.complete_exists
         else:
             fn = handle.compiler.group_exists
         part = _as_q(_plan_exists(
             handle.compiler, fn, plan, candidates, user, permission,
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, skipped=skipped,
         ))
         if part is None:
             continue
         parts.append(part)
-    if kind == 'complete' and delegations:
+    if kind == 'complete' and delegation_groups:
         sponsor_records = _ordinary_records(
             sponsor_handles, candidates, permission_model,
         )
-        delegated = _delegated_content_exists(
-            tuple(delegations), sponsor_records, user, permission,
-            content_identity=content_identity,
-            skip_is_active=skip_is_active,
-        )
-        if delegated is not None:
-            parts.append(delegated)
+        for grouped, conditions in delegation_groups:
+            delegated = _delegated_content_exists(
+                grouped, sponsor_records, user, permission,
+                content_identity=content_identity,
+                skip_is_active=skip_is_active,
+                user_conditions=conditions,
+                skipped=skipped,
+            )
+            if delegated is not None:
+                parts.append(delegated)
     if not parts:
         return None
     if len(parts) == 1:
@@ -294,7 +304,7 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
 
 def granted(handles, candidates, user, permission, *, kind='complete',
             sponsor_handles=None, permission_model=None,
-            skip_is_active=False):
+            skip_is_active=False, skipped=()):
     """OR each applicable relationship-family handle's complete (or group) predicate.
 
     Core-owned aggregate: fold-family handles are omitted. Noun-blind
@@ -323,6 +333,7 @@ def granted(handles, candidates, user, permission, *, kind='complete',
         ),
         permission_model=permission_model,
         skip_is_active=skip_is_active,
+        skipped=skipped,
     )
 
 
@@ -405,7 +416,8 @@ def _prefix_partial_suffix(record, lookup):
 
 
 def _exact_prefix_exists(record, lookup, target_attname, user, permission,
-                        content_identity, *, skip_is_active=False):
+                        content_identity, *, skip_is_active=False,
+                        user_conditions=None, skipped=()):
     """Grant row whose stored prefix is the outer row."""
     inner = _bind_record_qs(
         record,
@@ -414,18 +426,23 @@ def _exact_prefix_exists(record, lookup, target_attname, user, permission,
         correlation=Q(**{lookup: OuterRef(target_attname)}),
         content_identity=content_identity,
         skip_is_active=skip_is_active,
+        user_conditions=user_conditions,
+        skipped=skipped,
     )
     return Exists(inner)
 
 
 def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
-                              content_identity, *, skip_is_active=False):
+                              content_identity, *, skip_is_active=False,
+                              user_conditions=None, skipped=()):
     """One ordinary permitted-content predicate, including an ``along=`` walk."""
     position = _prefix_walk_position(record, lookup)
     if position in ('exact', 'before'):
         return _exact_prefix_exists(
             record, lookup, target_attname, user, permission, content_identity,
             skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
         )
     suffix = None
     if position == 'after':
@@ -435,6 +452,8 @@ def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
         content_identity=content_identity,
         suffix_lookup=suffix,
         skip_is_active=skip_is_active,
+        user_conditions=user_conditions,
+        skipped=skipped,
     )
 
 
@@ -514,7 +533,7 @@ def _delegation_prefix_reach_q(record, user, lookup, target_attname, candidate,
 def _delegation_prefix_exists(record, sponsor_records, user, permission,
                              content_identity, prefix_model, lookup,
                              target_attname, candidate, position,
-                             skip_is_active):
+                             skip_is_active, user_conditions=None, skipped=()):
     """``EXISTS`` delegation row correlated to ``candidate``."""
     sponsor_q = _prefix_sponsor_q(
         record, sponsor_records, permission, content_identity, prefix_model,
@@ -525,6 +544,8 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     eligibility = _principal_eligibility_q(
         record.sponsor_model, record.sponsor_field,
         skip_is_active=skip_is_active,
+        user_conditions=user_conditions,
+        skipped=skipped,
     )
     if eligibility is None:
         return None
@@ -533,6 +554,8 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     })
     combined &= _delegate_is_active_q(
         record, user, skip_is_active=skip_is_active,
+        user_conditions=user_conditions,
+        skipped=skipped,
     )
     combined &= _delegation_prefix_reach_q(
         record, user, lookup, target_attname, candidate, position,
@@ -549,7 +572,8 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
 
 def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
                                 prefix_model, *, content_identity,
-                                skip_is_active=False):
+                                skip_is_active=False, user_conditions=None,
+                                skipped=()):
     """Permitted-content predicates for one-level delegated authority.
 
     The delegate is included on a prefix only where the delegation and
@@ -572,7 +596,7 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
             found = _delegation_prefix_exists(
                 record, sponsor_records, user, permission, content_identity,
                 prefix_model, lookup, target_attname, candidate, position,
-                skip_is_active,
+                skip_is_active, user_conditions=user_conditions, skipped=skipped,
             )
             if found is not None:
                 parts.append(found)
@@ -581,7 +605,7 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 
 def _compile_permitted_content_queryset(
     queryset, user, permission, *, content, handles, sponsor_handles,
-    skip_is_active=False,
+    skip_is_active=False, skipped=(),
 ):
     """Compile the permitted-content queryset for resolved handles.
 
@@ -595,12 +619,12 @@ def _compile_permitted_content_queryset(
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
-    delegations = []
     content_identity = _candidate_model(content)
     for handle in handles:
         plan = _plan_for_permission(handle, content, user, permission)
         if getattr(plan, 'content_identity', None) is not None:
             content_identity = plan.content_identity
+        conditions = getattr(plan, 'user_conditions', None)
         for record in plan.records:
             for lookup, target_attname in _scope_prefix_lookups(
                 record, scope_model,
@@ -609,18 +633,21 @@ def _compile_permitted_content_queryset(
                     record, lookup, target_attname, user, permission,
                     content_identity,
                     skip_is_active=skip_is_active,
+                    user_conditions=conditions,
+                    skipped=skipped,
                 ))
-        delegations.extend(getattr(plan, 'delegations', ()) or ())
-    if delegations:
-        parts.extend(_delegated_prefix_predicates(
-            tuple(delegations),
-            _ordinary_records(
-                sponsor_handles, content, permission._meta.concrete_model,
-            ),
-            user, permission, scope_model,
-            content_identity=content_identity,
-            skip_is_active=skip_is_active,
-        ))
+        if getattr(plan, 'delegations', None):
+            parts.extend(_delegated_prefix_predicates(
+                tuple(plan.delegations),
+                _ordinary_records(
+                    sponsor_handles, content, permission._meta.concrete_model,
+                ),
+                user, permission, scope_model,
+                content_identity=content_identity,
+                skip_is_active=skip_is_active,
+                user_conditions=conditions,
+                skipped=skipped,
+            ))
     if not parts:
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
@@ -628,7 +655,7 @@ def _compile_permitted_content_queryset(
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
-                                skip_is_active=False):
+                                skip_is_active=False, **skip_flags):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -675,32 +702,34 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
-    from trusts.query import (
-        user_identity_denied,
-        require_mode_flag,
-        stored_user_is_inactive,
-    )
-    require_mode_flag(skip_is_active, 'skip_is_active')
+    from trusts.query import user_identity_denied, stored_user_is_inactive
+
+    skipped = _inquiry_skipped(skip_is_active, **skip_flags)
     if not handles:
         return queryset.none()
-    if user_identity_denied(user) or stored_user_is_inactive(
-        user, skip_is_active=skip_is_active,
+    if user_identity_denied(user) or (
+        stored_user_is_inactive(user)
+        and _handles_enforce_is_active(handles, skipped)
     ):
         return queryset.none()
     return _compile_permitted_content_queryset(
         queryset, user, permission, content=content, handles=handles,
         sponsor_handles=handles, skip_is_active=skip_is_active,
+        skipped=skipped,
     )
 
 
 def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
-                             skip_is_active=False):
-    return filter_by_permitted_content(queryset, user, permission, content=content, handles=handles, skip_is_active=skip_is_active)
+                             skip_is_active=False, **skip_flags):
+    return filter_by_permitted_content(
+        queryset, user, permission, content=content, handles=handles,
+        skip_is_active=skip_is_active, **skip_flags,
+    )
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete',
               extra_q=None, sponsor_handles=None, permission_model=None,
-              skip_is_active=False):
+              skip_is_active=False, skipped=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
     One SQL. ``None`` when no handle applies so the caller may use the
@@ -713,6 +742,7 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
         sponsor_handles=sponsor_handles,
         permission_model=permission_model,
         skip_is_active=skip_is_active,
+        skipped=skipped,
     )
     if granted_q is None:
         return None
@@ -728,7 +758,7 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
 
 def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None,
                    sponsor_handles=None, permission_model=None,
-                   skip_is_active=False):
+                   skip_is_active=False, skipped=()):
     """One grant EXISTS for ``obj`` through ``handle`` only.
 
     ``None`` when the handle is inapplicable. ``extra_q`` is an optional
@@ -739,6 +769,7 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
         sponsor_handles=sponsor_handles,
         permission_model=permission_model,
         skip_is_active=skip_is_active,
+        skipped=skipped,
     )
     if granted_q is None:
         return None
@@ -750,7 +781,8 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
 
 
 def _compile_common_permissions(handles, candidates, user, *, kind='complete',
-                                sponsor_handles=None, skip_is_active=False):
+                                sponsor_handles=None, skip_is_active=False,
+                                skipped=()):
     """Permission queryset for the given handles. No family filter."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
@@ -782,7 +814,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
             fn = handle.compiler.group_exists
         part = _as_q(_plan_exists(
             handle.compiler, fn, plan, qs, user, perm_expr,
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, skipped=skipped,
         ))
         if part is None:
             pass
@@ -797,6 +829,8 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
                 plan.delegations, compatible_records, user, perm_expr,
                 content_identity=_candidate_model(candidates),
                 skip_is_active=skip_is_active,
+                user_conditions=getattr(plan, 'user_conditions', None),
+                skipped=skipped,
             )
             if delegated is not None:
                 parts.append(delegated)
@@ -1885,46 +1919,82 @@ def _permission_content_type_filters(record, content_identity):
     }
 
 
-def _default_is_active_q(model, path, *, skip_is_active=False):
-    """SQL for the default ``is_active`` condition on one concrete user path.
+def _inquiry_skipped(skip_is_active=False, **flags):
+    from trusts.user_rules import collect_skipped
+
+    return collect_skipped(skip_is_active, **flags)
+
+
+def _activity_denied(user, conditions, skipped):
+    """Python fast denial for the built-in activity condition."""
+    from trusts.query import stored_user_is_inactive
+    from trusts.user_rules import enforces_is_active
+
+    return stored_user_is_inactive(user) and enforces_is_active(
+        conditions, skipped,
+    )
+
+
+def _handles_enforce_is_active(handles, skipped):
+    from trusts.user_rules import enforces_is_active
+
+    for handle in handles:
+        registry = getattr(handle, 'registry', None)
+        if registry is None:
+            continue
+        conditions = registry._stored_user_conditions()
+        if enforces_is_active(conditions, skipped):
+            return True
+    return False
+
+
+def _skip_names(skip_is_active=False, skipped=()):
+    names = set(skipped or ())
+    if skip_is_active:
+        names.add('is_active')
+    return frozenset(names)
+
+
+def _default_is_active_q(model, path, *, skip_is_active=False,
+                         user_conditions=None, skipped=()):
+    """Checked-user conditions as SQL, including the default ``is_active``.
 
     A missing column adds nothing, so a statement that does not compare
-    ``is_active`` does not invent a term. A column that is not a concrete
-    boolean is a configuration error. ``skip_is_active`` omits the comparison.
+    that field does not invent a term. ``skip_<name>`` omits that condition.
     """
-    if skip_is_active or not path:
+    from trusts.user_rules import compile_user_rules
+
+    if not path:
         return Q()
-    try:
-        field = model._meta.get_field('is_active')
-    except FieldDoesNotExist:
+    compiled = compile_user_rules(
+        model, path, user_conditions, role='user',
+        skipped=_skip_names(skip_is_active, skipped), missing='omit',
+    )
+    if compiled is None:
         return Q()
-    if (
-        not getattr(field, 'concrete', False)
-        or field.get_internal_type() != 'BooleanField'
-    ):
-        raise TrustsConfigurationError(
-            '%s.is_active must be a concrete BooleanField.'
-            % model._meta.label
-        )
-    return Q(**{'%s__is_active' % path: True})
+    return compiled
 
 
-def _delegate_is_active_q(record, user, *, skip_is_active=False):
-    """Activity comparison for a checked delegate bound as a model instance.
+def _delegate_is_active_q(record, user, *, skip_is_active=False,
+                          user_conditions=None, skipped=()):
+    """Checked-delegate conditions when the delegate is a model instance.
 
     An ``OuterRef`` delegate is the reverse candidate; that queryset already
-    compares ``is_active``. This helper does not add a second term.
+    carries the checked-user conditions. This helper does not add a second term.
     """
     if not isinstance(user, Model):
         return Q()
     return _default_is_active_q(
         record.delegate_model, record.delegate_field,
         skip_is_active=skip_is_active,
+        user_conditions=user_conditions,
+        skipped=skipped,
     )
 
 
 def _record_predicate(record, correlation=None, *, content_identity=None,
-                      skip_is_active=False, **bindings):
+                      skip_is_active=False, user_conditions=None, skipped=(),
+                      **bindings):
     """Bindings, condition, and correlation as one ``Q``.
 
     Separate ``filter()`` calls give a repeated many-to-many hop its own
@@ -1944,6 +2014,8 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
         combined &= _default_is_active_q(
             record.user_model, record.user_field,
             skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
         )
     compiled = _compile_predicate(record.condition, record)
     if compiled is not None:
@@ -1954,7 +2026,8 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
 
 
 def _bind_record_qs(record, correlation=None, *, content_identity=None,
-                    skip_is_active=False, **bindings):
+                    skip_is_active=False, user_conditions=None, skipped=(),
+                    **bindings):
     """Root rows for one record. One ``filter()`` for every predicate."""
     return record.root._default_manager.filter(
         _record_predicate(
@@ -1962,6 +2035,8 @@ def _bind_record_qs(record, correlation=None, *, content_identity=None,
             correlation=correlation,
             content_identity=content_identity,
             skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
             **bindings,
         ),
     )
@@ -1974,22 +2049,29 @@ def _shift_outer_ref(value):
     return value
 
 
-def _principal_eligibility_q(model, path, *, skip_is_active=False):
-    """SQL equivalent of ``is_active_principal`` through ``path``.
+def _principal_eligibility_q(model, path, *, skip_is_active=False,
+                             user_conditions=None, skipped=()):
+    """Sponsor identity and user conditions through ``path``.
 
-    Missing ``is_active`` fails closed because the runtime helper's default is
-    false. ``skip_is_active`` omits that predicate and does not require the
-    column. Anonymous/authenticated attributes use their runtime defaults when
-    they are not concrete fields. Any concrete eligibility field must be
-    boolean. Standard SQL only: equality against the boolean column.
+    Sponsor-targeted conditions, including the default ``is_active``, are
+    SQL. A required condition whose column is missing fails closed.
+    ``skip_<name>`` omits that condition and does not require its column.
+    Anonymous/authenticated attributes use their runtime defaults when
+    they are not concrete fields. Standard SQL only.
     """
+    from trusts.user_rules import compile_user_rules
+
+    rules = compile_user_rules(
+        model, path, user_conditions, role='sponsor',
+        skipped=_skip_names(skip_is_active, skipped), missing='closed',
+    )
+    if rules is None:
+        return None
     lookups = {}
     checks = [
         ('is_anonymous', False, False),
         ('is_authenticated', True, False),
     ]
-    if not skip_is_active:
-        checks.insert(0, ('is_active', True, True))
     for name, expected, required in checks:
         try:
             field = model._meta.get_field(name)
@@ -2006,9 +2088,8 @@ def _principal_eligibility_q(model, path, *, skip_is_active=False):
                 'principal eligibility.' % (model._meta.label, name)
             )
         lookups['%s__%s' % (path, name)] = expected
-    if not lookups:
-        return Q()
-    return Q(**lookups)
+    identity = Q(**lookups) if lookups else Q()
+    return identity & rules
 
 
 def _ordinary_records(handles, content, permission_model=None):
@@ -2225,7 +2306,8 @@ def _delegation_reaches(record, *, forward, user=None, content=None):
 
 
 def _delegated_content_exists(delegations, sponsor_records, user, permission,
-                              *, content_identity=None, skip_is_active=False):
+                              *, content_identity=None, skip_is_active=False,
+                              user_conditions=None, skipped=()):
     """Candidate-content predicate for one-level delegated authority."""
     if (
         user is None
@@ -2247,6 +2329,8 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
         eligibility = _principal_eligibility_q(
             record.sponsor_model, record.sponsor_field,
             skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
         )
         if eligibility is None:
             continue
@@ -2255,6 +2339,8 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
         })
         combined &= _delegate_is_active_q(
             record, user, skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
         )
         combined &= _delegation_reaches(record, forward=True, user=user)
         condition = _compile_predicate(
@@ -2271,7 +2357,8 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
 
 
 def _delegated_user_exists(delegations, sponsor_records, content, permission,
-                           *, content_identity=None, skip_is_active=False):
+                           *, content_identity=None, skip_is_active=False,
+                           user_conditions=None, skipped=()):
     """Candidate-user predicate for one-level delegated authority."""
     content = _require_instance(content, 'content')
     parts = []
@@ -2285,6 +2372,8 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
         eligibility = _principal_eligibility_q(
             record.sponsor_model, record.sponsor_field,
             skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
         )
         if eligibility is None:
             continue
@@ -3293,7 +3382,7 @@ class _PrefixInForwardWalk(Expression):
 
     def __init__(self, record, user, permission, attname, *,
                  content_identity=None, suffix_lookup=None,
-                 skip_is_active=False):
+                 skip_is_active=False, user_conditions=None, skipped=()):
         super().__init__(output_field=BooleanField())
         walk = record.along
         seed = _bind_record_qs(
@@ -3303,6 +3392,8 @@ class _PrefixInForwardWalk(Expression):
             correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
             content_identity=content_identity,
             skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -3422,7 +3513,8 @@ class GrantReach(Expression):
     subquery = True
 
     def __init__(self, record, user, permission, content=None, *,
-                 content_identity=None, skip_is_active=False):
+                 content_identity=None, skip_is_active=False,
+                 user_conditions=None, skipped=()):
         super().__init__(output_field=BooleanField())
         self.record = record
         self.content = content
@@ -3438,6 +3530,8 @@ class GrantReach(Expression):
                 permission=permission,
                 content_identity=content_identity,
                 skip_is_active=skip_is_active,
+                user_conditions=user_conditions,
+                skipped=skipped,
             )
             self.grant_query = grant.query.clone()
             self.grant_query.subquery = True
@@ -3449,6 +3543,8 @@ class GrantReach(Expression):
             correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
             content_identity=content_identity,
             skip_is_active=skip_is_active,
+            user_conditions=user_conditions,
+            skipped=skipped,
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -3691,17 +3787,21 @@ class RelationPlan:
     delegations: tuple = ()
     permission_model: type | None = None
     content_identity: type | None = None
+    user_conditions: tuple | None = None
 
-    def _bound_root_qs(self, record, *, skip_is_active=False, **bindings):
+    def _bound_root_qs(self, record, *, skip_is_active=False, skipped=(),
+                       **bindings):
         return _bind_record_qs(
             record,
             content_identity=self.content_identity,
             skip_is_active=skip_is_active,
+            user_conditions=self.user_conditions,
+            skipped=skipped,
             **bindings,
         )
 
     def _correlated_exists(self, terminal_field_attr, *, skip_is_active=False,
-                           **bindings):
+                           skipped=(), **bindings):
         parts = []
         for record in self.records:
             if record.along is not None:
@@ -3710,6 +3810,8 @@ class RelationPlan:
                         record, bindings['user'], bindings['permission'],
                         content_identity=self.content_identity,
                         skip_is_active=skip_is_active,
+                        user_conditions=self.user_conditions,
+                        skipped=skipped,
                     ))
                 elif terminal_field_attr == 'user_field':
                     parts.append(GrantReach(
@@ -3717,6 +3819,8 @@ class RelationPlan:
                         bindings['permission'], content=bindings['content'],
                         content_identity=self.content_identity,
                         skip_is_active=skip_is_active,
+                        user_conditions=self.user_conditions,
+                        skipped=skipped,
                     ))
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
@@ -3725,6 +3829,8 @@ class RelationPlan:
                         content=bindings['content'],
                         content_identity=self.content_identity,
                         skip_is_active=skip_is_active,
+                        user_conditions=self.user_conditions,
+                        skipped=skipped,
                     ))
                 continue
             terminal = getattr(record, terminal_field_attr)
@@ -3733,6 +3839,7 @@ class RelationPlan:
                 record,
                 correlation=Q(**{terminal: OuterRef(target)}),
                 skip_is_active=skip_is_active,
+                skipped=skipped,
                 **bindings,
             )
             parts.append(Exists(inner))
@@ -3742,7 +3849,8 @@ class RelationPlan:
             return parts[0]
         return reduce(or_, parts)
 
-    def content_exists(self, user, permission, *, skip_is_active=False):
+    def content_exists(self, user, permission, *, skip_is_active=False,
+                       skipped=()):
         """Candidate-row ``EXISTS`` correlating content through this plan.
 
         Later readers may OR this predicate with another predicate on the
@@ -3759,7 +3867,7 @@ class RelationPlan:
             return None
         return self._correlated_exists(
             'content_field', user=user, permission=permission,
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, skipped=skipped,
         )
 
     def user_exists(self, content, permission):
@@ -3785,7 +3893,8 @@ class RelationPlan:
             'user_field', content=content, permission=permission,
         )
 
-    def common_permissions(self, user, content, *, skip_is_active=False):
+    def common_permissions(self, user, content, *, skip_is_active=False,
+                           skipped=()):
         """Trustee permissions held on every candidate through this plan.
 
         ``content`` is an instance or QuerySet. Empty candidates yield
@@ -3800,6 +3909,7 @@ class RelationPlan:
         qs = candidate_queryset(content)
         exists = self.content_exists(
             user, OuterRef(OuterRef('pk')), skip_is_active=skip_is_active,
+            skipped=skipped,
         )
         if exists is None:
             return self.permission_model._default_manager.none()
@@ -3809,7 +3919,7 @@ class RelationPlan:
             Exists(qs.filter(~Q(exists))),
         ).distinct())
 
-    def permissions(self, user, content, *, skip_is_active=False):
+    def permissions(self, user, content, *, skip_is_active=False, skipped=()):
         """Distinct permission rows for ``(user, content)``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
@@ -3817,12 +3927,12 @@ class RelationPlan:
             return ()
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, skipped=skipped,
         )
         return bind_once(self.permission_model._default_manager.filter(exists).distinct())
 
     def has_permission(self, user, content, permission, *,
-                       skip_is_active=False):
+                       skip_is_active=False, skipped=()):
         """SQL ``EXISTS`` membership of ``permission`` in ``permissions()``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
@@ -3833,17 +3943,17 @@ class RelationPlan:
             return False
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
-            skip_is_active=skip_is_active,
+            skip_is_active=skip_is_active, skipped=skipped,
         )
         return bind_once(self.permission_model._default_manager.filter(
             pk=permission.pk,
         ).filter(exists)).exists()
 
     def filter_content(self, queryset, user, permission, *,
-                       skip_is_active=False):
+                       skip_is_active=False, skipped=()):
         """Lazy queryset of candidate rows correlated to the same plan."""
         exists = self.content_exists(
-            user, permission, skip_is_active=skip_is_active,
+            user, permission, skip_is_active=skip_is_active, skipped=skipped,
         )
         if exists is None:
             return queryset.none()
@@ -3882,6 +3992,7 @@ class TrustsRegistry(object):
         self._delegation_order = []
         self._frozen = False
         self._condition_lookup = None
+        self._user_conditions = None
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
 
@@ -3953,6 +4064,122 @@ class TrustsRegistry(object):
         return self.conditions.evaluate_permission_condition(
             model, cond_code, user, perm, obj,
         )
+
+    def user_conditions(self):
+        """Effective user conditions. ``None`` store means the built-in rule."""
+        if self._user_conditions is None:
+            from trusts.user_rules import BUILTIN_USER_CONDITIONS
+            return BUILTIN_USER_CONDITIONS
+        return tuple(self._user_conditions.values())
+
+    def _stored_user_conditions(self):
+        """``None`` when the registry still uses the built-in rule."""
+        if self._user_conditions is None:
+            return None
+        return tuple(self._user_conditions.values())
+
+    def register_user_condition(self, name, expr, on='*'):
+        """Register, replace, or remove one named user condition.
+
+        The same name replaces the previous expression. ``None`` removes
+        that name and no other. ``on`` is ``*`` (the default), ``user``,
+        ``sponsor``, or a non-empty tuple of those two. The lambda is
+        walked once into concrete boolean fields, ``&``, and ``~``.
+        """
+        from trusts.user_rules import BUILTIN_USER_CONDITIONS, normalize_on
+
+        if self._frozen:
+            raise TrustsConfigurationError(
+                'Cannot register a user condition on a frozen TrustsRegistry.'
+            )
+        if not isinstance(name, str) or not name.isidentifier():
+            raise TrustsConfigurationError(
+                'User condition name must be an identifier, not %r.' % (name,)
+            )
+        target = normalize_on(on)
+        created = self._user_conditions is None
+        self._materialize_user_conditions(BUILTIN_USER_CONDITIONS)
+        try:
+            return self._store_user_condition(name, expr, target)
+        except TrustsConfigurationError:
+            if created:
+                self._user_conditions = None
+            raise
+
+    def _store_user_condition(self, name, expr, target):
+        from trusts.user_rules import (
+            UserCondition,
+            assert_concrete_booleans,
+            condition_targets,
+            walk_user_lambda,
+        )
+        from django.contrib.auth import get_user_model
+
+        if expr is None:
+            if name not in self._user_conditions:
+                raise TrustsConfigurationError(
+                    'User condition %r is not registered.' % (name,)
+                )
+            del self._user_conditions[name]
+            return None
+        walked = walk_user_lambda(expr)
+        models = self._models_for_user_condition(condition_targets(target))
+        if not models and 'user' in condition_targets(target):
+            models = (get_user_model(),)
+        if not models:
+            raise TrustsConfigurationError(
+                'Register a delegation before a sponsor-only user condition.'
+            )
+        for model in models:
+            assert_concrete_booleans(model, walked, name)
+        self._user_conditions[name] = UserCondition(name, walked, target)
+        return self._user_conditions[name]
+
+    def _materialize_user_conditions(self, builtin):
+        if self._user_conditions is not None:
+            return
+        self._user_conditions = {rule.name: rule for rule in builtin}
+
+    def _models_for_user_condition(self, targets):
+        found = []
+        seen = set()
+
+        def add(model):
+            concrete = model._meta.concrete_model
+            if concrete in seen:
+                return
+            seen.add(concrete)
+            found.append(concrete)
+
+        if 'user' in targets:
+            for record in self._order:
+                add(record.user_model)
+            for record in self._delegation_order:
+                add(record.delegate_model)
+        if 'sponsor' in targets:
+            for record in self._delegation_order:
+                add(record.sponsor_model)
+        return found
+
+    def _recheck_user_conditions(self):
+        if self._user_conditions is None:
+            return
+        from trusts.user_rules import assert_concrete_booleans, condition_targets
+
+        from trusts.user_rules import FieldRef
+
+        for rule in self._user_conditions.values():
+            if (
+                rule.name == 'is_active'
+                and rule.on == '*'
+                and isinstance(rule.expr, FieldRef)
+                and rule.expr.name == 'is_active'
+            ):
+                continue
+            for model in self._models_for_user_condition(
+                condition_targets(rule.on),
+            ):
+                assert_concrete_booleans(model, rule.expr, rule.name)
 
     def freeze(self):
         """Seal relation and condition registration on this instance."""
@@ -4092,6 +4319,7 @@ class TrustsRegistry(object):
         else:
             self._delegations_by_root[root] = [record]
         self._delegation_order.append(record)
+        self._recheck_user_conditions()
         return record
 
     def register(self, *, content, user, permission=None, group=None,
@@ -4235,6 +4463,7 @@ class TrustsRegistry(object):
         else:
             self._by_root[root] = [record]
         self._order.append(record)
+        self._recheck_user_conditions()
         return record
 
     def _records_for(self, content_model, user_model=None, permission_model=None):
@@ -4299,54 +4528,50 @@ class TrustsRegistry(object):
             delegations=delegations,
             permission_model=plan_permission,
             content_identity=_candidate_model(content),
+            user_conditions=self._stored_user_conditions(),
         )
 
-    def permissions_for(self, user, content, *, skip_is_active=False):
+    def permissions_for(self, user, content, *, skip_is_active=False, **skip_flags):
         """Distinct permission rows granted to ``user`` on ``content``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
-        from trusts.query import (
-            user_identity_denied,
-            require_mode_flag,
-            stored_user_is_inactive,
-        )
-        require_mode_flag(skip_is_active, 'skip_is_active')
+        from trusts.query import user_identity_denied
+
+        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
         plan = self.plan_for(content, user=user)
-        if user_identity_denied(user) or stored_user_is_inactive(
-            user, skip_is_active=skip_is_active,
+        if user_identity_denied(user) or _activity_denied(
+            user, plan.user_conditions, skipped,
         ):
             if not plan.records or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
         return plan.permissions(
-            user, content, skip_is_active=skip_is_active,
+            user, content, skip_is_active=skip_is_active, skipped=skipped,
         )
 
     def has_permission(self, user, content, permission, *,
-                       skip_is_active=False):
+                       skip_is_active=False, **skip_flags):
         """Whether ``permission`` exists in the common plan for this pair."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
-        from trusts.query import (
-            user_identity_denied,
-            require_mode_flag,
-            stored_user_is_inactive,
-        )
-        require_mode_flag(skip_is_active, 'skip_is_active')
+        from trusts.query import user_identity_denied
+
+        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
         plan = self.plan_for(
             content, user=user, permission=permission,
         )
-        if user_identity_denied(user) or stored_user_is_inactive(
-            user, skip_is_active=skip_is_active,
+        if user_identity_denied(user) or _activity_denied(
+            user, plan.user_conditions, skipped,
         ):
             return False
         return plan.has_permission(
             user, content, permission, skip_is_active=skip_is_active,
+            skipped=skipped,
         )
 
     def filter_authorized(self, queryset, user, permission, *,
-                          skip_is_active=False):
+                          skip_is_active=False, **skip_flags):
         """Lazy queryset of rows ``user`` holds ``permission`` on.
 
         Consumes ``RelationPlan.content_exists`` through ``filter_content``.
@@ -4357,21 +4582,19 @@ class TrustsRegistry(object):
             )
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
-        from trusts.query import (
-            user_identity_denied,
-            require_mode_flag,
-            stored_user_is_inactive,
-        )
-        require_mode_flag(skip_is_active, 'skip_is_active')
+        from trusts.query import user_identity_denied
+
+        skipped = _inquiry_skipped(skip_is_active, **skip_flags)
         plan = self.plan_for(
             queryset, user=user, permission=permission,
         )
-        if user_identity_denied(user) or stored_user_is_inactive(
-            user, skip_is_active=skip_is_active,
+        if user_identity_denied(user) or _activity_denied(
+            user, plan.user_conditions, skipped,
         ):
             return queryset.none()
         return plan.filter_content(
             queryset, user, permission, skip_is_active=skip_is_active,
+            skipped=skipped,
         )
 
 
