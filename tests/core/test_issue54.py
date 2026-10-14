@@ -153,6 +153,10 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
             inspect.signature(filter_authorized_scopes),
             inspect.signature(filter_by_permitted_content),
         )
+        self.assertNotIn(
+            'skip_is_active',
+            inspect.signature(filter_by_permitted_content).parameters,
+        )
         sentinel = object()
         queryset, user, permission, content = (
             object(), object(), object(), object(),
@@ -279,7 +283,6 @@ class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
             )
         authorized.assert_called_once_with(
             queryset, 'user', 'permission', extra_q='extra',
-            skip_is_active=False,
         )
         self.assertEqual(manager.application_method(), 'application-owned')
 

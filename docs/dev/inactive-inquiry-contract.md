@@ -121,17 +121,17 @@ Thomas clarified the public keyword by the returned answer (review
 5486296327): content, permission enumeration, and boolean inquiries used
 `allow_inactive_user`; user-list inquiries used `allow_inactive`. This
 supersedes the narrower exception that initially named only
-`filter_by_permitted_content`. Internal helpers can propagate one boolean flag;
-public adapters map their documented keyword explicitly. Those two names
-are now `skip_<name>` for each registered user condition. The built-in
-`is_active` condition's keyword is `skip_is_active` on every row below.
+`filter_by_permitted_content`. Public adapters accept `skip_<name>` for each
+registered user condition. The built-in `is_active` condition's keyword is
+`skip_is_active`. It is not a separate parameter. Every row below uses that
+form.
 
-| Public inquiry | Keyword |
+| Public inquiry | Keywords |
 | --- | --- |
-| Content `.permitted` and `.authorized`, and their manager adapters | `skip_is_active=False` |
-| Backend `has_perm`, `get_all_permissions`, `get_group_permissions` | `skip_is_active=False` |
-| Registry `permissions_for`, `has_permission`, `filter_authorized`; `filter_by_permitted_content` | `skip_is_active=False` |
-| Content `get_permitted_users`; optional user-manager `.permitted` | `skip_is_active=False` |
+| Content `.permitted` and `.authorized`, and their manager adapters | `skip_<name>` |
+| Backend `has_perm`, `get_all_permissions`, `get_group_permissions` | `skip_<name>` |
+| Registry `permissions_for`, `has_permission`, `filter_authorized`; `filter_by_permitted_content` | `skip_<name>` |
+| Content `get_permitted_users`; optional user-manager `.permitted` | `skip_<name>` |
 
 Do not add an eligibility abstraction in anticipation of a superuser feature.
 Existing Django behavior stays unchanged; the inventory here remains evidence

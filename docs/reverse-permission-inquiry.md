@@ -5,7 +5,7 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the recursive agreement boundary below.
 
-Both adapters use the [`is_active` check and `skip_is_active` argument](source/index.rst#user-is-active-checks).
+Both adapters use the [`is_active` check and `skip_<name>` keywords](source/index.rst#user-is-active-checks).
 
 ## Decision
 
@@ -16,8 +16,8 @@ users = document.get_permitted_users(perm)
 users = User.objects.permitted(document, perm)
 ```
 
-Both accept exactly one saved content object, one permission, and the
-keyword-only `skip_is_active=False` argument, call one
+Both accept exactly one saved content object, one permission, and
+keyword-only `skip_<name>` arguments, call one
 internal reverse-query compiler, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
@@ -139,7 +139,7 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must agree when called with the same `skip_is_active` value. Each supported
+must agree when called with the same `skip_<name>` keywords. Each supported
 backend contribution retains its own eligibility rules, composed with the
 same candidate queryset and Django's superuser check.
 
@@ -309,7 +309,7 @@ Implementation must cover:
 - preservation of an application's existing user manager and queryset class;
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
-With `skip_is_active=False`, compare the result row for row with `has_perm()`
+Without `skip_is_active=True`, compare the result row for row with `has_perm()`
 for the same candidate users and normalized permission in every behavioral
 fixture. With `skip_is_active=True`, verify that only Trusts-owned
 `is_active` checks are skipped.

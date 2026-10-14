@@ -707,7 +707,7 @@ def _compile_permitted_content_queryset(
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
-                                skip_is_active=False, **skip_flags):
+                                **skip_flags):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -756,7 +756,7 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
     permission = _require_instance(permission, 'permission')
     from trusts.query import user_identity_denied, stored_user_is_inactive
 
-    skipped = _skipped_for_handles(handles, skip_is_active, skip_flags, user)
+    skipped = _skipped_for_handles(handles, skip_flags, user)
     if not handles or user_identity_denied(user):
         return queryset.none()
     if (
@@ -766,16 +766,16 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
         return queryset.none()
     return _compile_permitted_content_queryset(
         queryset, user, permission, content=content, handles=handles,
-        sponsor_handles=handles, skip_is_active=skip_is_active,
+        sponsor_handles=handles, skip_is_active='is_active' in skipped,
         skipped=skipped,
     )
 
 
 def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
-                             skip_is_active=False, **skip_flags):
+                             **skip_flags):
     return filter_by_permitted_content(
         queryset, user, permission, content=content, handles=handles,
-        skip_is_active=skip_is_active, **skip_flags,
+        **skip_flags,
     )
 
 
@@ -1992,13 +1992,13 @@ def _permission_content_type_filters(record, content_identity):
     }
 
 
-def _inquiry_skipped(skip_is_active=False, *, known=None, **flags):
+def _inquiry_skipped(*, known=None, **flags):
     from trusts.user_rules import collect_skipped
 
-    return collect_skipped(skip_is_active, known=known, **flags)
+    return collect_skipped(known=known, **flags)
 
 
-def _registry_skipped(registry, user, skip_is_active, skip_flags):
+def _registry_skipped(registry, user, skip_flags):
     """Parse skip keywords for one registry.
 
     A remaining user is checked against that registry's condition and
@@ -2009,7 +2009,7 @@ def _registry_skipped(registry, user, skip_is_active, skip_flags):
     known = None
     if user is not None and not user_identity_denied(user):
         known = registry._known_skip_names()
-    return _inquiry_skipped(skip_is_active, known=known, **skip_flags)
+    return _inquiry_skipped(known=known, **skip_flags)
 
 
 def _known_skip_names(handles):
@@ -2035,7 +2035,7 @@ def _known_skip_names(handles):
     return frozenset(names)
 
 
-def _skipped_for_handles(handles, skip_is_active, skip_flags, user):
+def _skipped_for_handles(handles, skip_flags, user):
     """Parse skip keywords, then require registered names for a real user.
 
     Anonymous and unauthenticated users are denied before a registry
@@ -2044,9 +2044,9 @@ def _skipped_for_handles(handles, skip_is_active, skip_flags, user):
     from trusts.query import user_identity_denied
 
     if user is None or user_identity_denied(user):
-        return _inquiry_skipped(skip_is_active, **skip_flags)
+        return _inquiry_skipped(**skip_flags)
     return _inquiry_skipped(
-        skip_is_active, known=_known_skip_names(handles), **skip_flags,
+        known=_known_skip_names(handles), **skip_flags,
     )
 
 
@@ -4869,13 +4869,13 @@ class TrustsRegistry(object):
             user_override=self._user_override,
         )
 
-    def permissions_for(self, user, content, *, skip_is_active=False, **skip_flags):
+    def permissions_for(self, user, content, **skip_flags):
         """Distinct permission rows granted to ``user`` on ``content``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         from trusts.query import user_identity_denied
 
-        skipped = _registry_skipped(self, user, skip_is_active, skip_flags)
+        skipped = _registry_skipped(self, user, skip_flags)
         plan = self.plan_for(content, user=user)
         if user_identity_denied(user) or _activity_denied(
             user, plan.user_conditions, skipped,
@@ -4884,18 +4884,18 @@ class TrustsRegistry(object):
                 return ()
             return plan.permission_model._default_manager.none()
         return plan.permissions(
-            user, content, skip_is_active=skip_is_active, skipped=skipped,
+            user, content, skip_is_active='is_active' in skipped,
+            skipped=skipped,
         )
 
-    def has_permission(self, user, content, permission, *,
-                       skip_is_active=False, **skip_flags):
+    def has_permission(self, user, content, permission, **skip_flags):
         """Whether ``permission`` exists in the common plan for this pair."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
         from trusts.query import user_identity_denied
 
-        skipped = _registry_skipped(self, user, skip_is_active, skip_flags)
+        skipped = _registry_skipped(self, user, skip_flags)
         plan = self.plan_for(
             content, user=user, permission=permission,
         )
@@ -4904,12 +4904,11 @@ class TrustsRegistry(object):
         ):
             return False
         return plan.has_permission(
-            user, content, permission, skip_is_active=skip_is_active,
+            user, content, permission, skip_is_active='is_active' in skipped,
             skipped=skipped,
         )
 
-    def filter_authorized(self, queryset, user, permission, *,
-                          skip_is_active=False, **skip_flags):
+    def filter_authorized(self, queryset, user, permission, **skip_flags):
         """Lazy queryset of rows ``user`` holds ``permission`` on.
 
         Consumes ``RelationPlan.content_exists`` through ``filter_content``.
@@ -4922,7 +4921,7 @@ class TrustsRegistry(object):
         permission = _require_instance(permission, 'permission')
         from trusts.query import user_identity_denied
 
-        skipped = _registry_skipped(self, user, skip_is_active, skip_flags)
+        skipped = _registry_skipped(self, user, skip_flags)
         plan = self.plan_for(
             queryset, user=user, permission=permission,
         )
@@ -4931,7 +4930,7 @@ class TrustsRegistry(object):
         ):
             return queryset.none()
         return plan.filter_content(
-            queryset, user, permission, skip_is_active=skip_is_active,
+            queryset, user, permission, skip_is_active='is_active' in skipped,
             skipped=skipped,
         )
 

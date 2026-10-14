@@ -31,7 +31,7 @@ the new one.
 
 | | Old | New |
 | --- | --- | --- |
-| Rows with permitted content under them | `filter_authorized_scopes(queryset, user, permission, *, content, handles=None, skip_is_active=False)` | `filter_by_permitted_content(queryset, user, permission, *, content, handles=None, skip_is_active=False)` |
+| Rows with permitted content under them | `filter_authorized_scopes(queryset, user, permission, *, content, handles=None, **skip_flags)` | `filter_by_permitted_content(queryset, user, permission, *, content, handles=None, **skip_flags)` |
 
 Migration-bot checklist:
 
@@ -57,17 +57,17 @@ the runtime change.
 Migration-bot checklist:
 
 - `.authorized(`, `permissions_for(`, `has_permission(`, and `filter_authorized(`
-- `filter_authorized_scopes(` and its `skip_is_active` keyword
+- `filter_authorized_scopes(` and its `skip_<name>` keywords
 - `.permitted(`, `get_permitted_users(`, and backend inquiry overrides
 - custom reverse/compiler hooks and candidate-manager `is_active` filters
 - permission-result caches, if present, and `trusts_policy_sql`
 
 ## `skip_is_active` (#273)
 
-`allow_inactive_user` and `allow_inactive` are both `skip_is_active`.
-Content, permission, boolean, and user-list inquiries use that keyword for
-the built-in `is_active` condition. A registered user condition uses
-`skip_<name>` on these same calls.
+`allow_inactive_user` and `allow_inactive` are `skip_<name>` on the same
+calls. The built-in `is_active` condition's keyword is `skip_is_active`.
+It is not a separate parameter. Content, permission, boolean, and user-list
+inquiries use that form.
 
 | Old | New |
 | --- | --- |

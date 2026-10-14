@@ -128,22 +128,19 @@ def condition_names(conditions, override=None):
     return frozenset(names)
 
 
-def collect_skipped(skip_is_active=False, *, known=None, **flags):
+def collect_skipped(*, known=None, **flags):
     """Names whose ``skip_<name>=True`` drops that condition.
 
     Each keyword is ``skip_`` plus a registered condition name. The
     built-in ``is_active`` condition is what makes ``skip_is_active``
-    accepted. ``known`` is that name set; a ``skip_*`` keyword outside
-    it raises ``TypeError``. A non-boolean or an unrelated keyword
-    fails before SQL. The default ``skip_is_active=False`` is the
-    signature default and is not treated as a request.
+    accepted. There is no separate ``skip_is_active`` parameter.
+    ``known`` is that name set; a ``skip_*`` keyword outside it raises
+    ``TypeError``. A non-boolean or an unrelated keyword fails before
+    SQL. ``False`` is not a request.
     """
     from trusts.query import require_mode_flag
 
-    require_mode_flag(skip_is_active, 'skip_is_active')
     requested = []
-    if skip_is_active:
-        requested.append('skip_is_active'[len('skip_'):])
     for key, value in flags.items():
         if (
             not key.startswith('skip_')
@@ -156,10 +153,6 @@ def collect_skipped(skip_is_active=False, *, known=None, **flags):
             raise TypeError('Unknown skip keyword %r.' % (key,))
         if value:
             requested.append(suffix)
-    if known is not None:
-        for name in requested:
-            if name not in known:
-                raise TypeError('Unknown skip keyword %r.' % ('skip_%s' % name,))
     return frozenset(requested)
 
 

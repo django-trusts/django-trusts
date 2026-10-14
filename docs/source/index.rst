@@ -483,16 +483,14 @@ the same model.
 .. code-block:: python
 
    def filter_by_permitted_content(
-       queryset, user, permission, *, content, handles=None,
-       skip_is_active=False,
+       queryset, user, permission, *, content, handles=None, **skip_flags,
    ):
        ...
 
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``skip_is_active`` is the keyword for the built-in
-``is_active`` condition, the same option as the other content inquiries.
-Another registered condition uses ``skip_<name>``.
+backends. ``skip_<name>`` drops that registered user condition, the same
+keywords as the other content inquiries.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -574,13 +572,13 @@ Including inactive users
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 To include users who fail a registered user condition, pass that
-condition's keyword-only ``skip_<name>=True``. The built-in ``is_active``
-condition's keyword is ``skip_is_active`` (the default is ``False``).
-The same keywords are used for content, permissions, booleans, and user
-lists. ``skip_is_active=True`` skips the built-in ``is_active`` checks for
-the user, delegate, and sponsor. An unknown ``skip_*`` keyword raises
-``TypeError``. Explicit conditions and candidate-queryset filters still
-apply.
+condition's keyword ``skip_<name>=True``. For the built-in ``is_active``
+condition the keyword is ``skip_is_active``. There is no separate
+parameter. The same keywords are used for content, permissions, booleans,
+and user lists. ``skip_is_active=True`` skips the built-in ``is_active``
+checks for the user, delegate, and sponsor. An unknown ``skip_*`` keyword
+raises ``TypeError``. Explicit conditions and candidate-queryset filters
+still apply.
 For example, inspect a suspended user's grants before reactivating them:
 
 .. code-block:: python

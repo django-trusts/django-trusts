@@ -22,8 +22,7 @@ from trusts.core import (
 _OBJECT_BLIND_BACKENDS = None
 
 
-def compile_permitted_users(content, perm, *, user_queryset=None,
-                            skip_is_active=False, **skip_flags):
+def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     """Lazy user queryset for one saved content object and one permission.
 
     The candidate rows are ``user_queryset`` when given (the optional
@@ -32,11 +31,9 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     that can contribute an exact reverse predicate. The ``is_active``
     check applies inside the Trusts-owned branch only. A custom predicate
     is not wrapped. ``skip_<name>=True`` drops that registered user
-    condition on the Trusts-owned branch. ``skip_is_active`` is the
-    keyword for the ``is_active`` condition and is forwarded only to the
-    Trusts-owned mixin method. The superuser contributor still requires an
-    active superuser. An unsupported object-permission backend raises
-    before SQL.
+    condition. The resulting names are forwarded only to the Trusts-owned
+    mixin method. The superuser contributor still requires an active
+    superuser. An unsupported object-permission backend raises before SQL.
     """
     from django.contrib.auth import get_backends, get_user_model
 
@@ -46,7 +43,6 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     _require_saved_content(content)
     _reject_permission_shape(perm)
     skipped = _inquiry_skipped(
-        skip_is_active,
         known=_known_skip_names(_relationship_implementation_handles()),
         **skip_flags,
     )
@@ -67,7 +63,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
         involved.append(Permission)
     for backend in backends:
         predicate = _backend_predicate(
-            backend, content, perm, skip_is_active=skip_is_active,
+            backend, content, perm, skip_is_active='is_active' in skipped,
             skipped=skipped,
         )
         if predicate is None:
@@ -313,10 +309,10 @@ def _object_blind_backends():
 def _trusts_owned_reverse_hook(backend):
     """True when the reverse hook is the mixin method, not an override.
 
-    ``skip_is_active=True`` is passed only through that Trusts-owned
+    The skipped condition names are passed only through that Trusts-owned
     method. Other hooks are called as
     ``permitted_users_predicate(content, perm)``. Trusts does not require
-    them to accept ``skip_is_active`` and does not raise when they do not.
+    them to accept ``skip_<name>`` and does not raise when they do not.
     """
     from trusts.backends import TrustModelBackendMixin
 
@@ -335,7 +331,7 @@ def _backend_predicate(backend, content, perm, *, skip_is_active=False,
     if _declares_reverse_hook(backend):
         if _trusts_owned_reverse_hook(backend):
             return backend.permitted_users_predicate(
-                content, perm, skip_is_active=skip_is_active, skipped=skipped,
+                content, perm, skipped=skipped,
             )
         return backend.permitted_users_predicate(content, perm)
     if type(backend) in _object_blind_backends():

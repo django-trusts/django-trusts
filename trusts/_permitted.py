@@ -311,7 +311,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
 
 
 def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
-                       skip_is_active=False, **skip_flags):
+                       **skip_flags):
     """Lazy filtered queryset of rows ``user`` may access.
 
     ``handles`` selects the backends. Core passes relationship-family
@@ -329,7 +329,7 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     )
     from trusts.core import _handles_enforce_is_active, _skipped_for_handles
 
-    skipped = _skipped_for_handles(handles, skip_is_active, skip_flags, user)
+    skipped = _skipped_for_handles(handles, skip_flags, user)
     enforce = _handles_enforce_is_active(handles, skipped)
     if not is_active_principal(
         user,
@@ -345,7 +345,7 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
         conditions,
         _permitted_binding(model, normalized),
         api='permitted',
-        skip_is_active=skip_is_active,
+        skip_is_active='is_active' in skipped,
         skipped=skipped,
     )
     if granted_q is None:
