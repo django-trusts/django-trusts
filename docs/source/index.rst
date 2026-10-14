@@ -561,8 +561,7 @@ and overrides are compiled into permission SQL.
 Every user-supplied rule must resolve its user attributes to concrete database
 fields. Registration rejects a Python property such as Django's
 ``is_authenticated`` or ``is_anonymous``, even when the property would return
-a constant. There is no instance-evaluation exception: ``check_instance`` is
-outside this contract and tracked separately in issue #313.
+a constant. There is no instance-evaluation exception in this contract.
 
 Configure conditions on ``backend.registry`` in ``AppConfig.ready()``.
 For example, replace the activity condition:
