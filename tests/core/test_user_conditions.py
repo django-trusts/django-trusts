@@ -64,10 +64,6 @@ class UserConditionRegistrationTest(TransactionTestCase):
             Grant.objects.create(note=note, user=inactive, permission=read)
 
             registry = TrustsRegistry()
-            grant = Ref(Grant)
-            registry.register(
-                content=grant.note, user=grant.user, permission=grant.permission,
-            )
             registry.register_user_condition(
                 'staff', lambda u: u.is_active & u.is_superuser,
             )
@@ -92,6 +88,10 @@ class UserConditionRegistrationTest(TransactionTestCase):
                 registry.register_user_condition(
                     'where', lambda u: u.is_active, on='group',
                 )
+            grant = Ref(Grant)
+            registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
 
             active_sql = str(registry.permissions_for(alice, note).query)
             self.assertIn('is_active', active_sql)
@@ -105,9 +105,12 @@ class UserConditionRegistrationTest(TransactionTestCase):
             self.assertNotIn('is_superuser', str(skipped.query))
             self.assertNotIn('is_active', str(skipped.query))
 
-            registry.register_user_condition('is_active', None)
-            registry.register_user_condition('staff', None)
-            allowed = registry.permissions_for(inactive, note)
+            open_registry = TrustsRegistry()
+            open_registry.register_user_condition('is_active', None)
+            open_registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            allowed = open_registry.permissions_for(inactive, note)
             self.assertEqual(
                 set(allowed.values_list('pk', flat=True)), {read.pk},
             )
@@ -177,14 +180,6 @@ class UserOverrideTest(TransactionTestCase):
             Link.objects.create(note=note, delegate=delegate, sponsor=superuser)
 
             registry = TrustsRegistry()
-            grant = Ref(Grant)
-            registry.register(
-                content=grant.note, user=grant.user, permission=grant.permission,
-            )
-            link = Ref(Link)
-            registry.register_delegation(
-                content=link.note, delegate=link.delegate, sponsor=link.sponsor,
-            )
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_override(
                     'superuser', lambda u: u.is_superuser, on='sponsor',
@@ -206,6 +201,21 @@ class UserOverrideTest(TransactionTestCase):
             registry.set_user_override(
                 'superuser',
                 lambda u: u.is_active & u.is_superuser,
+            )
+            registry.set_user_override('superuser', None)
+            with self.assertRaises(TrustsConfigurationError):
+                registry.set_user_override('superuser', None)
+            registry.set_user_override(
+                'superuser',
+                lambda u: u.is_active & u.is_superuser,
+            )
+            grant = Ref(Grant)
+            registry.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            link = Ref(Link)
+            registry.register_delegation(
+                content=link.note, delegate=link.delegate, sponsor=link.sponsor,
             )
 
             allowed = registry.permissions_for(superuser, note)
@@ -255,11 +265,18 @@ class UserOverrideTest(TransactionTestCase):
             self.assertTrue(holds(delegate))
             Grant.objects.filter(user=superuser).delete()
 
-            registry.set_user_override('superuser', None)
-            self.assertFalse(registry.has_permission(superuser, note, read))
-            self.assertTrue(registry.has_permission(holder, note, read))
+            plain = TrustsRegistry()
+            plain.register(
+                content=grant.note, user=grant.user, permission=grant.permission,
+            )
+            plain.register_delegation(
+                content=link.note, delegate=link.delegate, sponsor=link.sponsor,
+            )
+            self.assertFalse(plain.has_permission(superuser, note, read))
+            self.assertTrue(plain.has_permission(holder, note, read))
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_override('superuser', None)
+            self.assertEqual(registry._user_override.name, 'superuser')
             registry.freeze()
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_override(
@@ -322,29 +339,34 @@ class UserConditionTargetTest(TransactionTestCase):
             for user in (staff, plain, superuser, inactive):
                 TargetGrant.objects.create(note=note, user=user, permission=read)
 
-            registry = TrustsRegistry()
             grant = Ref(TargetGrant)
-            registry.register(
-                content=grant.note, user=grant.user, permission=grant.permission,
-            )
             link = Ref(TargetLink)
-            registry.register_delegation(
-                content=link.note, delegate=link.delegate, sponsor=link.sponsor,
-            )
-            handle = BackendHandle(
-                'user-target', registry, PlanQueryCompiler(),
-            )
 
-            def holds(user):
-                predicate = granted((handle,), note, user, read)
+            def open_registry(configure):
+                registry = TrustsRegistry()
+                configure(registry)
+                registry.register(
+                    content=grant.note,
+                    user=grant.user,
+                    permission=grant.permission,
+                )
+                registry.register_delegation(
+                    content=link.note,
+                    delegate=link.delegate,
+                    sponsor=link.sponsor,
+                )
+                return registry
+
+            def holds(handle, user, **skip):
+                predicate = granted((handle,), note, user, read, **skip)
                 if predicate is None:
                     return False
                 return bind_once(TargetNote.objects.filter(
                     pk=note.pk,
                 ).filter(predicate)).exists()
 
-            def sql_for(user):
-                predicate = granted((handle,), note, user, read)
+            def sql_for(handle, user, **skip):
+                predicate = granted((handle,), note, user, read, **skip)
                 return str(bind_once(TargetNote.objects.filter(
                     pk=note.pk,
                 ).filter(predicate)).query)
@@ -352,89 +374,317 @@ class UserConditionTargetTest(TransactionTestCase):
             staff_delegate = User.objects.create_user('tgt-staff-del', password='x')
             staff_delegate.is_staff = True
             staff_delegate.save(update_fields=['is_staff'])
-            registry.register_user_condition(
-                'staff', lambda u: u.is_staff, on='user',
+            staff_registry = open_registry(
+                lambda registry: registry.register_user_condition(
+                    'staff', lambda u: u.is_staff, on='user',
+                ),
+            )
+            staff_handle = BackendHandle(
+                'user-target-staff', staff_registry, PlanQueryCompiler(),
             )
             TargetLink.objects.create(
                 note=note, delegate=staff_delegate, sponsor=plain,
             )
-            self.assertTrue(holds(staff))
-            self.assertFalse(holds(plain))
-            self.assertTrue(holds(staff_delegate))
-            self.assertFalse(holds(actor))
-            delegated_sql = sql_for(staff_delegate)
+            self.assertTrue(holds(staff_handle, staff))
+            self.assertFalse(holds(staff_handle, plain))
+            self.assertTrue(holds(staff_handle, staff_delegate))
+            self.assertFalse(holds(staff_handle, actor))
+            delegated_sql = sql_for(staff_handle, staff_delegate)
             self.assertIn('is_staff', delegated_sql)
             self.assertNotIn('sponsor__is_staff', delegated_sql)
             self.assertIn('delegate', delegated_sql)
-            own = str(registry.permissions_for(staff, note).query)
+            own = str(staff_registry.permissions_for(staff, note).query)
             self.assertIn('is_staff', own)
 
-            registry.register_user_condition('staff', None)
-            registry.register_user_condition(
-                'sponsor_not_super', lambda u: ~u.is_superuser, on='sponsor',
+            sponsor_registry = open_registry(
+                lambda registry: registry.register_user_condition(
+                    'sponsor_not_super', lambda u: ~u.is_superuser, on='sponsor',
+                ),
+            )
+            sponsor_handle = BackendHandle(
+                'user-target-sponsor', sponsor_registry, PlanQueryCompiler(),
             )
             TargetLink.objects.all().delete()
             TargetLink.objects.create(
                 note=note, delegate=actor, sponsor=superuser,
             )
-            self.assertFalse(holds(actor))
-            sponsor_sql = sql_for(actor)
+            self.assertFalse(holds(sponsor_handle, actor))
+            sponsor_sql = sql_for(sponsor_handle, actor)
             self.assertIn('is_superuser', sponsor_sql)
             self.assertNotIn('delegate__is_superuser', sponsor_sql)
             TargetLink.objects.all().delete()
             TargetLink.objects.create(
                 note=note, delegate=actor, sponsor=plain,
             )
-            self.assertTrue(holds(actor))
-            self.assertTrue(holds(superuser))
-            checked = str(registry.permissions_for(superuser, note).query)
+            self.assertTrue(holds(sponsor_handle, actor))
+            self.assertTrue(holds(sponsor_handle, superuser))
+            checked = str(sponsor_registry.permissions_for(superuser, note).query)
             self.assertNotIn('is_superuser', checked)
 
-            registry.register_user_condition('sponsor_not_super', None)
-            registry.register_user_condition(
-                'is_active', lambda u: u.is_active, on='user',
+            user_active = open_registry(
+                lambda registry: registry.register_user_condition(
+                    'is_active', lambda u: u.is_active, on='user',
+                ),
+            )
+            user_handle = BackendHandle(
+                'user-target-active-user', user_active, PlanQueryCompiler(),
             )
             TargetLink.objects.all().delete()
             TargetLink.objects.create(
                 note=note, delegate=actor, sponsor=inactive,
             )
-            self.assertTrue(holds(actor))
-            self.assertFalse(holds(inactive))
-            registry.register_user_condition(
-                'is_active', lambda u: u.is_active, on='sponsor',
+            self.assertTrue(holds(user_handle, actor))
+            self.assertFalse(holds(user_handle, inactive))
+            sponsor_active = open_registry(
+                lambda registry: registry.register_user_condition(
+                    'is_active', lambda u: u.is_active, on='sponsor',
+                ),
             )
-            self.assertTrue(holds(inactive))
-            self.assertFalse(holds(actor))
-            registry.register_user_condition(
-                'is_active', lambda u: u.is_active, on='*',
+            sponsor_active_handle = BackendHandle(
+                'user-target-active-sponsor', sponsor_active, PlanQueryCompiler(),
             )
-            self.assertFalse(holds(actor))
-            self.assertFalse(holds(inactive))
-
-            def holds_skipping(user):
-                predicate = granted(
-                    (handle,), note, user, read, skip_is_active=True,
-                )
-                if predicate is None:
-                    return False
-                return bind_once(TargetNote.objects.filter(
-                    pk=note.pk,
-                ).filter(predicate)).exists()
-
-            self.assertTrue(holds_skipping(actor))
-            self.assertTrue(holds_skipping(inactive))
-            skipped_sql = str(bind_once(TargetNote.objects.filter(
-                pk=note.pk,
-            ).filter(granted(
-                (handle,), note, actor, read, skip_is_active=True,
-            ))).query)
+            self.assertTrue(holds(sponsor_active_handle, inactive))
+            self.assertFalse(holds(sponsor_active_handle, actor))
+            both_active = open_registry(
+                lambda registry: registry.register_user_condition(
+                    'is_active', lambda u: u.is_active, on='*',
+                ),
+            )
+            both_handle = BackendHandle(
+                'user-target-active-both', both_active, PlanQueryCompiler(),
+            )
+            self.assertFalse(holds(both_handle, actor))
+            self.assertFalse(holds(both_handle, inactive))
+            self.assertTrue(holds(both_handle, actor, skip_is_active=True))
+            self.assertTrue(holds(both_handle, inactive, skip_is_active=True))
+            skipped_sql = sql_for(both_handle, actor, skip_is_active=True)
             self.assertNotIn('is_active', skipped_sql)
 
-            registry.register_user_condition('is_active', None)
-            self.assertTrue(holds(inactive))
-            self.assertTrue(holds(actor))
+            removed = open_registry(
+                lambda registry: registry.register_user_condition('is_active', None),
+            )
+            removed_handle = BackendHandle(
+                'user-target-removed', removed, PlanQueryCompiler(),
+            )
+            self.assertTrue(holds(removed_handle, inactive))
+            self.assertTrue(holds(removed_handle, actor))
         finally:
             with connection.schema_editor() as editor:
                 editor.delete_model(TargetLink)
                 editor.delete_model(TargetGrant)
                 editor.delete_model(TargetNote)
+
+
+class UserRuleOrderTest(TestCase):
+    def test_rules_after_registration_raise_and_leave_rules_unchanged(self):
+        class OrderNote(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class OrderGrant(models.Model):
+            note = models.ForeignKey(OrderNote, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class OrderLink(models.Model):
+            note = models.ForeignKey(OrderNote, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        registry.register_user_condition('staff', lambda u: u.is_staff)
+        grant = Ref(OrderGrant)
+        registry.register(
+            content=grant.note, user=grant.user, permission=grant.permission,
+        )
+        names = tuple(rule.name for rule in registry.user_conditions())
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            registry.register_user_condition(
+                'extra', lambda u: u.is_superuser,
+            )
+        self.assertIn('before', str(ctx.exception))
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register_user_condition('staff', None)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.set_user_override(
+                'superuser', lambda u: u.is_superuser,
+            )
+        self.assertEqual(
+            tuple(rule.name for rule in registry.user_conditions()), names,
+        )
+        self.assertIsNone(registry._user_override)
+        self.assertEqual(len(registry.records), 1)
+
+        delegation_only = TrustsRegistry()
+        link = Ref(OrderLink)
+        delegation_only.register_delegation(
+            content=link.note, delegate=link.delegate, sponsor=link.sponsor,
+        )
+        with self.assertRaises(TrustsConfigurationError):
+            delegation_only.register_user_condition(
+                'staff', lambda u: u.is_staff,
+            )
+        with self.assertRaises(TrustsConfigurationError):
+            delegation_only.set_user_override(
+                'superuser', lambda u: u.is_superuser,
+            )
+        self.assertIsNone(delegation_only._user_conditions)
+        self.assertIsNone(delegation_only._user_override)
+        self.assertEqual(len(delegation_only.delegations), 1)
+
+    def test_failed_register_does_not_mutate(self):
+        class FitNote(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class OtherNote(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class BarePrincipal(models.Model):
+            label = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class FitGrant(models.Model):
+            note = models.ForeignKey(FitNote, on_delete=models.CASCADE)
+            other = models.ForeignKey(OtherNote, on_delete=models.CASCADE)
+            user = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+            bare = models.ForeignKey(
+                BarePrincipal, related_name='+', on_delete=models.CASCADE,
+            )
+            permission = models.ForeignKey(
+                Permission, related_name='+', on_delete=models.CASCADE,
+            )
+            other_permission = models.ForeignKey(
+                Permission, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class BareGrant(models.Model):
+            note = models.ForeignKey(FitNote, on_delete=models.CASCADE)
+            user = models.ForeignKey(BarePrincipal, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class FitLink(models.Model):
+            note = models.ForeignKey(FitNote, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                'auth.User', related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class BareLink(models.Model):
+            note = models.ForeignKey(FitNote, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                BarePrincipal, related_name='+', on_delete=models.CASCADE,
+            )
+            sponsor = models.ForeignKey(
+                BarePrincipal, related_name='+', on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = TrustsRegistry()
+        registry.register_user_condition(
+            'superuser', lambda u: u.is_superuser,
+        )
+        fit = Ref(FitGrant)
+        registry.register(
+            content=fit.note, user=fit.user, permission=fit.permission,
+        )
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register(
+                content=fit.other, user=fit.bare, permission=fit.other_permission,
+            )
+        self.assertEqual(len(registry._order), 1)
+        self.assertEqual(list(registry._by_root), [FitGrant])
+        self.assertEqual(len(registry._by_root[FitGrant]), 1)
+        self.assertEqual(registry._delegation_order, [])
+        self.assertEqual(registry._delegations_by_root, {})
+
+        fresh = TrustsRegistry()
+        fresh.register_user_condition('superuser', lambda u: u.is_superuser)
+        bare = Ref(BareGrant)
+        with self.assertRaises(TrustsConfigurationError):
+            fresh.register(
+                content=bare.note, user=bare.user, permission=bare.permission,
+            )
+        self.assertEqual(fresh._order, [])
+        self.assertEqual(fresh._by_root, {})
+
+        override_only = TrustsRegistry()
+        override_only.set_user_override(
+            'superuser', lambda u: u.is_superuser,
+        )
+        with self.assertRaises(TrustsConfigurationError):
+            override_only.register(
+                content=bare.note, user=bare.user, permission=bare.permission,
+            )
+        self.assertEqual(override_only._order, [])
+        self.assertEqual(override_only._by_root, {})
+        self.assertEqual(override_only._user_override.name, 'superuser')
+
+        delegated = TrustsRegistry()
+        delegated.register_user_condition(
+            'staff', lambda u: u.is_staff, on='sponsor',
+        )
+        fit_link = Ref(FitLink)
+        delegated.register_delegation(
+            content=fit_link.note,
+            delegate=fit_link.delegate,
+            sponsor=fit_link.sponsor,
+        )
+        bare_link = Ref(BareLink)
+        with self.assertRaises(TrustsConfigurationError):
+            delegated.register_delegation(
+                content=bare_link.note,
+                delegate=bare_link.delegate,
+                sponsor=bare_link.sponsor,
+            )
+        self.assertEqual(len(delegated._delegation_order), 1)
+        self.assertEqual(list(delegated._delegations_by_root), [FitLink])
+        self.assertNotIn(BareLink, delegated._delegations_by_root)
+        self.assertEqual(delegated._order, [])
+
+        empty_delegation = TrustsRegistry()
+        empty_delegation.register_user_condition(
+            'staff', lambda u: u.is_staff, on='sponsor',
+        )
+        with self.assertRaises(TrustsConfigurationError):
+            empty_delegation.register_delegation(
+                content=bare_link.note,
+                delegate=bare_link.delegate,
+                sponsor=bare_link.sponsor,
+            )
+        self.assertEqual(empty_delegation._delegation_order, [])
+        self.assertEqual(empty_delegation._delegations_by_root, {})

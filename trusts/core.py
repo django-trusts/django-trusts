@@ -4302,10 +4302,13 @@ class TrustsRegistry(object):
     def register_user_condition(self, name, expr, on='*'):
         """Register, replace, or remove one named user condition.
 
-        The same name replaces the previous expression. ``None`` removes
-        that name and no other. ``on`` is ``*`` (the default), ``user``,
-        ``sponsor``, or a non-empty tuple of those two. The lambda is
-        walked once into concrete boolean fields, ``&``, and ``~``.
+        Call this before ``register()`` or ``register_delegation()``.
+        Either call after a registration raises
+        ``TrustsConfigurationError``. The same name replaces the previous
+        expression. ``None`` removes that name and no other. ``on`` is
+        ``*`` (the default), ``user``, ``sponsor``, or a non-empty tuple
+        of those two. The lambda is walked once into concrete boolean
+        fields, ``&``, and ``~``.
         """
         from trusts.user_rules import BUILTIN_USER_CONDITIONS, normalize_on
 
@@ -4313,6 +4316,7 @@ class TrustsRegistry(object):
             raise TrustsConfigurationError(
                 'Cannot register a user condition on a frozen TrustsRegistry.'
             )
+        self._reject_rules_after_registration()
         if not isinstance(name, str) or not name.isidentifier():
             raise TrustsConfigurationError(
                 'User condition name must be an identifier, not %r.' % (name,)
@@ -4331,7 +4335,6 @@ class TrustsRegistry(object):
         from trusts.user_rules import (
             UserCondition,
             assert_concrete_booleans,
-            condition_targets,
             walk_user_lambda,
         )
         from django.contrib.auth import get_user_model
@@ -4344,15 +4347,7 @@ class TrustsRegistry(object):
             del self._user_conditions[name]
             return None
         walked = walk_user_lambda(expr)
-        models = self._models_for_user_condition(condition_targets(target))
-        if not models and 'user' in condition_targets(target):
-            models = (get_user_model(),)
-        if not models:
-            raise TrustsConfigurationError(
-                'Register a delegation before a sponsor-only user condition.'
-            )
-        for model in models:
-            assert_concrete_booleans(model, walked, name)
+        assert_concrete_booleans(get_user_model(), walked, name)
         self._user_conditions[name] = UserCondition(name, walked, target)
         return self._user_conditions[name]
 
@@ -4361,35 +4356,32 @@ class TrustsRegistry(object):
             return
         self._user_conditions = {rule.name: rule for rule in builtin}
 
-    def _models_for_user_condition(self, targets):
-        found = []
-        seen = set()
+    def _reject_rules_after_registration(self):
+        if self._order or self._delegation_order:
+            raise TrustsConfigurationError(
+                'Set user conditions and the user override before '
+                'register() or register_delegation().'
+            )
 
-        def add(model):
-            concrete = model._meta.concrete_model
-            if concrete in seen:
-                return
-            seen.add(concrete)
-            found.append(concrete)
+    def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
+        """Fail before install when the fixed rules do not fit these models.
 
-        if 'user' in targets:
-            for record in self._order:
-                add(record.user_model)
-            for record in self._delegation_order:
-                add(record.delegate_model)
-        if 'sponsor' in targets:
-            for record in self._delegation_order:
-                add(record.sponsor_model)
-        return found
+        The unmodified built-in ``is_active`` comparison is omitted when a
+        model has no such column. Every other condition, and the override
+        on the checked user or delegate, must be a concrete boolean.
+        """
+        from trusts.user_rules import (
+            BUILTIN_USER_CONDITIONS,
+            FieldRef,
+            assert_concrete_booleans,
+            condition_targets,
+        )
 
-    def _recheck_user_conditions(self):
-        if self._user_conditions is None:
-            return
-        from trusts.user_rules import assert_concrete_booleans, condition_targets
-
-        from trusts.user_rules import FieldRef
-
-        for rule in self._user_conditions.values():
+        rules = (
+            BUILTIN_USER_CONDITIONS if self._user_conditions is None
+            else tuple(self._user_conditions.values())
+        )
+        for rule in rules:
             if (
                 rule.name == 'is_active'
                 and rule.on == '*'
@@ -4397,17 +4389,31 @@ class TrustsRegistry(object):
                 and rule.expr.name == 'is_active'
             ):
                 continue
-            for model in self._models_for_user_condition(
-                condition_targets(rule.on),
-            ):
-                assert_concrete_booleans(model, rule.expr, rule.name)
+            targets = condition_targets(rule.on)
+            models = []
+            if user_model is not None and 'user' in targets:
+                models.append(user_model)
+            if sponsor_model is not None and 'sponsor' in targets:
+                models.append(sponsor_model)
+            for model in models:
+                assert_concrete_booleans(
+                    model._meta.concrete_model, rule.expr, rule.name,
+                )
+        slot = self._user_override
+        if slot is not None and user_model is not None:
+            assert_concrete_booleans(
+                user_model._meta.concrete_model, slot.expr, slot.name,
+            )
 
     def set_user_override(self, name, expr, on='user'):
         """Store the one checked-user override, or clear it with ``None``.
 
-        A new name and expression replace the previous slot. ``None``
-        must name the current override. ``on="sponsor"`` and ``on="*"``
-        raise. Sponsor authority is unchanged.
+        Call this before ``register()`` or ``register_delegation()``.
+        Either call after a registration raises
+        ``TrustsConfigurationError``. A new name and expression replace
+        the previous slot. ``None`` must name the current override.
+        ``on="sponsor"`` and ``on="*"`` raise. Sponsor authority is
+        unchanged.
         """
         from trusts.user_rules import (
             UserCondition,
@@ -4421,6 +4427,7 @@ class TrustsRegistry(object):
             raise TrustsConfigurationError(
                 'Cannot set a user override on a frozen TrustsRegistry.'
             )
+        self._reject_rules_after_registration()
         if not isinstance(name, str) or not name.isidentifier():
             raise TrustsConfigurationError(
                 'User override name must be an identifier, not %r.' % (name,)
@@ -4435,22 +4442,9 @@ class TrustsRegistry(object):
             self._user_override = None
             return None
         walked = walk_user_lambda(expr)
-        models = self._models_for_user_condition(frozenset(('user',)))
-        if not models:
-            models = (get_user_model(),)
-        for model in models:
-            assert_concrete_booleans(model, walked, name)
+        assert_concrete_booleans(get_user_model(), walked, name)
         self._user_override = UserCondition(name, walked, 'user')
         return self._user_override
-
-    def _recheck_user_override(self):
-        slot = self._user_override
-        if slot is None:
-            return
-        from trusts.user_rules import assert_concrete_booleans
-
-        for model in self._models_for_user_condition(frozenset(('user',))):
-            assert_concrete_booleans(model, slot.expr, slot.name)
 
     def freeze(self):
         """Seal relation and condition registration on this instance."""
@@ -4586,12 +4580,15 @@ class TrustsRegistry(object):
                             record,
                         )
                     )
+        self._assert_rules_for_registration(
+            user_model=delegate_model,
+            sponsor_model=sponsor_model,
+        )
+        if existing_rows:
             existing_rows.append(record)
         else:
             self._delegations_by_root[root] = [record]
         self._delegation_order.append(record)
-        self._recheck_user_conditions()
-        self._recheck_user_override()
         return record
 
     def register(self, *, content, user, permission=None, group=None,
@@ -4731,12 +4728,12 @@ class TrustsRegistry(object):
                             record,
                         )
                     )
+        self._assert_rules_for_registration(user_model=user_model)
+        if existing_rows:
             existing_rows.append(record)
         else:
             self._by_root[root] = [record]
         self._order.append(record)
-        self._recheck_user_conditions()
-        self._recheck_user_override()
         return record
 
     def _records_for(self, content_model, user_model=None, permission_model=None):
