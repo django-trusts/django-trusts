@@ -221,6 +221,11 @@ not be presented as though the default SQL had run. Reverse inquiries and
 sponsor checks must have defined equivalents or fail closed for unsupported
 declarations.
 
+Each inquiry entry must show the grouped user-rule expression and each rule's
+`check_instance` setting above `sql:`. Preserve AND/OR grouping and identify
+which terms evaluate on an instance or inside SQL. One entry-wide boolean is
+insufficient if the participating declarations use different sources.
+
 ### Delegation boundaries
 
 Audit the following boundaries:

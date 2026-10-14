@@ -169,6 +169,20 @@ Permission inquiries and named filters
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. Named filters are listed in ``add_named_filter()`` order.
 
+User rules
+~~~~~~~~~~
+
+Above ``sql:``, each inquiry entry records its user-rule expression with
+parentheses preserved. Each rule records ``check_instance`` so a reviewer
+can see which checks read the supplied user and which run in SQL. Skipped
+rules do not participate in the expression. A skipped condition contributes
+no restriction; a skipped override contributes no grant.
+
+With database evaluation throughout, the expression is evaluated in the SQL
+statement. With instance evaluation, the recorded expression shows how
+instance results combine with the SQL result. It does not imply that an
+instance override may bypass required validation or other user conditions.
+
 Permitted content
 ~~~~~~~~~~~~~~~~~
 

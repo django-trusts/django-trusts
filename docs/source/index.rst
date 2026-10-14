@@ -593,11 +593,19 @@ permission grant:
 
    registry.set_user_override(
        "superuser",
-       lambda u: u.is_active & u.is_superuser,
+       lambda u: (
+           u.is_authenticated
+           & ~u.is_anonymous
+           & u.is_active
+           & u.is_superuser
+       ),
    )
 
-User conditions still apply. Use ``skip_superuser=True`` to inspect a
-superuser's ordinary grants:
+User conditions still apply. Skipping a condition does not change the
+override's own requirements. A sponsor cannot delegate authority supplied
+by an override; the sponsor must hold ordinary grants.
+
+Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
 
 .. code-block:: python
 
@@ -610,6 +618,10 @@ Pass ``None`` to remove the override:
 .. code-block:: python
 
    registry.set_user_override("superuser", None)
+
+Django's ``PermissionsMixin.has_perm()`` allows an active superuser before
+calling backends. Trusts' own inquiries grant through a superuser override
+only when it is registered.
 
 Protect a view with the Trusts-only primary-key guard:
 
@@ -758,6 +770,10 @@ the same SQL and parameter values ``filter_by_permitted_content`` runs.
 The locked ``get_permitted_users`` statement is that backend's reverse
 predicate. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
+
+Each inquiry entry shows the grouped user-rule expression and whether each
+rule checks the supplied instance or the database above ``sql:``.
+Database rules are included in the SQL statement.
 
 ``content.get_permitted_users(perm)`` and
 ``User.objects.permitted(content, perm)`` call the same compiler, so the
