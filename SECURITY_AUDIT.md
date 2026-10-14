@@ -154,8 +154,17 @@ approval, tenant alignment, revocation, or expiry. The compiler stores
 normalized expression data and retains no callable. A two-argument builder on
 an ordinary registration, or any unsupported arity, is a configuration error.
 
-For actor `u`, content `c`, and permission `p`, every projection compiles the
-same shape:
+Validate the inquiry before evaluating an override. Permission format and
+type, registry configuration, selected names and skip options, and supported
+model/query shapes must pass semantic checks first. Invalid declarations or
+inputs raise even for a user whose override would succeed. A well-formed
+permission for another content type remains a denial on inquiry paths that
+return false/empty for that case; an override cannot turn it into a grant.
+Some content identity checks require SQL. Keep those checks outside the
+override OR rather than claiming that every mismatch can be found before SQL.
+
+For a valid inquiry by actor `u`, content `c`, and permission `p`, every
+projection compiles the same authorization shape:
 
 ```text
 user_conditions(u, skip_options)
@@ -178,6 +187,41 @@ registered condition, optional override, and permitted skip option. An override
 can replace the ordinary grant proof; include any requirements that must remain
 effective when other user conditions are skipped in the override itself.
 The sponsor still requires ordinary authority.
+
+The expression describes authorization after semantic validation. It does not
+authorize an early return that skips validation, content identity, or required
+candidate existence. Implementations may add fail-closed checks for unsupported
+or inconsistent inputs without changing the introductory examples.
+
+### Evaluating user rules on an instance
+
+User rules default to database evaluation (`check_instance=False`). Their
+expressions remain part of the compiled permission statement.
+`check_instance=True` instead reads the supplied user's attributes. This is an
+explicit choice to trust that object's values; the normal request-time user
+snapshot is acceptable.
+
+The security concern is which checks an early result omits. A false instance
+condition may avoid the grant query after mandatory validation. A true instance
+override replaces only the ordinary grant proof. It must not return success
+while another required user condition still needs database evaluation, or
+bypass permission/content identity, configuration checks, or candidate
+existence. Audit the order of mixed instance/database rules and prove those
+checks still run. Skipping one named rule does not waive these prerequisites.
+
+An override must also carry its own restrictions where they must survive
+skipping another condition. For example, an override requiring authentication,
+activity, and superuser status keeps all three requirements even when a caller
+skips the separate activity or authentication condition. Its own expression
+is not rewritten by those skip options.
+
+Include both instance and database paths in the policy audit. The lockfile must
+expose the SQL and values that execute; a Python decision or omitted query must
+not be presented as though the default SQL had run. Reverse inquiries and
+sponsor checks must have defined equivalents or fail closed for unsupported
+declarations.
+
+### Delegation boundaries
 
 Audit the following boundaries:
 

@@ -551,7 +551,8 @@ User conditions and overrides
 User conditions and overrides apply to all permission inquiries through
 the registry. The default conditions, ``is_active``, ``is_authenticated``,
 and ``is_registered``, require an active, authenticated user with a saved
-user row. No user override is registered by default.
+user row. No user override is registered by default. Conditions and
+overrides are compiled into permission SQL.
 
 Configure conditions on ``backend.registry`` in ``AppConfig.ready()``.
 For example, replace the activity condition:
@@ -562,12 +563,10 @@ For example, replace the activity condition:
    registry.register_user_condition(
        "is_active",
        lambda u: u.is_active,
-       check_instance=True,
    )
 
-``check_instance=True`` reads attributes from the supplied user.
-The default, ``False``, checks the database row. Registering the same name
-replaces that condition. Pass ``None`` to remove it:
+Registering the same name replaces that condition. Pass ``None`` to
+remove it:
 
 .. code-block:: python
 
@@ -595,7 +594,6 @@ permission grant:
    registry.set_user_override(
        "superuser",
        lambda u: u.is_active & u.is_superuser,
-       check_instance=True,
    )
 
 User conditions still apply. Use ``skip_superuser=True`` to inspect a
