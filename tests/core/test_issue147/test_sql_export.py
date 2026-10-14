@@ -403,6 +403,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             '$permission.id',
             '$content.app_label="documents"',
             '$content.model="document"',
+            'user.is_active=True',
         ])
         named = content['named_filters'][0]
         self.assertEqual(list(named), ['id', 'params', 'sql'])
@@ -1065,6 +1066,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
             '$permission.id',
             '$content.app_label="documents"',
             '$content.model="document"',
+            'user.is_active=True',
         ])
 
         account_handle = _handle('documents.backends.AccountBackend')
@@ -1089,6 +1091,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
             '$permission.id',
             '$content.app_label="documents"',
             '$content.model="document"',
+            'user.is_active=True',
         ])
 
     def test_custom_permission_pk_renders_the_resolved_target(self):

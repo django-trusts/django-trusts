@@ -409,6 +409,15 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertTrue(
                 account_registry.has_permission(account, note, read)
             )
+            account_sql = str(account_registry.permissions_for(account, note).query)
+            self.assertNotIn('is_active', account_sql)
+            active_sql = str(registry.permissions_for(alice, note).query)
+            self.assertIn('"is_active"', active_sql)
+            skipped = registry.permissions_for(
+                inactive, note, skip_is_active=True,
+            )
+            self.assertEqual(_pks(skipped), {read.pk})
+            self.assertNotIn('is_active', str(skipped.query))
 
             scope_registry = TrustsRegistry()
             scope_grant = Ref(FolderGrant)

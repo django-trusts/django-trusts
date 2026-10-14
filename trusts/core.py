@@ -119,12 +119,16 @@ class PlanQueryCompiler(object):
             or getattr(plan, 'delegations', None)
         )
 
-    def complete_exists(self, plan, candidates, user, permission):
+    def complete_exists(self, plan, candidates, user, permission, *,
+                        skip_is_active=False):
         if not plan.records:
             return None
-        return plan.content_exists(user, permission)
+        return plan.content_exists(
+            user, permission, skip_is_active=skip_is_active,
+        )
 
-    def group_exists(self, plan, candidates, user, permission):
+    def group_exists(self, plan, candidates, user, permission, *,
+                     skip_is_active=False):
         grouped = tuple(
             record for record in plan.records
             if getattr(record, 'via_group', False)
@@ -135,7 +139,7 @@ class PlanQueryCompiler(object):
             records=grouped,
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
-        ).content_exists(user, permission)
+        ).content_exists(user, permission, skip_is_active=skip_is_active)
 
 
 def compiler_for_class(cls):
@@ -219,6 +223,21 @@ def _compiler_applies(compiler, plan):
     return bool(getattr(plan, 'records', None))
 
 
+def _plan_exists(compiler, fn, plan, candidates, user, permission, *,
+                 skip_is_active):
+    """Call a plan compiler, passing ``skip_is_active`` only to the default.
+
+    Custom compilers keep the four-argument protocol. The default plan
+    compiler folds the built-in activity comparison into the grant SQL.
+    """
+    if isinstance(compiler, PlanQueryCompiler):
+        return fn(
+            plan, candidates, user, permission,
+            skip_is_active=skip_is_active,
+        )
+    return fn(plan, candidates, user, permission)
+
+
 def _relationship_handles(handles):
     from trusts.apps import _relationship_family_handles
 
@@ -248,7 +267,10 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
             fn = handle.compiler.complete_exists
         else:
             fn = handle.compiler.group_exists
-        part = _as_q(fn(plan, candidates, user, permission))
+        part = _as_q(_plan_exists(
+            handle.compiler, fn, plan, candidates, user, permission,
+            skip_is_active=skip_is_active,
+        ))
         if part is None:
             continue
         parts.append(part)
@@ -383,7 +405,7 @@ def _prefix_partial_suffix(record, lookup):
 
 
 def _exact_prefix_exists(record, lookup, target_attname, user, permission,
-                        content_identity):
+                        content_identity, *, skip_is_active=False):
     """Grant row whose stored prefix is the outer row."""
     inner = _bind_record_qs(
         record,
@@ -391,17 +413,19 @@ def _exact_prefix_exists(record, lookup, target_attname, user, permission,
         permission=permission,
         correlation=Q(**{lookup: OuterRef(target_attname)}),
         content_identity=content_identity,
+        skip_is_active=skip_is_active,
     )
     return Exists(inner)
 
 
 def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
-                              content_identity):
+                              content_identity, *, skip_is_active=False):
     """One ordinary permitted-content predicate, including an ``along=`` walk."""
     position = _prefix_walk_position(record, lookup)
     if position in ('exact', 'before'):
         return _exact_prefix_exists(
             record, lookup, target_attname, user, permission, content_identity,
+            skip_is_active=skip_is_active,
         )
     suffix = None
     if position == 'after':
@@ -410,6 +434,7 @@ def _ordinary_prefix_predicate(record, lookup, target_attname, user, permission,
         record, user, permission, target_attname,
         content_identity=content_identity,
         suffix_lookup=suffix,
+        skip_is_active=skip_is_active,
     )
 
 
@@ -506,6 +531,9 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
     combined = Q(**{
         record.delegate_field: _bind_terminal(user, 'delegate'),
     })
+    combined &= _delegate_is_active_q(
+        record, user, skip_is_active=skip_is_active,
+    )
     combined &= _delegation_prefix_reach_q(
         record, user, lookup, target_attname, candidate, position,
     )
@@ -580,6 +608,7 @@ def _compile_permitted_content_queryset(
                 parts.append(_ordinary_prefix_predicate(
                     record, lookup, target_attname, user, permission,
                     content_identity,
+                    skip_is_active=skip_is_active,
                 ))
         delegations.extend(getattr(plan, 'delegations', ()) or ())
     if delegations:
@@ -751,7 +780,10 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
             fn = handle.compiler.complete_exists
         else:
             fn = handle.compiler.group_exists
-        part = _as_q(fn(plan, qs, user, perm_expr))
+        part = _as_q(_plan_exists(
+            handle.compiler, fn, plan, qs, user, perm_expr,
+            skip_is_active=skip_is_active,
+        ))
         if part is None:
             pass
         else:
@@ -1853,7 +1885,46 @@ def _permission_content_type_filters(record, content_identity):
     }
 
 
-def _record_predicate(record, correlation=None, *, content_identity=None, **bindings):
+def _default_is_active_q(model, path, *, skip_is_active=False):
+    """SQL for the default ``is_active`` condition on one concrete user path.
+
+    A missing column adds nothing, so a statement that does not compare
+    ``is_active`` does not invent a term. A column that is not a concrete
+    boolean is a configuration error. ``skip_is_active`` omits the comparison.
+    """
+    if skip_is_active or not path:
+        return Q()
+    try:
+        field = model._meta.get_field('is_active')
+    except FieldDoesNotExist:
+        return Q()
+    if (
+        not getattr(field, 'concrete', False)
+        or field.get_internal_type() != 'BooleanField'
+    ):
+        raise TrustsConfigurationError(
+            '%s.is_active must be a concrete BooleanField.'
+            % model._meta.label
+        )
+    return Q(**{'%s__is_active' % path: True})
+
+
+def _delegate_is_active_q(record, user, *, skip_is_active=False):
+    """Activity comparison for a checked delegate bound as a model instance.
+
+    An ``OuterRef`` delegate is the reverse candidate; that queryset already
+    compares ``is_active``. This helper does not add a second term.
+    """
+    if not isinstance(user, Model):
+        return Q()
+    return _default_is_active_q(
+        record.delegate_model, record.delegate_field,
+        skip_is_active=skip_is_active,
+    )
+
+
+def _record_predicate(record, correlation=None, *, content_identity=None,
+                      skip_is_active=False, **bindings):
     """Bindings, condition, and correlation as one ``Q``.
 
     Separate ``filter()`` calls give a repeated many-to-many hop its own
@@ -1868,6 +1939,12 @@ def _record_predicate(record, correlation=None, *, content_identity=None, **bind
         )
     filters.update(_permission_content_type_filters(record, content_identity))
     combined = Q(**filters)
+    user_value = bindings.get('user')
+    if isinstance(user_value, Model):
+        combined &= _default_is_active_q(
+            record.user_model, record.user_field,
+            skip_is_active=skip_is_active,
+        )
     compiled = _compile_predicate(record.condition, record)
     if compiled is not None:
         combined &= compiled
@@ -1876,13 +1953,15 @@ def _record_predicate(record, correlation=None, *, content_identity=None, **bind
     return combined
 
 
-def _bind_record_qs(record, correlation=None, *, content_identity=None, **bindings):
+def _bind_record_qs(record, correlation=None, *, content_identity=None,
+                    skip_is_active=False, **bindings):
     """Root rows for one record. One ``filter()`` for every predicate."""
     return record.root._default_manager.filter(
         _record_predicate(
             record,
             correlation=correlation,
             content_identity=content_identity,
+            skip_is_active=skip_is_active,
             **bindings,
         ),
     )
@@ -2174,6 +2253,9 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
         combined = Q(**{
             record.delegate_field: _bind_terminal(user, 'delegate'),
         })
+        combined &= _delegate_is_active_q(
+            record, user, skip_is_active=skip_is_active,
+        )
         combined &= _delegation_reaches(record, forward=True, user=user)
         condition = _compile_predicate(
             record.condition, record, permission=permission,
@@ -3210,7 +3292,8 @@ class _PrefixInForwardWalk(Expression):
     subquery = True
 
     def __init__(self, record, user, permission, attname, *,
-                 content_identity=None, suffix_lookup=None):
+                 content_identity=None, suffix_lookup=None,
+                 skip_is_active=False):
         super().__init__(output_field=BooleanField())
         walk = record.along
         seed = _bind_record_qs(
@@ -3219,6 +3302,7 @@ class _PrefixInForwardWalk(Expression):
             permission=permission,
             correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
             content_identity=content_identity,
+            skip_is_active=skip_is_active,
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -3337,7 +3421,8 @@ class GrantReach(Expression):
     filterable = True
     subquery = True
 
-    def __init__(self, record, user, permission, content=None, *, content_identity=None):
+    def __init__(self, record, user, permission, content=None, *,
+                 content_identity=None, skip_is_active=False):
         super().__init__(output_field=BooleanField())
         self.record = record
         self.content = content
@@ -3352,6 +3437,7 @@ class GrantReach(Expression):
                 user=user,
                 permission=permission,
                 content_identity=content_identity,
+                skip_is_active=skip_is_active,
             )
             self.grant_query = grant.query.clone()
             self.grant_query.subquery = True
@@ -3362,6 +3448,7 @@ class GrantReach(Expression):
             permission=permission,
             correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
             content_identity=content_identity,
+            skip_is_active=skip_is_active,
         ).values(ident=F(walk.walk_field)).distinct()
         self.seed_query = seed.query.clone()
         self.seed_query.subquery = True
@@ -3605,14 +3692,16 @@ class RelationPlan:
     permission_model: type | None = None
     content_identity: type | None = None
 
-    def _bound_root_qs(self, record, **bindings):
+    def _bound_root_qs(self, record, *, skip_is_active=False, **bindings):
         return _bind_record_qs(
             record,
             content_identity=self.content_identity,
+            skip_is_active=skip_is_active,
             **bindings,
         )
 
-    def _correlated_exists(self, terminal_field_attr, **bindings):
+    def _correlated_exists(self, terminal_field_attr, *, skip_is_active=False,
+                           **bindings):
         parts = []
         for record in self.records:
             if record.along is not None:
@@ -3620,12 +3709,14 @@ class RelationPlan:
                     parts.append(GrantReach(
                         record, bindings['user'], bindings['permission'],
                         content_identity=self.content_identity,
+                        skip_is_active=skip_is_active,
                     ))
                 elif terminal_field_attr == 'user_field':
                     parts.append(GrantReach(
                         record, OuterRef(record.user_target),
                         bindings['permission'], content=bindings['content'],
                         content_identity=self.content_identity,
+                        skip_is_active=skip_is_active,
                     ))
                 else:
                     target = getattr(record, _TARGET_ATTRS[terminal_field_attr])
@@ -3633,6 +3724,7 @@ class RelationPlan:
                         record, bindings['user'], OuterRef(target),
                         content=bindings['content'],
                         content_identity=self.content_identity,
+                        skip_is_active=skip_is_active,
                     ))
                 continue
             terminal = getattr(record, terminal_field_attr)
@@ -3640,6 +3732,7 @@ class RelationPlan:
             inner = self._bound_root_qs(
                 record,
                 correlation=Q(**{terminal: OuterRef(target)}),
+                skip_is_active=skip_is_active,
                 **bindings,
             )
             parts.append(Exists(inner))
@@ -3649,7 +3742,7 @@ class RelationPlan:
             return parts[0]
         return reduce(or_, parts)
 
-    def content_exists(self, user, permission):
+    def content_exists(self, user, permission, *, skip_is_active=False):
         """Candidate-row ``EXISTS`` correlating content through this plan.
 
         Later readers may OR this predicate with another predicate on the
@@ -3666,6 +3759,7 @@ class RelationPlan:
             return None
         return self._correlated_exists(
             'content_field', user=user, permission=permission,
+            skip_is_active=skip_is_active,
         )
 
     def user_exists(self, content, permission):
@@ -3691,7 +3785,7 @@ class RelationPlan:
             'user_field', content=content, permission=permission,
         )
 
-    def common_permissions(self, user, content):
+    def common_permissions(self, user, content, *, skip_is_active=False):
         """Trustee permissions held on every candidate through this plan.
 
         ``content`` is an instance or QuerySet. Empty candidates yield
@@ -3704,7 +3798,9 @@ class RelationPlan:
                 return ()
             return self.permission_model._default_manager.none()
         qs = candidate_queryset(content)
-        exists = self.content_exists(user, OuterRef(OuterRef('pk')))
+        exists = self.content_exists(
+            user, OuterRef(OuterRef('pk')), skip_is_active=skip_is_active,
+        )
         if exists is None:
             return self.permission_model._default_manager.none()
         return bind_once(self.permission_model._default_manager.filter(
@@ -3713,7 +3809,7 @@ class RelationPlan:
             Exists(qs.filter(~Q(exists))),
         ).distinct())
 
-    def permissions(self, user, content):
+    def permissions(self, user, content, *, skip_is_active=False):
         """Distinct permission rows for ``(user, content)``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
@@ -3721,10 +3817,12 @@ class RelationPlan:
             return ()
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
+            skip_is_active=skip_is_active,
         )
         return bind_once(self.permission_model._default_manager.filter(exists).distinct())
 
-    def has_permission(self, user, content, permission):
+    def has_permission(self, user, content, permission, *,
+                       skip_is_active=False):
         """SQL ``EXISTS`` membership of ``permission`` in ``permissions()``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
@@ -3735,14 +3833,18 @@ class RelationPlan:
             return False
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
+            skip_is_active=skip_is_active,
         )
         return bind_once(self.permission_model._default_manager.filter(
             pk=permission.pk,
         ).filter(exists)).exists()
 
-    def filter_content(self, queryset, user, permission):
+    def filter_content(self, queryset, user, permission, *,
+                       skip_is_active=False):
         """Lazy queryset of candidate rows correlated to the same plan."""
-        exists = self.content_exists(user, permission)
+        exists = self.content_exists(
+            user, permission, skip_is_active=skip_is_active,
+        )
         if exists is None:
             return queryset.none()
         return bind_once(queryset.filter(exists).distinct())
@@ -4216,7 +4318,9 @@ class TrustsRegistry(object):
             if not plan.records or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
-        return plan.permissions(user, content)
+        return plan.permissions(
+            user, content, skip_is_active=skip_is_active,
+        )
 
     def has_permission(self, user, content, permission, *,
                        skip_is_active=False):
@@ -4237,7 +4341,9 @@ class TrustsRegistry(object):
             user, skip_is_active=skip_is_active,
         ):
             return False
-        return plan.has_permission(user, content, permission)
+        return plan.has_permission(
+            user, content, permission, skip_is_active=skip_is_active,
+        )
 
     def filter_authorized(self, queryset, user, permission, *,
                           skip_is_active=False):
@@ -4264,7 +4370,9 @@ class TrustsRegistry(object):
             user, skip_is_active=skip_is_active,
         ):
             return queryset.none()
-        return plan.filter_content(queryset, user, permission)
+        return plan.filter_content(
+            queryset, user, permission, skip_is_active=skip_is_active,
+        )
 
 
 class _PathBuilder(object):

@@ -324,6 +324,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             '$along_bound=2',
             '$content.app_label="documents"',
             '$content.model="folder"',
+            'user.is_active=True',
             '$along_match=True',
         ])
         self.assertEqual(content['has_perm']['params'], [
@@ -333,6 +334,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             '$along_bound=2',
             '$content.app_label="documents"',
             '$content.model="folder"',
+            'user.is_active=True',
             '$along_match=True',
         ])
         self.assertEqual(content['get_all_permissions']['params'], [
@@ -341,6 +343,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             '$along_bound=2',
             '$content.app_label="documents"',
             '$content.model="folder"',
+            'user.is_active=True',
             '$along_match=True',
         ])
         # One ordered list for the ORed reverse statement. Both walks
@@ -439,6 +442,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             '$along_bound=8',
             '$content.app_label="documents"',
             '$content.model="walknode"',
+            'user.is_active=True',
             '$along_match=True',
         ])
 

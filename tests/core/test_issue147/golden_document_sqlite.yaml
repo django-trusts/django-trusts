@@ -12,12 +12,12 @@ backends:
             permission: {path: "permission", model: "auth.Permission", target: "id"}
             content: {path: "document", model: "documents.Document", target: "id"}
         permitted:
-          params: ["$user.id", "$permission.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+          params: ["$user.id", "$permission.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "user.is_active=True"]
           sql: |-
             SELECT DISTINCT "documents_document"."id", "documents_document"."title", "documents_document"."confidential"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "permission_id", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "permission_id", %s AS "app_label", %s AS "model", %s AS "is_active"
             ) "trusts_bind"
             WHERE
             EXISTS (
@@ -25,21 +25,23 @@ backends:
               FROM "documents_documentpermission" "U0"
               INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
               INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
+              INNER JOIN "auth_user" "U3" ON ("U0"."user_id" = "U3"."id")
               WHERE ("U0"."permission_id" = ("trusts_bind"."permission_id")
                   AND "U2"."app_label" = ("trusts_bind"."app_label")
                   AND "U2"."model" = ("trusts_bind"."model")
                   AND "U0"."user_id" = ("trusts_bind"."user_id")
+                  AND "U3"."is_active" = ("trusts_bind"."is_active")
                   AND "U0"."document_id" = ("documents_document"."id")
               )
               LIMIT 1
             )
         has_perm:
-          params: ["$user.id", "$permission.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+          params: ["$user.id", "$permission.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "user.is_active=True"]
           sql: |-
             SELECT 1 AS "a"
             FROM "documents_document"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "permission_id", %s AS "content_pk", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "permission_id", %s AS "content_pk", %s AS "app_label", %s AS "model", %s AS "is_active"
             ) "trusts_bind"
             WHERE ("documents_document"."id" = ("trusts_bind"."content_pk")
               AND EXISTS (
@@ -47,22 +49,24 @@ backends:
                 FROM "documents_documentpermission" "U0"
                 INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
                 INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
+                INNER JOIN "auth_user" "U3" ON ("U0"."user_id" = "U3"."id")
                 WHERE ("U0"."permission_id" = ("trusts_bind"."permission_id")
                     AND "U2"."app_label" = ("trusts_bind"."app_label")
                     AND "U2"."model" = ("trusts_bind"."model")
                     AND "U0"."user_id" = ("trusts_bind"."user_id")
+                    AND "U3"."is_active" = ("trusts_bind"."is_active")
                     AND "U0"."document_id" = ("documents_document"."id")
                 )
                 LIMIT 1
               ) )
             LIMIT 1
         get_all_permissions:
-          params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+          params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\"", "user.is_active=True"]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
             CROSS JOIN (
-              SELECT %s AS "user_id", %s AS "content_pk", %s AS "app_label", %s AS "model"
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "app_label", %s AS "model", %s AS "is_active"
             ) "trusts_bind"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
@@ -81,10 +85,12 @@ backends:
                         FROM "documents_documentpermission" "U0"
                         INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
                         INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
+                        INNER JOIN "auth_user" "U3" ON ("U0"."user_id" = "U3"."id")
                         WHERE ("U0"."permission_id" = ("auth_permission"."id")
                             AND "U2"."app_label" = ("trusts_bind"."app_label")
                             AND "U2"."model" = ("trusts_bind"."model")
                             AND "U0"."user_id" = ("trusts_bind"."user_id")
+                            AND "U3"."is_active" = ("trusts_bind"."is_active")
                             AND "U0"."document_id" = ("V0"."id")
                         )
                         LIMIT 1

@@ -85,13 +85,17 @@ There are three directional change points, all controlled by the same flag:
 - sponsor eligibility in both directions is `_principal_eligibility_q` SQL;
 - reverse delegate eligibility comes from the Trusts-owned `_trusts_eligibility_q` branch.
 
-Default exporter SQL is also asymmetric: `policy_lock.py` adds no `is_active`
-predicate of its own; the reverse locked queryset includes `is_active` checks,
-while ordinary forward/registry exports consume projections without that
-`is_active` check. Python actor checks are not automatically represented in SQL.
-S2 must explicitly identify runtime checks versus exported SQL and propose the
-flag representation before claiming matching lockfile behavior. The current
-schema version is 1; there is no pre-authorized schema bump.
+Default exporter SQL was asymmetric at the time of this review: `policy_lock.py`
+added no `is_active` predicate of its own; the reverse locked queryset included
+`is_active` checks, while ordinary forward/registry exports consumed projections
+without that check. Python actor checks were not automatically represented in SQL.
+
+That forward gap is closed. Inquiries that used to reject an inactive user in
+Python before SQL now also compare a concrete `is_active` column in the grant
+SQL that runs. The lockfile records that SQL and the token `user.is_active=True`.
+There is no separate rule key. `skip_is_active=True` omits the comparison. A
+user model with no concrete `is_active` column does not gain a term. The schema
+version stays 1.
 
 User-facing pages describe finished behavior in present tense. Planned status,
 review inventory, sizing, and unresolved representation decisions stay here.
