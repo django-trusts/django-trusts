@@ -923,7 +923,8 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     ).distinct())
 
 
-def common_permissions(handles, candidates, user, *, kind='complete'):
+def common_permissions(handles, candidates, user, *, kind='complete',
+                       **skip_flags):
     """Permission queryset held on every candidate via the aggregate proof.
 
     Core-owned aggregate: fold-family handles are omitted. One SQL when
@@ -934,11 +935,14 @@ def common_permissions(handles, candidates, user, *, kind='complete'):
     ``_compile_common_permissions`` on ``self._own_handle()``.
     Only relationship-family handles participate.
     ``RelationPlan.common_permissions`` is not this function.
+    ``skip_<name>`` drops that registered condition or the override.
     """
     participating = _relationship_handles(handles)
+    skipped = _skipped_for_handles(participating, skip_flags, user)
     return _compile_common_permissions(
         participating, candidates, user, kind=kind,
         sponsor_handles=participating,
+        skipped=skipped,
     )
 
 
@@ -2043,19 +2047,6 @@ def _activity_denied(user, conditions, skipped):
     return single_field_condition_denied(
         user, conditions, skipped, role='user',
     )
-
-
-def _handles_enforce_is_active(handles, skipped):
-    from trusts.user_rules import enforces_is_active
-
-    for handle in handles:
-        registry = getattr(handle, 'registry', None)
-        if registry is None:
-            continue
-        conditions = registry._stored_user_conditions()
-        if enforces_is_active(conditions, skipped):
-            return True
-    return False
 
 
 def _handles_condition_denied(handles, user, skipped, *, role='user'):

@@ -6,9 +6,11 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connection, models
 from django.test import TestCase, TransactionTestCase
 
+from tests.apps import isolate_live_registry, override_apps_ready
 from tests.core import KernelHostRequiredMixin
+from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
-from tests.myapp.models import Document
+from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts._bind_once import bind_once
 from trusts.core import (
@@ -17,8 +19,12 @@ from trusts.core import (
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
+    common_permissions,
+    filter_by_permitted_content,
     granted,
 )
+from trusts.policy_lock import render_policy_sql_bytes
+from trusts.query import PermittedQuerySet
 
 
 def _permission(model, codename):
@@ -957,3 +963,270 @@ class SkipKeywordInquiryTest(KernelHostRequiredMixin, TestCase):
                 skip_nope=True,
             ),
         )
+
+
+class StaffSurfaceTest(TestCase):
+    """A custom staff condition is enforced and skippable on each inquiry."""
+
+    def setUp(self):
+        from django.apps import apps
+
+        self.config = apps.get_app_config('myapp')
+        self.original = self.config.registries[DOCUMENT_BACKEND]
+        self.original_sentinel = getattr(
+            self.config, '_document_grant_registry_id', None,
+        )
+        registry = TrustsRegistry()
+        registry.register_user_condition('staff', lambda u: u.is_staff)
+        registry.set_user_override('superuser', lambda u: u.is_superuser)
+        isolate_live_registry(self.config, registry, DOCUMENT_BACKEND)
+        self.config._document_grant_registry_id = None
+        with override_apps_ready(False, self.config.apps):
+            self.config.ready()
+        self.registry = registry
+        User = get_user_model()
+        self.plain = User.objects.create_user('surf-plain', password='x')
+        self.staff = User.objects.create_user('surf-staff', password='x')
+        self.staff.is_staff = True
+        self.staff.save(update_fields=['is_staff'])
+        self.superuser = User.objects.create_superuser(
+            'surf-super', password='x', email='s@example.com',
+        )
+        self.change = _permission(Document, 'change_document')
+        self.doc = Document.objects.create(title='surf')
+        self.other = Document.objects.create(title='other')
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.plain, permission=self.change,
+        )
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.staff, permission=self.change,
+        )
+        self.backend = DocumentBackend()
+        self.perm = 'myapp.change_document'
+
+    def tearDown(self):
+        self.config.registries[DOCUMENT_BACKEND] = self.original
+        self.config._document_grant_registry_id = self.original_sentinel
+
+    def test_staff_is_enforced_and_skippable(self):
+        with self.assertNumQueries(0):
+            self.assertFalse(
+                self.backend.has_perm(self.plain, self.perm, self.doc),
+            )
+        self.assertTrue(
+            self.backend.has_perm(self.staff, self.perm, self.doc),
+        )
+        self.assertTrue(
+            self.backend.has_perm(
+                self.plain, self.perm, self.doc, skip_staff=True,
+            ),
+        )
+        self.assertFalse(
+            self.backend.has_perm(self.staff, self.perm, self.other),
+        )
+
+        with self.assertNumQueries(0):
+            self.assertFalse(
+                Document.objects.authorized(self.plain, self.change).exists(),
+            )
+        self.assertEqual(
+            set(Document.objects.authorized(
+                self.staff, self.change,
+            ).values_list('pk', flat=True)),
+            {self.doc.pk},
+        )
+        self.assertEqual(
+            set(Document.objects.authorized(
+                self.plain, self.change, skip_staff=True,
+            ).values_list('pk', flat=True)),
+            {self.doc.pk},
+        )
+
+        permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
+        with self.assertNumQueries(0):
+            self.assertFalse(
+                permitted.permitted(self.change, self.plain).exists(),
+            )
+        self.assertEqual(
+            set(permitted.permitted(
+                self.change, self.staff,
+            ).values_list('pk', flat=True)),
+            {self.doc.pk},
+        )
+        self.assertEqual(
+            set(permitted.permitted(
+                self.change, self.plain, skip_staff=True,
+            ).values_list('pk', flat=True)),
+            {self.doc.pk},
+        )
+
+        handle = self.config.configured_backend(DOCUMENT_BACKEND)
+        denied = common_permissions((handle,), self.doc, self.plain)
+        self.assertIn('is_staff', str(denied.query))
+        self.assertEqual(list(denied), [])
+        held = common_permissions((handle,), self.doc, self.staff)
+        self.assertIn(self.change.pk, set(held.values_list('pk', flat=True)))
+        self.assertIn('is_staff', str(held.query))
+        skipped = common_permissions(
+            (handle,), self.doc, self.plain, skip_staff=True,
+        )
+        self.assertIn(self.change.pk, set(skipped.values_list('pk', flat=True)))
+        self.assertNotIn('is_staff', str(skipped.query))
+
+        self.assertNotIn(
+            self.plain.pk,
+            set(self.doc.get_permitted_users(self.change).values_list(
+                'pk', flat=True,
+            )),
+        )
+        included = set(self.doc.get_permitted_users(
+            self.change, skip_staff=True,
+        ).values_list('pk', flat=True))
+        self.assertIn(self.plain.pk, included)
+        self.assertIn(self.staff.pk, included)
+        skipped_users = self.doc.get_permitted_users(
+            self.change, skip_staff=True,
+        )
+        where = str(skipped_users.query).split('WHERE', 1)[-1]
+        self.assertNotIn('is_staff', where)
+        denied_users = self.doc.get_permitted_users(self.change)
+        self.assertIn('is_staff', str(denied_users.query).split('WHERE', 1)[-1])
+
+    def test_skip_superuser_drops_the_override_and_keeps_the_grant(self):
+        self.assertTrue(
+            self.backend.has_perm(self.superuser, self.perm, self.doc),
+        )
+        self.assertFalse(
+            self.backend.has_perm(
+                self.superuser, self.perm, self.doc, skip_superuser=True,
+            ),
+        )
+        self.assertTrue(
+            self.backend.has_perm(
+                self.staff, self.perm, self.doc, skip_superuser=True,
+            ),
+        )
+        self.assertFalse(
+            Document.objects.authorized(
+                self.superuser, self.change, skip_superuser=True,
+            ).exists(),
+        )
+        self.assertTrue(
+            Document.objects.authorized(
+                self.superuser, self.change,
+            ).filter(pk=self.doc.pk).exists(),
+        )
+        permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
+        self.assertFalse(
+            permitted.permitted(
+                self.change, self.superuser, skip_superuser=True,
+            ).exists(),
+        )
+        self.assertTrue(
+            permitted.permitted(self.change, self.superuser).filter(
+                pk=self.doc.pk,
+            ).exists(),
+        )
+
+    def test_lockfile_records_staff_and_the_override(self):
+        handle = self.config.configured_backend(DOCUMENT_BACKEND)
+        raw = render_policy_sql_bytes(handles=[handle])
+        self.assertIn(b'user.is_staff=True', raw)
+        self.assertIn(b'user.is_superuser=True', raw)
+        from trusts.reverse import lock_permitted_users_queryset
+
+        queryset = lock_permitted_users_queryset(
+            handle, self.doc, self.change,
+        )
+        sql = str(queryset.query)
+        self.assertIn('is_staff', sql)
+        self.assertIn('is_superuser', sql)
+
+
+class StaffPrefixFilterTest(TransactionTestCase):
+    def test_prefix_filter_enforces_and_skips_staff(self):
+        class Scope(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Payload(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Row(models.Model):
+            scope = models.ForeignKey(
+                Scope, related_name='rows', on_delete=models.CASCADE,
+            )
+            content = models.ForeignKey(Payload, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Grant(models.Model):
+            scope = models.ForeignKey(Scope, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(Scope)
+            editor.create_model(Payload)
+            editor.create_model(Row)
+            editor.create_model(Grant)
+        try:
+            User = get_user_model()
+            plain = User.objects.create_user('pref-plain', password='x')
+            staff = User.objects.create_user('pref-staff', password='x')
+            staff.is_staff = True
+            staff.save(update_fields=['is_staff'])
+            scope = Scope.objects.create(title='s')
+            payload = Payload.objects.create(title='p')
+            Row.objects.create(scope=scope, content=payload)
+            read = _permission(Payload, 'read_payload_staff')
+            Grant.objects.create(scope=scope, user=plain, permission=read)
+            Grant.objects.create(scope=scope, user=staff, permission=read)
+            registry = TrustsRegistry()
+            registry.register_user_condition(
+                'staff', lambda u: u.is_staff, on='user',
+            )
+            grant = Ref(Grant)
+            registry.register(
+                content=grant.scope.rows.content,
+                user=grant.user,
+                permission=grant.permission,
+            )
+            handle = BackendHandle(
+                'staff-prefix', registry, PlanQueryCompiler(),
+            )
+            denied = filter_by_permitted_content(
+                Scope.objects.all(), plain, read,
+                content=payload, handles=(handle,),
+            )
+            with self.assertNumQueries(0):
+                self.assertFalse(denied.exists())
+            self.assertEqual(
+                set(filter_by_permitted_content(
+                    Scope.objects.all(), staff, read,
+                    content=payload, handles=(handle,),
+                ).values_list('pk', flat=True)),
+                {scope.pk},
+            )
+            self.assertEqual(
+                set(filter_by_permitted_content(
+                    Scope.objects.all(), plain, read,
+                    content=payload, handles=(handle,), skip_staff=True,
+                ).values_list('pk', flat=True)),
+                {scope.pk},
+            )
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(Grant)
+                editor.delete_model(Row)
+                editor.delete_model(Payload)
+                editor.delete_model(Scope)

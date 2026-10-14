@@ -112,12 +112,9 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_unowned_backend_rejects_identity_before_registry(self):
-        from trusts.query import is_active_principal
-
         backend = MixinOnlyBackend()
         anonymous = AnonymousUser()
         unauthenticated = _UnauthenticatedPrincipal()
-        self.assertFalse(is_active_principal(None))
         with patch('trusts.apps.implementation_configs', return_value=()):
             with self.assertNumQueries(0):
                 self.assertFalse(

@@ -32,7 +32,6 @@ from trusts.query import (
     AuthorizedManager,
     AuthorizedManagerMixin,
     AuthorizedQuerySet,
-    is_active_principal,
 )
 
 
@@ -311,15 +310,13 @@ class AuthorizedQuerySetLiveTest(TestCase):
 
     def test_wrong_permission_type_is_zero_sql_configuration_error(self):
         qs = AuthorizedQuerySet(Document)
-        with patch('trusts.query.is_active_principal', wraps=is_active_principal) as active:
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    qs.authorized(self.alice, 'change_document')
-                with self.assertRaises(TrustsConfigurationError):
-                    qs.authorized(self.alice, 'myapp.change_document')
-                with self.assertRaises(TrustsConfigurationError):
-                    qs.authorized(self.alice, None)
-        active.assert_not_called()
+        with self.assertNumQueries(0):
+            with self.assertRaises(TrustsConfigurationError):
+                qs.authorized(self.alice, 'change_document')
+            with self.assertRaises(TrustsConfigurationError):
+                qs.authorized(self.alice, 'myapp.change_document')
+            with self.assertRaises(TrustsConfigurationError):
+                qs.authorized(self.alice, None)
 
     def test_instance_filter_matches_grant_and_stays_lazy(self):
         qs = Document.objects.authorized(self.alice, self.change)
@@ -334,14 +331,12 @@ class AuthorizedQuerySetLiveTest(TestCase):
     def test_inactive_user_is_empty_unless_auditing(self):
         self.alice.is_active = False
         self.alice.save()
-        with patch('trusts.query.is_active_principal') as active:
-            with self.assertNumQueries(0):
-                denied = Document.objects.authorized(self.alice, self.change)
-                self.assertFalse(denied.exists())
-            audited = Document.objects.authorized(
-                self.alice, self.change, skip_is_active=True,
-            )
-        active.assert_not_called()
+        with self.assertNumQueries(0):
+            denied = Document.objects.authorized(self.alice, self.change)
+            self.assertFalse(denied.exists())
+        audited = Document.objects.authorized(
+            self.alice, self.change, skip_is_active=True,
+        )
         self.assertEqual(_pks(audited), {self.doc_a.pk})
 
     def test_extra_q_is_and_overlay(self):

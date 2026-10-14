@@ -5,60 +5,11 @@ from django.db.models import Manager, Model, QuerySet
 from trusts._bind_once import bind_once
 
 
-def is_active_principal(user, *, skipped=()):
-    """Match ``User.has_perm``: anonymous and inactive users are denied.
-
-    Superuser short-circuit on ``has_perm`` is a Django ``ModelBackend``
-    behavior and is not duplicated in SQL list filters. An ``is_active``
-    name in ``skipped`` skips only that built-in check.
-    """
-    if user is None:
-        return False
-    if getattr(user, 'is_anonymous', False):
-        return False
-    if not getattr(user, 'is_authenticated', True):
-        return False
-    if (
-        'is_active' not in frozenset(skipped or ())
-        and not getattr(user, 'is_active', False)
-    ):
-        return False
-    return True
-
-
 def require_mode_flag(value, name):
     """A skip keyword must be a real boolean."""
     if not isinstance(value, bool):
         raise TypeError('%s must be a bool, not %r.' % (name, value))
     return value
-
-
-def stored_user_is_inactive(user, *, skipped=()):
-    """Whether a stored user's built-in ``is_active`` rejects the inquiry.
-
-    An ``is_active`` name in ``skipped`` skips the check. ``None`` is not
-    inactive so ``authorized(None)`` still fails at grant binding. A model
-    with no ``is_active`` is not inactive: a schema-neutral terminal keeps
-    its result, and permission SQL reports that model separately. A
-    non-model that presents as a user (``is_authenticated`` or
-    ``is_anonymous``) and has no ``is_active`` is denied, the same default
-    as ``has_perm``. Any other non-model is not inactive, so grant binding
-    still raises. Anonymous and unauthenticated denial stays with the
-    caller. A user object that is not a model instance is not a SQL
-    principal; permission SQL is compiled against the user model.
-    """
-    if 'is_active' in frozenset(skipped or ()) or user is None:
-        return False
-    if isinstance(user, Model) and not hasattr(user, 'is_active'):
-        return False
-    if (
-        not isinstance(user, Model)
-        and not hasattr(user, 'is_active')
-        and not hasattr(user, 'is_authenticated')
-        and not hasattr(user, 'is_anonymous')
-    ):
-        return False
-    return not bool(getattr(user, 'is_active', False))
 
 
 def single_field_condition_denied(user, conditions, skipped, *, role='user'):
@@ -118,9 +69,9 @@ def user_identity_denied(user):
     """Anonymous and unauthenticated users are denied even when
     ``skip_is_active`` is true.
 
-    Missing attributes keep the same defaults as ``is_active_principal``:
-    not anonymous, and authenticated. ``None`` is not this denial; callers
-    that require an instance still raise.
+    Missing attributes keep the identity defaults: not anonymous, and
+    authenticated. ``None`` is not this denial; callers that require an
+    instance still raise.
     """
     if getattr(user, 'is_anonymous', False):
         return True
@@ -134,8 +85,8 @@ class AuthorizedQuerySet(QuerySet):
 
     ``permission`` must be a model instance. Strings and auth.Permission
     *codenames* raise ``TrustsConfigurationError`` with zero SQL. This
-    method does not parse ``:condition``, does not call
-    ``is_active_principal``, and does not call ``get_permission``.
+    method does not parse ``:condition`` and does not call
+    ``get_permission``.
 
     An authenticated user who fails a registered user condition receives
     an empty queryset unless that condition's ``skip_<name>`` keyword is

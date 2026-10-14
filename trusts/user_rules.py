@@ -158,18 +158,6 @@ def collect_skipped(*, known=None, **flags):
     return frozenset(requested)
 
 
-def enforces_is_active(conditions, skipped, *, role='user'):
-    """Whether the built-in activity condition still applies to ``role``."""
-    rules = BUILTIN_USER_CONDITIONS if conditions is None else conditions
-    skipped = frozenset(skipped or ())
-    for rule in rules:
-        if rule.name != 'is_active' or rule.name in skipped:
-            continue
-        if role in condition_targets(rule.on):
-            return True
-    return False
-
-
 class _Expr(object):
     def __and__(self, other):
         if not isinstance(other, _Expr):

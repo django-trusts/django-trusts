@@ -654,9 +654,9 @@ def _principal_presence(model, name):
     """How ``name`` is visible to SQL.
 
     ``field`` is a concrete boolean column. ``stock`` is
-    ``AbstractBaseUser``'s property, which ``is_active_principal``
-    evaluates without a column. ``absent`` uses that helper's
-    ``getattr`` default. Any other Python attribute fails closed.
+    ``AbstractBaseUser``'s property, which the Python shortcut evaluates
+    without a column. ``absent`` uses the ``getattr`` default. Any other
+    Python attribute fails closed.
     """
     field = _concrete_field(model, name)
     if field is not None:
@@ -686,8 +686,8 @@ def _trusts_eligibility_q(model, *, user_conditions=None,
                           skipped=()):
     """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
 
-    ``is_active_principal`` denies anonymous, unauthenticated, and inactive
-    users. A missing ``is_active`` uses the same default as
+    The checked-user shortcut denies anonymous, unauthenticated, and
+    inactive users. A missing ``is_active`` uses the same default as
     ``getattr(user, 'is_active', False)`` and contributes no users.
     A name in ``skipped`` omits that condition and does not fail closed
     when its column is absent. Persisted rows use the stock
