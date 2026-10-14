@@ -50,9 +50,11 @@ Multiple registered trusts may authorize the same kind of content. Each
 complete trust is an independent way to receive permission.
 
 A delegated trust connects a **delegate** who is acting, a **sponsor** whose
-live ordinary authority supplies the ceiling, and the protected content. Its
-condition may narrow that authority to relationship-owned scope such as
-approved operations or selected repositories.
+authority supplies the ceiling, and the protected content. By default that
+authority comes from the sponsor's live ordinary grants; an override explicitly
+targeted to the sponsor may supply it instead. The delegation condition may
+narrow that authority to relationship-owned scope such as approved operations
+or selected repositories.
 
 Installation
 ------------
@@ -338,14 +340,16 @@ Permission checks keep the familiar Django spelling:
 
 The same correlated policy drives object checks, permission enumeration,
 ``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
-policy SQL. The sponsor's live ordinary permissions provide the authority
-ceiling.
+policy SQL. By default, the sponsor's live ordinary permissions provide the
+authority ceiling. With the default override target of ``on="user"``, the
+sponsor therefore needs an ordinary grant. An override explicitly registered
+with ``on="sponsor"`` or ``on="*"`` may supply sponsor authority instead.
 
 Several delegated relationship models may target the same content model. Each
 relationship remains a complete alternative: its own delegate, content,
-condition, and sponsor's ordinary-authority ceiling are ANDed before that
-branch is ORed with the others. A branch cannot borrow another relationship's
-approval or sponsor.
+condition, and sponsor-authority predicate are ANDed before that branch is
+ORed with the others. A branch cannot borrow another relationship's approval
+or sponsor.
 
 For ordinary and delegated registrations, ``content=`` may also reach a bounded content
 set rather than a foreign key on the relationship row. For example,
@@ -822,9 +826,10 @@ The locked ``get_permitted_users`` statement is that backend's reverse
 predicate. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
-Each inquiry entry shows the grouped user-rule expression and whether each
-rule checks the supplied instance or the database above ``sql:``.
-Database rules are included in the SQL statement.
+Each inquiry entry shows the grouped user-rule expression above ``sql:``.
+Every named term records its target, for example
+``is_active[*] & (superuser[user] | ordinary)``, and every user rule is
+compiled into the SQL statement.
 
 ``content.get_permitted_users(perm)`` and
 ``User.objects.permitted(content, perm)`` call the same compiler, so the
