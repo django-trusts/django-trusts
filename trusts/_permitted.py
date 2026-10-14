@@ -1,7 +1,7 @@
 """HTTP-free compiler for ``permitted`` and ``authorization_required``.
 
-The view decorator keeps pk coercion, HTTP statuses, the active-superuser
-existence shortcut, and ``trusts.E008`` bookkeeping. This module is the
+The view decorator keeps pk coercion, HTTP statuses, and ``trusts.E008``
+bookkeeping. This module is the
 shared preflight and grant. ``handles`` is an explicit private input so
 another package can supply its own later. Runtime ``.permitted()`` calls
 are not recorded for ``trusts.E008``.
@@ -201,9 +201,9 @@ def _authorization_preflight_state(handles, model, conditions):
     ``participating`` is True when at least one handle has an applicable
     ``auth.Permission`` plan for ``model``. ``complete`` is True when one
     of those backends also owns every selected name as a queryable
-    condition (the same rule as ``trusts.E008``). Callers that have an
-    active-superuser shortcut must not run it until this returns a
-    complete pair. ``trusts.E008`` itself only sees guards recorded by
+    condition (the same rule as ``trusts.E008``). A grant query must not
+    run until this returns a complete pair. ``trusts.E008`` itself only
+    sees guards recorded by
     ``authorization_required``.
     """
     participating = False

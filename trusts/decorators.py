@@ -67,9 +67,11 @@ def _coerce_pk(model, raw):
     return value
 
 
-def _authorize_candidate(request, view_kwargs, model, permission, conditions):
+def _authorize_candidate(request, view_kwargs, model, permission, conditions,
+                         skip_flags):
     from django.apps import apps as django_apps
     from trusts.apps import _relationship_implementation_handles
+    from trusts.core import _skipped_for_handles
 
     handles = _relationship_implementation_handles()
 
@@ -78,19 +80,6 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
     if 'pk' not in view_kwargs:
         raise Http404
     pk = _coerce_pk(model, raw_pk)
-
-    is_superuser = bool(
-        user is not None
-        and getattr(user, 'is_active', False)
-        and getattr(user, 'is_superuser', False)
-        and not getattr(user, 'is_anonymous', False)
-    )
-    if not is_superuser and (
-        user is None
-        or user_identity_denied(user)
-        or _handles_condition_denied(handles, user, ())
-    ):
-        raise PermissionDenied
 
     if not django_apps.ready:
         raise TrustsConfigurationError(
@@ -101,12 +90,15 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
         handles, model, conditions, api='authorization_required',
     )
 
-    candidates = model._default_manager.filter(pk=pk)
-    if is_superuser:
-        if not candidates.exists():
-            raise Http404
-        return
+    skipped = _skipped_for_handles(handles, skip_flags, user)
+    if (
+        user is None
+        or user_identity_denied(user)
+        or _handles_condition_denied(handles, user, skipped)
+    ):
+        raise PermissionDenied
 
+    candidates = model._default_manager.filter(pk=pk)
     app_label, codename = permission.split('.', 1)
     binding = _permission_binding(model, app_label, codename)
     granted_q = _authorization_grant_q(
@@ -118,6 +110,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
         conditions,
         binding,
         api='authorization_required',
+        skipped=skipped,
     )
     if granted_q is None:
         matched = None
@@ -134,29 +127,31 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions):
     raise Http404
 
 
-def authorization_required(model, permission, conditions=()):
+def authorization_required(model, permission, conditions=(), **skip_flags):
     """Trusts-only view guard: explicit model, pk URL kwarg, optional names.
 
     Candidate identity is only ``view_kwargs["pk"]`` bound to
     ``model._meta.pk``. Structural configuration is checked with zero
     SQL before any candidate query: at least one applicable
     ``auth.Permission`` plan is required, and selected names must be
-    owned together by one participating backend. Active superusers
-    then take one existence query and bypass grants and conditions;
-    invalid configuration never reaches that shortcut. Only applicable
-    plans whose permission terminal is
-    ``django.contrib.auth.models.Permission`` participate. Each of
-    those backends composes its own grant with its own selected names
-    before the backends are OR'd; backend order does not change the
-    result. Only relationship-family implementation handles participate.
-    Does not use Django backend OR, ``user.has_perm``, or the
-    legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
+    owned together by one participating backend. Invalid configuration
+    raises before a grant query. Only applicable plans whose permission
+    terminal is ``django.contrib.auth.models.Permission`` participate.
+    Each of those backends composes its own grant with its own selected
+    names before the backends are OR'd; backend order does not change
+    the result. Only relationship-family implementation handles
+    participate. Does not use Django backend OR, ``user.has_perm``, or
+    the legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
     surface. Django's object-level ``user.has_perm`` OR across
     authentication backends is a different layer.
 
+    An active superuser is allowed only when a registered user override
+    passes, or when an ordinary grant does. ``skip_<name>`` keywords
+    are forwarded to that same inquiry. ``skip_<override>`` drops the
+    override and leaves ordinary grants in place.
+
     ``PermittedQuerySet.permitted`` is the queryset form of this
-    permission codec and condition rule. It has no HTTP status and no
-    active-superuser shortcut.
+    permission codec and condition rule. It has no HTTP status.
     """
     model = _guard_model(model)
     _guard_permission(model, permission)
@@ -166,7 +161,9 @@ def authorization_required(model, permission, conditions=()):
     def decorator(view_func):
         @wraps(view_func)
         def _wrapped_view(request, *args, **kwargs):
-            _authorize_candidate(request, kwargs, model, permission, conditions)
+            _authorize_candidate(
+                request, kwargs, model, permission, conditions, skip_flags,
+            )
             return view_func(request, *args, **kwargs)
         return _wrapped_view
     return decorator

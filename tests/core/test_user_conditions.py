@@ -8,7 +8,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import PermissionDenied
 from django.db import connection, models
+from django.http import HttpRequest
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import path, reverse
 
@@ -28,6 +30,10 @@ from trusts.core import (
     common_permissions,
     filter_by_permitted_content,
     granted,
+)
+from trusts.decorators import (
+    _declared_authorization_guards,
+    authorization_required,
 )
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedQuerySet, PermittedUsersManagerMixin
@@ -1379,6 +1385,115 @@ class SuperuserSurfaceTest(TestCase):
         self._expect(handle, self.dormant, False)
         self._expect(handle, self.dormant, True, skip_is_active=True)
         self._expect(handle, self.peer, True)
+
+
+def _guard_request(user):
+    request = HttpRequest()
+    request.user = user
+    return request
+
+
+class AuthorizationRequiredSuperuserTest(TestCase):
+    """The view guard follows the override. It does not copy ``has_perm``."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.active = User.objects.create_superuser(
+            'guard-active-super', password='x', email='guard-active@example.com',
+        )
+        self.dormant = User.objects.create_superuser(
+            'guard-dormant-super', password='x', email='guard-dormant@example.com',
+        )
+        self.dormant.is_active = False
+        self.dormant.save(update_fields=['is_active'])
+        self.change = _permission(Document, 'change_document')
+        self.doc = Document.objects.create(title='guard-super')
+        self.perm = 'myapp.change_document'
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.dormant, permission=self.change,
+        )
+
+    def _view(self, **flags):
+        @authorization_required(Document, self.perm, **flags)
+        def view(request, pk):
+            return 'ok'
+
+        entry = (Document, self.perm, ())
+        self.addCleanup(self._forget_guard, entry)
+        return view
+
+    def _forget_guard(self, entry):
+        try:
+            _declared_authorization_guards.remove(entry)
+        except ValueError:
+            pass
+
+    def test_without_override_active_superuser_needs_a_grant(self):
+        config, original, sentinel, registry = _install_document_registry(
+            override=False,
+        )
+        self.addCleanup(
+            _restore_document_registry, config, original, sentinel,
+        )
+        self.assertIsNone(registry._user_override)
+        view = self._view()
+        with self.assertNumQueries(2):
+            with self.assertRaises(PermissionDenied):
+                view(_guard_request(self.active), pk=self.doc.pk)
+        self.assertTrue(self.active.has_perm(self.perm, self.doc))
+        with self.assertNumQueries(0):
+            with self.assertRaises(PermissionDenied):
+                view(_guard_request(self.dormant), pk=self.doc.pk)
+        audited = self._view(skip_is_active=True)
+        self.assertEqual(
+            audited(_guard_request(self.dormant), pk=self.doc.pk), 'ok',
+        )
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.active, permission=self.change,
+        )
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                view(_guard_request(self.active), pk=self.doc.pk), 'ok',
+            )
+
+    def test_override_allows_active_superuser_without_a_grant(self):
+        config, original, sentinel, registry = _install_document_registry(
+            override=True,
+        )
+        self.addCleanup(
+            _restore_document_registry, config, original, sentinel,
+        )
+        self.assertEqual(registry._user_override.name, 'superuser')
+        view = self._view()
+        with self.assertNumQueries(1):
+            self.assertEqual(
+                view(_guard_request(self.active), pk=self.doc.pk), 'ok',
+            )
+        with self.assertNumQueries(0):
+            with self.assertRaises(PermissionDenied):
+                view(_guard_request(self.dormant), pk=self.doc.pk)
+
+    def test_skip_superuser_drops_the_override(self):
+        config, original, sentinel, registry = _install_document_registry(
+            override=True,
+        )
+        self.addCleanup(
+            _restore_document_registry, config, original, sentinel,
+        )
+        self.assertEqual(registry._user_override.name, 'superuser')
+        plain = self._view()
+        skipped = self._view(skip_superuser=True)
+        self.assertEqual(
+            plain(_guard_request(self.active), pk=self.doc.pk), 'ok',
+        )
+        with self.assertRaises(PermissionDenied):
+            skipped(_guard_request(self.active), pk=self.doc.pk)
+        DocumentGrant.objects.create(
+            document=self.doc, user=self.active, permission=self.change,
+        )
+        self.assertEqual(
+            skipped(_guard_request(self.active), pk=self.doc.pk), 'ok',
+        )
 
 
 class SuperuserPrefixFilterTest(TransactionTestCase):
