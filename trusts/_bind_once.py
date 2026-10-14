@@ -69,6 +69,9 @@ def bind_once(queryset, *also):
 
     A queryset whose Django query structure does not match, or a rewrite
     that fails, is returned unchanged. The warning is logged once.
+    An ``along=`` depth cap is checked here too, while the original
+    queryset is still intact. A cap the rewrite cannot retarget returns
+    that original queryset, not a mix of bound and plain SQL.
     """
     if not trusts_bind_once():
         return _pack(queryset, also)
@@ -376,11 +379,93 @@ def _rewrite(queryset, also):
     for extra in extras:
         walk.visit(extra)
     walk.finish(prepared.query)
+    # Compile along retargets before this clone is published. A failure
+    # raises into bind_once, which still holds the untouched original.
+    _validate_along_retarget(prepared, extras)
     _arm_exists(prepared)
     if isinstance(queryset, QuerySet):
         return prepared, extras
     queryset.query = prepared.query
     return queryset, extras
+
+
+def _validate_along_retarget(prepared, extras):
+    """Compile each along retarget on copies before the clone is returned.
+
+    ``_retarget_depth`` otherwise runs when the caller compiles SQL, after
+    ``bind_once`` has already returned the rewritten queryset. A miss then
+    raises, and the original statement is no longer available to fall back
+    to. Compiling here makes that miss a rewrite failure. Copies keep the
+    compiler from writing aliases onto the queryset this pass returns.
+    """
+    nodes = []
+    seen = set()
+    _collect_along_once(prepared.query, nodes, seen)
+    for extra in extras:
+        _collect_along_once(extra, nodes, seen)
+    if not nodes:
+        return
+    probe = prepared.query.clone()
+    probe.alias_map = {
+        alias: table if table is None else copy.copy(table)
+        for alias, table in probe.alias_map.items()
+    }
+    probe.table_map = {
+        name: list(aliases) for name, aliases in probe.table_map.items()
+    }
+    compiler = probe.get_compiler(
+        using=getattr(prepared, 'db', None) or 'default',
+    )
+    for node in nodes:
+        # The statement compiler resolves F() before as_sql. Do the same
+        # on the probe, or an unresolved F is reported as a rewrite failure.
+        standalone = _own_expr(node)
+        if hasattr(standalone, 'resolve_expression'):
+            standalone = standalone.resolve_expression(
+                probe, allow_joins=True, reuse=None, summarize=False,
+            )
+        standalone.as_sql(compiler, compiler.connection)
+
+
+def _collect_along_once(node, found, seen):
+    if node is None or isinstance(node, (str, bytes, int, float, bool)):
+        return
+    marker = id(node)
+    if marker in seen:
+        return
+    if isinstance(node, _AlongOnce):
+        seen.add(marker)
+        found.append(node)
+        return
+    if isinstance(node, Query):
+        seen.add(marker)
+        _collect_along_once(node.where, found, seen)
+        for annotation in node.annotations.values():
+            _collect_along_once(annotation, found, seen)
+        for part in node.combined_queries or ():
+            _collect_along_once(part, found, seen)
+        return
+    if isinstance(node, (list, tuple)):
+        seen.add(marker)
+        for item in node:
+            _collect_along_once(item, found, seen)
+        return
+    if isinstance(node, Lookup):
+        seen.add(marker)
+        _collect_along_once(node.lhs, found, seen)
+        if not node.rhs_is_direct_value():
+            _collect_along_once(node.rhs, found, seen)
+        return
+    if isinstance(node, (WhereNode, Q)):
+        seen.add(marker)
+        for child in node.children:
+            _collect_along_once(child, found, seen)
+        return
+    if not hasattr(node, 'get_source_expressions'):
+        return
+    seen.add(marker)
+    for source in node.get_source_expressions():
+        _collect_along_once(source, found, seen)
 
 
 def _prepare(queryset, also):
@@ -432,7 +517,7 @@ class _Walk(object):
                 hit.apply(ref)
         _install(query, columns)
 
-    def visit(self, node):
+    def visit(self, node, exists_context=False):
         if node is None or isinstance(node, (
             BindRef, BoundBool, SqlInt, str, bytes, int, float, bool,
         )):
@@ -440,14 +525,23 @@ class _Walk(object):
         if isinstance(node, _AlongOnce):
             self.visit(node.inner)
             return
+        if isinstance(node, Exists):
+            # Exists.__init__ already ran query.exists(), which put the
+            # sentinel on this query. Do not walk sources again.
+            self.visit(node.query, exists_context=True)
+            return
         if isinstance(node, Query):
             if id(node) in self.seen_queries:
                 return
             self.seen_queries.add(id(node))
             self.visit(node.where)
             for key, annotation in list(node.annotations.items()):
+                # Django's EXISTS sentinel is the annotation named "a" on
+                # the existence subquery. A caller annotation of that name
+                # on the outer query keeps its value and output field.
                 if (
-                    key == 'a'
+                    exists_context
+                    and key == 'a'
                     and isinstance(annotation, Value)
                     and annotation.value == 1
                     and not isinstance(annotation.value, bool)
@@ -457,7 +551,7 @@ class _Walk(object):
                     continue
                 self.visit(annotation)
             for part in node.combined_queries or ():
-                self.visit(part)
+                self.visit(part, exists_context=exists_context)
             return
         if isinstance(node, Lookup):
             self._visit_lookup(node)

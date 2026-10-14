@@ -1,15 +1,17 @@
 """One placeholder per inquiry value, and ``is_active`` in the statement (#300)."""
 
+import re
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import django
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection
-from django.db.models import IntegerField, OuterRef, Value
+from django.db import connection, models
+from django.db.models import CharField, IntegerField, OuterRef, Value
 from django.db.models.sql.query import Query
-from django.test import SimpleTestCase, TestCase, override_settings
-from django.test.utils import CaptureQueriesContext
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext, isolate_apps
 
 from tests.core.test_issue147.test_sql_export import (
     Document as GuideDocument,
@@ -27,7 +29,14 @@ from trusts._bind_once import (
     strip_exists_marker,
     trusts_bind_once,
 )
-from trusts.core import TrustsConfigurationError, granted
+from trusts.core import (
+    BackendHandle,
+    PlanQueryCompiler,
+    TrustsConfigurationError,
+    TrustsRegistry,
+    _render_reach_sql,
+    granted,
+)
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import stored_user_is_inactive
 from trusts.reverse import _trusts_eligibility_q
@@ -403,3 +412,211 @@ class Issue300ShapeFallbackTest(TestCase):
         self.assertEqual(
             sql.count('"auth_user"."id" = ("trusts_bind"."user_id")'), 2, sql,
         )
+
+
+@contextmanager
+def _model_tables(*model_classes):
+    with connection.schema_editor() as editor:
+        for model in model_classes:
+            editor.create_model(model)
+    try:
+        yield
+    finally:
+        with connection.schema_editor() as editor:
+            for model in reversed(model_classes):
+                editor.delete_model(model)
+
+
+def _render_parenthesized_depth(walk, seed_sql, seed_params, connection, neighbor=None):
+    """The review repro: ``depth < %s`` becomes ``depth < (%s)``."""
+    sql, params = _render_reach_sql(
+        walk, seed_sql, seed_params, connection, neighbor=neighbor,
+    )
+    rewritten, count = re.subn(
+        r'(["`]depth["`]\s*<\s*)%s',
+        r'\1(%s)',
+        sql,
+        count=1,
+    )
+    if count != 1:
+        raise AssertionError(sql)
+    return rewritten, params
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class Issue300UserAnnotationTest(TransactionTestCase):
+    def test_annotation_named_a_keeps_its_value_and_output_type(self):
+        class Note(models.Model):
+            title = models.CharField(max_length=40)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class NoteGrant(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _model_tables(Note, NoteGrant):
+            user = User.objects.create_user(username='ann-a-300', password='x')
+            content_type, _created = ContentType.objects.get_or_create(
+                app_label='trusts_tests', model='note',
+            )
+            permission, _created = Permission.objects.get_or_create(
+                content_type=content_type,
+                codename='read_note_a',
+                defaults={'name': 'read_note_a'},
+            )
+            note = Note.objects.create(title='kept')
+            NoteGrant.objects.create(note=note, user=user, permission=permission)
+            registry = TrustsRegistry()
+            handle = BackendHandle(
+                path='tests.annotation.a',
+                registry=registry,
+                compiler=PlanQueryCompiler(),
+            )
+            handle.register(
+                trust=NoteGrant,
+                user='user',
+                permission='permission',
+                content='note',
+            )
+            candidates = Note.objects.annotate(
+                a=Value(1, output_field=CharField()),
+            )
+            with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+                plain = handle.registry.filter_authorized(
+                    candidates, user, permission,
+                )
+                plain_values = list(plain.values_list('a', flat=True))
+            bound = handle.registry.filter_authorized(
+                candidates, user, permission,
+            )
+            bound_values = list(bound.values_list('a', flat=True))
+            self.assertEqual(plain_values, ['1'])
+            self.assertEqual(bound_values, ['1'])
+            self.assertIsInstance(bound_values[0], str)
+            annotation = bound.query.annotations['a']
+            self.assertIsInstance(annotation, Value)
+            self.assertNotIsInstance(annotation, SqlInt)
+            self.assertEqual(annotation.value, 1)
+            self.assertIsInstance(annotation.output_field, CharField)
+            sql, _params = bound.query.sql_with_params()
+            self.assertIn('SELECT 1 AS "a"', sql)
+            self.assertNotIn('SELECT %s AS "a"', sql)
+            self.assertIn('trusts_bind', sql)
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class Issue300AlongRetargetFallbackTest(TransactionTestCase):
+    def setUp(self):
+        bind_once_module._warned = False
+
+    def tearDown(self):
+        bind_once_module._warned = False
+
+    def test_parenthesized_depth_cap_falls_back_for_execution_and_lock(self):
+        class RetargetNode(models.Model):
+            parent = models.ForeignKey(
+                'self', null=True, related_name='children',
+                on_delete=models.CASCADE,
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class RetargetGrant(models.Model):
+            node = models.ForeignKey(RetargetNode, on_delete=models.CASCADE)
+            user = models.ForeignKey(User, on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with _model_tables(RetargetNode, RetargetGrant):
+            user = User.objects.create_user(username='along-cap-300', password='x')
+            content_type, _created = ContentType.objects.get_or_create(
+                app_label='trusts_tests', model='retargetnode',
+            )
+            permission, _created = Permission.objects.get_or_create(
+                content_type=content_type,
+                codename='read_retarget',
+                defaults={'name': 'read_retarget'},
+            )
+            node = RetargetNode.objects.create()
+            RetargetGrant.objects.create(
+                node=node, user=user, permission=permission,
+            )
+            registry = TrustsRegistry()
+            handle = BackendHandle(
+                path='tests.along.retarget',
+                registry=registry,
+                compiler=PlanQueryCompiler(),
+            )
+            handle.register(
+                trust=RetargetGrant,
+                user='user',
+                permission='permission',
+                content='node',
+                along=('node__parent', 4),
+            )
+            candidates = RetargetNode.objects.order_by('pk')
+            with patch(
+                'trusts.core._render_reach_sql', _render_parenthesized_depth,
+            ):
+                with override_settings(TRUSTS_SQL_BIND_ONCE=False):
+                    plain = handle.registry.filter_authorized(
+                        candidates, user, permission,
+                    )
+                    plain_rows = list(plain)
+                    plain_sql = plain.query.sql_with_params()
+                    plain_has = handle.registry.has_permission(
+                        user, node, permission,
+                    )
+                    plain_doc = _load_policy_sql_document(
+                        render_policy_sql_bytes(handles=[handle]),
+                    )
+                bind_once_module._warned = False
+                with self.assertLogs('trusts', level='WARNING') as logs:
+                    bound = handle.registry.filter_authorized(
+                        candidates, user, permission,
+                    )
+                    bound_rows = list(bound)
+                    bound_sql = bound.query.sql_with_params()
+                    bound_has = handle.registry.has_permission(
+                        user, node, permission,
+                    )
+                    bound_doc = _load_policy_sql_document(
+                        render_policy_sql_bytes(handles=[handle]),
+                    )
+                    list(handle.registry.filter_authorized(
+                        candidates, user, permission,
+                    ))
+                    render_policy_sql_bytes(handles=[handle])
+            self.assertEqual(len(logs.records), 1)
+            message = logs.records[0].getMessage()
+            self.assertIn('TrustsConfigurationError', message)
+            self.assertIn('could not retarget the along depth cap', message)
+            self.assertIn(django.get_version(), message)
+            self.assertEqual(bound_rows, plain_rows)
+            self.assertEqual(bound_rows, [node])
+            self.assertIs(bound_has, plain_has)
+            self.assertIs(bound_has, True)
+            self.assertEqual(bound_sql, plain_sql)
+            self.assertNotIn('trusts_bind', bound_sql[0])
+            self.assertRegex(bound_sql[0], r'["`]depth["`]\s*<\s*\(%s\)')
+            self.assertEqual(bound_doc, plain_doc)
+            for content in bound_doc['backends'][0]['contents']:
+                for key in (
+                    'permitted', 'has_perm', 'get_all_permissions',
+                    'get_permitted_users',
+                ):
+                    self.assertNotIn('trusts_bind', content[key]['sql'], key)
+                    self.assertRegex(
+                        content[key]['sql'],
+                        r'["`]depth["`]\s*<\s*\(%s\)',
+                        key,
+                    )
