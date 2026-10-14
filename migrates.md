@@ -23,59 +23,6 @@ Applications adopting schema-neutral django-trusts 1.0 as a new integration
 should follow the
 [usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
-## Lockfile `params` are `source=value` tokens (#300)
-
-Each `params` entry in `trusts-policy.lock.yaml` was a map. A call input
-carried `bind` and `hint`. A bound constant carried `const` and `hint`.
-Each entry is now one string. A call input is a bare `$` token. A bound
-constant is `source=value`. A non-id target stays dotted (`$user.code`,
-`$permission.code`, `$content.pk_value`). Bools spell `True` and `False`.
-Strings use JSON quoting. There is no hint line.
-
-| | Old | New |
-| --- | --- | --- |
-| Call input | `{bind: "user.id", hint: "$user"}` | `"$user.id"` |
-| Permission call input | `{bind: "permission.id", hint: "$permission"}` | `"$permission.id"` |
-| Content call input | `{bind: "content.id", hint: "$content"}` | `"$content.id"` |
-| Content primary key | `{const: 1, hint: "content pk"}` | `"$content.id"` |
-| Content type app | `{const: "gh_permissions", hint: "content type app"}` | `"$content.app_label=\"gh_permissions\""` |
-| Content type model | `{const: "repository", hint: "content type model"}` | `"$content.model=\"repository\""` |
-| Active user | `{const: true, hint: "active"}` | `"user.is_active=True"` |
-| Along bound | `{const: 8, hint: "along bound"}` | `"$along_bound=8"` |
-| Along match | `{const: true, hint: "along match"}` | `"$along_match=True"` |
-| Compared field | `{const: true, hint: "confidential"}` | `"confidential=True"` |
-
-```yaml
-# Old (Issue permitted, map params)
-params: [{bind: "permission.id", hint: "$permission"}, {const: "gh_permissions", hint: "content type app"}, {const: "issue", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 8, hint: "along bound"}, {const: true, hint: "along match"}]
-
-# New (same inquiry, regenerated)
-params: ["$user.id", "$permission.id", "$along_bound=8", "$content.app_label=\"gh_permissions\"", "$content.model=\"issue\"", "$along_match=True"]
-```
-
-`trusts_bind` columns, and this `params` list, are ordered user, then
-permission, then content. A content primary key sorts with content.
-Remaining columns keep registration order. Tagged values (bytes,
-decimals, UUIDs, dates, and the other non-scalar constants) stay inside
-the token as the JSON mapping the old `const` held.
-
-Regenerate every committed lockfile with `trusts_policy_sql --lock`.
-Update any consumer that reads `bind`, `const`, or `hint` from a param
-entry. `trusts.E009` compares the lockfile bytes, so a file generated
-before this change fails that check until it is rewritten.
-
-Migration-bot checklist:
-
-- `trusts-policy.lock.yaml`
-- `trusts_policy_sql --lock`
-- `{bind:`
-- `{const:`
-- `hint:`
-- `content type app`
-- `content type model`
-- `along bound`
-- `content pk`
-
 ## `filter_authorized_scopes` renamed (#302)
 
 `filter_authorized_scopes` is deprecated. Call `filter_by_permitted_content`.
