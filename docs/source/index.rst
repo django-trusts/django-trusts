@@ -304,10 +304,13 @@ Delegate live authority
 -----------------------
 
 The delegated registration makes ``delegate`` the current actor and
-``sponsor`` the source of live ordinary authority. For a requested permission,
+``sponsor`` the source of live authority. For a requested permission,
 django-trusts requires the same delegation row, its selected content and
-condition, and an ordinary sponsor grant on that content. The actor's own
-ordinary grants remain available as independent alternatives.
+condition, and sponsor authority on that content. By default, user overrides
+target only the checked user, so the sponsor must have an ordinary grant. An
+override explicitly registered with ``on="sponsor"`` or ``on="*"`` may
+supply sponsor authority instead. The actor's own ordinary grants remain
+available as independent alternatives.
 
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
