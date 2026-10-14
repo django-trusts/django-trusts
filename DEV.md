@@ -174,8 +174,10 @@ proposed contract. Keep it draft; user docs normally merge with or after the
 implementation so `dev` does not promise behavior it does not provide.
 
 The implementor reviews that contract before coding, surfaces contradictions
-or missing cases, and implements against it. Implementation PRs normally do
-not edit user docs. When implementation exposes a mismatch, the implementor
+or missing cases, and implements against it. Code review checks both
+correctness and adherence to the docs, including the reasoning behind
+documented choices and the boundaries the docs intentionally leave
+unspecified. Implementation PRs normally do not edit user docs. When implementation exposes a mismatch, the implementor
 posts an evidence-backed doc-change request. The doc writer decides whether it
 is a valid contract change, a documentation defect, or an implementation
 misunderstanding, and updates the docs when warranted. Keep implementation
