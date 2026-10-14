@@ -148,11 +148,13 @@ A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 ``{path: "...", model: "...", target: "..."}``. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
-combines all applicable ordinary grants with OR: any matching ordinary grant
-may supply the sponsor's authority on the same content and permission.
-Reviewers should verify the delegate/sponsor direction, the relationship's
-explicit conditions, the :ref:`user conditions and overrides <user-conditions-and-overrides>`,
-and the sponsor's ordinary-grant predicate in the document and generated SQL.
+combines all applicable ordinary grants with OR by default. An override
+explicitly registered with ``on="sponsor"`` or ``on="*"`` is an additional
+alternative that may supply sponsor authority on the same content and
+permission. Reviewers should verify the delegate/sponsor direction, the
+relationship's explicit conditions, the :ref:`user conditions and overrides
+<user-conditions-and-overrides>`, and the complete sponsor-authority predicate
+in the document and generated SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
 used ``along=``. The depth cap stays a ``const`` with hint ``along bound``.
@@ -173,26 +175,21 @@ User rules
 ~~~~~~~~~~
 
 Above ``sql:``, each inquiry entry records its user-rule expression with
-parentheses preserved. Every named term carries its target from ``on=``
-and where it is evaluated: ``sql`` for the permission statement or
-``instance`` for the supplied user. The ordinary grant proof is written
-``ordinary[sql]``. For example, with the default conditions shortened to
-``is_active`` and a registered ``superuser`` override:
+parentheses preserved. Every named term carries its target from ``on=``, and
+the ordinary grant proof is written ``ordinary``. For example, with the
+default conditions shortened to ``is_active`` and a registered
+``superuser`` override:
 
 .. code-block:: text
 
-   is_active[*, sql] & (superuser[user, sql] | ordinary[sql])
+   is_active[*] & (superuser[user] | ordinary)
 
 A rule registered with ``("user", "sponsor")`` is recorded as ``*``.
 Skipped rules do not appear in the expression, for any of their targets. A
-skipped condition contributes no restriction; a skipped override
-contributes no grant. With ``skip_is_active=True`` the entry above records
-``superuser[user, sql] | ordinary[sql]``.
-
-With database evaluation throughout, the expression is evaluated in the SQL
-statement. With instance evaluation, the recorded expression shows how
-instance results combine with the SQL result. It does not imply that an
-instance override may bypass required validation or other user conditions.
+skipped condition contributes no restriction; a skipped override contributes
+no grant. With ``skip_is_active=True`` the entry above records
+``superuser[user] | ordinary``. All user rules are compiled into the policy
+SQL.
 
 Permitted content
 ~~~~~~~~~~~~~~~~~
@@ -210,9 +207,10 @@ that model. The parameter values are the values in that statement. An
 object check. The depth cap is a ``const`` with hint ``along bound``. A
 prefix at the walk site is compared with the walk. An ancestor of the walk
 site stays the value stored on the grant. A one-level delegation keeps a
-row only where the delegation and the sponsor's ordinary permission both
-reach it. Ordinary sponsor grants may come from another backend in the
-same document, as they do for ``has_perm``. A content path with no proper
+row only where the delegation and the sponsor's authority both reach it. By
+default that authority comes from ordinary sponsor grants, which may come from
+another backend in the same document as they do for ``has_perm``; an explicitly
+sponsor-targeted override is an additional alternative. A content path with no proper
 prefix omits the key. A prefix whose queryset is empty also omits that
 model, because that call runs no SQL. Schema version stays 1.
 
