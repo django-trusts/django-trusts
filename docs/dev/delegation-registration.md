@@ -152,7 +152,7 @@ question.
 For actor `u`, content `c`, and permission `p`, the compiled result is:
 
 ```text
-is_active_principal(u)
+u is active and authenticated and not anonymous
 AND (
     ordinary(u, c, p)
     OR
@@ -160,18 +160,17 @@ AND (
         d.delegate = u
         AND delegation_reaches(d, c)
         AND delegated_condition(d, p)
-        AND is_active_principal(d.sponsor)
+        AND d.sponsor is active and authenticated and not anonymous
         AND ordinary(d.sponsor, c, p)
 )
 ```
 
-`is_active_principal(x)` is expressed as its equivalent eligibility predicate
-where the inquiry projects persisted principals. A delegate or sponsor that
-fails that rule cannot
-authorize through delegation, even while its ordinary grants and delegation
-rows remain stored. The delegate gate applies to both the actor's ordinary
-branch and delegated branch. This eligibility rule does not decide whether
-active-superuser status supplies authority.
+That check is the eligibility predicate where the inquiry projects persisted
+principals. A delegate or sponsor that fails it cannot authorize through
+delegation, even while its ordinary grants and delegation rows remain stored.
+The delegate gate applies to both the actor's ordinary branch and delegated
+branch. This eligibility rule does not decide whether active-superuser status
+supplies authority.
 
 The exact relationship row binds the sponsor. A matching relationship from
 one installation cannot borrow the sponsor, approval, content, or condition
