@@ -548,7 +548,7 @@ User conditions and overrides
 The only default condition is ``is_active``, if the field exists.
 No user override is registered by default.
 
-Configure user rules on ``backend.registry`` in ``AppConfig.ready()`` before
+Set user conditions and overrides in ``AppConfig.ready()``, before
 registering permissions or delegations. For example, replace the activity
 condition:
 
