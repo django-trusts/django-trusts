@@ -160,6 +160,123 @@ class UserConditionRegistrationTest(TransactionTestCase):
                 editor.delete_model(Note)
 
 
+class PreRegistrationPlanFragmentTest(TransactionTestCase):
+    """A plan built before registration must not keep a stale rule."""
+
+    def test_add_replace_and_remove_after_plan_for(self):
+        class Note(models.Model):
+            title = models.CharField(max_length=20)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class Grant(models.Model):
+            note = models.ForeignKey(Note, on_delete=models.CASCADE)
+            user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+            permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        with connection.schema_editor() as editor:
+            editor.create_model(Note)
+            editor.create_model(Grant)
+        try:
+            User = get_user_model()
+            plain = User.objects.create_user('frag-plain', password='x')
+            staff = User.objects.create_user('frag-staff', password='x')
+            staff.is_staff = True
+            staff.save(update_fields=['is_staff'])
+            staff_only = User.objects.create_user('frag-staff-only', password='x')
+            staff_only.is_staff = True
+            staff_only.save(update_fields=['is_staff'])
+            superuser = User.objects.create_superuser(
+                'frag-super', password='x', email='frag@example.com',
+            )
+            inactive = User.objects.create_user('frag-inactive', password='x')
+            inactive.is_active = False
+            inactive.save(update_fields=['is_active'])
+            note = Note.objects.create(title='n')
+            read = _permission(Note, 'read_note_plan_fragment')
+            for holder in (plain, staff, inactive):
+                Grant.objects.create(note=note, user=holder, permission=read)
+            grant = Ref(Grant)
+
+            def register(registry):
+                registry.register(
+                    content=grant.note,
+                    user=grant.user,
+                    permission=grant.permission,
+                )
+
+            added = TrustsRegistry()
+            added.plan_for(Note, user=plain)
+            self.assertTrue(added._rule_fragments)
+            added.register_user_condition('staff', lambda u: u.is_staff)
+            self.assertFalse(added._rule_fragments)
+            self.assertFalse(added._override_fragments)
+            register(added)
+            self.assertFalse(added.has_permission(plain, note, read))
+            self.assertIn('is_staff', str(added.permissions_for(plain, note).query))
+
+            replaced = TrustsRegistry()
+            replaced.register_user_condition('staff', lambda u: u.is_staff)
+            replaced.plan_for(Note, user=staff)
+            replaced.register_user_condition(
+                'staff', lambda u: u.is_superuser,
+            )
+            self.assertFalse(replaced._rule_fragments)
+            register(replaced)
+            self.assertFalse(replaced.has_permission(staff, note, read))
+            replaced_sql = str(replaced.permissions_for(staff, note).query)
+            self.assertIn('is_superuser', replaced_sql)
+            self.assertNotIn('is_staff', replaced_sql)
+
+            removed = TrustsRegistry()
+            removed.plan_for(Note, user=inactive)
+            removed.register_user_condition('is_active', None)
+            self.assertFalse(removed._rule_fragments)
+            register(removed)
+            self.assertTrue(removed.has_permission(inactive, note, read))
+            self.assertNotIn(
+                'is_active', str(removed.permissions_for(inactive, note).query),
+            )
+
+            override = TrustsRegistry()
+            override.plan_for(Note, user=plain)
+            override.set_user_override('superuser', lambda u: u.is_superuser)
+            self.assertFalse(override._override_fragments)
+            register(override)
+            self.assertTrue(override.has_permission(superuser, note, read))
+
+            replaced_override = TrustsRegistry()
+            replaced_override.set_user_override('staff', lambda u: u.is_staff)
+            replaced_override.plan_for(Note, user=staff_only)
+            replaced_override.set_user_override(
+                'superuser', lambda u: u.is_superuser,
+            )
+            self.assertFalse(replaced_override._override_fragments)
+            register(replaced_override)
+            self.assertFalse(
+                replaced_override.has_permission(staff_only, note, read),
+            )
+            self.assertTrue(
+                replaced_override.has_permission(superuser, note, read),
+            )
+
+            cleared = TrustsRegistry()
+            cleared.set_user_override('superuser', lambda u: u.is_superuser)
+            cleared.plan_for(Note, user=superuser)
+            cleared.set_user_override('superuser', None)
+            self.assertFalse(cleared._override_fragments)
+            register(cleared)
+            self.assertFalse(cleared.has_permission(superuser, note, read))
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(Grant)
+                editor.delete_model(Note)
+
+
 class UserOverrideTest(TransactionTestCase):
     def test_checked_user_override_or_ordinary_grant(self):
         class Note(models.Model):

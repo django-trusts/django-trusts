@@ -2,7 +2,7 @@
 """Matrix B: django-trusts 1.0.0rc1 + exact Zero candidate.
 
 Requires ZERO_CHECKOUT (django-trusts-zero at the exact Zero candidate
-``00a58981134a1957fb9aa08bc0768b226fd310ba``) and an
+``518a906af9d0ee9da96992a791f7288c511f7b5b``) and an
 installed pair.
 Django is configured here so the kernel tests.settings host is not used.
 """

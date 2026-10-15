@@ -124,7 +124,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
 
     def test_companion_pin_is_exact_zero_candidate(self):
-        z_methods = '00a58981134a1957fb9aa08bc0768b226fd310ba'
+        z_methods = '518a906af9d0ee9da96992a791f7288c511f7b5b'
         stale_r5a = '462c83b59edfb51011b4373e8214b2daaab7f500'
         stale_38 = 'c7dc4f11f728ad3c4c22249e471daa4bf9849404'
         stale_191 = '517307170f954f187da78c56e236ec1779c46e29'

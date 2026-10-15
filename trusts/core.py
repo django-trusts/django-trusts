@@ -4145,6 +4145,11 @@ class TrustsRegistry(object):
             self._override_fragments[model] = compiled
             return compiled
 
+    def _clear_compiled_rules(self):
+        """Drop registration-time fragments after a successful rule edit."""
+        self._rule_fragments.clear()
+        self._override_fragments.clear()
+
     def _compiled_subject(self, records, delegations, user_model):
         if user_model is not None:
             return user_model
@@ -4212,6 +4217,7 @@ class TrustsRegistry(object):
                         'User condition %r is not registered.' % (name,)
                     )
                 del self._user_conditions[name]
+                self._clear_compiled_rules()
                 return None
             rule = UserCondition(name, concrete_rule(expr, name), target)
         except TrustsConfigurationError:
@@ -4219,6 +4225,7 @@ class TrustsRegistry(object):
                 self._user_conditions = None
             raise
         self._user_conditions[name] = rule
+        self._clear_compiled_rules()
         return rule
 
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
@@ -4282,10 +4289,12 @@ class TrustsRegistry(object):
                     'User override %r is not the current override.' % (name,)
                 )
             self._user_override = None
+            self._clear_compiled_rules()
             return None
         self._user_override = UserCondition(
             name, concrete_rule(expr, name), 'user',
         )
+        self._clear_compiled_rules()
         return self._user_override
 
     def freeze(self):
