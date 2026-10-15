@@ -1838,6 +1838,204 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
                 editor.delete_model(PlainPrincipal)
 
 
+class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
+    """A user model with no ``is_active`` column."""
+
+    def _create(self, label):
+        module = __name__
+
+        def meta():
+            return type('Meta', (), {'app_label': 'trusts_tests'})
+
+        user_model = type('%sUser' % label, (AbstractBaseUser,), {
+            '__module__': module,
+            'username': models.CharField(max_length=40, unique=True),
+            'USERNAME_FIELD': 'username',
+            'Meta': meta(),
+        })
+        note_model = type('%sNote' % label, (models.Model,), {
+            '__module__': module,
+            'title': models.CharField(max_length=40),
+            'Meta': meta(),
+        })
+        grant_model = type('%sGrant' % label, (models.Model,), {
+            '__module__': module,
+            'user': models.ForeignKey(user_model, on_delete=models.CASCADE),
+            'note': models.ForeignKey(note_model, on_delete=models.CASCADE),
+            'permission': models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            ),
+            'Meta': meta(),
+        })
+        link_model = type('%sLink' % label, (models.Model,), {
+            '__module__': module,
+            'note': models.ForeignKey(note_model, on_delete=models.CASCADE),
+            'delegate': models.ForeignKey(
+                user_model, related_name='+', on_delete=models.CASCADE,
+            ),
+            'sponsor': models.ForeignKey(
+                user_model, related_name='+', on_delete=models.CASCADE,
+            ),
+            'Meta': meta(),
+        })
+        self.assertNotIn(
+            'is_active',
+            [field.name for field in user_model._meta.concrete_fields],
+        )
+        self.assertIs(user_model.is_active, True)
+        with connection.schema_editor() as editor:
+            editor.create_model(user_model)
+            editor.create_model(note_model)
+            editor.create_model(grant_model)
+            editor.create_model(link_model)
+        return user_model, note_model, grant_model, link_model
+
+    def _drop(self, user_model, note_model, grant_model, link_model):
+        with connection.schema_editor() as editor:
+            editor.delete_model(link_model)
+            editor.delete_model(grant_model)
+            editor.delete_model(note_model)
+            editor.delete_model(user_model)
+
+    def test_is_active_condition_raises_at_registration(self):
+        """``is_active`` fails when this user model is registered.
+
+        An explicit ``register_user_condition('is_active', ...)`` and the
+        built-in condition both raise from ``register()`` and
+        ``register_delegation()``. Neither call stores a relation.
+        """
+        user_model, note_model, grant_model, link_model = self._create(
+            'Rejected',
+        )
+        try:
+            grant = Ref(grant_model)
+            link = Ref(link_model)
+
+            def assert_rejected(registry, call):
+                with self.assertNumQueries(0):
+                    with self.assertRaises(TrustsConfigurationError) as ctx:
+                        call()
+                message = str(ctx.exception)
+                self.assertIn("User condition 'is_active'", message)
+                self.assertIn('concrete BooleanField', message)
+                self.assertIn(user_model._meta.label, message)
+
+            explicit = TrustsRegistry()
+            explicit.register_user_condition(
+                'is_active', lambda u: u.is_active,
+            )
+            assert_rejected(
+                explicit,
+                lambda: explicit.register(
+                    content=grant.note,
+                    user=grant.user,
+                    permission=grant.permission,
+                ),
+            )
+            self.assertEqual(explicit.records, ())
+
+            builtin = TrustsRegistry()
+            assert_rejected(
+                builtin,
+                lambda: builtin.register(
+                    content=grant.note,
+                    user=grant.user,
+                    permission=grant.permission,
+                ),
+            )
+            self.assertEqual(builtin.records, ())
+
+            delegated = TrustsRegistry()
+            assert_rejected(
+                delegated,
+                lambda: delegated.register_delegation(
+                    content=link.note,
+                    delegate=link.delegate,
+                    sponsor=link.sponsor,
+                ),
+            )
+            self.assertEqual(delegated.delegations, ())
+        finally:
+            self._drop(user_model, note_model, grant_model, link_model)
+
+    def test_without_an_is_active_condition_inquiries_still_match(self):
+        """Forward, reverse, and sponsor checks run with no activity column."""
+        from trusts.reverse import lock_permitted_users_queryset
+
+        user_model, note_model, grant_model, link_model = self._create('Open')
+        try:
+            holder = user_model.objects.create(
+                username='columnless-holder', password='x',
+            )
+            sponsor = user_model.objects.create(
+                username='columnless-sponsor', password='x',
+            )
+            delegate = user_model.objects.create(
+                username='columnless-delegate', password='x',
+            )
+            outsider = user_model.objects.create(
+                username='columnless-outsider', password='x',
+            )
+            note = note_model.objects.create(title='columnless')
+            permission = _permission(note_model, 'change_columnlessnote')
+            grant_model.objects.create(
+                user=holder, note=note, permission=permission,
+            )
+            grant_model.objects.create(
+                user=sponsor, note=note, permission=permission,
+            )
+            link_model.objects.create(
+                note=note, delegate=delegate, sponsor=sponsor,
+            )
+
+            registry = TrustsRegistry()
+            registry.register_user_condition('is_active', None)
+            grant = Ref(grant_model)
+            link = Ref(link_model)
+            registry.register(
+                content=grant.note,
+                user=grant.user,
+                permission=grant.permission,
+            )
+            registry.register_delegation(
+                content=link.note,
+                delegate=link.delegate,
+                sponsor=link.sponsor,
+            )
+            self.assertTrue(registry.has_permission(holder, note, permission))
+            self.assertTrue(registry.has_permission(sponsor, note, permission))
+            self.assertFalse(registry.has_permission(outsider, note, permission))
+            forward_sql = str(registry.permissions_for(holder, note).query)
+            self.assertNotIn('is_active', forward_sql)
+
+            handle = BackendHandle(
+                'columnless', registry, PlanQueryCompiler(),
+            )
+            predicate = granted((handle,), note, delegate, permission)
+            self.assertIsNotNone(predicate)
+            matched = bind_once(note_model.objects.filter(
+                pk=note.pk,
+            ).filter(predicate))
+            self.assertTrue(matched.exists())
+            self.assertNotIn('is_active', matched.query.sql_with_params()[0])
+            denied = granted((handle,), note, outsider, permission)
+            if denied is not None:
+                self.assertFalse(bind_once(note_model.objects.filter(
+                    pk=note.pk,
+                ).filter(denied)).exists())
+
+            found = set(lock_permitted_users_queryset(
+                handle, note, permission,
+            ).values_list('pk', flat=True))
+            self.assertEqual(found, {holder.pk, sponsor.pk, delegate.pk})
+            reverse_sql = str(lock_permitted_users_queryset(
+                handle, note, permission,
+            ).query)
+            self.assertNotIn('is_active', reverse_sql)
+        finally:
+            self._drop(user_model, note_model, grant_model, link_model)
+
+
 _STOCK_CALLS = (
     ('has_perm', ('auth.view_user',), {'skip_is_active': True}),
     ('ahas_perm', ('auth.view_user',), {'skip_is_active': True}),

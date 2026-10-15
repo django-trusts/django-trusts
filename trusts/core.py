@@ -2131,7 +2131,7 @@ def _shift_outer_ref(value):
 def _principal_eligibility_q(model, path, rules, values):
     """Sponsor rules compiled at registration, plus identity columns.
 
-    ``rules`` is that fragment, or ``None`` when a column was missing.
+    ``rules`` is that fragment. A missing fragment contributes nothing.
     Anonymous and authenticated attributes use their runtime defaults
     when they are not concrete fields.
     """
@@ -4135,18 +4135,18 @@ class TrustsRegistry(object):
             self._stored_user_conditions(), self._user_override,
         )
 
-    def _rule_fragment(self, model, *, role, path='', missing='omit'):
+    def _rule_fragment(self, model, *, role, path=''):
         """Registration-time ``(skip OR condition)`` for one model and role."""
         from trusts.user_rules import compile_user_rules
 
         model = model._meta.concrete_model
-        key = (model, role, path, missing)
+        key = (model, role, path)
         try:
             return self._rule_fragments[key]
         except KeyError:
             compiled = compile_user_rules(
                 model, path, self._stored_user_conditions(),
-                role=role, values={}, missing=missing,
+                role=role, values={},
             )
             self._rule_fragments[key] = compiled
             return compiled
@@ -4251,18 +4251,12 @@ class TrustsRegistry(object):
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
         """Fail when a fixed rule is not a concrete boolean on these models.
 
-        The unmodified built-in ``is_active`` comparison is omitted when a
-        model has no such column.
+        The built-in ``is_active`` condition is included. A model with no
+        such column must remove that condition before registration.
         """
         from trusts.user_rules import assert_concrete_booleans, rule_applies
 
         for rule in self.user_conditions():
-            expr = rule.expr
-            if (
-                rule.name == 'is_active' and rule.on == '*'
-                and expr.kind == 'field' and expr.name == 'is_active'
-            ):
-                continue
             models = []
             if user_model is not None and rule_applies(rule.on, 'user'):
                 models.append(user_model)
@@ -4455,12 +4449,10 @@ class TrustsRegistry(object):
             user_model=delegate_model,
             sponsor_model=sponsor_model,
         )
-        self._rule_fragment(delegate_model, role='user', missing='omit')
-        self._rule_fragment(delegate_model, role='user', missing='closed')
+        self._rule_fragment(delegate_model, role='user')
         self._override_fragment(delegate_model)
         record = replace(record, sponsor_rules=self._rule_fragment(
             sponsor_model, role='sponsor', path=sponsor_field,
-            missing='closed',
         ))
         if existing_rows:
             existing_rows.append(record)
@@ -4607,8 +4599,7 @@ class TrustsRegistry(object):
                         )
                     )
         self._assert_rules_for_registration(user_model=user_model)
-        self._rule_fragment(user_model, role='user', missing='omit')
-        self._rule_fragment(user_model, role='user', missing='closed')
+        self._rule_fragment(user_model, role='user')
         self._override_fragment(user_model)
         if existing_rows:
             existing_rows.append(record)
@@ -4677,10 +4668,8 @@ class TrustsRegistry(object):
         subject = self._compiled_subject(records, delegations, user_model)
         rules = closed = override = None
         if subject is not None:
-            rules = self._rule_fragment(subject, role='user', missing='omit')
-            closed = self._rule_fragment(
-                subject, role='user', missing='closed',
-            )
+            rules = self._rule_fragment(subject, role='user')
+            closed = rules
             override = self._override_fragment(subject)
         return RelationPlan(
             records=records,

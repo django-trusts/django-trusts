@@ -219,20 +219,17 @@ def _stored(conditions):
     return tuple(conditions)
 
 
-def compile_user_rules(model, path, conditions, *, role, values, missing='omit'):
+def compile_user_rules(model, path, conditions, *, role, values):
     """``(skip_<name> OR condition)`` for rules that apply to ``role``.
 
-    ``conditions is None`` is the built-in ``is_active`` rule. A missing
-    column is omitted for the checked user and fails closed for a sponsor.
+    ``conditions is None`` is the built-in ``is_active`` rule. Registration
+    rejects a condition whose column is not on ``model``; this compiler
+    does not omit that column or fail closed for it.
     """
     values = values or {}
     combined = None
     for rule in _stored(conditions):
         if not rule_applies(rule.on, role):
-            continue
-        if field_state(model, rule.expr) == 'missing':
-            if missing == 'closed':
-                return None
             continue
         flag = SkipFlag(rule.name, values.get(rule.name, False))
         part = Q(flag) | _compile(path, rule.expr)
