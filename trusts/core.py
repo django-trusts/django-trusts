@@ -4040,7 +4040,6 @@ class TrustsRegistry(object):
         self._frozen = False
         self._condition_lookup = None
         self._user_conditions = None
-        self._explicit_condition_names = set()
         self._user_override = None
         self._rule_fragments = {}
         self._override_fragments = {}
@@ -4117,10 +4116,18 @@ class TrustsRegistry(object):
         )
 
     def user_conditions(self):
-        """Effective user conditions. ``None`` store means the built-in rule."""
+        """Effective user conditions.
+
+        ``None`` store means the built-in ``is_active`` rule when the
+        configured user model has that concrete boolean field, and no
+        conditions otherwise. Compilation for a registered model uses
+        that model's own fields.
+        """
         if self._user_conditions is None:
-            from trusts.user_rules import BUILTIN_USER_CONDITIONS
-            return BUILTIN_USER_CONDITIONS
+            from django.contrib.auth import get_user_model
+
+            from trusts.user_rules import builtin_user_conditions
+            return builtin_user_conditions(get_user_model())
         return tuple(self._user_conditions.values())
 
     def _stored_user_conditions(self):
@@ -4136,40 +4143,19 @@ class TrustsRegistry(object):
             self._stored_user_conditions(), self._user_override,
         )
 
-    def _implicit_is_active(self, rule):
-        """True for the built-in ``is_active`` rule the caller did not set."""
-        if rule.name in self._explicit_condition_names:
-            return False
-        expr = rule.expr
-        return (
-            rule.name == 'is_active' and rule.on == '*'
-            and expr.kind == 'field' and expr.name == 'is_active'
-        )
-
     def _conditions_for_model(self, model):
         """Conditions compiled for ``model``.
 
-        The implicit ``is_active`` rule is left out when that column is
-        missing. Every inquiry uses this same list. An explicit
-        ``is_active`` condition is kept and rejected by registration.
+        With no caller-set rules, the built-in ``is_active`` condition is
+        included only when ``model`` has that concrete boolean field.
+        A caller-set list is used as stored, including a replacement
+        ``is_active`` condition. Every inquiry uses this same list.
         """
-        from trusts.user_rules import BUILTIN_USER_CONDITIONS, field_state
-
         stored = self._stored_user_conditions()
-        rules = BUILTIN_USER_CONDITIONS if stored is None else stored
-        kept = []
-        dropped = False
-        for rule in rules:
-            if (
-                self._implicit_is_active(rule)
-                and field_state(model, rule.expr) == 'missing'
-            ):
-                dropped = True
-                continue
-            kept.append(rule)
-        if not dropped:
+        if stored is not None:
             return stored
-        return tuple(kept)
+        from trusts.user_rules import builtin_user_conditions
+        return builtin_user_conditions(model)
 
     def _rule_fragment(self, model, *, role, path=''):
         """Registration-time ``(skip OR condition)`` for one model and role."""
@@ -4223,7 +4209,7 @@ class TrustsRegistry(object):
     def _open_for_rules(self, kind):
         if self._frozen:
             verb = (
-                'register a user condition' if kind == 'condition'
+                'set a user condition' if kind == 'condition'
                 else 'set a user override'
             )
             raise TrustsConfigurationError(
@@ -4235,19 +4221,24 @@ class TrustsRegistry(object):
                 'register() or register_delegation().'
             )
 
-    def register_user_condition(self, name, expr, on='*'):
-        """Register, replace, or remove one named user condition.
+    def set_user_condition(self, name, expr, on='*'):
+        """Set, replace, or remove one named user condition.
 
         Call this before ``register()`` or ``register_delegation()``.
         ``None`` removes that name. ``on`` is ``*``, ``user``, ``sponsor``,
         or a non-empty tuple of those two. The lambda is walked once.
+        ``is_active`` replaces the default and is not checked against the
+        user model's fields. Other names must be concrete booleans.
         """
+        from django.contrib.auth import get_user_model
+
         from trusts.user_rules import (
-            BUILTIN_USER_CONDITIONS,
             UserCondition,
+            builtin_user_conditions,
             concrete_rule,
             normalize_on,
             validate_user_rule_name,
+            walk_user_lambda,
         )
 
         self._open_for_rules('condition')
@@ -4264,7 +4255,8 @@ class TrustsRegistry(object):
         created = self._user_conditions is None
         if created:
             self._user_conditions = {
-                rule.name: rule for rule in BUILTIN_USER_CONDITIONS
+                rule.name: rule
+                for rule in builtin_user_conditions(get_user_model())
             }
         try:
             if expr is None:
@@ -4273,40 +4265,41 @@ class TrustsRegistry(object):
                         'User condition %r is not registered.' % (name,)
                     )
                 del self._user_conditions[name]
-                self._explicit_condition_names.discard(name)
                 self._clear_compiled_rules()
                 return None
-            rule = UserCondition(name, concrete_rule(expr, name), target)
+            if name == 'is_active':
+                walked = walk_user_lambda(expr)
+            else:
+                walked = concrete_rule(expr, name)
+            rule = UserCondition(name, walked, target)
         except TrustsConfigurationError:
             if created:
                 self._user_conditions = None
             raise
         self._user_conditions[name] = rule
-        self._explicit_condition_names.add(name)
         self._clear_compiled_rules()
         return rule
 
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
         """Fail when a fixed rule is not a concrete boolean on these models.
 
-        An explicit ``is_active`` condition raises when the column is
-        missing. The implicit built-in is omitted from every fragment
-        instead, so no inquiry path treats that column differently.
+        ``is_active`` is not checked. The default rule is added only when
+        that field exists, and ``set_user_condition('is_active', ...)``
+        replaces it without a field error.
         """
         from trusts.user_rules import assert_concrete_booleans, rule_applies
 
-        for rule in self.user_conditions():
-            if self._implicit_is_active(rule):
-                continue
-            models = []
-            if user_model is not None and rule_applies(rule.on, 'user'):
-                models.append(user_model)
-            if sponsor_model is not None and rule_applies(rule.on, 'sponsor'):
-                models.append(sponsor_model)
-            for model in models:
-                assert_concrete_booleans(
-                    model._meta.concrete_model, rule.expr, rule.name,
-                )
+        pairs = []
+        if user_model is not None:
+            pairs.append((user_model, 'user'))
+        if sponsor_model is not None:
+            pairs.append((sponsor_model, 'sponsor'))
+        for model, role in pairs:
+            concrete = model._meta.concrete_model
+            for rule in self._conditions_for_model(concrete):
+                if rule.name == 'is_active' or not rule_applies(rule.on, role):
+                    continue
+                assert_concrete_booleans(concrete, rule.expr, rule.name)
         slot = self._user_override
         if slot is not None and user_model is not None:
             assert_concrete_booleans(

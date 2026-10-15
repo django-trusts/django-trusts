@@ -33,6 +33,20 @@ BUILTIN_USER_CONDITIONS = (
 )
 
 
+def builtin_user_conditions(model):
+    """The default ``is_active`` rule, or nothing when that field is absent."""
+    try:
+        field = model._meta.get_field('is_active')
+    except FieldDoesNotExist:
+        return ()
+    if (
+        getattr(field, 'concrete', False)
+        and field.get_internal_type() == 'BooleanField'
+    ):
+        return BUILTIN_USER_CONDITIONS
+    return ()
+
+
 def rule_applies(on, role):
     return on == '*' or on == role
 
@@ -164,7 +178,10 @@ def assert_concrete_booleans(model, expr, name):
 
 
 def concrete_rule(expr, name):
-    """Walk ``expr`` and require concrete booleans on the user model."""
+    """Walk ``expr`` and require concrete booleans on the user model.
+
+    ``set_user_condition('is_active', ...)`` does not use this field check.
+    """
     from django.contrib.auth import get_user_model
 
     walked = walk_user_lambda(expr)
@@ -223,8 +240,8 @@ def compile_user_rules(model, path, conditions, *, role, values):
     """``(skip_<name> OR condition)`` for rules that apply to ``role``.
 
     ``conditions is None`` is the built-in ``is_active`` rule. The registry
-    drops that implicit rule before this call when ``model`` has no such
-    column, and it uses one fragment for every inquiry.
+    passes that rule only when ``model`` has the field, and one fragment
+    for every inquiry.
     """
     values = values or {}
     combined = None

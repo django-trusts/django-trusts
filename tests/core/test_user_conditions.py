@@ -90,28 +90,28 @@ class UserConditionRegistrationTest(TransactionTestCase):
             Grant.objects.create(note=note, user=inactive, permission=read)
 
             registry = TrustsRegistry()
-            registry.register_user_condition(
+            registry.set_user_condition(
                 'staff', lambda u: u.is_active & u.is_superuser,
             )
-            replaced = registry.register_user_condition(
+            replaced = registry.set_user_condition(
                 'staff', lambda u: ~u.is_superuser, on=('user',),
             )
             self.assertEqual(replaced.on, 'user')
-            both = registry.register_user_condition(
+            both = registry.set_user_condition(
                 'either', lambda u: u.is_staff, on=('user', 'sponsor'),
             )
             self.assertEqual(both.on, '*')
-            registry.register_user_condition('either', None)
+            registry.set_user_condition('either', None)
             with self.assertRaises(TrustsConfigurationError):
-                registry.register_user_condition('missing', None)
+                registry.set_user_condition('missing', None)
             with self.assertRaises(TrustsConfigurationError):
-                registry.register_user_condition(
+                registry.set_user_condition(
                     'bad', lambda u: u.is_authenticated,
                 )
             with self.assertRaises(TrustsConfigurationError):
-                registry.register_user_condition('nope', lambda u: u.username)
+                registry.set_user_condition('nope', lambda u: u.username)
             with self.assertRaises(TrustsConfigurationError):
-                registry.register_user_condition(
+                registry.set_user_condition(
                     'where', lambda u: u.is_active, on='group',
                 )
             grant = Ref(Grant)
@@ -137,7 +137,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
             self.assertIn('is_active', str(skipped.query))
 
             open_registry = TrustsRegistry()
-            open_registry.register_user_condition('is_active', None)
+            open_registry.set_user_condition('is_active', None)
             open_registry.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
             )
@@ -151,7 +151,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
                 registry.permissions_for(alice, note, allow_inactive=True)
             registry.freeze()
             with self.assertRaises(TrustsConfigurationError):
-                registry.register_user_condition(
+                registry.set_user_condition(
                     'again', lambda u: u.is_active,
                 )
         finally:
@@ -212,7 +212,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             added = TrustsRegistry()
             added.plan_for(Note, user=plain)
             self.assertTrue(added._rule_fragments)
-            added.register_user_condition('staff', lambda u: u.is_staff)
+            added.set_user_condition('staff', lambda u: u.is_staff)
             self.assertFalse(added._rule_fragments)
             self.assertFalse(added._override_fragments)
             register(added)
@@ -220,9 +220,9 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             self.assertIn('is_staff', str(added.permissions_for(plain, note).query))
 
             replaced = TrustsRegistry()
-            replaced.register_user_condition('staff', lambda u: u.is_staff)
+            replaced.set_user_condition('staff', lambda u: u.is_staff)
             replaced.plan_for(Note, user=staff)
-            replaced.register_user_condition(
+            replaced.set_user_condition(
                 'staff', lambda u: u.is_superuser,
             )
             self.assertFalse(replaced._rule_fragments)
@@ -234,7 +234,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
 
             removed = TrustsRegistry()
             removed.plan_for(Note, user=inactive)
-            removed.register_user_condition('is_active', None)
+            removed.set_user_condition('is_active', None)
             self.assertFalse(removed._rule_fragments)
             register(removed)
             self.assertTrue(removed.has_permission(inactive, note, read))
@@ -539,7 +539,7 @@ class UserConditionTargetTest(TransactionTestCase):
             staff_delegate.is_staff = True
             staff_delegate.save(update_fields=['is_staff'])
             staff_registry = open_registry(
-                lambda registry: registry.register_user_condition(
+                lambda registry: registry.set_user_condition(
                     'staff', lambda u: u.is_staff, on='user',
                 ),
             )
@@ -561,7 +561,7 @@ class UserConditionTargetTest(TransactionTestCase):
             self.assertIn('is_staff', own)
 
             sponsor_registry = open_registry(
-                lambda registry: registry.register_user_condition(
+                lambda registry: registry.set_user_condition(
                     'sponsor_not_super', lambda u: ~u.is_superuser, on='sponsor',
                 ),
             )
@@ -586,7 +586,7 @@ class UserConditionTargetTest(TransactionTestCase):
             self.assertNotIn('is_superuser', checked)
 
             user_active = open_registry(
-                lambda registry: registry.register_user_condition(
+                lambda registry: registry.set_user_condition(
                     'is_active', lambda u: u.is_active, on='user',
                 ),
             )
@@ -600,7 +600,7 @@ class UserConditionTargetTest(TransactionTestCase):
             self.assertTrue(holds(user_handle, actor))
             self.assertFalse(holds(user_handle, inactive))
             sponsor_active = open_registry(
-                lambda registry: registry.register_user_condition(
+                lambda registry: registry.set_user_condition(
                     'is_active', lambda u: u.is_active, on='sponsor',
                 ),
             )
@@ -610,7 +610,7 @@ class UserConditionTargetTest(TransactionTestCase):
             self.assertTrue(holds(sponsor_active_handle, inactive))
             self.assertFalse(holds(sponsor_active_handle, actor))
             both_active = open_registry(
-                lambda registry: registry.register_user_condition(
+                lambda registry: registry.set_user_condition(
                     'is_active', lambda u: u.is_active, on='*',
                 ),
             )
@@ -626,7 +626,7 @@ class UserConditionTargetTest(TransactionTestCase):
             self.assertIn('is_active', skipped_sql)
 
             removed = open_registry(
-                lambda registry: registry.register_user_condition('is_active', None),
+                lambda registry: registry.set_user_condition('is_active', None),
             )
             removed_handle = BackendHandle(
                 'user-target-removed', removed, PlanQueryCompiler(),
@@ -669,19 +669,19 @@ class UserRuleOrderTest(TestCase):
                 app_label = 'trusts_tests'
 
         registry = TrustsRegistry()
-        registry.register_user_condition('staff', lambda u: u.is_staff)
+        registry.set_user_condition('staff', lambda u: u.is_staff)
         grant = Ref(OrderGrant)
         registry.register(
             content=grant.note, user=grant.user, permission=grant.permission,
         )
         names = tuple(rule.name for rule in registry.user_conditions())
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            registry.register_user_condition(
+            registry.set_user_condition(
                 'extra', lambda u: u.is_superuser,
             )
         self.assertIn('before', str(ctx.exception))
         with self.assertRaises(TrustsConfigurationError):
-            registry.register_user_condition('staff', None)
+            registry.set_user_condition('staff', None)
         with self.assertRaises(TrustsConfigurationError):
             registry.set_user_override(
                 'superuser', lambda u: u.is_superuser,
@@ -698,7 +698,7 @@ class UserRuleOrderTest(TestCase):
             content=link.note, delegate=link.delegate, sponsor=link.sponsor,
         )
         with self.assertRaises(TrustsConfigurationError):
-            delegation_only.register_user_condition(
+            delegation_only.set_user_condition(
                 'staff', lambda u: u.is_staff,
             )
         with self.assertRaises(TrustsConfigurationError):
@@ -780,7 +780,7 @@ class UserRuleOrderTest(TestCase):
                 app_label = 'trusts_tests'
 
         registry = TrustsRegistry()
-        registry.register_user_condition(
+        registry.set_user_condition(
             'superuser', lambda u: u.is_superuser,
         )
         fit = Ref(FitGrant)
@@ -798,7 +798,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(registry._delegations_by_root, {})
 
         fresh = TrustsRegistry()
-        fresh.register_user_condition('superuser', lambda u: u.is_superuser)
+        fresh.set_user_condition('superuser', lambda u: u.is_superuser)
         bare = Ref(BareGrant)
         with self.assertRaises(TrustsConfigurationError):
             fresh.register(
@@ -820,7 +820,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(override_only._user_override.name, 'superuser')
 
         delegated = TrustsRegistry()
-        delegated.register_user_condition(
+        delegated.set_user_condition(
             'staff', lambda u: u.is_staff, on='sponsor',
         )
         fit_link = Ref(FitLink)
@@ -842,7 +842,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(delegated._order, [])
 
         empty_delegation = TrustsRegistry()
-        empty_delegation.register_user_condition(
+        empty_delegation.set_user_condition(
             'staff', lambda u: u.is_staff, on='sponsor',
         )
         with self.assertRaises(TrustsConfigurationError):
@@ -881,7 +881,7 @@ class SkipKeywordTest(TransactionTestCase):
             read = _permission(SkipNote, 'read_note_skip_keyword')
             SkipGrant.objects.create(note=note, user=alice, permission=read)
             registry = TrustsRegistry()
-            registry.register_user_condition(
+            registry.set_user_condition(
                 'staff', lambda u: u.is_superuser,
             )
             grant = Ref(SkipGrant)
@@ -951,7 +951,7 @@ class SkipKeywordTest(TransactionTestCase):
             self.assertIn('skip_nope', str(ctx.exception))
 
             removed = TrustsRegistry()
-            removed.register_user_condition('is_active', None)
+            removed.set_user_condition('is_active', None)
             removed.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
             )
@@ -1036,20 +1036,20 @@ class SkipKeywordNameTest(TestCase):
     def test_condition_name_must_be_an_identifier(self):
         registry = TrustsRegistry()
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            registry.register_user_condition(
+            registry.set_user_condition(
                 'not-a-name', lambda u: u.is_active,
             )
         self.assertIn('identifier', str(ctx.exception))
         self.assertIsNone(registry._user_conditions)
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            registry.register_user_condition('flags', lambda u: u.is_active)
+            registry.set_user_condition('flags', lambda u: u.is_active)
         self.assertIn('collides', str(ctx.exception))
         self.assertIsNone(registry._user_conditions)
         with self.assertRaises(TrustsConfigurationError) as ctx:
             registry.set_user_override('user', lambda u: u.is_superuser)
         self.assertIn('collides', str(ctx.exception))
         self.assertIsNone(registry._user_override)
-        registry.register_user_condition('staff', lambda u: u.is_staff)
+        registry.set_user_condition('staff', lambda u: u.is_staff)
         self.assertEqual(
             tuple(rule.name for rule in registry.user_conditions()),
             ('is_active', 'staff'),
@@ -1061,14 +1061,14 @@ class SkipKeywordNameTest(TestCase):
             registry.set_user_override('is_active', lambda u: u.is_superuser)
         self.assertIn('collides', str(ctx.exception))
         self.assertIsNone(registry._user_override)
-        registry.register_user_condition('staff', lambda u: u.is_staff)
+        registry.set_user_condition('staff', lambda u: u.is_staff)
         with self.assertRaises(TrustsConfigurationError) as ctx:
             registry.set_user_override('staff', lambda u: u.is_staff)
         self.assertIn('collides', str(ctx.exception))
         self.assertIsNone(registry._user_override)
         registry.set_user_override('superuser', lambda u: u.is_superuser)
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            registry.register_user_condition(
+            registry.set_user_condition(
                 'superuser', lambda u: u.is_superuser,
             )
         self.assertIn('collides', str(ctx.exception))
@@ -1081,7 +1081,7 @@ class SkipKeywordNameTest(TestCase):
             registry.set_user_override('staff', lambda u: u.is_staff)
         self.assertEqual(registry._user_override.name, 'superuser')
         opened = TrustsRegistry()
-        opened.register_user_condition('is_active', None)
+        opened.set_user_condition('is_active', None)
         opened.set_user_override('is_active', lambda u: u.is_superuser)
         self.assertEqual(opened._user_override.name, 'is_active')
 
@@ -1131,7 +1131,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
             self.config, '_document_grant_registry_id', None,
         )
         registry = TrustsRegistry()
-        registry.register_user_condition('staff', lambda u: u.is_staff)
+        registry.set_user_condition('staff', lambda u: u.is_staff)
         registry.set_user_override('superuser', lambda u: u.is_superuser)
         isolate_live_registry(self.config, registry, DOCUMENT_BACKEND)
         self.config._document_grant_registry_id = None
@@ -1358,7 +1358,7 @@ class StaffPrefixFilterTest(TransactionTestCase):
             Grant.objects.create(scope=scope, user=plain, permission=read)
             Grant.objects.create(scope=scope, user=staff, permission=read)
             registry = TrustsRegistry()
-            registry.register_user_condition(
+            registry.set_user_condition(
                 'staff', lambda u: u.is_staff, on='user',
             )
             grant = Ref(Grant)
@@ -1897,57 +1897,72 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             editor.delete_model(note_model)
             editor.delete_model(user_model)
 
-    def test_explicit_is_active_condition_raises_at_registration(self):
-        """``register_user_condition('is_active', ...)`` rejects this model.
+    def test_set_is_active_replaces_the_default_without_raising(self):
+        """``set_user_condition('is_active', ...)`` replaces the default.
 
-        ``register()`` and ``register_delegation()`` raise before storing
-        a relation. The implicit built-in is not this case.
+        The call, ``register()``, and ``register_delegation()`` do not
+        raise when this model has no ``is_active`` column. Another
+        condition name still requires a concrete boolean field.
         """
+        from unittest.mock import patch
+
         user_model, note_model, grant_model, link_model = self._create(
-            'Rejected',
+            'Replaced',
         )
         try:
             grant = Ref(grant_model)
             link = Ref(link_model)
 
-            def assert_rejected(call):
-                with self.assertNumQueries(0):
-                    with self.assertRaises(TrustsConfigurationError) as ctx:
-                        call()
-                message = str(ctx.exception)
-                self.assertIn("User condition 'is_active'", message)
-                self.assertIn('concrete BooleanField', message)
-                self.assertIn(user_model._meta.label, message)
+            def set_active(registry):
+                with patch(
+                    'django.contrib.auth.get_user_model',
+                    return_value=user_model,
+                ):
+                    return registry.set_user_condition(
+                        'is_active', lambda u: u.is_active,
+                    )
 
             explicit = TrustsRegistry()
-            explicit.register_user_condition(
-                'is_active', lambda u: u.is_active,
-            )
-            assert_rejected(lambda: explicit.register(
-                content=grant.note,
-                user=grant.user,
-                permission=grant.permission,
-            ))
-            self.assertEqual(explicit.records, ())
+            rule = set_active(explicit)
+            self.assertEqual(rule.name, 'is_active')
+            with self.assertNumQueries(0):
+                explicit.register(
+                    content=grant.note,
+                    user=grant.user,
+                    permission=grant.permission,
+                )
+            self.assertEqual(len(explicit.records), 1)
 
             delegated = TrustsRegistry()
-            delegated.register_user_condition(
-                'is_active', lambda u: u.is_active,
-            )
-            assert_rejected(lambda: delegated.register_delegation(
-                content=link.note,
-                delegate=link.delegate,
-                sponsor=link.sponsor,
-            ))
-            self.assertEqual(delegated.delegations, ())
+            set_active(delegated)
+            with self.assertNumQueries(0):
+                delegated.register_delegation(
+                    content=link.note,
+                    delegate=link.delegate,
+                    sponsor=link.sponsor,
+                )
+            self.assertEqual(len(delegated.delegations), 1)
+
+            other = TrustsRegistry()
+            with patch(
+                'django.contrib.auth.get_user_model',
+                return_value=user_model,
+            ):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    other.set_user_condition('staff', lambda u: u.is_staff)
+            message = str(ctx.exception)
+            self.assertIn("User condition 'staff'", message)
+            self.assertIn('concrete BooleanField', message)
+            self.assertIn(user_model._meta.label, message)
+            self.assertIsNone(other._user_conditions)
         finally:
             self._drop(user_model, note_model, grant_model, link_model)
 
     def test_without_an_is_active_condition_inquiries_still_match(self):
         """Forward, reverse, and sponsor checks run with no activity column.
 
-        The registry never registers an ``is_active`` condition, so the
-        implicit built-in is left out of every fragment.
+        The registry never sets an ``is_active`` condition, and this model
+        has no such field, so the default condition is not added.
         """
         from trusts.reverse import lock_permitted_users_queryset
 
