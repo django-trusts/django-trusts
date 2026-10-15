@@ -47,13 +47,7 @@ same trust model. In the simplest cases, that model connects the protected
 object to either a user and Django permission or a Django group.
 
 Multiple registered trusts may authorize the same kind of content. Each
-complete trust is an independent way to receive permission.
-
-A delegated trust connects a **delegate** who is acting, a **sponsor** whose
-authority supplies the ceiling, and the protected content. By default that
-authority comes from the sponsor's live ordinary grants. The delegation
-condition may narrow that authority to relationship-owned scope such as
-approved operations or selected repositories.
+trust is an independent way to receive permission.
 
 Installation
 ------------
@@ -339,12 +333,11 @@ Permission checks keep the familiar Django spelling:
 
 The same correlated policy drives object checks, permission enumeration,
 ``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
-policy SQL. The complete sponsor-authority predicate provides the authority
-ceiling for all of those inquiries.
+policy SQL. The sponsor's authority limits all of those inquiries.
 
 Several delegated relationship models may target the same content model. Each
-relationship remains a complete alternative: its own delegate, content,
-condition, and sponsor-authority predicate are ANDed before that branch is
+relationship provides another way to receive permission: its own delegate,
+content, condition, and sponsor authority are ANDed before that branch is
 ORed with the others. A branch cannot borrow another relationship's approval
 or sponsor.
 
@@ -360,7 +353,7 @@ A sponsor's ordinary grant may use ``along=``. That bounded walk is part of
 the sponsor's live authority on every object it reaches, including when the
 check is a delegation. A delegated registration may use ``along=`` on the
 same call. The delegate is allowed on an object only when the delegation walk
-and the sponsor-authority predicate both reach that object. Each contributing
+and the sponsor's ordinary grant both reach that object. Each contributing
 ordinary sponsor grant's ``along=`` walk or exact match must reach the object.
 A delegate cannot sponsor a further delegation.
 
@@ -552,9 +545,8 @@ does not grow ``permitted``.
 User conditions and overrides
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-By default, Trusts permission inquiries require an active, saved, authenticated user.
-The default ``is_active`` condition and any additional user conditions are
-compiled into permission SQL. No user override is registered by default.
+The only default condition is ``is_active``, if the field exists.
+No user override is registered by default.
 
 Configure user rules on ``backend.registry`` in ``AppConfig.ready()`` before
 registering permissions or delegations. For example, replace the activity
@@ -583,54 +575,13 @@ example, inspect an inactive user's grants:
        "documents.change_document", skip_is_active=True,
    )
 
-Django's stock user methods do not accept these skip keywords. Anonymous and
-unauthenticated users still receive no positive result.
+Condition names must be Python identifiers with no name conflict; their
+lambdas must return Boolean expressions.
 
-Register an override to let active superusers pass without an ordinary
-permission grant:
+Use ``set_user_override()`` to set the single override; setting another
+replaces it. Pass its current name with ``None`` to remove it.
 
-.. code-block:: python
-
-   registry.set_user_override(
-       "superuser",
-       lambda u: u.is_active & u.is_superuser,
-   )
-
-User conditions still apply. Skipping a condition does not change the
-override's own requirements. Use ``skip_superuser=True`` to inspect ordinary
-grants instead:
-
-.. code-block:: python
-
-   documents = Document.objects.permitted(
-       "documents.change_document", user, skip_superuser=True,
-   )
-
-There is one override slot; setting another replaces it. Pass its current
-name with ``None`` to remove it:
-
-.. code-block:: python
-
-   registry.set_user_override("superuser", None)
-
-Conditions apply to both the checked user and delegation sponsors by default
-(``on="*"``). Use ``on="user"``, ``on="sponsor"``, or a tuple of those names
-to narrow a condition. A skip applies to every user that condition targets.
-Overrides apply only to the checked user; sponsors need ordinary grants.
-For example, an application can also stop superusers from sponsoring:
-
-.. code-block:: python
-
-   registry.set_user_condition(
-       "superuser_cannot_sponsor",
-       lambda u: ~u.is_superuser,
-       on="sponsor",
-   )
-
-Django's ``PermissionsMixin.has_perm()`` allows active superusers before
-calling backends. Trusts does not change that. An application can opt out in
-its custom user model's ``has_perm()`` and ``has_module_perms()`` methods;
-this also changes superuser behavior in Django admin.
+Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md#django-auths-checks-before-calling-backends>`_.
 
 Protect a view with the Trusts-only primary-key guard:
 
@@ -656,8 +607,8 @@ Protect a view with the Trusts-only primary-key guard:
 The guard binds only the URL keyword argument named ``pk`` to the model's
 primary-key field. It performs configuration preflight before candidate lookup;
 a missing object produces 404 and an existing unauthorized object produces
-403. It has no implicit superuser shortcut. Named ``skip_<name>`` values may be
-passed after ``conditions`` when a view deliberately needs one, for example
+403. Named ``skip_<name>`` values may be passed after ``conditions`` when a
+view deliberately needs one, for example
 ``authorization_required(Document, permission, (), skip_is_active=True)``.
 Those values are fixed when the decorator is created and forwarded to the
 Trusts inquiry; they are not selected from request data.
@@ -731,7 +682,7 @@ A relationship condition is always applied to its branch; a named filter is
 selected by an authorization caller. Neither can create permission by itself.
 
 Applications may register more than one valid path to the same content. A
-direct user grant and a team-derived grant can coexist, with either complete
+direct user grant and a team-derived grant can coexist, with either
 path providing permission.
 
 Inherited relationships
@@ -747,7 +698,7 @@ currently exercised by CI are recorded in the `support matrix
 The same bounded walk participates in object checks, permitted-content
 querysets, permission enumeration, reverse permitted-user inquiry, and
 authorization-policy SQL. For one content and
-permission, reverse inquiry returns exactly the users whose complete
+permission, reverse inquiry returns exactly the users whose
 forward object check succeeds, including the terminal condition and user
 checks.
 
@@ -781,12 +732,12 @@ passes through another model before the protected object, it also lists
 ``filter_by_permitted_content``: one statement for each of those models,
 the same SQL and parameter values ``filter_by_permitted_content`` runs.
 The locked ``get_permitted_users`` statement is that backend's reverse
-predicate. A content with named filters lists those queries.
+query. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
 Registered user conditions are visible in inquiry SQL and ordered parameters;
-the optional override appears in complete inquiries. ``get_group_permissions``
-uses conditions and group grants without the override. The artifact does not add a separate
+the optional override is omitted from ``get_group_permissions``, which uses
+conditions and group grants. The artifact does not add a separate
 user-rule expression or a second statement for skipped rules. A skip option is
 a bound parameter such as ``skip_is_active=False``; callers change that value
 without changing the statement shape.

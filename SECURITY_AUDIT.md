@@ -341,11 +341,48 @@ own their application labels, migrations, tables, and registration calls.
 
 ### Django auth's checks before calling backends
 
-Django treats an active superuser as globally authorized in
-`PermissionsMixin.has_perm()` before consulting authentication backends.
-Treat `is_superuser` as an unrestricted root override. Use
-staff/non-superuser accounts for administrators who must remain subject to
-tenant, parent, object, or named-filter restrictions.
+Django's `PermissionsMixin.has_perm()` allows an active superuser before
+consulting authentication backends. Trusts does not change that shortcut.
+Trusts inquiries and policy SQL have no implicit superuser grant, including
+`authorization_required`. Django's stock `has_perm()` and permission-enumeration
+methods do not forward Trusts-specific skip keywords; use a Trusts inquiry API
+when a skip is needed.
+
+An application can opt out of Django's shortcut in its custom user model by
+overriding `has_perm()` and `has_module_perms()` to ask the backends without
+the superuser early return. This also changes superuser behavior in Django
+admin. Use staff/non-superuser accounts for administrators who must remain
+subject to tenant, parent, object, or named-filter restrictions.
+
+To opt into a Trusts override, register its own activity requirement:
+
+```python
+registry.set_user_override(
+    "superuser",
+    lambda u: u.is_active & u.is_superuser,
+)
+```
+
+User conditions still apply. Skipping the separate activity condition does
+not remove the activity check inside this override. To inspect only ordinary
+grants, use a Trusts inquiry with `skip_superuser=True`. That keyword is valid
+only while `superuser` names the current override. Pass
+`set_user_override("superuser", None)` to remove it; any other name raises.
+
+Conditions apply to both the checked user and sponsors by default. To prevent
+superusers from sponsoring even their ordinary grants, an application can add:
+
+```python
+registry.set_user_condition(
+    "superuser_cannot_sponsor",
+    lambda u: ~u.is_superuser,
+    on="sponsor",
+)
+```
+
+This condition is not installed by default. `skip_superuser` skips the override,
+not this condition. Each condition's skip applies to all users its `on=` targets;
+separate skip controls require separately named conditions.
 
 For ordinary users, Django grants when any configured authentication backend
 grants. Trusts cannot revoke authorization supplied by another backend. Audit
