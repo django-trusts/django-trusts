@@ -558,13 +558,28 @@ is registered by default. Permission SQL identifies users by persisted primary
 key, so only saved users can match without a separate condition. Conditions
 and overrides are compiled into permission SQL.
 
+All Trusts inquiries apply those rules, including ordinary and delegated
+grants, permission enumeration, reverse user listing, and
+``filter_by_permitted_content``. Anonymous and unauthenticated users receive
+no positive result. Input and configuration errors still raise before that
+denial, and permission SQL is compiled against a user model rather than an
+arbitrary Python object.
+
 Every user-supplied rule must resolve its user attributes to concrete database
 fields. Registration rejects a Python property such as Django's
 ``is_authenticated`` or ``is_anonymous``, even when the property would return
 a constant. There is no instance-evaluation exception in this contract.
 
-Configure conditions on ``backend.registry`` in ``AppConfig.ready()``.
-For example, replace the activity condition:
+The unmodified built-in ``is_active`` condition is omitted when the configured
+user model has no concrete field by that name. Once an application replaces
+that condition, or registers any other condition or override, every referenced
+attribute must resolve to a concrete ``BooleanField``.
+
+Configure conditions on ``backend.registry`` in ``AppConfig.ready()`` before
+the first ``backend.register()`` or ``backend.register_delegation()`` call.
+Once an ordinary or delegated record exists, either user-rule registration
+method raises without changing the registry. For example, replace the activity
+condition:
 
 .. code-block:: python
 
@@ -579,6 +594,14 @@ Registering the same name replaces that condition. Pass ``None`` to remove it:
 .. code-block:: python
 
    registry.register_user_condition("is_active", None)
+
+Rule names must be Python identifiers, must not reuse a reserved inquiry
+parameter, and must be distinct across conditions and the override. Skip
+keywords must have the form ``skip_<identifier>`` and their values must be
+booleans. Those shapes and values are checked even for anonymous and
+unauthenticated users; those users then deny without looking up a rule name.
+For a persisted user, the suffix must name a current condition or the current
+override. Replacing an override therefore makes its old skip keyword invalid.
 
 To skip a condition for one inquiry, use ``skip_<name>=True``. For example,
 inspect an inactive user's grants:
@@ -612,6 +635,12 @@ to let active superusers pass without an ordinary permission grant:
 
 User conditions still apply. Skipping a condition does not change the
 override's own requirements.
+
+Each condition compiles as ``skip_<name> OR condition``. The override compiles
+as ``NOT skip_<name> AND override`` and is ORed with the ordinary and delegated
+grant proof. Skip values are bound parameters, so changing one does not change
+the SQL statement shape. Skipping the override disables only that alternative;
+an ordinary grant can still authorize.
 
 By default, a user condition applies to every user whose authority
 participates in the result. For an ordinary permission check, that is the
@@ -673,6 +702,8 @@ Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
        "documents.change_document", user, skip_superuser=True,
    )
 
+That keyword is valid only while ``superuser`` is the current override name.
+
 Pass the current override's name with ``None`` to clear the slot:
 
 .. code-block:: python
@@ -718,7 +749,11 @@ Protect a view with the Trusts-only primary-key guard:
 The guard binds only the URL keyword argument named ``pk`` to the model's
 primary-key field. It performs configuration preflight before candidate lookup;
 a missing object produces 404 and an existing unauthorized object produces
-403.
+403. It has no implicit superuser shortcut. Named ``skip_<name>`` values may be
+passed after ``conditions`` when a view deliberately needs one, for example
+``authorization_required(Document, permission, (), skip_is_active=True)``.
+Those values are fixed when the decorator is created and forwarded to the
+Trusts inquiry; they are not selected from request data.
 
 Object checks, permission enumeration, queryset filtering, and view protection
 consume the same normalized registrations.
@@ -842,15 +877,53 @@ The locked ``get_permitted_users`` statement is that backend's reverse
 predicate. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
-Each inquiry entry shows the grouped user-rule expression above ``sql:``.
-Every named term records its target, for example
-``is_active[*] & (superuser[user] | ordinary)``, and every user rule is
-compiled into the SQL statement.
+Registered user conditions and the optional override are visible in each
+inquiry's SQL and ordered parameters. The artifact does not add a separate
+user-rule expression or a second statement for skipped rules. A skip option is
+a bound parameter such as ``skip_is_active=False``; callers change that value
+without changing the statement shape.
 
 ``content.get_permitted_users(perm)`` and
 ``User.objects.permitted(content, perm)`` call the same compiler, so the
 artifact contains one reverse-user query rather than duplicate entries. The
-lockfile key remains ``get_permitted_users``.
+lockfile key remains ``get_permitted_users``. For the direct
+``DocumentPermission`` example on SQLite, that entry is:
+
+.. code-block:: yaml
+
+   get_permitted_users:
+     params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
+     sql: |-
+       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
+       FROM "auth_user"
+       CROSS JOIN (
+         SELECT %s AS "permission_id", %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
+       ) "trusts_bind"
+       WHERE (((%s)
+             OR "auth_user"."is_active" = ("trusts_bind"."is_active")
+         )
+         AND EXISTS (
+           SELECT 1 AS "a"
+           FROM "documents_documentpermission" "U0"
+           INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
+           INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id")
+           WHERE ("U0"."document_id" = ("trusts_bind"."content_id")
+               AND "U0"."permission_id" = ("trusts_bind"."permission_id")
+               AND "U3"."app_label" = ("trusts_bind"."app_label")
+               AND "U3"."model" = ("trusts_bind"."model")
+               AND "U0"."user_id" = ("auth_user"."id")
+           )
+           LIMIT 1
+         ) )
+
+``TRUSTS_SQL_BIND_ONCE`` defaults to true. It is the switch for the one-row
+bind table in the statement above. Leave it on. Set it to false only
+when that SQL misbehaves: django-trusts then runs the plain queryset,
+and the lockfile records that plain SQL. Set it back to true when the
+plain statement is no longer needed. If the queryset does not have the
+Django query structure the rewrite reads, django-trusts leaves the
+queryset unchanged, logs one warning, and the lockfile records that
+same plain SQL.
 
 Several trusts for the same content within one backend are OR alternatives.
 django-trusts issues one SQL statement for each permission inquiry and combines

@@ -28,6 +28,7 @@ from trusts.core import (
     TrustsConfigurationError,
     TrustsRegistry,
     _IdentInReach,
+    _InquiryPermissionMatch,
 )
 from trusts.policy_lock import (
     CHECK_ID_POLICY_LOCK,
@@ -40,9 +41,11 @@ from trusts.policy_lock import (
     _compile_permitted,
     _const_from_json,
     _json_const,
+    _presented_const,
     _sentinel,
     _assign_ids,
     _load_policy_sql_document,
+    _render_condition,
     _sql_row,
     _symbol_for_new_param,
     check_policy_sql_lockfile,
@@ -156,6 +159,7 @@ class Folder(models.Model):
 
 class PolicyActor(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         app_label = 'documents'
@@ -172,6 +176,7 @@ class PolicyActorGrant(models.Model):
 
 class PolicyAccount(models.Model):
     code = models.CharField(max_length=16, unique=True)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         app_label = 'documents'
@@ -196,6 +201,23 @@ class PolicyDelegation(models.Model):
         'auth.User', related_name='+', on_delete=models.CASCADE,
     )
     permissions = models.ManyToManyField(Permission, related_name='+')
+
+    class Meta:
+        app_label = 'documents'
+
+
+class Operation(models.Model):
+    code = models.CharField(max_length=32, primary_key=True)
+
+    class Meta:
+        app_label = 'documents'
+
+
+class OperationGrant(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    user = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+    permission = models.ForeignKey(Operation, on_delete=models.CASCADE)
+    caps = models.ManyToManyField(Operation, related_name='+')
 
     class Meta:
         app_label = 'documents'
@@ -377,18 +399,19 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(list(document['database']), ['engine'])
         self.assertEqual(list(content['permitted']), ['params', 'sql'])
         self.assertEqual(content['permitted']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
-            {'bind': 'permission.id', 'hint': '$permission'},
-            {'const': 'documents', 'hint': 'content type app'},
-            {'const': 'document', 'hint': 'content type model'},
-            {'bind': 'user.id', 'hint': '$user'},
+            '$user.id',
+            '$permission.id',
+            'user.is_active=True',
+            '$content.app_label="documents"',
+            '$content.model="document"',
+            'skip_is_active=False',
         ])
         named = content['named_filters'][0]
         self.assertEqual(list(named), ['id', 'params', 'sql'])
         self.assertEqual(named['id'], 'documents__Document__non_confidential')
         self.assertNotIn('.', named['id'])
         self.assertNotIn('.', trust['id'])
-        self.assertEqual(named['params'], [{'const': True, 'hint': 'confidential'}])
+        self.assertEqual(named['params'], ['confidential=True'])
         self.assertNotIn('documents_documentpermission', named['sql'])
         self.assertNotIn('confidential" IS NULL', content['permitted']['sql'])
         self.assertNotIn('confidential" = %s', content['permitted']['sql'])
@@ -396,10 +419,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('kind', trust)
         self.assertNotIn('kind', named)
         self.assertIn('EXISTS (', content['has_perm']['sql'])
-        self.assertIn(
-            {'bind': 'permission.id', 'hint': '$permission'},
-            content['has_perm']['params'],
-        )
+        self.assertIn('$permission.id', content['has_perm']['params'])
         self.assertIn('auth_permission', content['get_all_permissions']['sql'])
         for token in ('change_document', 'codename'):
             self.assertNotIn(token, content['permitted']['sql'])
@@ -514,7 +534,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         )
         self.assertEqual(
             capped['condition'],
-            'permission in caps and user == user',
+            '$permission.id in caps and user == user',
         )
         self.assertEqual(
             delegated['id'],
@@ -528,7 +548,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         })
         self.assertEqual(
             delegated['condition'],
-            'permissions == $permission and delegate == sponsor',
+            '$permission.id in permissions and delegate == sponsor',
         )
         text = render_policy_sql_bytes(handles=[handle]).decode('utf-8')
         self.assertIn(
@@ -540,10 +560,10 @@ class PolicySqlGoldenTest(SimpleTestCase):
             text,
         )
         self.assertIn(
-            'condition: "permission in caps and user == user"\n', text,
+            'condition: "$permission.id in caps and user == user"\n', text,
         )
         self.assertIn(
-            'condition: "permissions == $permission and delegate == sponsor"\n',
+            'condition: "$permission.id in permissions and delegate == sponsor"\n',
             text,
         )
         loaded = yaml.safe_load(text)
@@ -561,8 +581,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
         walk(loaded)
         self.assertEqual(rendered, [
-            'permission in caps and user == user',
-            'permissions == $permission and delegate == sponsor',
+            '$permission.id in caps and user == user',
+            '$permission.id in permissions and delegate == sponsor',
         ])
         self.assertNotIn('delegate:\n', text)
         self.assertNotIn('sponsor:\n', text)
@@ -576,7 +596,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
                 PermissionIn('team__allowed_operations'),
                 Equal('team__organization', 'repository__organization'),
             ), member='operation'),
-            'operation in team__allowed_operations and '
+            '$permission.id in team__allowed_operations and '
             'team__organization == repository__organization',
         )
         self.assertEqual(
@@ -590,11 +610,11 @@ class PolicySqlGoldenTest(SimpleTestCase):
                 PermissionIn('caps'),
                 Equal('user', 'user'),
             ), member='permission'),
-            'permission in caps and user == user',
+            '$permission.id in caps and user == user',
         )
         self.assertEqual(
             _render_condition(_InquiryPermissionMatch('permissions')),
-            'permissions == $permission',
+            '$permission.id in permissions',
         )
         self.assertEqual(
             _render_condition(All(
@@ -802,7 +822,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertIn('WITH RECURSIVE', text)
         self.assertIn('UNION ALL', text)
         self.assertIn('FROM "gen" AS "g"', text)
-        self.assertEqual(text.count('const: 2'), 4)
+        self.assertEqual(text.count('"$along_bound=2"'), 4)
         self.assertEqual(
             _symbol_for_new_param(_IdentInReach('id', 'SELECT 1', (), 2)),
             {'const': 2, 'hint': 'along bound'},
@@ -812,8 +832,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
         ):
             params = content[key]['params']
             self.assertEqual(
-                [param for param in params if param.get('const') == 2],
-                [{'const': 2, 'hint': 'along bound'}],
+                [param for param in params if param.startswith('$along_bound=')],
+                ['$along_bound=2'],
             )
             self.assertEqual(
                 content[key]['sql'].count('%s'), len(params),
@@ -1043,11 +1063,13 @@ class PolicySqlSentinelTest(SimpleTestCase):
         actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
         self.assertEqual(actor_content['permitted']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
-            {'bind': 'permission.id', 'hint': '$permission'},
-            {'const': 'documents', 'hint': 'content type app'},
-            {'const': 'document', 'hint': 'content type model'},
-            {'bind': 'user.id', 'hint': '$user'},
+            '$user.id',
+            '$permission.id',
+            '$content.id',
+            'user.is_active=True',
+            '$content.app_label="documents"',
+            '$content.model="document"',
+            'skip_is_active=False',
         ])
 
         account_handle = _handle('documents.backends.AccountBackend')
@@ -1068,12 +1090,50 @@ class PolicySqlSentinelTest(SimpleTestCase):
             'target': 'code',
         })
         self.assertEqual(account_content['permitted']['params'], [
-            {'const': 1, 'hint': 'exists marker'},
-            {'bind': 'permission.id', 'hint': '$permission'},
-            {'const': 'documents', 'hint': 'content type app'},
-            {'const': 'document', 'hint': 'content type model'},
-            {'bind': 'user.code', 'hint': '$user.code'},
+            '$user.code',
+            '$permission.id',
+            '$content.id',
+            'user.is_active=True',
+            '$content.app_label="documents"',
+            '$content.model="document"',
+            'skip_is_active=False',
         ])
+
+    def test_custom_permission_pk_renders_the_resolved_target(self):
+        handle = _handle('documents.backends.OperationBackend')
+        handle.register(
+            trust=OperationGrant,
+            user='user',
+            permission='permission',
+            content='document',
+            condition=lambda grant: grant.caps.contains(grant.permission),
+        )
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        content = document['backends'][0]['contents'][0]
+        grant = content['trusts'][0]
+        self.assertEqual(grant['permission'], {
+            'path': 'permission',
+            'model': 'documents.Operation',
+            'target': 'code',
+        })
+        self.assertEqual(grant['condition'], '$permission.code in caps')
+        self.assertIn('$permission.code', content['permitted']['params'])
+        self.assertNotIn('$permission.id', content['permitted']['params'])
+        self.assertEqual(
+            content['permitted']['sql'].count('%s'),
+            len(content['permitted']['params']),
+        )
+        match = _InquiryPermissionMatch('permissions')
+        self.assertEqual(
+            _render_condition(match, permission_token='$permission.code'),
+            '$permission.code in permissions',
+        )
+        self.assertEqual(
+            _render_condition(match),
+            '$permission.id in permissions',
+        )
 
 
 class PolicySqlConstantTest(SimpleTestCase):
@@ -1090,7 +1150,7 @@ class PolicySqlConstantTest(SimpleTestCase):
             self.assertEqual(list(row), ['id', 'params', 'sql'])
 
         def restored(code):
-            return _const_from_json(by_code[prefix + code][0]['const'])
+            return _const_from_json(_presented_const(by_code[prefix + code][0]))
 
         self.assertEqual(restored('amount'), 1.5)
         self.assertEqual(restored('negzero'), 0.0)
@@ -1146,7 +1206,7 @@ class PolicySqlConcurrencyTest(TestCase):
         outcome = []
         export_ident = []
 
-        def classifying(node, sql, params):
+        def classifying(node, sql, params, query=None):
             if (
                 threading.get_ident() == export_ident[0]
                 and not classifying.paused
@@ -1157,7 +1217,7 @@ class PolicySqlConcurrencyTest(TestCase):
                     raise TimeoutError(
                         'export compilation was not released'
                     )
-            return _classify_compiled(node, sql, params)
+            return _classify_compiled(node, sql, params, query=query)
 
         classifying.paused = False
 

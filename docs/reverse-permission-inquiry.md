@@ -128,7 +128,7 @@ configuration/permission-code error selected for the singular object check. A
 well-formed string that identifies no permission row applicable to the supplied
 content does not produce an ordinary grant.
 
-## How the result matches `has_perm()`
+## How forward and reverse checks agree
 
 For every user row in the configured user model's candidate queryset and every
 accepted `perm` / saved `content` pair:
@@ -138,21 +138,19 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must agree when called with the same skip options. Each supported
-backend contribution retains its own user rules and the same candidate queryset.
+must agree when called with the same skip options. Each supported backend
+contribution retains its own user rules and the same candidate queryset.
 
-Trusts backend contributions match that backend's object check under the same
-registered user conditions, override, and skip options.
-For an `auth.Permission` instance, use its `app_label.codename` string in
-`has_perm()`; supported strings and custom permission instances are unchanged.
-Reverse compilation still uses the canonical permission row.
-Custom backend contributions retain their own rules. Stock `user.has_perm()`
-cannot forward Trusts skip options.
+A Trusts contribution matches that Trusts backend's object check under the
+same permission identity, registered conditions, override, and skip options.
+Custom backend contributions retain their own rules. Core ORs those supported
+contributions rather than silently omitting a backend that might grant.
 
-This is stronger than the Trusts-only contract of
-`Model.objects.authorized(user, permission)`. The reverse inquiry must not
-silently omit a grant supplied by another backend and still call the result
-complete.
+This contract does not promise row-for-row parity with native
+`user.has_perm()`. Django's user method can apply outer checks before calling
+backends and cannot forward Trusts skip options. The locked
+`get_permitted_users` statement is one Trusts backend contribution, not the
+aggregate result across authentication backends.
 
 ### User rules and Django's backend boundary
 
@@ -219,10 +217,12 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    trusts_user_conditions(user, skip_options)
-    AND (
-        trusts_user_override(user, skip_options)
-        OR trusts_complete_grant_predicate(user, permission, content)
+    (
+        trusts_user_conditions(user, skip_options)
+        AND (
+            trusts_user_override(user, skip_options)
+            OR trusts_complete_grant_predicate(user, permission, content)
+        )
     )
     OR custom_backend_complete_predicate(user, permission, content)
     OR ...

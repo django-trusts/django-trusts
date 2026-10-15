@@ -505,7 +505,7 @@ class DelegatedAlongTest(TransactionTestCase):
             )
             self.assertTrue(backend.has_perm(
                 self.delegate, self.code, self.child,
-                allow_inactive_user=True,
+                skip_is_active=True,
             ))
             self.assertNotIn(
                 self.delegate.pk,
@@ -516,7 +516,7 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertIn(
                 self.delegate.pk,
                 set(self.child.get_permitted_users(
-                    self.change, allow_inactive=True,
+                    self.change, skip_is_active=True,
                 ).values_list('pk', flat=True)),
             )
         self.sponsor.is_active = True
@@ -538,7 +538,7 @@ class DelegatedAlongTest(TransactionTestCase):
             )
             self.assertTrue(backend.has_perm(
                 self.delegate, self.code, self.child,
-                allow_inactive_user=True,
+                skip_is_active=True,
             ))
             self.assertNotIn(
                 self.delegate.pk,
@@ -610,14 +610,12 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertEqual(row['sql'].count('%s'), len(row['params']))
             self.assertIn('WITH RECURSIVE', row['sql'])
             bounds = [
-                param for param in row['params']
-                if param.get('hint') == 'along bound'
+                int(param.split('=', 1)[1])
+                for param in row['params']
+                if param.startswith('$along_bound=')
             ]
             self.assertTrue(bounds, operation)
-            self.assertTrue(
-                all(param.get('const') in (1, 2) for param in bounds),
-                operation,
-            )
+            self.assertTrue(all(value in (1, 2) for value in bounds), operation)
             self.assertNotIn('json_', row['sql'].lower())
 
     def _assert_content_walk_sql(self, handle, bounds, table=None):
@@ -633,14 +631,12 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertEqual(row['sql'].count('%s'), len(row['params']), operation)
             self.assertIn('WITH RECURSIVE', row['sql'])
             found = [
-                param for param in row['params']
-                if param.get('hint') == 'along bound'
+                int(param.split('=', 1)[1])
+                for param in row['params']
+                if param.startswith('$along_bound=')
             ]
             self.assertTrue(found, operation)
-            self.assertTrue(
-                all(param.get('const') in bounds for param in found),
-                operation,
-            )
+            self.assertTrue(all(value in bounds for value in found), operation)
             self.assertNotIn('json_', row['sql'].lower())
             if table is not None:
                 self.assertIn(table, row['sql'])

@@ -6,42 +6,24 @@ backends:
     contents:
       - model: "documents.Folder"
         permitted:
-          params: [{bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
+          params: ["$user.id", "$permission.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False"]
           sql: |-
             SELECT DISTINCT "documents_folder"."id", "documents_folder"."parent_id"
             FROM "documents_folder"
-            WHERE "documents_folder"."id" IN (
-              WITH RECURSIVE "gen"("ident", "depth") AS (
-                SELECT "seed_rows"."ident", 0
-                FROM (
-                  SELECT DISTINCT "U0"."folder_id" AS "ident"
-                  FROM "documents_foldergrant" "U0"
-                  INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
-                  INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
-                  WHERE ("U0"."permission_id" = %s
-                      AND "U2"."app_label" = %s
-                      AND "U2"."model" = %s
-                      AND "U0"."user_id" = %s
-                      AND "U0"."folder_id" IS NOT NULL
+            CROSS JOIN (
+              SELECT %s AS "user_id", %s AS "permission_id", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+            ) "trusts_bind"
+            WHERE (
+              EXISTS (
+                SELECT 1 AS "a"
+                FROM "auth_user" "U0"
+                WHERE ("U0"."id" = ("trusts_bind"."user_id")
+                    AND ((%s)
+                      OR "U0"."is_active" = ("trusts_bind"."is_active")
                   )
-                ) AS "seed_rows"
-                UNION ALL
-                SELECT "child"."id", "g"."depth" + 1
-                FROM "gen" AS "g"
-                JOIN "documents_folder" AS "child" ON "child"."parent_id" = "g"."ident"
-                WHERE "g"."depth" < %s
-                  AND "child"."id" IS NOT NULL
+                )
+                LIMIT 1
               )
-              SELECT DISTINCT "s"."id"
-              FROM "gen"
-              JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
-            ) = %s
-        has_perm:
-          params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
-          sql: |-
-            SELECT %s AS "a"
-            FROM "documents_folder"
-            WHERE ("documents_folder"."id" = %s
                 AND "documents_folder"."id" IN (
                 WITH RECURSIVE "gen"("ident", "depth") AS (
                   SELECT "seed_rows"."ident", 0
@@ -50,10 +32,10 @@ backends:
                     FROM "documents_foldergrant" "U0"
                     INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
                     INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
-                    WHERE ("U0"."permission_id" = %s
-                        AND "U2"."app_label" = %s
-                        AND "U2"."model" = %s
-                        AND "U0"."user_id" = %s
+                    WHERE ("U0"."permission_id" = ("trusts_bind"."permission_id")
+                        AND "U2"."app_label" = ("trusts_bind"."app_label")
+                        AND "U2"."model" = ("trusts_bind"."model")
+                        AND "U0"."user_id" = ("trusts_bind"."user_id")
                         AND "U0"."folder_id" IS NOT NULL
                     )
                   ) AS "seed_rows"
@@ -61,33 +43,92 @@ backends:
                   SELECT "child"."id", "g"."depth" + 1
                   FROM "gen" AS "g"
                   JOIN "documents_folder" AS "child" ON "child"."parent_id" = "g"."ident"
-                  WHERE "g"."depth" < %s
+                  WHERE "g"."depth" < "trusts_bind"."along_bound"
                     AND "child"."id" IS NOT NULL
                 )
                 SELECT DISTINCT "s"."id"
                 FROM "gen"
                 JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
-              ) = %s
+              ) = ("trusts_bind"."along_match")
+            )
+        has_perm:
+          params: ["$user.id", "$permission.id", "$content.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False"]
+          sql: |-
+            SELECT 1 AS "a"
+            FROM "documents_folder"
+            CROSS JOIN (
+              SELECT %s AS "user_id", %s AS "permission_id", %s AS "content_pk", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+            ) "trusts_bind"
+            WHERE ("documents_folder"."id" = ("trusts_bind"."content_pk")
+              AND EXISTS (
+                SELECT 1 AS "a"
+                FROM "auth_user" "U0"
+                WHERE ("U0"."id" = ("trusts_bind"."user_id")
+                    AND ((%s)
+                      OR "U0"."is_active" = ("trusts_bind"."is_active")
+                  )
+                )
+                LIMIT 1
+              )
+                AND "documents_folder"."id" IN (
+                WITH RECURSIVE "gen"("ident", "depth") AS (
+                  SELECT "seed_rows"."ident", 0
+                  FROM (
+                    SELECT DISTINCT "U0"."folder_id" AS "ident"
+                    FROM "documents_foldergrant" "U0"
+                    INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
+                    INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
+                    WHERE ("U0"."permission_id" = ("trusts_bind"."permission_id")
+                        AND "U2"."app_label" = ("trusts_bind"."app_label")
+                        AND "U2"."model" = ("trusts_bind"."model")
+                        AND "U0"."user_id" = ("trusts_bind"."user_id")
+                        AND "U0"."folder_id" IS NOT NULL
+                    )
+                  ) AS "seed_rows"
+                  UNION ALL
+                  SELECT "child"."id", "g"."depth" + 1
+                  FROM "gen" AS "g"
+                  JOIN "documents_folder" AS "child" ON "child"."parent_id" = "g"."ident"
+                  WHERE "g"."depth" < "trusts_bind"."along_bound"
+                    AND "child"."id" IS NOT NULL
+                )
+                SELECT DISTINCT "s"."id"
+                FROM "gen"
+                JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
+              ) = ("trusts_bind"."along_match")
             )
             LIMIT 1
         get_all_permissions:
-          params: [{const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: 1, hint: "exists marker"}, {const: 1, hint: "content pk"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "user.id", hint: "$user"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}]
+          params: ["$user.id", "$content.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False"]
           sql: |-
             SELECT DISTINCT "auth_permission"."id", "auth_permission"."name", "auth_permission"."content_type_id", "auth_permission"."codename", "django_content_type"."app_label", "django_content_type"."model"
             FROM "auth_permission"
+            CROSS JOIN (
+              SELECT %s AS "user_id", %s AS "content_pk", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+            ) "trusts_bind"
             INNER JOIN "django_content_type" ON ("auth_permission"."content_type_id" = "django_content_type"."id")
             WHERE (
               EXISTS (
-                SELECT %s AS "a"
+                SELECT 1 AS "a"
                 FROM "documents_folder" "U0"
-                WHERE "U0"."id" = %s
+                WHERE "U0"."id" = ("trusts_bind"."content_pk")
                 LIMIT 1
               )
               AND NOT ( EXISTS (
-                  SELECT %s AS "a"
+                  SELECT 1 AS "a"
                   FROM "documents_folder" "V0"
-                  WHERE ("V0"."id" = %s
-                      AND NOT ("V0"."id" IN (
+                  WHERE ("V0"."id" = ("trusts_bind"."content_pk")
+                      AND NOT ( EXISTS (
+                        SELECT 1 AS "a"
+                        FROM "auth_user" "U0"
+                        WHERE ("U0"."id" = ("trusts_bind"."user_id")
+                            AND ((%s)
+                              OR "U0"."is_active" = ("trusts_bind"."is_active")
+                          )
+                        )
+                        LIMIT 1
+                      )
+                        AND "V0"."id" IN (
                         WITH RECURSIVE "gen"("ident", "depth") AS (
                           SELECT "seed_rows"."ident", 0
                           FROM (
@@ -96,9 +137,9 @@ backends:
                             INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
                             INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
                             WHERE ("U0"."permission_id" = ("auth_permission"."id")
-                                AND "U2"."app_label" = %s
-                                AND "U2"."model" = %s
-                                AND "U0"."user_id" = %s
+                                AND "U2"."app_label" = ("trusts_bind"."app_label")
+                                AND "U2"."model" = ("trusts_bind"."model")
+                                AND "U0"."user_id" = ("trusts_bind"."user_id")
                                 AND "U0"."folder_id" IS NOT NULL
                             )
                           ) AS "seed_rows"
@@ -106,32 +147,36 @@ backends:
                           SELECT "child"."id", "g"."depth" + 1
                           FROM "gen" AS "g"
                           JOIN "documents_folder" AS "child" ON "child"."parent_id" = "g"."ident"
-                          WHERE "g"."depth" < %s
+                          WHERE "g"."depth" < "trusts_bind"."along_bound"
                             AND "child"."id" IS NOT NULL
                         )
                         SELECT DISTINCT "s"."id"
                         FROM "gen"
                         JOIN "documents_folder" AS "s" ON "s"."id" = "gen"."ident"
-                      ) = %s
-                    )
-                  )
+                      ) = ("trusts_bind"."along_match")
+                    ) )
                   LIMIT 1
                 ) ) )
             ORDER BY "django_content_type"."app_label" ASC, "django_content_type"."model" ASC, "auth_permission"."codename" ASC
         get_permitted_users:
-          params: [{const: true, hint: "active"}, {const: 1, hint: "exists marker"}, {bind: "permission.id", hint: "$permission"}, {const: "documents", hint: "content type app"}, {const: "folder", hint: "content type model"}, {bind: "content.id", hint: "$content"}, {const: 2, hint: "along bound"}, {const: true, hint: "along match"}, {const: true, hint: "along match"}]
+          params: ["$permission.id", "$content.id", "user.is_active=True", "$along_bound=2", "$content.app_label=\"documents\"", "$content.model=\"folder\"", "$along_match=True", "skip_is_active=False", "$along_match=True"]
           sql: |-
             SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
             FROM "auth_user"
-            WHERE ("auth_user"."is_active" = %s
+            CROSS JOIN (
+              SELECT %s AS "permission_id", %s AS "content_id", %s AS "is_active", %s AS "along_bound", %s AS "app_label", %s AS "model", %s AS "along_match"
+            ) "trusts_bind"
+            WHERE (((%s)
+                  OR "auth_user"."is_active" = ("trusts_bind"."is_active")
+              )
               AND EXISTS (
-                SELECT %s AS "a"
+                SELECT 1 AS "a"
                 FROM "documents_foldergrant" "U0"
                 INNER JOIN "auth_permission" "U1" ON ("U0"."permission_id" = "U1"."id")
                 INNER JOIN "django_content_type" "U2" ON ("U1"."content_type_id" = "U2"."id")
-                WHERE ("U0"."permission_id" = %s
-                    AND "U2"."app_label" = %s
-                    AND "U2"."model" = %s
+                WHERE ("U0"."permission_id" = ("trusts_bind"."permission_id")
+                    AND "U2"."app_label" = ("trusts_bind"."app_label")
+                    AND "U2"."model" = ("trusts_bind"."model")
                     AND "U0"."user_id" = ("auth_user"."id")
                     AND "U0"."folder_id" IN (
                     WITH RECURSIVE "gen"("ident", "depth") AS (
@@ -139,13 +184,13 @@ backends:
                       FROM (
                         SELECT DISTINCT "U0"."id" AS "ident"
                         FROM "documents_folder" "U0"
-                        WHERE "U0"."id" = %s
+                        WHERE "U0"."id" = ("trusts_bind"."content_id")
                       ) AS "seed_rows"
                       UNION ALL
                       SELECT "cur"."parent_id", "g"."depth" + 1
                       FROM "gen" AS "g"
                       JOIN "documents_folder" AS "cur" ON "cur"."id" = "g"."ident"
-                      WHERE "g"."depth" < %s
+                      WHERE "g"."depth" < "trusts_bind"."along_bound"
                         AND "cur"."parent_id" IS NOT NULL
                     )
                     SELECT DISTINCT "s"."id"
@@ -154,5 +199,5 @@ backends:
                   ) = %s
                 )
                 LIMIT 1
-              ) = %s
+              ) = ("trusts_bind"."along_match")
             )

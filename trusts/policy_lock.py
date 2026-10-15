@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextvars
 import datetime
 import errno
+import json
 import math
 import os
 import re
@@ -363,7 +364,12 @@ def _project_content(handle, alias, group, filters, handles):
                 'sponsor': _delegation_relation(record, 'sponsor'),
                 'content': _relation(record, 'content'),
             }
-            condition = _render_condition(record.condition)
+            condition = _render_condition(
+                record.condition,
+                permission_token=_permission_token(
+                    getattr(record, 'condition_permission_target', None),
+                ),
+            )
             if condition is not None:
                 row['condition'] = condition
             along = getattr(record, 'along', None)
@@ -396,6 +402,9 @@ def _project_content(handle, alias, group, filters, handles):
         condition = _render_condition(
             record.condition,
             member=getattr(record, 'permission_field', None),
+            permission_token=_permission_token(
+                getattr(record, 'permission_target', None),
+            ),
         )
         if condition is not None:
             row['condition'] = condition
@@ -443,17 +452,107 @@ def _project_content(handle, alias, group, filters, handles):
     return content
 
 
+_CONST_SOURCE = {
+    'content type app': '$content.app_label',
+    'content type model': '$content.model',
+    'active': 'user.is_active',
+    'along bound': '$along_bound',
+    'along match': '$along_match',
+}
+
+
+def _token_literal(value):
+    """Python spelling of one bound constant, inside a ``source=value`` token."""
+    if isinstance(value, bool):
+        return 'True' if value else 'False'
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        from trusts.policy_yaml import canonical_float_scalar
+
+        if not math.isfinite(value):
+            return json.dumps(_json_const(value), separators=(',', ':'))
+        return canonical_float_scalar(value)
+    if value is None:
+        return 'null'
+    if isinstance(value, dict):
+        return json.dumps(value, separators=(',', ':'), ensure_ascii=False)
+    return json.dumps(_json_const(value), separators=(',', ':'), ensure_ascii=False)
+
+
+def _present_param(symbol):
+    """One lockfile entry for one compilation symbol.
+
+    Call inputs are bare tokens (``$user.id``). Bound constants are
+    ``source=value`` (``$content.app_label="documents"``,
+    ``user.is_active=True``, ``$along_bound=2``). Every symbol is kept:
+    a literal ``EXISTS`` marker has already been removed from the
+    placeholder list, and a caller ``Value(1)`` is a real parameter.
+    """
+    if 'bind' in symbol:
+        return '$' + symbol['bind']
+    hint = symbol.get('hint') or 'literal'
+    source = _CONST_SOURCE.get(hint, hint)
+    return '%s=%s' % (source, _token_literal(symbol.get('const')))
+
+
+def _present_params(symbols):
+    params = []
+    for symbol in symbols:
+        token = _present_param(symbol)
+        if token is not None:
+            params.append(token)
+    return params
+
+
+class _CallInput(object):
+    def __repr__(self):
+        return 'call-input'
+
+
+_CALL_INPUT = _CallInput()
+
+
+def _presented_const(token):
+    """Constant payload of one ``source=value`` lockfile token.
+
+    A bare call input (``$user.id``) returns :data:`_CALL_INPUT`.
+    Tagged values come back as the mapping ``_json_const`` recorded.
+    """
+    if not isinstance(token, str) or '=' not in token:
+        return _CALL_INPUT
+    literal = token.split('=', 1)[1]
+    if literal == 'True':
+        return True
+    if literal == 'False':
+        return False
+    if literal == 'null':
+        return None
+    if literal[:1] in '"{[':
+        return json.loads(literal)
+    if re.fullmatch(r'-?(0|[1-9][0-9]*)', literal):
+        return int(literal)
+    from trusts.policy_yaml import parse_canonical_float
+
+    return parse_canonical_float(literal)
+
+
 def _named_filter_row(row):
     return {
         'id': row['id'],
-        'params': row['params'],
+        'params': _present_params(row['params']),
         'sql': _format_policy_sql(row['sql']),
     }
 
 
 def _sql_row(compiled):
-    sql, params = compiled
-    return {'params': params, 'sql': _format_policy_sql(sql)}
+    sql, symbols = compiled
+    return {
+        'params': _present_params(symbols),
+        'sql': _format_policy_sql(sql),
+    }
 
 
 def _require_shared_terminals(records, label):
@@ -579,6 +678,8 @@ def _role_sentinel(record, role, alias):
 def _compile_permitted(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
 
+    from trusts._bind_once import bind_once
+
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
     queryset = _content_manager(model).all()
@@ -590,7 +691,7 @@ def _compile_permitted(handle, alias, records, model, handles):
         raise TrustsConfigurationError(
             'Policy SQL found no grant for %s.' % _model_label(model)
         )
-    queryset = queryset.filter(granted).distinct()
+    queryset = bind_once(queryset.filter(granted).distinct())
     return _compile_queryset(
         queryset, alias, record=records[0], expr=None, records=records,
     )
@@ -598,6 +699,8 @@ def _compile_permitted(handle, alias, records, model, handles):
 
 def _compile_has_perm(handle, alias, records, model, handles):
     from trusts.core import _compile_granted
+
+    from trusts._bind_once import bound_exists_query
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -611,8 +714,9 @@ def _compile_has_perm(handle, alias, records, model, handles):
             'Policy SQL found no grant for %s.' % _model_label(model)
         )
     exists = _content_manager(model).filter(pk=instance.pk).filter(granted)
+    compiled = bound_exists_query(exists)
     return _compile_queryset(
-        _Query(exists.query.exists()),
+        _Query(compiled),
         alias, record=records[0], expr=None, records=records,
     )
 
@@ -712,12 +816,12 @@ def _compile_filter_by_permitted_content(handle, alias, records, model, handles)
         # statement.
         if queryset.query.is_empty():
             continue
-        sql, params = _compile_queryset(
+        sql, symbols = _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
         rows.append({
             'model': _model_label(prefix),
-            'params': params,
+            'params': _present_params(symbols),
             'sql': _format_policy_sql(sql),
         })
     return rows
@@ -754,21 +858,37 @@ def _relation(record, role):
     }
 
 
-def _render_condition(condition, *, member=None):
+def _permission_token(target):
+    """Lockfile token for the resolved permission identity.
+
+    ``id`` and a custom primary key or ``to_field`` use the same spelling
+    as the SQL parameter (``$permission.id``, ``$permission.code``).
+    """
+    name = target or 'id'
+    if name == 'pk':
+        name = 'id'
+    return '$permission.%s' % name
+
+
+def _render_condition(condition, *, member=None, permission_token='$permission.id'):
     """One Python-like condition line, or ``None`` when none is stored.
 
     A trust id ending in ``__cond`` means ``record.condition`` is set.
     Field paths stay bare. ``Equal`` compares two columns.
-    ``permission_in`` is ``<permission field> in <collection>``: the
-    member is the registered permission column, not the inquiry's
-    requested permission. Only ``_InquiryPermissionMatch`` binds that
-    requested permission, written ``$permission``. ``member`` is the
-    ordinary record's ``permission_field`` and is required for
-    membership. The line is a double-quoted YAML string.
+    ``permission_in`` and ``_InquiryPermissionMatch`` are membership:
+    ``$permission.<target> in <collection>``. ``permission_token`` is the
+    same token the SQL parameter uses. ``member`` is the ordinary
+    record's ``permission_field`` and is required for ``permission_in``.
+    The line is a double-quoted YAML string.
     """
     if condition is None:
         return None
-    return _condition_expr(condition, member=member, grouped=False)
+    return _condition_expr(
+        condition,
+        member=member,
+        permission_token=permission_token,
+        grouped=False,
+    )
 
 
 def _condition_path(operand):
@@ -787,16 +907,24 @@ def _condition_path(operand):
     )
 
 
-def _condition_expr(node, *, member, grouped):
+def _condition_expr(node, *, member, permission_token, grouped):
     from trusts.core import All, Equal, PermissionIn, _InquiryPermissionMatch
 
     if isinstance(node, All):
         if len(node.predicates) == 1:
             return _condition_expr(
-                node.predicates[0], member=member, grouped=grouped,
+                node.predicates[0],
+                member=member,
+                permission_token=permission_token,
+                grouped=grouped,
             )
         parts = [
-            _condition_expr(part, member=member, grouped=True)
+            _condition_expr(
+                part,
+                member=member,
+                permission_token=permission_token,
+                grouped=True,
+            )
             for part in node.predicates
         ]
         text = ' and '.join(parts)
@@ -814,7 +942,7 @@ def _condition_expr(node, *, member, grouped):
                 'Policy SQL condition membership has no permission field.'
             )
         parts = [
-            '%s in %s' % (member, _condition_path(ref))
+            '%s in %s' % (permission_token, _condition_path(ref))
             for ref in node.refs
         ]
         text = ' and '.join(parts)
@@ -822,7 +950,7 @@ def _condition_expr(node, *, member, grouped):
             return '(%s)' % text
         return text
     if isinstance(node, _InquiryPermissionMatch):
-        return '%s == $permission' % _condition_path(node.ref)
+        return '%s in %s' % (permission_token, _condition_path(node.ref))
     raise TrustsConfigurationError(
         'Policy SQL cannot render condition node %s.'
         % type(node).__name__
@@ -1257,14 +1385,16 @@ def _classifying_compiler(base):
                 if _export_scope.get() is None:
                     return super().compile(node)
                 sql, params = super().compile(node)
-                return _classify_compiled(node, sql, params)
+                return _classify_compiled(
+                    node, sql, params, query=self.query,
+                )
 
         ClassifyingCompiler.__name__ = 'Classifying%s' % base.__name__
         _classifying_classes[base] = ClassifyingCompiler
         return ClassifyingCompiler
 
 
-def _classify_compiled(node, sql, params):
+def _classify_compiled(node, sql, params, query=None):
     if isinstance(params, tuple):
         params = list(params)
     else:
@@ -1274,7 +1404,7 @@ def _classify_compiled(node, sql, params):
         if isinstance(param, _Symbol):
             tagged.append(param)
             continue
-        symbol = _symbol_for_new_param(node)
+        symbol = _symbol_for_new_param(node, query=query)
         if symbol is None:
             raise TrustsConfigurationError(
                 'Policy SQL render could not classify a %s placeholder.'
@@ -1284,12 +1414,30 @@ def _classify_compiled(node, sql, params):
     return sql, tagged
 
 
-def _symbol_for_new_param(node):
+def _symbol_for_new_param(node, query=None):
+    from trusts._bind_once import BindTable
     from trusts.core import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )
 
+    if isinstance(node, BindTable):
+        column = node.next_column()
+        if column.kind == 'bind':
+            return _with_hint({'bind': column.label}, _request_hint(column.label))
+        if column.label == 'content pk':
+            attname = (
+                getattr(column.output_field, 'attname', None)
+                or getattr(column.output_field, 'name', None)
+                or 'id'
+            )
+            return _with_hint(
+                {'bind': 'content.%s' % attname},
+                '$content.%s' % attname,
+            )
+        return _with_hint(
+            {'const': _json_const(column.value)}, column.label,
+        )
     if isinstance(node, (GrantReach, _PrefixInForwardWalk)):
         return _with_hint(
             {'const': _json_const(node.record.along.bound)}, 'along bound',
@@ -1306,10 +1454,20 @@ def _symbol_for_new_param(node):
         return _with_hint(
             {'const': _json_const(node.bound)}, 'along bound',
         )
+    from trusts._bind_once import BoundBool
+    from trusts.user_rules import SkipFlag
+    if isinstance(node, SkipFlag):
+        return _with_hint(
+            {'const': _json_const(node.value)}, 'skip_%s' % node.name,
+        )
+    if isinstance(node, BoundBool):
+        return _with_hint(
+            {'const': _json_const(node.value)}, node.hint,
+        )
     if isinstance(node, Value):
         return _with_hint(
             {'const': _json_const(node.value)},
-            _const_hint(node, node.value),
+            _value_hint(node, query),
         )
     record = getattr(_ctx, 'record', None)
     if record is not None and isinstance(node, Lookup):
@@ -1356,6 +1514,29 @@ def _with_hint(symbol, hint):
     return annotated
 
 
+def _value_hint(node, query):
+    """Label for one ``Value`` placeholder.
+
+    The ``EXISTS`` sentinel is the annotation named ``a`` on that
+    existence query. Any other ``Value``, including ``Value(1)``, keeps
+    its annotation alias so the lockfile does not call it a marker.
+    """
+    annotations = {}
+    if query is not None:
+        annotations = getattr(query, 'annotations', None) or {}
+    sentinel = annotations.get('a')
+    if (
+        sentinel is node
+        and node.value == 1
+        and not isinstance(node.value, bool)
+    ):
+        return 'exists marker'
+    for alias, annotation in annotations.items():
+        if annotation is node:
+            return alias
+    return 'literal'
+
+
 def _const_hint(node, value):
     """Readable label for one constant placeholder."""
     from trusts.core import (
@@ -1364,11 +1545,12 @@ def _const_hint(node, value):
     )
 
     if isinstance(node, Value):
-        if value == 1:
-            return 'exists marker'
         return 'literal'
     if isinstance(node, Lookup):
         lhs = getattr(node, 'lhs', None)
+        from trusts._bind_once import _AlongOnce
+        if isinstance(lhs, _AlongOnce):
+            lhs = lhs.inner
         if isinstance(lhs, (
             GrantReach, _IdentInReach, _KeyedReach, _AnchorInInverseReach,
             _PrefixInForwardWalk,

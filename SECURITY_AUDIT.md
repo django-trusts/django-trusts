@@ -72,6 +72,14 @@ there is no instance-evaluation exception in this contract.
 Registration closes when the configured registry freezes; late mutation is
 rejected.
 
+Register every user condition and the optional override before the first
+ordinary or delegated permission registration. Once either kind of record
+exists, `register_user_condition()` and `set_user_override()` fail before
+mutating the registry. Rule names must be Python identifiers, must not collide
+with reserved inquiry parameters, and must not collide across conditions and
+the override. Skip values must be booleans. Replacing the single override slot
+also replaces the only valid override skip name.
+
 ### Ordinary relationship authorization
 
 The public registration signature is
@@ -215,10 +223,12 @@ authorize an early return that skips validation, content identity, or required
 candidate existence. Implementations may add fail-closed checks for unsupported
 or inconsistent inputs without changing the introductory examples.
 
-Each inquiry entry must show the grouped user-rule expression above `sql:`.
-Preserve AND/OR grouping, and give every named term its `on=` target, for
-example `is_active[*] & (superuser[user] | ordinary)`. Skipped terms are
-omitted for all of their targets.
+The policy lockfile exposes user rules through the actual SQL and ordered
+parameters only. It does not add a separate expression field or a skipped-rule
+statement variant. Audit the Boolean grouping and each bound default such as
+`skip_is_active=False`: a condition is `skip_<name> OR condition`, while an
+override is `NOT skip_<name> AND override`, ORed with ordinary and delegated
+grants.
 
 ### Delegation boundaries
 
@@ -521,10 +531,11 @@ artifact describes SQLite rather than production SQL.
 The writer uses the installed supported `PyYAML` release. Strings, parameter
 flow sequences, SQL literal blocks, key order, line endings, and the trailing
 newline are part of the emitted byte profile. The writer does not emit YAML
-tags, anchors, or aliases. Runtime user and permission roles appear as `bind`; candidate primary keys
-used to compile object checks are typed sentinel values recorded as `const`,
-not application data. A repeated `const: 1` must therefore be reviewed by SQL
-position rather than assumed to be an `EXISTS` probe.
+tags, anchors, or aliases. Call inputs use `$role.field` tokens and bound
+constants use `source=value`, including `$along_bound=<n>` and concrete field
+comparisons. The literal `SELECT 1` inside an `EXISTS` probe is not a
+parameter. Review every token by its SQL position rather than inferring a
+role from a repeated scalar value.
 
 `trusts.E009` compares raw bytes and does not parse the committed document.
 Hand formatting, reordering, a dependency-induced spelling change, or a changed

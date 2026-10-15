@@ -51,6 +51,13 @@ registered by default.
 | Built-in user restrictions | Named conditions on `backend.registry`; replace an expression or pass `None` to remove it |
 | Python `is_authenticated` / `is_anonymous` checks | No default rule uses those properties. A custom equivalent is accepted only when it resolves to a concrete database field |
 | Trusts shortcuts supply superuser access | Register `set_user_override("superuser", ...)` explicitly if required; use `skip_superuser=True` to inspect ordinary grants |
+| `trusts.query.is_active_principal(user, allow_inactive=False)` returned a Python boolean for `None`, anonymous, unauthenticated, and inactive objects | Removed. Use the registered `is_active` condition through a Trusts inquiry, or inspect the application's concrete user fields directly outside authorization SQL |
+
+Register every user condition and the optional override before the first
+`register()` or `register_delegation()` call on that registry. Once either
+kind of permission record exists, `register_user_condition()` and
+`set_user_override()` fail before changing the registry. A successful add,
+replacement, or removal invalidates the compiled rule cache.
 
 Applications relying on implicit superuser access must register the override
 shown in the guide or grant ordinary permissions. Review custom backend and
@@ -70,6 +77,23 @@ concrete user fields. Registration rejects Python properties such as Django's
 `is_authenticated` and `is_anonymous`, even when they return constants. There
 is no `check_instance` mode in this contract.
 
+Names must be Python identifiers and must not collide with reserved inquiry
+parameters. A condition and the override cannot use the same name. Skip
+keywords are parsed before anonymous-user denial, must have the form
+`skip_<identifier>`, and must be booleans. Anonymous and unauthenticated users
+then deny without looking up a registered name. For a persisted principal,
+only current condition names and the current override name are accepted. When
+an override is replaced, its old `skip_<name>` keyword becomes invalid.
+
+The built-in `is_active` condition is omitted only when the configured user
+model has no concrete `is_active` field and the condition has not been
+modified. Explicitly replacing it, or registering any other condition or
+override, requires every referenced attribute to resolve to a concrete
+`BooleanField`. Each condition compiles as `skip_<name> OR condition`; the
+override compiles as `NOT skip_<name> AND override`, ORed with ordinary and
+delegated grants. A true override skip therefore disables that alternative but
+does not remove ordinary grants.
+
 Migration-bot checklist:
 
 - replace `allow_inactive_user` and `allow_inactive` with `skip_is_active`
@@ -78,11 +102,18 @@ Migration-bot checklist:
 - find reliance on `is_superuser` in view guards, reverse inquiries, and adapters
 - review `register_user_condition(`, `set_user_override(`, custom user models,
   and candidate-manager filters
+- move user-condition and override setup before every `register(` or
+  `register_delegation(` call
 - replace `is_authenticated` and `is_anonymous` in registered user rules with
   concrete user fields, or remove those terms
+- replace imports and calls of `trusts.query.is_active_principal`
+- validate user-rule names, reserved-name collisions, and boolean skip values;
+  remove callers that use a replaced override's old skip name
 - verify override replacement and name-matched removal behavior
 - reject sponsor-targeted overrides and keep sponsor authority on ordinary grants
-- regenerate policy locks and verify default and skipped-rule results
+- regenerate policy locks and review the actual SQL plus each
+  `skip_<name>=False` parameter; the lockfile has no separate skipped-rule
+  variant or user-rule expression field
 
 ## Permission content type must match the object (#267)
 
@@ -116,8 +147,9 @@ owner.has_perm("gh_permissions.read_repository", repository)  # True
 ```
 
 No schema migration. Existing crossed positives become denials. Regenerate
-`trusts-policy.lock.yaml`; `auth.Permission` grants gain `const` parameters
-for the protected model's content identity.
+`trusts-policy.lock.yaml`; `auth.Permission` grants gain
+`$content.app_label="..."` and `$content.model="..."` parameters for the
+protected model's content identity.
 
 Migration-bot checklist:
 

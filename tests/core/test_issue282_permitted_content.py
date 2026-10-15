@@ -36,18 +36,20 @@ def _request(user):
 
 
 def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
-    """The lockfile statement is the SQL and values Django runs.
+    """The lockfile statement is the SQL Django runs.
 
-    Constants in the lockfile are those values. The SQL text is that
-    statement broken between tokens. Nothing is rewritten into another
-    inquiry.
+    A ``source=value`` token is that executed constant. A bare
+    ``$user.id`` style token is a call input and is not compared to
+    the sentinel. The SQL text is that statement broken between tokens.
     """
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
     from trusts.policy_lock import (
+        _CALL_INPUT,
         _json_const,
         _load_policy_sql_document,
+        _presented_const,
         _role_sentinel,
         render_policy_sql_bytes,
     )
@@ -102,11 +104,11 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     )
     test.assertEqual(row['sql'].count('%s'), len(row['params']))
     test.assertEqual(len(row['params']), len(raw_params))
-    for symbol, value in zip(row['params'], raw_params):
-        if 'const' in symbol:
-            test.assertEqual(symbol['const'], _json_const(value))
-        else:
-            test.assertEqual(set(symbol), {'bind', 'hint'})
+    for token, value in zip(row['params'], raw_params):
+        parsed = _presented_const(token)
+        if parsed is _CALL_INPUT:
+            continue
+        test.assertEqual(parsed, _json_const(value))
     return row
 
 
@@ -207,16 +209,16 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
         return handle
 
     def _agree(self, handle, user, permission, allowed_cabinets, *,
-               allow_inactive=False):
+               skip_is_active=False):
         sheets = list(self.Sheet.objects.all())
         with _listed(handle):
             authorized = set(handle.registry.filter_authorized(
                 self.Sheet.objects.all(), user, permission,
-                allow_inactive_user=allow_inactive,
+                skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
             for sheet in sheets:
                 permitted = set(sheet.get_permitted_users(
-                    permission, allow_inactive=allow_inactive,
+                    permission, skip_is_active=skip_is_active,
                 ).values_list('pk', flat=True))
                 self.assertEqual(
                     user.pk in permitted,
@@ -226,7 +228,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             listed = filter_by_permitted_content(
                 self.Cabinet.objects.all(), user, permission,
                 content=self.Sheet, handles=(handle,),
-                allow_inactive_user=allow_inactive,
+                skip_is_active=skip_is_active,
             )
             self.assertIsNone(listed._result_cache)
             with self.assertNumQueries(1):
@@ -441,8 +443,8 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
         )
         self.assertIn('WITH RECURSIVE', row['sql'])
         self.assertEqual(
-            [param for param in row['params'] if param.get('hint') == 'along bound'],
-            [{'const': 1, 'hint': 'along bound'}],
+            [param for param in row['params'] if param.startswith('$along_bound=')],
+            ['$along_bound=1'],
         )
 
 
@@ -546,29 +548,29 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         )
         return handle
 
-    def _permitted_content(self, handle, user, *, allow_inactive=False):
+    def _permitted_content(self, handle, user, *, skip_is_active=False):
         return set(filter_by_permitted_content(
             self.Cabinet.objects.all(), user, self.change,
             content=self.Sheet, handles=(handle,),
-            allow_inactive_user=allow_inactive,
+            skip_is_active=skip_is_active,
         ).values_list('pk', flat=True))
 
-    def _agree_user(self, handle, user, allowed_cabinets, *, allow_inactive=False):
+    def _agree_user(self, handle, user, allowed_cabinets, *, skip_is_active=False):
         with _listed(handle):
             authorized = set(AuthorizedQuerySet(self.Sheet).authorized(
-                user, self.change, allow_inactive_user=allow_inactive,
+                user, self.change, skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
             for cabinet in (self.root, self.child, self.past, self.beyond):
                 sheet = self.sheets[cabinet.pk]
                 permitted = set(sheet.get_permitted_users(
-                    self.change, allow_inactive=allow_inactive,
+                    self.change, skip_is_active=skip_is_active,
                 ).values_list('pk', flat=True))
                 self.assertEqual(
                     user.pk in permitted,
                     sheet.pk in authorized,
                     cabinet.title,
                 )
-        listed = self._permitted_content(handle, user, allow_inactive=allow_inactive)
+        listed = self._permitted_content(handle, user, skip_is_active=skip_is_active)
         expected = {cabinet.pk for cabinet in allowed_cabinets}
         self.assertEqual(listed, expected)
         self.assertEqual(
@@ -644,7 +646,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         self.delegate.save(update_fields=['is_active'])
         self._agree_user(handle, self.delegate, ())
         self._agree_user(
-            handle, self.delegate, (self.child,), allow_inactive=True,
+            handle, self.delegate, (self.child,), skip_is_active=True,
         )
         self.delegate.is_active = True
         self.delegate.save(update_fields=['is_active'])
@@ -652,7 +654,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         self.sponsor.save(update_fields=['is_active'])
         self._agree_user(handle, self.delegate, ())
         self._agree_user(
-            handle, self.delegate, (self.child,), allow_inactive=True,
+            handle, self.delegate, (self.child,), skip_is_active=True,
         )
 
     def test_longer_content_suffix_fails_closed(self):
@@ -1128,12 +1130,9 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         self.assertIn('i282d_delegation', row['sql'])
         bounds = [
             param for param in row['params']
-            if param.get('hint') == 'along bound'
+            if param.startswith('$along_bound=')
         ]
-        self.assertEqual(
-            bounds,
-            [{'const': 1, 'hint': 'along bound'}, {'const': 1, 'hint': 'along bound'}],
-        )
+        self.assertEqual(bounds, ['$along_bound=1'])
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

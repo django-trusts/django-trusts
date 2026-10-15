@@ -103,14 +103,14 @@ class PermittedQuerySetSurfaceTest(SimpleTestCase):
         parameters = inspect.signature(AuthorizedQuerySet.authorized).parameters
         self.assertEqual(
             list(parameters),
-            ['self', 'user', 'permission', 'extra_q', 'allow_inactive_user'],
+            ['self', 'user', 'permission', 'extra_q', 'skip_flags'],
         )
         self.assertIsNone(parameters['extra_q'].default)
-        self.assertEqual(parameters['allow_inactive_user'].default, False)
         self.assertEqual(
-            parameters['allow_inactive_user'].kind,
-            inspect.Parameter.KEYWORD_ONLY,
+            parameters['skip_flags'].kind,
+            inspect.Parameter.VAR_KEYWORD,
         )
+        self.assertNotIn('skip_is_active', parameters)
 
 
 class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
@@ -252,7 +252,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         )
         self.assertEqual(
             _pks(Document.objects.authorized(
-                self.inactive, self.change, allow_inactive_user=True,
+                self.inactive, self.change, skip_is_active=True,
             )),
             {self.open_doc.pk},
         )

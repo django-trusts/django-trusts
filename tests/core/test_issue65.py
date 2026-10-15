@@ -405,9 +405,10 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             for value in vars(core).values()
             if isinstance(value, types.ModuleType)
         }
+        allowed_trusts_modules = {'trusts.core', 'trusts._bind_once'}
         self.assertTrue(
             all(
-                name == 'trusts.core' or not name.startswith('trusts.')
+                name in allowed_trusts_modules or not name.startswith('trusts.')
                 for name in imported
             ),
             imported,
@@ -416,7 +417,8 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             module = getattr(value, '__module__', None)
             if isinstance(module, str):
                 self.assertFalse(
-                    module.startswith('trusts.') and module != 'trusts.core',
+                    module.startswith('trusts.')
+                    and module not in allowed_trusts_modules,
                     module,
                 )
 

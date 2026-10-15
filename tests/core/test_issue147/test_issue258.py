@@ -28,6 +28,7 @@ from trusts.policy_lock import (
     _const_from_json,
     _json_const,
     _load_policy_sql_document,
+    _sentinel_value,
     render_policy_sql_bytes,
     resolve_lockfile_path,
     write_policy_lock,
@@ -412,7 +413,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
 
 
 class PolicyLockSentinelTest(SimpleTestCase):
-    def test_content_primary_key_sentinels_are_deterministic_consts(self):
+    def test_content_primary_key_sentinels_are_call_inputs(self):
         cases = (
             ('BoolDoc', models.BooleanField(), True),
             ('UuidDoc', models.UUIDField(), {
@@ -460,19 +461,32 @@ class PolicyLockSentinelTest(SimpleTestCase):
         )
         for name, field, expected in cases:
             with self.subTest(name=name):
-                consts = _has_perm_consts(name, field)
-                self.assertEqual(consts[0], 1)
-                self.assertEqual(consts[1], expected)
-                self.assertEqual(consts[2], 1)
+                self.assertEqual(
+                    _has_perm_content_token(name, field),
+                    '$content.pk_value',
+                )
+                self.assertEqual(
+                    _json_const(_sentinel_value(field, 'default')),
+                    expected,
+                )
 
-        aware = _has_perm_consts('AwareDoc', models.DateTimeField())
-        self.assertEqual(aware[1], {
+        aware_field = models.DateTimeField()
+        self.assertEqual(
+            _has_perm_content_token('AwareDoc', aware_field),
+            '$content.pk_value',
+        )
+        self.assertEqual(_json_const(_sentinel_value(aware_field, 'default')), {
             'type': 'datetime',
             'value': '2000-01-01T00:00:00+00:00',
         })
         with override_settings(USE_TZ=False):
-            naive = _has_perm_consts('NaiveDoc', models.DateTimeField())
-        self.assertEqual(naive[1], {
+            naive_field = models.DateTimeField()
+            self.assertEqual(
+                _has_perm_content_token('NaiveDoc', naive_field),
+                '$content.pk_value',
+            )
+            naive = _json_const(_sentinel_value(naive_field, 'default'))
+        self.assertEqual(naive, {
             'type': 'datetime',
             'value': '2000-01-01T00:00:00',
         })
@@ -493,7 +507,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
         self.assertIn('pk_value', message)
         self.assertIn('RejectingField', message)
 
-    def test_json_primary_key_fails_closed_before_a_document(self):
+    def test_json_primary_key_is_a_call_input(self):
         content, grant = _pk_pair('JsonDoc', models.JSONField())
         handle = _handle('documents.backends.JsonDocBackend')
         handle.register(
@@ -502,10 +516,13 @@ class PolicyLockSentinelTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[handle])
-        self.assertIn('cannot record constant', str(ctx.exception))
-        self.assertIn('dict', str(ctx.exception))
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        params = document['backends'][0]['contents'][0]['has_perm']['params']
+        self.assertIn('$content.pk_value', params)
+        self.assertEqual(content._meta.pk.attname, 'pk_value')
+        self.assertEqual(grant._meta.get_field('document').related_model, content)
 
     def test_missing_grant_or_permission_query_fails_closed(self):
         handle = _document_handle('documents.backends.MissingQueryBackend')
@@ -587,19 +604,17 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         self.assertIn(' AND ', both_row['sql'])
         self.assertIn(' OR ', either_row['sql'])
         self.assertEqual(both_row['params'], [
-            {'const': 'alpha', 'hint': 'label'},
-            {'const': 1.5, 'hint': 'amount'},
+            'label="alpha"',
+            'amount=1.5',
         ])
         self.assertEqual(either_row['params'], both_row['params'])
-        self.assertEqual(filters[prefix + 'owner']['params'], [
-            {'bind': 'user.id', 'hint': '$user'},
-        ])
+        self.assertEqual(filters[prefix + 'owner']['params'], ['$user.id'])
         self.assertEqual(filters[prefix + 'username']['params'], [
-            {'bind': 'user.username', 'hint': '$user.username'},
+            '$user.username',
         ])
         self.assertNotIn('alpha', filters[prefix + 'owner']['sql'])
         self.assertEqual(filters[prefix + 'differs']['params'], [
-            {'const': 'nope', 'hint': 'label'},
+            'label="nope"',
         ])
         self.assertIn('NOT', filters[prefix + 'differs']['sql'])
 
@@ -626,7 +641,7 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         self.assertEqual(_json_const('alpha'), 'alpha')
         self.assertEqual(_const_from_json('alpha'), 'alpha')
 
-    def test_split_content_targets_fail_closed(self):
+    def test_split_content_targets_bind_each_column(self):
         class CodeDocument(models.Model):
             code = models.CharField(max_length=8, unique=True)
 
@@ -664,11 +679,20 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[handle])
-        message = str(ctx.exception)
-        self.assertIn('do not share a target', message)
-        self.assertIn('documents.CodeDocument', message)
+        document = _load_policy_sql_document(
+            render_policy_sql_bytes(handles=[handle]),
+        )
+        content_row = document['backends'][0]['contents'][0]
+        self.assertEqual(content_row['model'], 'documents.CodeDocument')
+        users = content_row['get_permitted_users']
+        binds = [
+            token for token in users['params']
+            if token.startswith('$content.')
+        ]
+        self.assertEqual(binds.count('$content.id'), 1)
+        self.assertEqual(binds.count('$content.code'), 1)
+        self.assertIn('content_id', users['sql'])
+        self.assertIn('content_code', users['sql'])
 
     def test_directory_lock_path_and_non_text_path_fail_closed(self):
         payload = dump_policy_yaml({'schema_version': 1})
@@ -712,7 +736,7 @@ def math_sign(value):
     return math.copysign(1.0, value)
 
 
-def _has_perm_consts(name, field):
+def _has_perm_content_token(name, field):
     content, grant = _pk_pair(name, field)
     handle = _handle('documents.backends.%sBackend' % name)
     handle.register(
@@ -729,8 +753,12 @@ def _has_perm_consts(name, field):
     content_row = document['backends'][0]['contents'][0]
     if content_row['model'] != content._meta.label:
         raise AssertionError(content_row['model'])
-    return [
-        row['const']
-        for row in content_row['has_perm']['params']
-        if 'const' in row
+    matches = [
+        token for token in content_row['has_perm']['params']
+        if token.startswith('$content.') and '=' not in token
     ]
+    if len(matches) != 1:
+        raise AssertionError(
+            'content token produced %r' % (content_row['has_perm']['params'],)
+        )
+    return matches[0]
