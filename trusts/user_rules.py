@@ -222,9 +222,9 @@ def _stored(conditions):
 def compile_user_rules(model, path, conditions, *, role, values):
     """``(skip_<name> OR condition)`` for rules that apply to ``role``.
 
-    ``conditions is None`` is the built-in ``is_active`` rule. Registration
-    rejects a condition whose column is not on ``model``; this compiler
-    does not omit that column or fail closed for it.
+    ``conditions is None`` is the built-in ``is_active`` rule. The registry
+    drops that implicit rule before this call when ``model`` has no such
+    column, and it uses one fragment for every inquiry.
     """
     values = values or {}
     combined = None

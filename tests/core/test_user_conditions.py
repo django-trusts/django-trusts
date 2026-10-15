@@ -1897,12 +1897,11 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             editor.delete_model(note_model)
             editor.delete_model(user_model)
 
-    def test_is_active_condition_raises_at_registration(self):
-        """``is_active`` fails when this user model is registered.
+    def test_explicit_is_active_condition_raises_at_registration(self):
+        """``register_user_condition('is_active', ...)`` rejects this model.
 
-        An explicit ``register_user_condition('is_active', ...)`` and the
-        built-in condition both raise from ``register()`` and
-        ``register_delegation()``. Neither call stores a relation.
+        ``register()`` and ``register_delegation()`` raise before storing
+        a relation. The implicit built-in is not this case.
         """
         user_model, note_model, grant_model, link_model = self._create(
             'Rejected',
@@ -1911,7 +1910,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             grant = Ref(grant_model)
             link = Ref(link_model)
 
-            def assert_rejected(registry, call):
+            def assert_rejected(call):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError) as ctx:
                         call()
@@ -1924,42 +1923,32 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             explicit.register_user_condition(
                 'is_active', lambda u: u.is_active,
             )
-            assert_rejected(
-                explicit,
-                lambda: explicit.register(
-                    content=grant.note,
-                    user=grant.user,
-                    permission=grant.permission,
-                ),
-            )
+            assert_rejected(lambda: explicit.register(
+                content=grant.note,
+                user=grant.user,
+                permission=grant.permission,
+            ))
             self.assertEqual(explicit.records, ())
 
-            builtin = TrustsRegistry()
-            assert_rejected(
-                builtin,
-                lambda: builtin.register(
-                    content=grant.note,
-                    user=grant.user,
-                    permission=grant.permission,
-                ),
-            )
-            self.assertEqual(builtin.records, ())
-
             delegated = TrustsRegistry()
-            assert_rejected(
-                delegated,
-                lambda: delegated.register_delegation(
-                    content=link.note,
-                    delegate=link.delegate,
-                    sponsor=link.sponsor,
-                ),
+            delegated.register_user_condition(
+                'is_active', lambda u: u.is_active,
             )
+            assert_rejected(lambda: delegated.register_delegation(
+                content=link.note,
+                delegate=link.delegate,
+                sponsor=link.sponsor,
+            ))
             self.assertEqual(delegated.delegations, ())
         finally:
             self._drop(user_model, note_model, grant_model, link_model)
 
     def test_without_an_is_active_condition_inquiries_still_match(self):
-        """Forward, reverse, and sponsor checks run with no activity column."""
+        """Forward, reverse, and sponsor checks run with no activity column.
+
+        The registry never registers an ``is_active`` condition, so the
+        implicit built-in is left out of every fragment.
+        """
         from trusts.reverse import lock_permitted_users_queryset
 
         user_model, note_model, grant_model, link_model = self._create('Open')
@@ -1989,7 +1978,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             )
 
             registry = TrustsRegistry()
-            registry.register_user_condition('is_active', None)
+            self.assertIsNone(registry._user_conditions)
             grant = Ref(grant_model)
             link = Ref(link_model)
             registry.register(

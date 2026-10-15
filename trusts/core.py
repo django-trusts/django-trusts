@@ -4040,6 +4040,7 @@ class TrustsRegistry(object):
         self._frozen = False
         self._condition_lookup = None
         self._user_conditions = None
+        self._explicit_condition_names = set()
         self._user_override = None
         self._rule_fragments = {}
         self._override_fragments = {}
@@ -4135,6 +4136,41 @@ class TrustsRegistry(object):
             self._stored_user_conditions(), self._user_override,
         )
 
+    def _implicit_is_active(self, rule):
+        """True for the built-in ``is_active`` rule the caller did not set."""
+        if rule.name in self._explicit_condition_names:
+            return False
+        expr = rule.expr
+        return (
+            rule.name == 'is_active' and rule.on == '*'
+            and expr.kind == 'field' and expr.name == 'is_active'
+        )
+
+    def _conditions_for_model(self, model):
+        """Conditions compiled for ``model``.
+
+        The implicit ``is_active`` rule is left out when that column is
+        missing. Every inquiry uses this same list. An explicit
+        ``is_active`` condition is kept and rejected by registration.
+        """
+        from trusts.user_rules import BUILTIN_USER_CONDITIONS, field_state
+
+        stored = self._stored_user_conditions()
+        rules = BUILTIN_USER_CONDITIONS if stored is None else stored
+        kept = []
+        dropped = False
+        for rule in rules:
+            if (
+                self._implicit_is_active(rule)
+                and field_state(model, rule.expr) == 'missing'
+            ):
+                dropped = True
+                continue
+            kept.append(rule)
+        if not dropped:
+            return stored
+        return tuple(kept)
+
     def _rule_fragment(self, model, *, role, path=''):
         """Registration-time ``(skip OR condition)`` for one model and role."""
         from trusts.user_rules import compile_user_rules
@@ -4145,7 +4181,7 @@ class TrustsRegistry(object):
             return self._rule_fragments[key]
         except KeyError:
             compiled = compile_user_rules(
-                model, path, self._stored_user_conditions(),
+                model, path, self._conditions_for_model(model),
                 role=role, values={},
             )
             self._rule_fragments[key] = compiled
@@ -4237,6 +4273,7 @@ class TrustsRegistry(object):
                         'User condition %r is not registered.' % (name,)
                     )
                 del self._user_conditions[name]
+                self._explicit_condition_names.discard(name)
                 self._clear_compiled_rules()
                 return None
             rule = UserCondition(name, concrete_rule(expr, name), target)
@@ -4245,18 +4282,22 @@ class TrustsRegistry(object):
                 self._user_conditions = None
             raise
         self._user_conditions[name] = rule
+        self._explicit_condition_names.add(name)
         self._clear_compiled_rules()
         return rule
 
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
         """Fail when a fixed rule is not a concrete boolean on these models.
 
-        The built-in ``is_active`` condition is included. A model with no
-        such column must remove that condition before registration.
+        An explicit ``is_active`` condition raises when the column is
+        missing. The implicit built-in is omitted from every fragment
+        instead, so no inquiry path treats that column differently.
         """
         from trusts.user_rules import assert_concrete_booleans, rule_applies
 
         for rule in self.user_conditions():
+            if self._implicit_is_active(rule):
+                continue
             models = []
             if user_model is not None and rule_applies(rule.on, 'user'):
                 models.append(user_model)
