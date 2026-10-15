@@ -32,7 +32,6 @@ from trusts.query import (
     AuthorizedManager,
     AuthorizedManagerMixin,
     AuthorizedQuerySet,
-    is_active_principal,
 )
 
 
@@ -153,6 +152,10 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
             inspect.signature(filter_authorized_scopes),
             inspect.signature(filter_by_permitted_content),
         )
+        self.assertNotIn(
+            'skip_is_active',
+            inspect.signature(filter_by_permitted_content).parameters,
+        )
         sentinel = object()
         queryset, user, permission, content = (
             object(), object(), object(), object(),
@@ -164,12 +167,12 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
         ) as called:
             result = filter_authorized_scopes(
                 queryset, user, permission, content=content,
-                handles=handles, allow_inactive_user=True,
+                handles=handles, skip_is_active=True,
             )
         self.assertIs(result, sentinel)
         called.assert_called_once_with(
             queryset, user, permission, content=content,
-            handles=handles, allow_inactive_user=True,
+            handles=handles, skip_is_active=True,
         )
 
 
@@ -279,7 +282,6 @@ class AuthorizedQuerySetSurfaceTest(SimpleTestCase):
             )
         authorized.assert_called_once_with(
             queryset, 'user', 'permission', extra_q='extra',
-            allow_inactive_user=False,
         )
         self.assertEqual(manager.application_method(), 'application-owned')
 
@@ -308,15 +310,13 @@ class AuthorizedQuerySetLiveTest(TestCase):
 
     def test_wrong_permission_type_is_zero_sql_configuration_error(self):
         qs = AuthorizedQuerySet(Document)
-        with patch('trusts.query.is_active_principal', wraps=is_active_principal) as active:
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    qs.authorized(self.alice, 'change_document')
-                with self.assertRaises(TrustsConfigurationError):
-                    qs.authorized(self.alice, 'myapp.change_document')
-                with self.assertRaises(TrustsConfigurationError):
-                    qs.authorized(self.alice, None)
-        active.assert_not_called()
+        with self.assertNumQueries(0):
+            with self.assertRaises(TrustsConfigurationError):
+                qs.authorized(self.alice, 'change_document')
+            with self.assertRaises(TrustsConfigurationError):
+                qs.authorized(self.alice, 'myapp.change_document')
+            with self.assertRaises(TrustsConfigurationError):
+                qs.authorized(self.alice, None)
 
     def test_instance_filter_matches_grant_and_stays_lazy(self):
         qs = Document.objects.authorized(self.alice, self.change)
@@ -331,14 +331,12 @@ class AuthorizedQuerySetLiveTest(TestCase):
     def test_inactive_user_is_empty_unless_auditing(self):
         self.alice.is_active = False
         self.alice.save()
-        with patch('trusts.query.is_active_principal') as active:
-            with self.assertNumQueries(0):
-                denied = Document.objects.authorized(self.alice, self.change)
-                self.assertFalse(denied.exists())
-            audited = Document.objects.authorized(
-                self.alice, self.change, allow_inactive_user=True,
-            )
-        active.assert_not_called()
+        with self.assertNumQueries(1):
+            denied = Document.objects.authorized(self.alice, self.change)
+            self.assertFalse(denied.exists())
+        audited = Document.objects.authorized(
+            self.alice, self.change, skip_is_active=True,
+        )
         self.assertEqual(_pks(audited), {self.doc_a.pk})
 
     def test_extra_q_is_and_overlay(self):
@@ -367,7 +365,7 @@ class AuthorizedQuerySetLiveTest(TestCase):
             with patch('trusts.core.granted') as compiled:
                 denied = Document.objects.authorized(AnonymousUser(), self.change)
                 audited = Document.objects.authorized(
-                    AnonymousUser(), self.change, allow_inactive_user=True,
+                    AnonymousUser(), self.change, skip_is_active=True,
                 )
                 self.assertFalse(denied.exists())
                 self.assertFalse(audited.exists())

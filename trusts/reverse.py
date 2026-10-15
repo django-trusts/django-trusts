@@ -22,27 +22,34 @@ from trusts.core import (
 _OBJECT_BLIND_BACKENDS = None
 
 
-def compile_permitted_users(content, perm, *, user_queryset=None,
-                            allow_inactive=False):
+def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     """Lazy user queryset for one saved content object and one permission.
 
     The candidate rows are ``user_queryset`` when given (the optional
     manager adapter) and otherwise ``AUTH_USER_MODEL``'s default manager.
-    Django's active-superuser rule is OR-ed with each configured backend
-    that can contribute an exact reverse predicate. The ``is_active``
-    check applies inside the Trusts-owned branch only. A custom predicate
-    is not wrapped. ``allow_inactive=True`` is forwarded only to the
-    Trusts-owned mixin method. The superuser contributor still requires an
-    active superuser. An unsupported object-permission backend raises
+    Each configured backend that can contribute an exact reverse predicate
+    is OR-ed. A registered user override is part of the Trusts-owned
+    predicate, not a separate superuser grant. The ``is_active`` check
+    applies inside the Trusts-owned branch only. A custom predicate is
+    not wrapped. ``skip_<name>=True`` sets that bound parameter. The
+    values are forwarded only to the Trusts-owned mixin method.
+    Django's ``PermissionsMixin.has_perm`` early return is
+    not copied here. An unsupported object-permission backend raises
     before SQL.
     """
     from django.contrib.auth import get_backends, get_user_model
 
-    from trusts.query import require_mode_flag
+    from trusts.apps import _relationship_implementation_handles
+    from trusts.core import user_skip_params
 
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    require_mode_flag(allow_inactive, 'allow_inactive')
+    inquiry = user_skip_params(
+        None, skip_flags,
+        handles=_relationship_implementation_handles(),
+        require_user=False,
+    )
+    skipped = inquiry.values
     if user_queryset is None:
         user_queryset = get_user_model()._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
@@ -52,15 +59,15 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     backends = tuple(get_backends())
     _reject_unaccepted_permission_instance(perm, backends)
     user_model = user_queryset.model
-    _assert_superuser_fields(user_model)
     _assert_persisted_principal(user_model)
-    parts = [_superuser_q(user_model)]
+    parts = []
     involved = [user_model, content.__class__]
     if isinstance(perm, (str, Permission)):
         involved.append(Permission)
     for backend in backends:
         predicate = _backend_predicate(
-            backend, content, perm, allow_inactive=allow_inactive,
+            backend, content, perm,
+            skipped=skipped,
         )
         if predicate is None:
             continue
@@ -76,15 +83,19 @@ def compile_permitted_users(content, perm, *, user_queryset=None,
     _assert_same_database(alias, involved)
     if user_queryset.db != alias:
         user_queryset = user_queryset.using(alias)
-    combined = parts[0]
-    for part in parts[1:]:
-        combined |= part
+    if not parts:
+        combined = Q(pk__isnull=True)
+    else:
+        combined = parts[0]
+        for part in parts[1:]:
+            combined |= part
     from trusts._bind_once import bind_once
 
     return bind_once(user_queryset.filter(combined).distinct())
 
 
-def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
+def trusts_mixin_predicate(backend, content, perm, *,
+                           skipped=()):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
     from trusts.apps import _relationship_implementation_handles
 
@@ -107,19 +118,29 @@ def trusts_mixin_predicate(backend, content, perm, *, allow_inactive=False):
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
             content_identity=getattr(plan, 'content_identity', None),
-            allow_inactive=allow_inactive,
+            skipped=skipped,
         )
         if delegated is not None:
             exists = delegated if exists is None else (_as_q(exists) | delegated)
-    if exists is None:
-        return None
+    from trusts.core import _bound_permission_identity, user_predicate
+
     user_model = _plan_user_model(plan, content)
-    eligibility = _trusts_eligibility_q(
-        user_model, allow_inactive=allow_inactive,
+    permission_model = plan.permission_model
+    if permission_model is None and not isinstance(binding, Model):
+        permission_model = Permission
+    predicate = user_predicate(
+        None if exists is None else _as_q(exists),
+        user_model,
+        plan.user_rules_closed,
+        plan.user_override_q,
+        skipped,
+        _bound_permission_identity(
+            binding, content.__class__, permission_model,
+        ),
     )
-    if eligibility is None:
+    if predicate is None:
         return None
-    predicate = eligibility & _as_q(exists)
+    predicate = _trusts_eligibility_q(user_model) & predicate
     if condition:
         overlay = _named_filter_q(
             backend, content, perm, condition[0], user_model,
@@ -166,15 +187,26 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
             exists = (
                 delegated if exists is None else (_as_q(exists) | delegated)
             )
-    if exists is None:
+    from trusts.core import _bound_permission_identity, user_predicate
+
+    if plan.user_rules_closed is None:
+        return user_model._default_manager.all().filter(pk__isnull=True)
+    predicate = user_predicate(
+        None if exists is None else _as_q(exists),
+        user_model,
+        plan.user_rules_closed,
+        plan.user_override_q,
+        {},
+        _bound_permission_identity(
+            permission, content.__class__, plan.permission_model,
+        ),
+    )
+    if predicate is None:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
             % content._meta.label
         )
-    eligibility = _trusts_eligibility_q(user_model)
-    if eligibility is None:
-        return user_model._default_manager.all().filter(pk__isnull=True)
-    predicate = eligibility & _as_q(exists)
+    predicate = _trusts_eligibility_q(user_model) & predicate
     from trusts._bind_once import bind_once
 
     return bind_once(
@@ -254,10 +286,10 @@ def _object_blind_backends():
 def _trusts_owned_reverse_hook(backend):
     """True when the reverse hook is the mixin method, not an override.
 
-    ``allow_inactive=True`` is passed only through that Trusts-owned
+    The skipped condition names are passed only through that Trusts-owned
     method. Other hooks are called as
     ``permitted_users_predicate(content, perm)``. Trusts does not require
-    them to accept ``allow_inactive`` and does not raise when they do not.
+    them to accept ``skip_<name>`` and does not raise when they do not.
     """
     from trusts.backends import TrustModelBackendMixin
 
@@ -269,13 +301,14 @@ def _trusts_owned_reverse_hook(backend):
     )
 
 
-def _backend_predicate(backend, content, perm, *, allow_inactive=False):
+def _backend_predicate(backend, content, perm, *,
+                       skipped=()):
     if getattr(backend, 'trusts_object_permissions', None) is False:
         return None
     if _declares_reverse_hook(backend):
-        if allow_inactive and _trusts_owned_reverse_hook(backend):
+        if _trusts_owned_reverse_hook(backend):
             return backend.permitted_users_predicate(
-                content, perm, allow_inactive=True,
+                content, perm, skipped=skipped,
             )
         return backend.permitted_users_predicate(content, perm)
     if type(backend) in _object_blind_backends():
@@ -570,38 +603,18 @@ def _concrete_field(model, name):
     return field
 
 
-def _require_boolean(model, name, role):
-    field = _concrete_field(model, name)
-    if field is None or field.get_internal_type() != 'BooleanField':
-        raise TrustsConfigurationError(
-            'Reverse permission inquiry needs %s.%s as a concrete '
-            'BooleanField to compile the %s in SQL.'
-            % (model._meta.label, name, role)
-        )
-
-
-def _assert_superuser_fields(model):
-    _require_boolean(model, 'is_active', 'active-superuser rule')
-    _require_boolean(model, 'is_superuser', 'active-superuser rule')
-
-
 def _assert_persisted_principal(model):
     for name in ('is_anonymous', 'is_authenticated', 'is_active'):
         _principal_presence(model, name)
-
-
-def _superuser_q(model):
-    """Django's outer rule: active superusers, not a global is_active filter."""
-    return Q(is_active=True, is_superuser=True)
 
 
 def _principal_presence(model, name):
     """How ``name`` is visible to SQL.
 
     ``field`` is a concrete boolean column. ``stock`` is
-    ``AbstractBaseUser``'s property, which ``is_active_principal``
-    evaluates without a column. ``absent`` uses that helper's
-    ``getattr`` default. Any other Python attribute fails closed.
+    ``AbstractBaseUser``'s property, which the Python shortcut evaluates
+    without a column. ``absent`` uses the ``getattr`` default. Any other
+    Python attribute fails closed.
     """
     field = _concrete_field(model, name)
     if field is not None:
@@ -627,23 +640,17 @@ def _principal_presence(model, name):
     )
 
 
-def _trusts_eligibility_q(model, *, allow_inactive=False):
-    """Eligibility of ``TrustModelBackendMixin.has_perm`` as SQL.
+def _trusts_eligibility_q(model):
+    """Anonymous and authenticated columns on a reverse candidate user.
 
-    ``is_active_principal`` denies anonymous, unauthenticated, and inactive
-    users. A missing ``is_active`` uses the same default as
-    ``getattr(user, 'is_active', False)`` and contributes no users.
-    ``allow_inactive`` omits the ``is_active`` equality and does not fail
-    closed when that column is absent. Persisted rows use the stock
+    Registered user conditions and the override are bound by
+    ``user_predicate``. Persisted rows use the stock
     anonymous/authenticated properties unless those names are concrete
     fields. The predicate is standard boolean SQL.
     """
-    active = _principal_presence(model, 'is_active')
     anonymous = _principal_presence(model, 'is_anonymous')
     authenticated = _principal_presence(model, 'is_authenticated')
-    if not allow_inactive and active != 'field':
-        return None
-    predicate = Q() if allow_inactive else Q(is_active=True)
+    predicate = Q()
     if anonymous == 'field':
         predicate &= Q(is_anonymous=False)
     if authenticated == 'field':

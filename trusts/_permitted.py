@@ -1,7 +1,7 @@
 """HTTP-free compiler for ``permitted`` and ``authorization_required``.
 
-The view decorator keeps pk coercion, HTTP statuses, the active-superuser
-existence shortcut, and ``trusts.E008`` bookkeeping. This module is the
+The view decorator keeps pk coercion, HTTP statuses, and ``trusts.E008``
+bookkeeping. This module is the
 shared preflight and grant. ``handles`` is an explicit private input so
 another package can supply its own later. Runtime ``.permitted()`` calls
 are not recorded for ``trusts.E008``.
@@ -15,7 +15,6 @@ from django.db.models import Subquery
 
 from trusts._bind_once import bind_once
 from trusts.core import TrustsConfigurationError, _ordinary_records, granted
-from trusts.query import is_active_principal
 
 
 def _guard_permission_string(permission, *, api):
@@ -201,9 +200,9 @@ def _authorization_preflight_state(handles, model, conditions):
     ``participating`` is True when at least one handle has an applicable
     ``auth.Permission`` plan for ``model``. ``complete`` is True when one
     of those backends also owns every selected name as a queryable
-    condition (the same rule as ``trusts.E008``). Callers that have an
-    active-superuser shortcut must not run it until this returns a
-    complete pair. ``trusts.E008`` itself only sees guards recorded by
+    condition (the same rule as ``trusts.E008``). A grant query must not
+    run until this returns a complete pair. ``trusts.E008`` itself only
+    sees guards recorded by
     ``authorization_required``.
     """
     participating = False
@@ -255,7 +254,8 @@ def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
 
 
 def _authorization_grant_q(handles, candidates, user, model, permission,
-                           conditions, binding, *, api, allow_inactive=False):
+                           conditions, binding, *, api,
+                           skipped=()):
     """OR each auth-Permission backend's grant composed with its own names.
 
     A backend participates only when it has an applicable exact
@@ -280,7 +280,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
                 (handle,), candidates, user, binding, kind='complete',
                 sponsor_handles=handles,
                 permission_model=Permission,
-                allow_inactive=allow_inactive,
+                skipped=skipped,
             )
             if part is None:
                 continue
@@ -290,7 +290,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             (handle,), candidates, user, binding, kind='complete',
             sponsor_handles=handles,
             permission_model=Permission,
-            allow_inactive=allow_inactive,
+            skipped=skipped,
         )
         if part is None:
             continue
@@ -308,12 +308,12 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
 
 
 def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
-                       allow_inactive=False):
+                       **skip_flags):
     """Lazy filtered queryset of rows ``user`` may access.
 
     ``handles`` selects the backends. Core passes relationship-family
     implementation handles. Input and configuration are validated before
-    the anonymous and inactive shortcut, and before SQL. A well-formed
+    the anonymous denial, and before SQL. A well-formed
     permission for another content type is an empty queryset. This call
     does not register a ``trusts.E008`` guard and does not copy Django's
     active-superuser shortcut.
@@ -324,10 +324,12 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.query import require_mode_flag
-    require_mode_flag(allow_inactive, 'allow_inactive_user')
-    if not is_active_principal(user, allow_inactive=allow_inactive):
+    from trusts.core import user_skip_params
+
+    inquiry = user_skip_params(user, skip_flags, handles=handles)
+    if inquiry.denied:
         return queryset.none()
+    skipped = inquiry.values
     granted_q = _authorization_grant_q(
         handles,
         queryset,
@@ -337,7 +339,7 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
         conditions,
         _permitted_binding(model, normalized),
         api='permitted',
-        allow_inactive=allow_inactive,
+        skipped=skipped,
     )
     if granted_q is None:
         return queryset.none()

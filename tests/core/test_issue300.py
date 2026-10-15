@@ -14,6 +14,7 @@ from django.db.models.sql.query import Query
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext, isolate_apps
 
+from tests.core import KernelHostRequiredMixin
 from tests.core.test_issue147.test_sql_export import (
     Document as GuideDocument,
     _document_handle,
@@ -39,7 +40,6 @@ from trusts.core import (
     granted,
 )
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import stored_user_is_inactive
 from trusts.reverse import _trusts_eligibility_q
 
 
@@ -84,7 +84,7 @@ class Issue300LockfileTest(SimpleTestCase):
             '"is_active" = ("trusts_bind"."is_active")', users['sql'],
         )
         self.assertNotIn('"is_active" = %s', users['sql'])
-        self.assertNotIn('allow_inactive', users['sql'])
+        self.assertNotIn('skip_is_active', users['sql'])
 
     def test_flag_off_records_the_plain_queryset(self):
         with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -107,23 +107,29 @@ class Issue300LockfileTest(SimpleTestCase):
 
 
 class Issue300EligibilitySqlTest(SimpleTestCase):
-    def test_is_active_equality_is_added_only_when_inactive_users_are_denied(self):
-        denied = User.objects.filter(
-            _trusts_eligibility_q(User, allow_inactive=False),
-        )
-        included = User.objects.filter(
-            _trusts_eligibility_q(User, allow_inactive=True),
-        )
-        denied_where = str(denied.query.where)
-        included_where = str(included.query.where)
-        self.assertIn('is_active', denied_where)
-        self.assertNotIn('is_active', included_where)
-        self.assertNotIn('allow_inactive', denied_where)
-        self.assertNotIn('allow_inactive', included_where)
-        self.assertNotIn('OR', denied_where)
+    def test_skip_is_active_keeps_the_condition_in_one_statement(self):
+        from trusts.user_rules import compile_user_rules
+
+        denied = bind_once(User.objects.filter(compile_user_rules(
+            User, '', None, role='user', values={'is_active': False},
+        )))
+        included = bind_once(User.objects.filter(compile_user_rules(
+            User, '', None, role='user', values={'is_active': True},
+        )))
+        denied_sql, denied_params = denied.query.sql_with_params()
+        included_sql, included_params = included.query.sql_with_params()
+        self.assertEqual(denied_sql, included_sql)
+        self.assertIn('is_active', denied_sql)
+        self.assertIn('OR', str(denied.query.where))
+        self.assertIn(False, denied_params)
+        self.assertNotIn(False, included_params)
+        eligibility = str(User.objects.filter(
+            _trusts_eligibility_q(User),
+        ).query.where)
+        self.assertNotIn('is_active', eligibility)
 
 
-class Issue300BooleanFieldTest(TestCase):
+class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
     def test_authorized_denies_a_non_model_without_is_active_and_none_raises(self):
         class Authenticated(object):
             is_authenticated = True
@@ -136,12 +142,9 @@ class Issue300BooleanFieldTest(TestCase):
             codename='change_document',
             defaults={'name': 'Can change document'},
         )
-        self.assertTrue(stored_user_is_inactive(Authenticated()))
-        self.assertFalse(stored_user_is_inactive(object()))
         with self.assertNumQueries(0):
-            self.assertFalse(
-                Document.objects.authorized(Authenticated(), permission).exists()
-            )
+            with self.assertRaises(TrustsConfigurationError):
+                Document.objects.authorized(Authenticated(), permission)
         handle = _document_handle()
         content = GuideDocument(title='note-300', pk=1)
         with self.assertRaises(TrustsConfigurationError):
@@ -306,9 +309,11 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
                 self.assertEqual(list(params), [1])
 
     def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
-        query = bind_once(User.objects.filter(
-            _trusts_eligibility_q(User, allow_inactive=False),
-        )).query
+        from trusts.user_rules import compile_user_rules
+
+        query = bind_once(User.objects.filter(compile_user_rules(
+            User, '', None, role='user', values={},
+        ))).query
         engines = (
             'django.db.backends.sqlite3',
             'django.db.backends.mysql',

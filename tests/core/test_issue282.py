@@ -505,7 +505,7 @@ class DelegatedAlongTest(TransactionTestCase):
             )
             self.assertTrue(backend.has_perm(
                 self.delegate, self.code, self.child,
-                allow_inactive_user=True,
+                skip_is_active=True,
             ))
             self.assertNotIn(
                 self.delegate.pk,
@@ -516,7 +516,7 @@ class DelegatedAlongTest(TransactionTestCase):
             self.assertIn(
                 self.delegate.pk,
                 set(self.child.get_permitted_users(
-                    self.change, allow_inactive=True,
+                    self.change, skip_is_active=True,
                 ).values_list('pk', flat=True)),
             )
         self.sponsor.is_active = True
@@ -538,7 +538,7 @@ class DelegatedAlongTest(TransactionTestCase):
             )
             self.assertTrue(backend.has_perm(
                 self.delegate, self.code, self.child,
-                allow_inactive_user=True,
+                skip_is_active=True,
             ))
             self.assertNotIn(
                 self.delegate.pk,

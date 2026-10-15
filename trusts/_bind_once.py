@@ -732,6 +732,8 @@ def _classify_lookup(lookup, value, root_model):
     model_label = _lookup_model_label(lookup)
     if isinstance(value, bool) and name in _ELIGIBILITY:
         return 'eligibility', _ELIGIBILITY[name]
+    if isinstance(value, bool) and _user_boolean_label(lookup, name) is not None:
+        return 'eligibility', _user_boolean_label(lookup, name)
     if name == 'app_label' and model_label == 'contenttypes.ContentType':
         return 'const', 'content type app'
     if name == 'model' and model_label == 'contenttypes.ContentType':
@@ -834,6 +836,28 @@ def _lookup_field_name(lookup):
         if isinstance(name, str) and name != '':
             return name
     return None
+
+
+def _user_boolean_label(lookup, name):
+    """Bind-once label for a concrete boolean on the auth user model.
+
+    ``is_active`` keeps its existing eligibility label. Other user booleans
+    use ``user.<field>`` so the lockfile token is ``user.<field>=True``.
+    """
+    if not name or name in _ELIGIBILITY:
+        return None
+    if _lookup_model_label(lookup) != _user_concrete()._meta.label:
+        return None
+    try:
+        field = _user_concrete()._meta.get_field(name)
+    except Exception:
+        return None
+    if (
+        not getattr(field, 'concrete', False)
+        or field.get_internal_type() != 'BooleanField'
+    ):
+        return None
+    return 'user.' + name
 
 
 def _lookup_model_label(lookup):

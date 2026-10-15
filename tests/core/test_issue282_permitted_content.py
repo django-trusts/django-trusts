@@ -209,16 +209,16 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
         return handle
 
     def _agree(self, handle, user, permission, allowed_cabinets, *,
-               allow_inactive=False):
+               skip_is_active=False):
         sheets = list(self.Sheet.objects.all())
         with _listed(handle):
             authorized = set(handle.registry.filter_authorized(
                 self.Sheet.objects.all(), user, permission,
-                allow_inactive_user=allow_inactive,
+                skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
             for sheet in sheets:
                 permitted = set(sheet.get_permitted_users(
-                    permission, allow_inactive=allow_inactive,
+                    permission, skip_is_active=skip_is_active,
                 ).values_list('pk', flat=True))
                 self.assertEqual(
                     user.pk in permitted,
@@ -228,7 +228,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             listed = filter_by_permitted_content(
                 self.Cabinet.objects.all(), user, permission,
                 content=self.Sheet, handles=(handle,),
-                allow_inactive_user=allow_inactive,
+                skip_is_active=skip_is_active,
             )
             self.assertIsNone(listed._result_cache)
             with self.assertNumQueries(1):
@@ -548,29 +548,29 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         )
         return handle
 
-    def _permitted_content(self, handle, user, *, allow_inactive=False):
+    def _permitted_content(self, handle, user, *, skip_is_active=False):
         return set(filter_by_permitted_content(
             self.Cabinet.objects.all(), user, self.change,
             content=self.Sheet, handles=(handle,),
-            allow_inactive_user=allow_inactive,
+            skip_is_active=skip_is_active,
         ).values_list('pk', flat=True))
 
-    def _agree_user(self, handle, user, allowed_cabinets, *, allow_inactive=False):
+    def _agree_user(self, handle, user, allowed_cabinets, *, skip_is_active=False):
         with _listed(handle):
             authorized = set(AuthorizedQuerySet(self.Sheet).authorized(
-                user, self.change, allow_inactive_user=allow_inactive,
+                user, self.change, skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
             for cabinet in (self.root, self.child, self.past, self.beyond):
                 sheet = self.sheets[cabinet.pk]
                 permitted = set(sheet.get_permitted_users(
-                    self.change, allow_inactive=allow_inactive,
+                    self.change, skip_is_active=skip_is_active,
                 ).values_list('pk', flat=True))
                 self.assertEqual(
                     user.pk in permitted,
                     sheet.pk in authorized,
                     cabinet.title,
                 )
-        listed = self._permitted_content(handle, user, allow_inactive=allow_inactive)
+        listed = self._permitted_content(handle, user, skip_is_active=skip_is_active)
         expected = {cabinet.pk for cabinet in allowed_cabinets}
         self.assertEqual(listed, expected)
         self.assertEqual(
@@ -646,7 +646,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         self.delegate.save(update_fields=['is_active'])
         self._agree_user(handle, self.delegate, ())
         self._agree_user(
-            handle, self.delegate, (self.child,), allow_inactive=True,
+            handle, self.delegate, (self.child,), skip_is_active=True,
         )
         self.delegate.is_active = True
         self.delegate.save(update_fields=['is_active'])
@@ -654,7 +654,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
         self.sponsor.save(update_fields=['is_active'])
         self._agree_user(handle, self.delegate, ())
         self._agree_user(
-            handle, self.delegate, (self.child,), allow_inactive=True,
+            handle, self.delegate, (self.child,), skip_is_active=True,
         )
 
     def test_longer_content_suffix_fails_closed(self):

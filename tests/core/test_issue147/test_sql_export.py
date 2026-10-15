@@ -401,8 +401,10 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(content['permitted']['params'], [
             '$user.id',
             '$permission.id',
+            'user.is_active=True',
             '$content.app_label="documents"',
             '$content.model="document"',
+            'skip_is_active=False',
         ])
         named = content['named_filters'][0]
         self.assertEqual(list(named), ['id', 'params', 'sql'])
@@ -1063,8 +1065,11 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertEqual(actor_content['permitted']['params'], [
             '$user.id',
             '$permission.id',
+            '$content.id',
+            'user.is_active=True',
             '$content.app_label="documents"',
             '$content.model="document"',
+            'skip_is_active=False',
         ])
 
         account_handle = _handle('documents.backends.AccountBackend')
@@ -1087,8 +1092,11 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertEqual(account_content['permitted']['params'], [
             '$user.code',
             '$permission.id',
+            '$content.id',
+            'user.is_active=True',
             '$content.app_label="documents"',
             '$content.model="document"',
+            'skip_is_active=False',
         ])
 
     def test_custom_permission_pk_renders_the_resolved_target(self):
