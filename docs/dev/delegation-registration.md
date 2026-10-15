@@ -3,7 +3,7 @@
 Status: implementation-driver contract for [issue #266][issue-266].
 
 - Release train: 1.1
-- Last updated: 2026-10-10
+- Last updated: 2026-10-15
 - Documentation PR: [#279][docs-pr]
 - Implementation PR: [#280][implementation-pr] (merged)
 
@@ -88,7 +88,7 @@ backend.register(
     delegate="delegate",
     sponsor="sponsor",
     content="sponsor__personal_organization__repositories",
-    condition=lambda d, p: d.allowed_permissions.contains(p),
+    condition=lambda d, p: d.permissions.contains(p),
 )
 ```
 
@@ -112,7 +112,7 @@ sponsor path, so `sponsor_link__user` uses `sponsor_link__user_id` and
 not a bare `user_id` on the delegation row. One delegation cannot sponsor
 another; that chain stays rejected.
 
-For example, a delegation row with an `allowed_permissions` relation may
+For example, a delegation row with a `permissions` relation may
 narrow the sponsor ceiling without adding another public registration
 argument:
 
@@ -122,7 +122,7 @@ backend.register(
     delegate=lambda d: d.delegate,
     sponsor=lambda d: d.sponsor,
     content=lambda d: d.repository,
-    condition=lambda d, p: d.allowed_permissions.contains(p),
+    condition=lambda d, p: d.permissions.contains(p),
 )
 ```
 

@@ -15,7 +15,7 @@ log.
   named `skip_` options across permission inquiries. Rules compile to SQL over
   concrete user fields; Python properties are rejected at registration. See the
   [user guide](source/index.rst#user-conditions-and-overrides) and
-  [migration record](../migrates.md#user-conditions-and-overrides-273-284).
+  [migration record](../migrates.md#superuser-bypass-273).
 
 - **Provisional `along=` reachability.** Reverse inquiry, policy SQL, and
   delegation support bounded provisional `along=` on SQLite, PostgreSQL,

@@ -60,7 +60,7 @@ The registration APIs define permission sources and restrictions:
 | --- | --- | --- |
 | `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the complete registered policy matches |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
-| `registry.register_user_condition(..., on="*")` | Require a named user predicate on the users named by `on=` unless skipped | No |
+| `registry.set_user_condition(..., on="*")` | Require a named user predicate on the users named by `on=` unless skipped | No |
 | `registry.set_user_override(..., on="user")` | Register an optional alternative to ordinary grants for the checked user only | Yes, subject to required user conditions |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
@@ -74,7 +74,7 @@ rejected.
 
 Register every user condition and the optional override before the first
 ordinary or delegated permission registration. Once either kind of record
-exists, `register_user_condition()` and `set_user_override()` fail before
+exists, `set_user_condition()` and `set_user_override()` fail before
 mutating the registry. Rule names must be Python identifiers, must not collide
 with reserved inquiry parameters, and must not collide across conditions and
 the override. Skip values must be booleans. Replacing the single override slot
@@ -148,7 +148,7 @@ backend.register(
     delegate=lambda d: d.delegate,
     sponsor=lambda d: d.sponsor,
     content=lambda d: d.document,
-    condition=lambda d, p: d.allowed_permissions.contains(p),
+    condition=lambda d, p: d.permissions.contains(p),
 )
 ```
 

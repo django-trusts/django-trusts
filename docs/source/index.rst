@@ -134,7 +134,7 @@ The application owns its protected content and trust models.
            Document,
            on_delete=models.CASCADE,
        )
-       allowed_permissions = models.ManyToManyField(Permission)
+       permissions = models.ManyToManyField(Permission)
 
 ``DocumentPermission`` connects one user and one permission to one document.
 ``GroupDocumentPermission`` connects a Django group to one document; users
@@ -262,7 +262,7 @@ Register the model paths when the application starts:
                delegate=lambda d: d.delegate,
                sponsor=lambda d: d.sponsor,
                content=lambda d: d.document,
-               condition=lambda d, p: d.allowed_permissions.contains(p),
+               condition=lambda d, p: d.permissions.contains(p),
            )
            backend.add_named_filter(
                Document,
@@ -316,7 +316,7 @@ available as independent alternatives.
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
 The one-argument form applies row-only restrictions. The two-argument form in
-the example checks the requested permission against ``allowed_permissions``.
+the example checks the requested permission against ``permissions``.
 Create the relationship and its scope with ordinary application data writes:
 
 .. code-block:: python
@@ -326,7 +326,7 @@ Create the relationship and its scope with ordinary application data writes:
        sponsor=owner,
        document=document,
    )
-   delegation.allowed_permissions.add(change_document)
+   delegation.permissions.add(change_document)
 
 Permission checks keep the familiar Django spelling:
 
@@ -584,16 +584,16 @@ condition:
 .. code-block:: python
 
    registry = backend.registry
-   registry.register_user_condition(
+   registry.set_user_condition(
        "is_active",
        lambda u: u.is_active,
    )
 
-Registering the same name replaces that condition. Pass ``None`` to remove it:
+Setting the same name replaces that condition. Pass ``None`` to remove it:
 
 .. code-block:: python
 
-   registry.register_user_condition("is_active", None)
+   registry.set_user_condition("is_active", None)
 
 Rule names must be Python identifiers, must not reuse a reserved inquiry
 parameter, and must be distinct across conditions and the override. Skip
@@ -635,12 +635,6 @@ to let active superusers pass without an ordinary permission grant:
 
 User conditions still apply. Skipping a condition does not change the
 override's own requirements.
-
-Each condition compiles as ``skip_<name> OR condition``. The override compiles
-as ``NOT skip_<name> AND override`` and is ORed with the ordinary and delegated
-grant proof. Skip values are bound parameters, so changing one does not change
-the SQL statement shape. Skipping the override disables only that alternative;
-an ordinary grant can still authorize.
 
 By default, a user condition applies to every user whose authority
 participates in the result. For an ordinary permission check, that is the
@@ -686,7 +680,7 @@ ordinary condition that applies only to sponsors:
 
 .. code-block:: python
 
-   registry.register_user_condition(
+   registry.set_user_condition(
        "superuser_cannot_sponsor",
        lambda u: ~u.is_superuser,
        on="sponsor",
@@ -716,9 +710,7 @@ Django's ``PermissionsMixin.has_perm()`` returns ``True`` for an active
 superuser before it calls any authentication backend. This is Django behavior;
 Trusts does not change it. Trusts' own inquiries and policy SQL do not grant
 based on ``is_superuser`` unless the application registers the superuser
-override. For a valid Trusts inquiry, registering it matches the default
-``has_perm()`` choice to grant an active superuser. Trusts still performs its
-required validation, content-identity, candidate, and condition checks.
+override.
 
 An application can instead use a custom user model and override ``has_perm()``
 and ``has_module_perms()`` so they skip Django's superuser early return and

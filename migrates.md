@@ -1,4 +1,4 @@
-# Migrating to django-trusts 1.0
+# Migrating from django-trusts 1.0 to 1.1
 
 This guide records only changes from a released version that require
 applications to change their code, settings, or data when they upgrade. A
@@ -7,21 +7,6 @@ entry, because no application could have depended on it. It is not a
 development log. New features and changes that require no application action
 belong in [What's new](docs/whats-new.md); development history belongs in
 [DEV.md](DEV.md).
-
-django-trusts 1.0 is a step change from django-trusts 0.x. It is not API,
-model, or schema compatible with the 0.x package. Version 1.0 is a
-schema-neutral authorization library and does not provide a direct migration
-path for applications using the historical Trust and Content implementation.
-
-The compatibility layer for django-trusts 0.x is
-[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
-Existing 0.x applications should install that package and follow its
-[migration guide](https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md).
-That is the supported 0.x migration path.
-
-Applications adopting schema-neutral django-trusts 1.0 as a new integration
-should follow the
-[usage guide](https://django-trusts.readthedocs.io/en/dev/).
 
 ## `filter_authorized_scopes` renamed (#302)
 
@@ -37,83 +22,10 @@ Migration-bot checklist:
 
 - search `filter_authorized_scopes(` and replace with `filter_by_permitted_content(`
 
-## User conditions and overrides (#273, #284)
+## Superuser bypass (#273)
 
-Named [user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides)
-replace built-in activity checks and implicit Trusts superuser shortcuts.
-The only default condition is `is_active`. Permission SQL already joins users
-by primary key, so only saved users can match. No superuser override is
-registered by default.
-
-| Old | New |
-| --- | --- |
-| `allow_inactive_user=True` or `allow_inactive=True` | `skip_is_active=True` on Trusts inquiry APIs |
-| Built-in user restrictions | Named conditions on `backend.registry`; replace an expression or pass `None` to remove it |
-| Python `is_authenticated` / `is_anonymous` checks | No default rule uses those properties. A custom equivalent is accepted only when it resolves to a concrete database field |
-| Trusts shortcuts supply superuser access | Register `set_user_override("superuser", ...)` explicitly if required; use `skip_superuser=True` to inspect ordinary grants |
-| `trusts.query.is_active_principal(user, allow_inactive=False)` returned a Python boolean for `None`, anonymous, unauthenticated, and inactive objects | Removed. Use the registered `is_active` condition through a Trusts inquiry, or inspect the application's concrete user fields directly outside authorization SQL |
-
-Register every user condition and the optional override before the first
-`register()` or `register_delegation()` call on that registry. Once either
-kind of permission record exists, `register_user_condition()` and
-`set_user_override()` fail before changing the registry. A successful add,
-replacement, or removal invalidates the compiled rule cache.
-
-Applications relying on implicit superuser access must register the override
-shown in the guide or grant ordinary permissions. Review custom backend and
-compiler adapters, permission caches, and policy locks. Django's native
-`PermissionsMixin.has_perm()` shortcut remains outside registry control; see
-the [Django backend boundary](SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
-
-The registry stores one user-override slot. Setting a new override replaces
-the previous name and expression. Passing `None` clears the slot only when the
-name matches the current override; any other name raises an error.
-The override applies only to the checked user. Passing `on="sponsor"` or
-`on="*"` when registering an override raises an error; sponsor authority comes
-only from ordinary grants.
-
-Condition and override expressions must compile completely to SQL over
-concrete user fields. Registration rejects Python properties such as Django's
-`is_authenticated` and `is_anonymous`, even when they return constants. There
-is no `check_instance` mode in this contract.
-
-Names must be Python identifiers and must not collide with reserved inquiry
-parameters. A condition and the override cannot use the same name. Skip
-keywords are parsed before anonymous-user denial, must have the form
-`skip_<identifier>`, and must be booleans. Anonymous and unauthenticated users
-then deny without looking up a registered name. For a persisted principal,
-only current condition names and the current override name are accepted. When
-an override is replaced, its old `skip_<name>` keyword becomes invalid.
-
-The built-in `is_active` condition is omitted only when the configured user
-model has no concrete `is_active` field and the condition has not been
-modified. Explicitly replacing it, or registering any other condition or
-override, requires every referenced attribute to resolve to a concrete
-`BooleanField`. Each condition compiles as `skip_<name> OR condition`; the
-override compiles as `NOT skip_<name> AND override`, ORed with ordinary and
-delegated grants. A true override skip therefore disables that alternative but
-does not remove ordinary grants.
-
-Migration-bot checklist:
-
-- replace `allow_inactive_user` and `allow_inactive` with `skip_is_active`
-- review `.authorized(`, `.permitted(`, `permissions_for(`, `has_permission(`,
-  `filter_authorized(`, `filter_by_permitted_content(`, and `get_permitted_users(`
-- find reliance on `is_superuser` in view guards, reverse inquiries, and adapters
-- review `register_user_condition(`, `set_user_override(`, custom user models,
-  and candidate-manager filters
-- move user-condition and override setup before every `register(` or
-  `register_delegation(` call
-- replace `is_authenticated` and `is_anonymous` in registered user rules with
-  concrete user fields, or remove those terms
-- replace imports and calls of `trusts.query.is_active_principal`
-- validate user-rule names, reserved-name collisions, and boolean skip values;
-  remove callers that use a replaced override's old skip name
-- verify override replacement and name-matched removal behavior
-- reject sponsor-targeted overrides and keep sponsor authority on ordinary grants
-- regenerate policy locks and review the actual SQL plus each
-  `skip_<name>=False` parameter; the lockfile has no separate skipped-rule
-  variant or user-rule expression field
+Trusts superuser bypass now requires an explicit `set_user_override()`.
+See [User conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
 
 ## Permission content type must match the object (#267)
 
@@ -176,8 +88,8 @@ Migration-bot checklist:
 | Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous user |
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
-New code should use `.permitted()`. For changes to user checks and audit
-options on existing inquiries, see User conditions and overrides above.
+New code should use `.permitted()`. For user checks and audit options, see
+[User conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
 Zero's `ContentQuerySet.permitted(perm, user)` retains its permission codec.
 
 ```python
@@ -323,3 +235,20 @@ at the
 and an
 [immutable commit](https://github.com/django-trusts/django-trusts/blob/7414886263faafb6edfb44c0c5fcf9fc8fa14e79/migrates.md).
 Those records describe unpublished development transitions; they are not an alternative 0.x migration path.
+
+## Migrating to django-trusts 1.0
+
+django-trusts 1.0 is a step change from django-trusts 0.x. It is not API,
+model, or schema compatible with the 0.x package. Version 1.0 is a
+schema-neutral authorization library and does not provide a direct migration
+path for applications using the historical Trust and Content implementation.
+
+The compatibility layer for django-trusts 0.x is
+[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
+Existing 0.x applications should install that package and follow its
+[migration guide](https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md).
+That is the supported 0.x migration path.
+
+Applications adopting schema-neutral django-trusts 1.0 as a new integration
+should follow the
+[usage guide](https://django-trusts.readthedocs.io/en/dev/).
