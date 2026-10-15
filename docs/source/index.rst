@@ -552,42 +552,18 @@ does not grow ``permitted``.
 User conditions and overrides
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-User conditions and overrides apply to all permission inquiries through
-the registry. The only default condition is ``is_active``. No user override
-is registered by default. Permission SQL identifies users by persisted primary
-key, so only saved users can match without a separate condition. Conditions
-and overrides are compiled into permission SQL.
+By default, Trusts permission inquiries require an active, saved, authenticated user.
+The default ``is_active`` condition and any additional user conditions are
+compiled into permission SQL. No user override is registered by default.
 
-All Trusts inquiries apply those rules, including ordinary and delegated
-grants, permission enumeration, reverse user listing, and
-``filter_by_permitted_content``. Anonymous and unauthenticated users receive
-no positive result. Input and configuration errors still raise before that
-denial, and permission SQL is compiled against a user model rather than an
-arbitrary Python object.
-
-Every user-supplied rule must resolve its user attributes to concrete database
-fields. Registration rejects a Python property such as Django's
-``is_authenticated`` or ``is_anonymous``, even when the property would return
-a constant. There is no instance-evaluation exception in this contract.
-
-The unmodified built-in ``is_active`` condition is omitted when the configured
-user model has no concrete field by that name. Once an application replaces
-that condition, or registers any other condition or override, every referenced
-attribute must resolve to a concrete ``BooleanField``.
-
-Configure conditions on ``backend.registry`` in ``AppConfig.ready()`` before
-the first ``backend.register()`` or ``backend.register_delegation()`` call.
-Once an ordinary or delegated record exists, either user-rule registration
-method raises without changing the registry. For example, replace the activity
+Configure user rules on ``backend.registry`` in ``AppConfig.ready()`` before
+registering permissions or delegations. For example, replace the activity
 condition:
 
 .. code-block:: python
 
    registry = backend.registry
-   registry.set_user_condition(
-       "is_active",
-       lambda u: u.is_active,
-   )
+   registry.set_user_condition("is_active", lambda u: u.is_active)
 
 Setting the same name replaces that condition. Pass ``None`` to remove it:
 
@@ -595,16 +571,8 @@ Setting the same name replaces that condition. Pass ``None`` to remove it:
 
    registry.set_user_condition("is_active", None)
 
-Rule names must be Python identifiers, must not reuse a reserved inquiry
-parameter, and must be distinct across conditions and the override. Skip
-keywords must have the form ``skip_<identifier>`` and their values must be
-booleans. Those shapes and values are checked even for anonymous and
-unauthenticated users; those users then deny without looking up a rule name.
-For a persisted user, the suffix must name a current condition or the current
-override. Replacing an override therefore makes its old skip keyword invalid.
-
-To skip a condition for one inquiry, use ``skip_<name>=True``. For example,
-inspect an inactive user's grants:
+Use ``skip_<name>=True`` to skip a condition for one Trusts inquiry. For
+example, inspect an inactive user's grants:
 
 .. code-block:: python
 
@@ -615,28 +583,22 @@ inspect an inactive user's grants:
        "documents.change_document", skip_is_active=True,
    )
 
-Django's stock ``PermissionsMixin.has_perm()`` and permission-enumeration
-methods do not forward Trusts-specific skip keywords. Use a Trusts inquiry API
-when a skip is needed.
+Django's stock user methods do not accept these skip keywords. Anonymous and
+unauthenticated users still receive no positive result.
 
-``set_user_override()`` stores one override slot. Setting a new override
-replaces the previous name and expression. For example, register an override
-to let active superusers pass without an ordinary permission grant:
+Register an override to let active superusers pass without an ordinary
+permission grant:
 
 .. code-block:: python
 
    registry.set_user_override(
        "superuser",
-       lambda u: (
-           u.is_active
-           & u.is_superuser
-       ),
+       lambda u: u.is_active & u.is_superuser,
    )
 
 User conditions still apply. Skipping a condition does not change the
-override's own requirements.
-
-Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
+override's own requirements. Use ``skip_superuser=True`` to inspect ordinary
+grants instead:
 
 .. code-block:: python
 
@@ -644,57 +606,18 @@ Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
        "documents.change_document", user, skip_superuser=True,
    )
 
-That keyword is valid only while ``superuser`` is the current override name.
-
-Pass the current override's name with ``None`` to clear the slot:
+There is one override slot; setting another replaces it. Pass its current
+name with ``None`` to remove it:
 
 .. code-block:: python
 
    registry.set_user_override("superuser", None)
 
-Passing ``None`` with any other name raises an error.
-
-By default, a user condition applies to every user whose authority
-participates in the result. For an ordinary permission check, that is the
-user being checked. A delegated proof also checks its sponsor. Use
-``on="user"``, ``on="sponsor"``, or a tuple to narrow a condition.
-
-A user override applies only to the checked user. Omit ``on=`` or pass
-``on="user"``. Registering an override with ``on="sponsor"`` or ``on="*"``
-raises an error. An override can replace the checked user's ordinary grant
-proof, but sponsor authority always comes from the sponsor's ordinary grants.
-
-.. list-table::
-   :header-rows: 1
-
-   * - ``on=``
-     - Checked user
-     - Sponsor in a delegated proof
-   * - ``"*"`` (conditions only; default)
-     - Yes
-     - Yes
-   * - ``"user"`` (conditions or overrides)
-     - Yes
-     - No
-   * - ``"sponsor"`` (conditions only)
-     - No
-     - Yes
-   * - ``("user", "sponsor")`` (conditions only)
-     - Yes
-     - Yes (same as ``"*"``)
-
-For conditions, only ``"*"``, ``"user"``, ``"sponsor"``, or a non-empty
-tuple of ``"user"`` and ``"sponsor"`` are accepted. Condition registration
-raises an error for any other value, an empty tuple, or a tuple mixing ``"*"``
-with names. Overrides accept only the checked-user target described above.
-
-``skip_<name>=True`` removes that rule for every user its ``on=`` names. For
-example, ``skip_is_active=True`` skips the activity check for both the
-checked user and the sponsor. To skip them separately, register two
-conditions with different names and targets.
-
-An application can stop superusers from sponsoring delegated access with an
-ordinary condition that applies only to sponsors:
+Conditions apply to both the checked user and delegation sponsors by default
+(``on="*"``). Use ``on="user"``, ``on="sponsor"``, or a tuple of those names
+to narrow a condition. A skip applies to every user that condition targets.
+Overrides apply only to the checked user; sponsors need ordinary grants.
+For example, an application can also stop superusers from sponsoring:
 
 .. code-block:: python
 
@@ -704,18 +627,10 @@ ordinary condition that applies only to sponsors:
        on="sponsor",
    )
 
-This condition is not registered by default.
-
-Django's ``PermissionsMixin.has_perm()`` returns ``True`` for an active
-superuser before it calls any authentication backend. This is Django behavior;
-Trusts does not change it. Trusts' own inquiries and policy SQL do not grant
-based on ``is_superuser`` unless the application registers the superuser
-override.
-
-An application can instead use a custom user model and override ``has_perm()``
-and ``has_module_perms()`` so they skip Django's superuser early return and
-ask the configured authentication backends. This is an available application
-choice, and it also changes superuser behavior in Django admin.
+Django's ``PermissionsMixin.has_perm()`` allows active superusers before
+calling backends. Trusts does not change that. An application can opt out in
+its custom user model's ``has_perm()`` and ``has_module_perms()`` methods;
+this also changes superuser behavior in Django admin.
 
 Protect a view with the Trusts-only primary-key guard:
 
