@@ -1897,6 +1897,45 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             editor.delete_model(note_model)
             editor.delete_model(user_model)
 
+    def test_non_boolean_is_active_is_not_the_default(self):
+        """A non-boolean ``is_active`` column is not the built-in condition."""
+        from trusts.user_rules import builtin_user_conditions
+
+        def meta():
+            return type('Meta', (), {'app_label': 'trusts_tests'})
+
+        user_model = type('TextActiveUser', (AbstractBaseUser,), {
+            '__module__': __name__,
+            'username': models.CharField(max_length=40, unique=True),
+            'is_active': models.CharField(max_length=8, default='yes'),
+            'USERNAME_FIELD': 'username',
+            'Meta': meta(),
+        })
+        note_model = type('TextActiveNote', (models.Model,), {
+            '__module__': __name__,
+            'title': models.CharField(max_length=40),
+            'Meta': meta(),
+        })
+        grant_model = type('TextActiveGrant', (models.Model,), {
+            '__module__': __name__,
+            'user': models.ForeignKey(user_model, on_delete=models.CASCADE),
+            'note': models.ForeignKey(note_model, on_delete=models.CASCADE),
+            'permission': models.ForeignKey(
+                Permission, on_delete=models.CASCADE,
+            ),
+            'Meta': meta(),
+        })
+        self.assertEqual(builtin_user_conditions(user_model), ())
+        registry = TrustsRegistry()
+        grant = Ref(grant_model)
+        with self.assertNumQueries(0):
+            registry.register(
+                content=grant.note,
+                user=grant.user,
+                permission=grant.permission,
+            )
+        self.assertEqual(len(registry.records), 1)
+
     def test_set_is_active_replaces_the_default_without_raising(self):
         """``set_user_condition('is_active', ...)`` replaces the default.
 
