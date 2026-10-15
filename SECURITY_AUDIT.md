@@ -175,8 +175,8 @@ return false/empty for that case; an override cannot turn it into a grant.
 Some content identity checks require SQL. Keep those checks outside the
 override OR rather than claiming that every mismatch can be found before SQL.
 
-For a valid inquiry by actor `u`, content `c`, and permission `p`, every
-projection compiles the same authorization shape:
+For a valid complete inquiry by actor `u`, content `c`, and permission `p`,
+the projections compile this authorization shape:
 
 ```text
 user_conditions(u, "user", skip_options)
@@ -191,6 +191,9 @@ AND (
         AND ordinary(d.sponsor, c, p)
 )
 ```
+
+`get_group_permissions` instead combines required user conditions with
+group grants; it does not include the override or delegated grants.
 
 User rules and named skip options follow the
 [usage guide](docs/source/index.rst#user-conditions-and-overrides).

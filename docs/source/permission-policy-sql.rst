@@ -171,14 +171,17 @@ parameters. Named filters are listed in ``add_named_filter()`` order.
 User rules
 ~~~~~~~~~~
 
-Registered user conditions and the optional override appear only in each
-inquiry's compiled SQL and ordered ``params``. The lockfile does not add a
+Registered user conditions appear in inquiry SQL and ordered ``params``.
+The optional override participates in complete inquiries;
+``get_group_permissions`` uses conditions and group grants without it. The lockfile does not add a
 parallel user-rule expression or a second statement for skipped rules. Every
 registered rule must compile completely to SQL over concrete user fields; a
 Python property such as ``is_authenticated`` or ``is_anonymous`` is rejected.
 
 Each registered rule adds its default bound skip value, for example
-``skip_is_active=False`` or ``skip_superuser=False``. At runtime a caller may
+``skip_is_active=False`` or ``skip_superuser=False``. User Boolean comparisons
+are labeled ``user.<field>=True``, for example ``user.is_superuser=True``.
+At runtime a caller may
 bind ``True`` for a valid ``skip_<name>`` keyword without changing the
 statement shape. A condition is compiled as ``skip_<name> OR condition``. An
 override is compiled as ``NOT skip_<name> AND override`` and ORed with the

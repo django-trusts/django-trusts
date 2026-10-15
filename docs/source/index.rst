@@ -636,6 +636,24 @@ to let active superusers pass without an ordinary permission grant:
 User conditions still apply. Skipping a condition does not change the
 override's own requirements.
 
+Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
+
+.. code-block:: python
+
+   documents = Document.objects.permitted(
+       "documents.change_document", user, skip_superuser=True,
+   )
+
+That keyword is valid only while ``superuser`` is the current override name.
+
+Pass the current override's name with ``None`` to clear the slot:
+
+.. code-block:: python
+
+   registry.set_user_override("superuser", None)
+
+Passing ``None`` with any other name raises an error.
+
 By default, a user condition applies to every user whose authority
 participates in the result. For an ordinary permission check, that is the
 user being checked. A delegated proof also checks its sponsor. Use
@@ -687,24 +705,6 @@ ordinary condition that applies only to sponsors:
    )
 
 This condition is not registered by default.
-
-Use ``skip_superuser=True`` to inspect a superuser's ordinary grants:
-
-.. code-block:: python
-
-   documents = Document.objects.permitted(
-       "documents.change_document", user, skip_superuser=True,
-   )
-
-That keyword is valid only while ``superuser`` is the current override name.
-
-Pass the current override's name with ``None`` to clear the slot:
-
-.. code-block:: python
-
-   registry.set_user_override("superuser", None)
-
-Passing ``None`` with any other name raises an error.
 
 Django's ``PermissionsMixin.has_perm()`` returns ``True`` for an active
 superuser before it calls any authentication backend. This is Django behavior;
@@ -869,8 +869,9 @@ The locked ``get_permitted_users`` statement is that backend's reverse
 predicate. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
-Registered user conditions and the optional override are visible in each
-inquiry's SQL and ordered parameters. The artifact does not add a separate
+Registered user conditions are visible in inquiry SQL and ordered parameters;
+the optional override appears in complete inquiries. ``get_group_permissions``
+uses conditions and group grants without the override. The artifact does not add a separate
 user-rule expression or a second statement for skipped rules. A skip option is
 a bound parameter such as ``skip_is_active=False``; callers change that value
 without changing the statement shape.

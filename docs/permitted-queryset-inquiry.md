@@ -198,6 +198,7 @@ Raise `TypeError` or `TrustsConfigurationError` before SQL when:
 
 Return an empty queryset when:
 
+- the user is anonymous or unauthenticated;
 - a required user condition fails; or
 - the permission is well formed and the model has an applicable plan, but
   the permission belongs to another content type, including another

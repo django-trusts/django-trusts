@@ -156,7 +156,8 @@ question.
 
 ## Authorization rule
 
-For actor `u`, content `c`, and permission `p`, the compiled result is:
+The superseded #284 eligibility rule for actor `u`, content `c`, and
+permission `p` was:
 
 ```text
 u is active and authenticated and not anonymous
@@ -172,7 +173,7 @@ AND (
 )
 ```
 
-That check is the eligibility predicate where the inquiry projects persisted
+That check was the eligibility predicate where the inquiry projected persisted
 principals. A delegate or sponsor that fails it cannot authorize through
 delegation, even while its ordinary grants and delegation rows remain stored.
 The delegate gate applies to both the actor's ordinary branch and delegated
