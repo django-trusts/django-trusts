@@ -11,9 +11,10 @@ log.
 
 ## 1.1.0
 
-- **Named user rules.** Registry user conditions and optional overrides share
-  named `skip_` options across permission inquiries. Rules compile to SQL over
-  concrete user fields; Python properties are rejected at registration. See the
+- **User conditions and overrides.** `set_user_condition()` and
+  `set_user_override()` add named user checks to Trusts inquiries. Skip one
+  with `skip_<name>=True`. Rules use user model fields; Python properties raise
+  at registration. See the
   [user guide](source/index.rst#user-conditions-and-overrides) and
   [migration record](../migrates.md#superuser-bypass-273).
 

@@ -65,20 +65,14 @@ The registration APIs define permission sources and restrictions:
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
 types, constants, and combinations are intended to be rejected during setup.
-Every registered user-rule attribute must resolve to a concrete database
-field. Python properties such as Django's `is_authenticated` and
-`is_anonymous` are rejected at registration, even when they return constants;
-there is no instance-evaluation exception in this contract.
-Registration closes when the configured registry freezes; late mutation is
-rejected.
+User rules must use database fields; properties such as `is_authenticated`
+raise at registration. Registration closes when the registry freezes.
 
-Register every user condition and the optional override before the first
-ordinary or delegated permission registration. Once either kind of record
-exists, `set_user_condition()` and `set_user_override()` fail before
-mutating the registry. Rule names must be Python identifiers, must not collide
-with reserved inquiry parameters, and must not collide across conditions and
-the override. Skip values must be booleans. Replacing the single override slot
-also replaces the only valid override skip name.
+Set user conditions and overrides before `register()` or
+`register_delegation()`; later calls raise without changing the registry.
+Names must be unique Python identifiers and must not conflict with inquiry
+parameters. Skip values must be booleans. Replacing the override also replaces
+its skip name.
 
 ### Ordinary relationship authorization
 
@@ -166,14 +160,10 @@ approval, tenant alignment, revocation, or expiry. The compiler stores
 normalized expression data and retains no callable. A two-argument builder on
 an ordinary registration, or any unsupported arity, is a configuration error.
 
-Validate the inquiry before evaluating an override. Permission format and
-type, registry configuration, selected names and skip options, and supported
-model/query shapes must pass semantic checks first. Invalid declarations or
-inputs raise even for a user whose override would succeed. A well-formed
-permission for another content type remains a denial on inquiry paths that
-return false/empty for that case; an override cannot turn it into a grant.
-Some content identity checks require SQL. Keep those checks outside the
-override OR rather than claiming that every mismatch can be found before SQL.
+Inputs and configuration are validated before any override. Invalid input
+raises even for a user the override would grant. An override cannot turn a
+permission for another content type into a grant or bypass content identity
+and candidate-existence checks, including those enforced in SQL.
 
 For a valid complete inquiry by actor `u`, content `c`, and permission `p`,
 the projections compile this authorization shape:
@@ -199,13 +189,10 @@ User rules and named skip options follow the
 [usage guide](docs/source/index.rst#user-conditions-and-overrides).
 These names describe compiled predicates, not runtime callbacks. Audit every
 registered condition, optional override, and permitted skip option. An override
-can replace the ordinary grant proof; include any requirements that must remain
+can stand in for an ordinary grant; include any requirements that must remain
 effective when other user conditions are skipped in the override itself.
 `user_conditions(x, target, ...)` includes only conditions whose `on=` covers
-`target`; `"*"` covers both. Conditions default to `on="*"`. An override
-applies only to the checked user and may replace only that user's ordinary
-grant proof. Registering an override with `on="sponsor"` or `on="*"` is an
-error. A sponsor always requires ordinary authority.
+`target`; `"*"` covers both. Conditions default to `on="*"`.
 
 | Rule | Default `on=` | Checked user | Sponsor | With `skip_<name>=True` |
 | --- | --- | --- | --- | --- |
@@ -213,25 +200,13 @@ error. A sponsor always requires ordinary authority.
 | Override | `"user"` | Alternative to ordinary grants | Never supported | Removed |
 | Condition with `on="sponsor"` (e.g. `superuser_cannot_sponsor`) | n/a | Not checked | Required | Removed for the sponsor |
 
-`on=` is validated at registration and fails closed before any inquiry SQL.
-Conditions accept `"*"`, `"user"`, `"sponsor"`, or a non-empty tuple of
-`"user"` and `"sponsor"`; unknown values, an empty tuple, and `"*"` mixed with
-names are rejected. `("user", "sponsor")` is normalized to `"*"`. Overrides
-accept only `"user"`. A skip option removes a condition for every target in
-its `on=`, which preserves the existing #284 behavior of `skip_is_active` for
-the sponsor. Separate skip controls require separately named conditions.
+Conditions accept `on="*"` (default), `"user"`, `"sponsor"`, or a non-empty
+tuple of `"user"` and `"sponsor"`. Overrides accept only `"user"`. Other values
+raise at registration. One skip removes a condition for every target in its
+`on=`.
 
-The expression describes authorization after semantic validation. It does not
-authorize an early return that skips validation, content identity, or required
-candidate existence. Implementations may add fail-closed checks for unsupported
-or inconsistent inputs without changing the introductory examples.
-
-The policy lockfile exposes user rules through the actual SQL and ordered
-parameters only. It does not add a separate expression field or a skipped-rule
-statement variant. Audit the Boolean grouping and each bound default such as
-`skip_is_active=False`: a condition is `skip_<name> OR condition`, while an
-override is `NOT skip_<name> AND override`, ORed with ordinary and delegated
-grants.
+Audit the user-rule SQL as described in the
+[policy SQL guide](docs/source/permission-policy-sql.rst#user-rules).
 
 ### Delegation boundaries
 
@@ -242,9 +217,7 @@ Audit the following boundaries:
 - the sponsor predicate is the live OR-union of applicable ordinary grants,
   including other configured Trusts handles;
 - the current compiler excludes delegated registrations from the sponsor
-  ordinary-grant union, preventing an unbounded chain or cycle; this
-  implementation boundary does not rule out a future bounded multi-level or
-  recursive design;
+  ordinary-grant union, preventing an unbounded chain or cycle;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
   permission the sponsor-authority predicate does not provide;
 - delegate and sponsor eligibility must be enforced inside the shared plan,
@@ -363,8 +336,8 @@ registry.set_user_override(
 )
 ```
 
-User conditions still apply. Skipping the separate activity condition does
-not remove the activity check inside this override. To inspect only ordinary
+`skip_is_active` does not skip the activity check inside this override.
+To inspect only ordinary
 grants, use a Trusts inquiry with `skip_superuser=True`. That keyword is valid
 only while `superuser` names the current override. Pass
 `set_user_override("superuser", None)` to remove it; any other name raises.
@@ -381,8 +354,7 @@ registry.set_user_condition(
 ```
 
 This condition is not installed by default. `skip_superuser` skips the override,
-not this condition. Each condition's skip applies to all users its `on=` targets;
-separate skip controls require separately named conditions.
+not this condition.
 
 For ordinary users, Django grants when any configured authentication backend
 grants. Trusts cannot revoke authorization supplied by another backend. Audit

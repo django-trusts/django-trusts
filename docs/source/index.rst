@@ -298,12 +298,11 @@ equivalent of the first registration is:
 Delegate live authority
 -----------------------
 
-The delegated registration makes ``delegate`` the current actor and
-``sponsor`` the source of live authority. For a requested permission,
+A delegation lets a **delegate** act with a **sponsor**'s live ordinary
+permissions on the protected content. For a requested permission,
 django-trusts requires the same delegation row, its selected content and
-condition, and sponsor authority on that content. That authority comes only
-from the sponsor's ordinary grants. Conditions that apply to the
-sponsor are described in :ref:`user conditions and overrides
+condition, and sponsor authority on that content. Conditions that apply to
+the sponsor are described in :ref:`user conditions and overrides
 <user-conditions-and-overrides>`. The actor's own ordinary grants remain
 available as independent alternatives.
 
@@ -453,8 +452,7 @@ declarations only. A runtime ``.permitted()`` call is not one of those
 declarations; it still validates and raises on first use.
 
 Malformed permissions and conditions raise before SQL. A well-formed
-permission for another content type produces an empty queryset.
-Named conditions remain explicit:
+permission for another content type produces an empty queryset. Named conditions remain explicit:
 
 .. code-block:: python
 
@@ -544,6 +542,9 @@ does not grow ``permitted``.
 
 User conditions and overrides
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A user condition must hold for every grant. A user override grants the
+checked user without an ordinary grant.
 
 The only default condition is ``is_active``, if the field exists.
 No user override is registered by default.
@@ -735,12 +736,7 @@ The locked ``get_permitted_users`` statement is that backend's reverse
 query. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
-Registered user conditions are visible in inquiry SQL and ordered parameters;
-the optional override is omitted from ``get_group_permissions``, which uses
-conditions and group grants. The artifact does not add a separate
-user-rule expression or a second statement for skipped rules. A skip option is
-a bound parameter such as ``skip_is_active=False``; callers change that value
-without changing the statement shape.
+User conditions appear in the SQL, each with a ``skip_<name>=False`` parameter.
 
 ``content.get_permitted_users(perm)`` and
 ``User.objects.permitted(content, perm)`` call the same compiler, so the
