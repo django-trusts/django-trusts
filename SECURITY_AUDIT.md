@@ -75,13 +75,25 @@ its skip name.
 
 ### Ordinary relationship authorization
 
+Call `backend.register()` or `backend.register_delegation()` from the owning
+implementation's `AppConfig.ready()` before the registry freezes.
+
 The public registration signature is
 `register(*, trust, user=None, permission=None, content, group=None, delegate=None, sponsor=None, condition=None, along=None)`.
 An ordinary registration supplies `user=` and exactly one of `permission=` or
 `group=`. The required `trust=` model is the root of its non-empty paths:
 
-The [setup guide](docs/source/index.rst#register-the-trust) shows lambda and
-string declarations for this registration.
+```python
+backend.register(
+    trust=DocumentPermission,
+    user="user",
+    permission="permission",
+    content="document",
+)
+```
+
+The [setup guide](docs/source/index.rst#register-the-trust) also shows the
+lambda spelling.
 
 Each path accepts either a Django `__` string or a one-argument path lambda;
 django-trusts calls the
@@ -191,8 +203,6 @@ Overrides accept only `"user"`. Other values
 raise at registration. One skip removes a condition for every target in its
 `on=`.
 
-Audit the user-rule SQL as described in the
-[policy SQL guide](docs/dev/permission-policy-sql.rst#user-conditions-and-overrides).
 
 ### Delegation boundaries
 
@@ -335,7 +345,13 @@ The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coer
 through the protected model's primary-key field, and keeps it as a parameter.
 Request data cannot select query structure.
 
-The [view example](docs/source/index.rst#protect-a-view) shows the guard's
+```python
+@authorization_required(Document, "documents.change_document")
+def edit_document(request, pk):
+    ...
+```
+
+The [setup guide](docs/source/index.rst#protect-a-view) shows the surrounding
 application setup.
 
 The guard performs structural preflight before candidate lookup. An absent
@@ -350,10 +366,19 @@ to pass.
 
 ### Named filters restrict the query
 
-A named filter is registered against the protected model:
+A named filter is registered against the protected model during application
+setup:
 
-The [named-filter example](docs/source/index.rst#named-filters) supplies the
-registration used here.
+```python
+backend.add_named_filter(
+    Document,
+    "non_confidential",
+    predicate=lambda u, p, o: o.confidential != True,
+)
+```
+
+The [setup guide](docs/source/index.rst#named-filters) shows how callers select
+that filter.
 
 The backend invokes the callable once with symbolic user, permission, and
 object references. Operations on those references construct a closed expression
@@ -409,19 +434,18 @@ bounded reachability. Audit:
 - termination in the presence of cycles;
 - the resolved identity at every hop;
 - the supported database renderer; and
-- agreement among object, queryset, enumeration, and reverse-user projections.
+- agreement among object, queryset, enumeration, and users-from-content projections.
 
 The inquiry for users from content derives walk-site identities from the bound content and
 traverses the inverse graph without the outer candidate user. Eligible grants
-and users join that walk outside the CTE. The reverse branch carries the same
+and users join that walk outside the CTE. The users-from-content branch carries the same
 terminal condition and user checks; the condition must not move onto
 intermediate walk nodes. Compare returned users with forward object
 checks for the same content and permission. If the walk cannot be rendered
 exactly, inquiry raises before SQL rather than returning a broader user set.
-The policy lock does the same for that statement, so a document that would
-omit or simplify the query for users from content is not emitted. Audit the schema version,
-exported walk path, shape, bound, constant parameter, and recursive SQL
-together.
+The policy output does the same for that statement, so output that would omit
+or simplify the query for users from content is not emitted. Audit the declared
+walk, bound, generated recursive SQL, and returned-user parity together.
 
 Current CI exercises Along only for the database combinations listed in the
 support matrix.
@@ -482,95 +506,60 @@ checks. Runtime denial should not fall back to a broader Trusts path.
 
 ## Authorization policy SQL and lockfile
 
-The user-facing [permission policy SQL guide](docs/dev/permission-policy-sql.rst)
-describes the schema, command, lockfile, and system-check workflow. This section
-records the additional security boundaries.
+`python manage.py trusts_policy_sql` produces one-way review output containing
+the generated parameterized SQL. It lets reviewers inspect the queries and
+notice changes. The YAML is not a public schema or an input format.
 
-The generated YAML is organized by backend and protected content model. Each
-trust exposes its declared relationships. Each content with trusts records SQL
-for `permitted`, `has_perm`, `get_all_permissions`, and
-`get_permitted_users`. The locked reverse statement is that backend's
-branch, including its registered user conditions and overrides. Filter-only
-contents carry their model and `named_filters`, and empty relationship
-backends remain visible as `contents: []`.
+### Renderer, connection, and stability boundary
 
-A django-trusts backend issues one SQL statement for each permission inquiry.
-When more than one trust in that backend authorizes the same content model, the
-SQL combines those trusts with OR. Different backends remain separate.
+One lockfile records output from one selected Django database renderer.
+`TRUSTS_POLICY_DATABASE` selects the inspection alias; Django's `default`
+alias is used when it is unset. Keep that choice consistent in every job that
+renders or checks one lockfile. The output reflects the selected renderer and
+does not imply equivalence with another database engine.
 
-### Renderer and connection boundary
-
-A lockfile belongs to one selected Django database renderer. `database.engine`
-identifies the configured engine, while the SQL records effective quoting,
-placeholders, operators, and dialect. The database alias itself is not stored.
-Lockfile equality verifies rendered bytes, not database identity and not
-equivalence across engines.
-
-Rendering compiles the exported statements without executing them or reading
+Rendering compiles the statements without executing them or reading
 application or authorization rows. A selected backend or driver may still open
 a connection for initialization, server-version discovery, or capability
-queries. Audit the selected alias's connection settings, driver provenance,
+queries. Audit the inspection alias's connection settings, driver provenance,
 server capabilities, and account authority.
 
-Multi-engine CI may pin `TRUSTS_POLICY_DATABASE` to one dedicated inspection
-alias while using different databases for runtime tests. Keep that pin
-consistent in application settings and every job that renders or runs E009. A
-validated shape uses MySQL as `default` and a separate SQLite `policy` alias;
-E009 follows `policy`. This limits production exposure, but the resulting
-artifact describes SQLite rather than production SQL.
+Generated bytes are stable only while the django-trusts version and its
+dependencies, including Django and the YAML library, remain the same. A version
+or dependency change may alter the output without changing application
+declarations. Regenerate the lockfile and review that diff with the upgrade.
 
-### Generated bytes and dependency boundary
+### Formatter and enforcement
 
-The writer uses the installed supported `PyYAML` release. Strings, parameter
-flow sequences, SQL literal blocks, key order, line endings, and the trailing
-newline are part of the emitted byte profile. The writer does not emit YAML
-tags, anchors, or aliases. Call inputs use `$role.field` tokens and bound
-constants use `source=value`, including `$along_bound=<n>` and concrete field
-comparisons. The literal `SELECT 1` inside an `EXISTS` probe is not a
-parameter. Review every token by its SQL position rather than inferring a
-role from a repeated scalar value.
+The SQL formatter accepts only the tokens it understands and fails closed on an
+unexpected token. It does not strip, guess, or return partially formatted SQL.
 
-`trusts.E009` compares raw bytes and does not parse the committed document.
-Hand formatting, reordering, a dependency-induced spelling change, or a changed
-newline fails equality even if another YAML parser would construct similar
-data. A PyYAML or other dependency upgrade may change the generated bytes;
-rerun `python manage.py trusts_policy_sql --lock`, review the diff, and commit
-intentional output changes with the dependency update.
+`python manage.py trusts_policy_sql --lock` writes the review output.
+`TRUSTS_POLICY_LOCKFILE` may select an explicit absolute path; relative paths
+are errors. Otherwise django-trusts uses the conventional lockfile under an
+absolute `BASE_DIR`.
 
-### Check lifecycle and enforcement
-
-The Django model check `trusts.E009` enforces the lockfile when the conventional
-file exists or an explicit `TRUSTS_POLICY_LOCKFILE` path is configured. The
-explicit path must be absolute and is never resolved against `BASE_DIR` or the
-working directory. When the conventional file does not exist and the setting is
-not configured, the check returns no error before database-alias resolution or
-rendering. A relative, missing, unreadable, or byte-different explicit file fails.
-
-The system check is the only lockfile enforcement and is not a request-time
-authorization gate. Run `python manage.py check` in CI and before deployment.
-WSGI and ASGI startup do not prove that the check ran.
+The Django model check `trusts.E009` compares the generated bytes with the
+committed file. It does not parse the YAML. Run `python manage.py check` in CI
+and before deployment. The check is not a request-time authorization gate.
 
 ### What equality does not prove
 
-Byte equality proves only that the finalized declarations and selected renderer
-produce the reviewed artifact. It does not prove:
+Lockfile equality proves only that the current declarations, versions,
+dependencies, and selected renderer produced the reviewed bytes. It does not
+prove:
 
 - compiler correctness;
-- the correctness of omitted runtime compositions or short circuits;
-- trustworthy database rows or grant workflows;
+- trustworthy authorization rows or grant workflows;
 - the absence of application bypasses;
 - the behavior of other Django authentication backends;
-- that an inspection renderer matches production; or
-- the safety of a change that updates both code and lockfile.
+- that the inspection renderer matches production; or
+- that a code and lockfile change is safe merely because they match.
 
 Django still grants when any configured authentication backend grants. An
 active superuser remains globally authorized in `PermissionsMixin.has_perm()`
-before backends run. A green lockfile check does not revoke those grants.
-
-Review backend paths, content grouping, trust relationships, `or_group`,
-permission-inquiry SQL, named filters, parameter roles, IDs, and `database.engine` as
-changes to the authorization surface. Lockfile equality is a change-control
-mechanism, not a complete security proof.
+before backends run. Lockfile equality is a change-control aid, not a security
+proof.
 
 ## Reference implementations
 

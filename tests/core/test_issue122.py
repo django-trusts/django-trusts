@@ -61,7 +61,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertNotIn('.registry.register(', rst)
         self.assertIn('o.confidential != True', rst)
         self.assertIn('confidential = models.BooleanField(default=False)', rst)
-        self.assertIn('Inherited relationships are provisional', rst)
+        self.assertIn('``along=`` declares bounded hierarchical reachability', rst)
         self.assertIn('along=("parent", 8)', rst)
         self.assertIn(
             'provisional extension of django-trusts for ordered allow and deny',

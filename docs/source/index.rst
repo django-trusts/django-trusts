@@ -161,14 +161,18 @@ the same queryset with ``from_queryset``:
 ``PermittedManager = Manager.from_queryset(PermittedQuerySet)`` are the
 concrete forms when no custom queryset is required. Plain
 ``user.has_perm(permission, document)`` object checks do not require
-either one. ``.authorized()`` remains the lower-level instance
-projection. The `permitted queryset inquiry contract
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-inquiries.md>`_
-records that split.
+either one. ``.authorized(user, permission, extra_q=None)`` remains the lower-level instance
+projection. It accepts a saved permission instance rather than a permission
+string and does not select named conditions. ``.permitted(permission, user,
+conditions=())`` is the public content-list inquiry and keeps the same
+registered user conditions, overrides, and relationship grants as the object
+check.
 
 ``PermittedUsersMixin`` adds
-``document.get_permitted_users(permission)``, which returns the users permitted on one saved document. It does not replace or
-change ``Document.objects``.
+``document.get_permitted_users(permission)``, which returns the users whose
+object check succeeds for one saved document and permission. The optional
+``User.objects.permitted(document, permission)`` manager adapter asks the same
+question. Neither changes ``Document.objects``.
 
 Granting and revoking permission are ordinary changes to persisted application
 data:
@@ -690,19 +694,13 @@ path providing permission.
 Inherited relationships
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Inherited relationships are provisional. ``along=`` works with delegated
-registrations. A bounded hierarchical walk may be
-declared with ``along=("parent", 8)`` on ``backend.register``.
-django-trusts evaluates the walk with a recursive common table expression
-rather than traversing the hierarchy in Python. The database combinations
-currently exercised by CI are recorded in the `support matrix
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/support-matrix.md>`_.
-The same bounded walk participates in object checks, permitted-content
-querysets, permission enumeration, users from content, and
-authorization-policy SQL. For one content and
-permission, the returned users are exactly those whose
-object check succeeds, including the terminal condition and user
-checks.
+``along=`` declares bounded hierarchical reachability and also works with
+delegated registrations. For example, ``along=("parent", 8)`` on
+``backend.register`` applies the same bounded walk to object checks,
+permitted-content querysets, permission enumeration, users from content, and
+authorization-policy output. See the `security audit
+<https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md#bounded-inherited-relationships>`_
+for the recursive-query and database boundaries.
 
 Ordered allow and deny
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -717,92 +715,29 @@ An example Windows declaration lives in
 Permission policy in SQL
 ------------------------
 
-django-trusts can render the registered authorization policy as deterministic
-YAML containing parameterized compiler SQL:
+django-trusts can render its registered authorization policy as reviewable
+output containing generated parameterized SQL:
 
 .. code-block:: console
 
    python manage.py trusts_policy_sql
 
-The command uses ``TRUSTS_POLICY_DATABASE``, or Django's ``default`` alias when
-unset. ``--database`` selects another configured alias for one invocation.
-
-Output is grouped by backend and protected content; see the `SQL reference
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-policy-sql.rst>`_
-for its schema and parameter notation. For the direct
-``DocumentPermission`` example on SQLite, that entry is:
-
-.. code-block:: yaml
-
-   get_permitted_users:
-     params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
-     sql: |-
-       SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
-       FROM "auth_user"
-       CROSS JOIN (
-         SELECT %s AS "permission_id", %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
-       ) "trusts_bind"
-       WHERE (((%s)
-             OR "auth_user"."is_active" = ("trusts_bind"."is_active")
-         )
-         AND EXISTS (
-           SELECT 1 AS "a"
-           FROM "documents_documentpermission" "U0"
-           INNER JOIN "auth_permission" "U2" ON ("U0"."permission_id" = "U2"."id")
-           INNER JOIN "django_content_type" "U3" ON ("U2"."content_type_id" = "U3"."id")
-           WHERE ("U0"."document_id" = ("trusts_bind"."content_id")
-               AND "U0"."permission_id" = ("trusts_bind"."permission_id")
-               AND "U3"."app_label" = ("trusts_bind"."app_label")
-               AND "U3"."model" = ("trusts_bind"."model")
-               AND "U0"."user_id" = ("auth_user"."id")
-           )
-           LIMIT 1
-         ) )
-
-``TRUSTS_SQL_BIND_ONCE`` defaults to true. It is the switch for the one-row
-bind table in the statement above. Leave it on. Set it to false only
-when that SQL misbehaves: django-trusts then runs the plain queryset,
-and the lockfile records that plain SQL. Set it back to true when the
-plain statement is no longer needed. If the queryset does not have the
-Django query structure the rewrite reads, django-trusts leaves the
-queryset unchanged, logs one warning, and the lockfile records that
-same plain SQL.
-
-Several trusts for the same content within one backend are OR alternatives.
-django-trusts issues one SQL statement for each permission inquiry and combines
-those trusts with OR. Different backends remain separate.
-
-Authorization policy lockfile
------------------------------
-
-Write the same bytes to a lockfile after registration is complete:
+This output is for examining the queries and noticing changes. It is not a
+public file format or an input API. Write the current output to a lockfile
+after registration is complete:
 
 .. code-block:: console
 
    python manage.py trusts_policy_sql --lock
 
-``TRUSTS_POLICY_LOCKFILE`` selects an explicit absolute path. Relative explicit
-paths are errors and are not resolved against ``BASE_DIR`` or the working
-directory. Otherwise django-trusts uses
-``BASE_DIR / "trusts-policy.lock.yaml"`` when ``BASE_DIR`` is absolute.
+The Django model check ``trusts.E009`` compares the generated bytes with the
+committed lockfile when the conventional file exists or
+``TRUSTS_POLICY_LOCKFILE`` selects an explicit absolute path. Run
+``python manage.py check`` in CI and before deployment.
 
-The Django model check ``trusts.E009`` enforces the lockfile when the
-conventional file exists or ``TRUSTS_POLICY_LOCKFILE`` is configured. When the
-conventional file does not exist and the setting is not configured, the check
-returns no error and does not resolve the renderer. A missing explicit file is
-an error.
-
-A lockfile belongs to one database renderer. Multi-engine CI may keep runtime
-databases different while pinning one ``TRUSTS_POLICY_DATABASE`` inspection
-alias consistently in settings and every render or E009 job. For example,
-MySQL ``default`` plus SQLite ``policy`` reviews one SQLite lockfile; E009
-follows ``policy``. Run ``python manage.py check`` in CI and before deployment.
-
-See the `permission policy SQL reference <https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-policy-sql.rst>`_ for
-the schema, identifiers, renderer selection, and review workflow. See the
-`lockfile security audit guide
+See the `lockfile security audit guide
 <../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
-connection and enforcement boundaries.
+renderer, dependency, connection, and enforcement boundaries.
 
 Reference implementations
 -------------------------

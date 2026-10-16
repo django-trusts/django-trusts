@@ -6,7 +6,7 @@ surface that was previously refused and is now supported does not need an
 entry, because no application could have depended on it. It is not a
 development log. New features and changes that require no application action
 belong in [What's new](docs/whats-new.md); development history belongs in
-[DEV.md](docs/dev/development.md).
+[development history](docs/dev/development.md).
 
 ## `filter_authorized_scopes` renamed (#302)
 
