@@ -1,5 +1,8 @@
 # #284 inactive-user inquiries: implementation review driver
 
+Historical development record. Last source update: 2026-10-13.
+This reorganization has not been reviewed by a human for current accuracy.
+
 Historical implementation driver for #284/#296, completed before the named-user-rule
 proposal in [draft #312](https://github.com/django-trusts/django-trusts/pull/312).
 Its activity flags and fixed eligibility rules are superseded by
@@ -28,7 +31,7 @@ split and sized before implementation.
 | --- | --- | --- |
 | Forward public `.permitted` | `trusts/query.py`, `trusts/_permitted.py` | Preserve preflight before denial; propagate the flag to every applicable handle and condition overlay |
 | Lower-level `.authorized` and manager adapter | `trusts/query.py`, `trusts/core.py:granted` | Default inactive-user denial is a behavior change; retain instance-only input and candidate queryset |
-| Backend checks and enumeration | `trusts/backends.py` | Extend owned signatures without changing stock Django calls; cover instance/collection and complete/group queries |
+| Backend checks and enumeration | `trusts/backends.py` | Extend owned signatures without changing stock Django calls; cover instance/collection and ordinary-and-delegated/group queries |
 | Reverse content and user-manager adapters | `trusts/query.py`, `trusts/reverse.py` | Share compiler; `is_active` checks within Trusts-owned grants; preserve candidate manager and backend completeness |
 | Registry inquiries | `TrustsRegistry.permissions_for`, `has_permission`, `filter_authorized` | Current ordinary projections have no user check; require old/new migration and explicit flag |
 | Plan/compiler projections | `RelationPlan.content_exists`, `user_exists`, `permissions`, `common_permissions`, `has_permission`, `filter_content`; `PlanQueryCompiler` | Propagate the flag without treating correlated SQL bindings as runtime users; verify each supported query shape |
@@ -91,7 +94,7 @@ There are three directional change points, all controlled by the same flag:
 - reverse delegate eligibility comes from the Trusts-owned `_trusts_eligibility_q` branch.
 
 Default exporter SQL is also asymmetric: `policy_lock.py` adds no `is_active`
-predicate of its own; the reverse locked queryset includes `is_active` checks,
+condition of its own; the reverse locked queryset includes `is_active` checks,
 while ordinary forward/registry exports consume projections without that
 `is_active` check. Python actor checks are not automatically represented in SQL.
 S2 must explicitly identify runtime checks versus exported SQL and propose the
@@ -144,8 +147,8 @@ human authorization is required for the already agreed bounded feature work.
 ## Backend boundary clarification, 2026-10-11
 
 Thomas's decision, relayed in #296 comment 6118712403: Trusts guarantees only
-its own backend. `is_active` predicates stay inside Trusts-owned grant branches;
-custom backend predicates are not wrapped with a global `is_active` filter.
+its own backend. `is_active` conditions stay inside Trusts-owned grant branches;
+custom backend conditions are not wrapped with a global `is_active` filter.
 Neither keyword is forwarded to custom backends, and no new hook capability
 or flag support is required from them. This supersedes the earlier review
 requirements for aggregate `is_active` filtering and explicit audit participation.

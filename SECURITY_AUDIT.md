@@ -21,7 +21,7 @@ and every authorization backend installed beside django-trusts.
 
 django-trusts's direct runtime dependencies are Django and PyYAML. The supported
 Python, Django, and database
-combinations are recorded in [the support matrix](docs/support-matrix.md).
+combinations are recorded in [the support matrix](docs/dev/support-matrix.md).
 Build and test dependencies are not part of the runtime authorization boundary.
 
 Django selects and loads the database backend and driver configured by the
@@ -58,18 +58,17 @@ The registration APIs define permission sources and restrictions:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
-| `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the complete registered policy matches |
-| `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
-| `registry.set_user_condition(..., on="*")` | Require a named user predicate on the users named by `on=` unless skipped | No |
+| `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the registered policy matches |
+| `add_named_filter(...)` | Bind a model-scoped name to a registration-time condition | No |
+| `registry.set_user_condition(..., on="*")` | Require a named user condition on the users named by `on=` unless skipped | No |
 | `registry.set_user_override(..., on="user")` | Register an optional alternative to ordinary grants for the checked user only | Yes, subject to required user conditions |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
 types, constants, and combinations are intended to be rejected during setup.
-User rules must use database fields; properties such as `is_authenticated`
+User conditions and overrides must use database fields; properties such as `is_authenticated`
 raise at registration. Registration closes when the registry freezes.
 
-Set user conditions and overrides before `register()` or
-`register_delegation()`; later calls raise without changing the registry.
+Set user conditions and overrides before any ordinary or delegated registration; later calls raise without changing the registry.
 Names must be unique Python identifiers and must not conflict with inquiry
 parameters. Skip values must be booleans. Replacing the override also replaces
 its skip name.
@@ -112,7 +111,7 @@ An exception, an empty or invalid path, or an unsupported relationship shape is
 rejected before django-trusts updates the registry. Side effects already
 performed by application code are outside that behavior.
 
-`condition=` is the same one-argument symbolic predicate, rooted at `trust=`.
+`condition=` is the same one-argument symbolic condition, rooted at `trust=`.
 It is invoked once after the freeze check. Supported operations are path equality
 (`==`), collection-rooted `.contains(member)`, and conjunction (`&`). Literal
 Python `in` is unsupported and is not recovered through AST, bytecode, `dis`,
@@ -122,11 +121,11 @@ or a `__contains__` side channel. The stored overlay is private `Equal` /
 values. `.contains` is a reserved condition-proxy method; a model field of
 that name cannot be walked there. The `predicate=` keyword is reserved and
 unsupported. Invalid arity, foreign roots, empty or non-expression
-returns, unsupported operations, and predicate exceptions fail closed.
+returns, unsupported operations, and condition exceptions fail closed.
 django-trusts' own validation is designed not to issue SQL and does not
 partially mutate the registry.
 
-A complete matching path is positive authorization evidence. Multiple complete
+A matching path is positive authorization evidence. Multiple matching
 relationship registrations for the same protected model are alternatives and
 combine with OR in one generated query. A condition attached to a relationship
 narrows only that branch and cannot create a grant.
@@ -165,7 +164,7 @@ raises even for a user the override would grant. An override cannot turn a
 permission for another content type into a grant or bypass content identity
 and candidate-existence checks, including those enforced in SQL.
 
-For a valid complete inquiry by actor `u`, content `c`, and permission `p`,
+For a valid inquiry by actor `u`, content `c`, and permission `p`,
 the projections compile this authorization shape:
 
 ```text
@@ -185,9 +184,9 @@ AND (
 `get_group_permissions` instead combines required user conditions with
 group grants; it does not include the override or delegated grants.
 
-User rules and named skip options follow the
+User conditions and overrides and named skip options follow the
 [usage guide](docs/source/index.rst#user-conditions-and-overrides).
-These names describe compiled predicates, not runtime callbacks. Audit every
+These names describe compiled conditions, not runtime callbacks. Audit every
 registered condition, optional override, and permitted skip option. An override
 can stand in for an ordinary grant; include any requirements that must remain
 effective when other user conditions are skipped in the override itself.
@@ -206,7 +205,7 @@ raise at registration. One skip removes a condition for every target in its
 `on=`.
 
 Audit the user-rule SQL as described in the
-[policy SQL guide](docs/source/permission-policy-sql.rst#user-rules).
+[policy SQL guide](docs/dev/permission-policy-sql.rst#user-rules).
 
 ### Delegation boundaries
 
@@ -214,36 +213,36 @@ Audit the following boundaries:
 
 - the exact delegation row must bind its delegate, sponsor, content, and
   condition state; rows must not borrow fields from one another;
-- the sponsor predicate is the live OR-union of applicable ordinary grants,
+- the sponsor-grant query is the live OR-union of applicable ordinary grants,
   including other configured Trusts handles;
 - the current compiler excludes delegated registrations from the sponsor
   ordinary-grant union, preventing an unbounded chain or cycle;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
-  permission the sponsor-authority predicate does not provide;
+  permission the ordinary sponsor-grant query does not provide;
 - delegate and sponsor eligibility must be enforced inside the shared plan,
   without loading the sponsor or issuing a second authorization inquiry;
 - the actor's independent ordinary grant remains a separate OR branch;
 - tenant, organization, approval, revocation, and expiry data require
   authorized write paths and database constraints; and
-- object checks, permitted querysets, enumeration, reverse inquiry, and policy
+- object checks, permitted querysets, enumeration, inquiry for users from content, and policy
   SQL must agree and remain one queryset statement per inquiry.
 
 A delegated registration may use the same bounded `along=` grammar as an
 ordinary registration. Its relationship walk and the sponsor-authority
-predicate must authorize the same object. Each ordinary sponsor grant's
+condition must authorize the same object. Each ordinary sponsor grant's
 effective bounded reach participates in the ceiling. A delegation cannot
 sponsor another delegation.
 
 Delegation remains inside the registered declarative policy and its correlated
-sponsor-authority predicate. An application-level nested call to
+ordinary sponsor-grant query. An application-level nested call to
 `sponsor.has_perm()` falls outside that audited policy surface: it can import
 Django's superuser and authentication backend checks, separate the relationship row from its authority
-predicate, and disagree with queryset, reverse-inquiry, or lockfile behavior.
+condition, and disagree with queryset, users-from-content inquiry, or lockfile behavior.
 
 A terminal many-to-many user membership is supported where validated. Review
 the resolved comparison identity, duplicate-row behavior, and whether
 `distinct()` is present on projections that need it. A long path must be
-compiled from every segment; no implementation may validate the complete path
+compiled from every segment; no implementation may validate the path
 and then query only its first hop.
 
 The `user`, `permission`, and `content` relationship path arguments may
@@ -264,7 +263,7 @@ backend.add_named_filter(
 The backend invokes the callable once with symbolic user, permission, and
 object references. Operations on those references construct a closed expression
 tree; django-trusts validates and normalizes that result, stores only the
-immutable IR, and discards the callable. The predicate runs in the same
+immutable IR, and discards the callable. The condition runs in the same
 application-startup context as its surrounding code and receives no additional
 authority from django-trusts. django-trusts does not inspect or sandbox the
 callable body; SQL, I/O, request state, and mutable captures remain application
@@ -293,10 +292,10 @@ The obsolete `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` setting does not
 restore callbacks. If it remains true, Django's system checks report
 `trusts.E007`.
 
-Policy predicates define fixed query structure during registration. Runtime
+Policy conditions define fixed query structure during registration. Runtime
 request values may bind only to a predeclared lookup and must remain
 parameterized data; they may not choose a model, backend, permission, path,
-operator, predicate structure, ordering, or SQL fragment.
+operator, condition structure, ordering, or SQL fragment.
 
 ## Configure Django
 
@@ -372,8 +371,8 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user rules and relationship-family SQL before pagination |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user rules within each Trusts branch |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user conditions and overrides within each Trusts branch |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.
@@ -430,15 +429,15 @@ bounded reachability. Audit:
 - the supported database renderer; and
 - agreement among object, queryset, enumeration, and reverse-user projections.
 
-Reverse inquiry derives walk-site identities from the bound content and
+The inquiry for users from content derives walk-site identities from the bound content and
 traverses the inverse graph without the outer candidate user. Eligible grants
 and users join that walk outside the CTE. The reverse branch carries the same
 terminal condition and user checks; the condition must not move onto
-intermediate walk nodes. Compare reverse results with complete forward object
+intermediate walk nodes. Compare returned users with forward object
 checks for the same content and permission. If the walk cannot be rendered
 exactly, inquiry raises before SQL rather than returning a broader user set.
 The policy lock does the same for that statement, so a document that would
-omit or simplify the reverse query is not emitted. Audit the schema version,
+omit or simplify the query for users from content is not emitted. Audit the schema version,
 exported walk path, shape, bound, constant parameter, and recursive SQL
 together.
 
@@ -457,7 +456,7 @@ cannot be safely authorized not to become grants silently. This includes:
 - an `auth.Permission` whose `content_type` is not the protected object's content type;
 - incompatible `to_field` identities;
 - unknown named filters;
-- unsupported predicate expressions;
+- unsupported condition expressions;
 - frozen-registry mutation;
 - unsupported database renderers; and
 - invalid request primary-key coercion.
@@ -481,7 +480,7 @@ A mismatch is ordinary authorization input, not a configuration error.
 the codename. `.permitted()` and `get_permitted_users` /
 `User.objects.permitted` are empty for that pair. `authorization_required`
 denies an ordinary user. The generated policy SQL carries the same
-predicate. Any other permission terminal stays primary-key identity,
+condition. Any other permission terminal stays primary-key identity,
 including a custom model that has a `content_type` foreign key.
 
 String `has_perm` still infers the model from the codename suffix. That
@@ -494,14 +493,14 @@ check.
 
 The [Django backend boundary](#django-auths-checks-before-calling-backends)
 still applies to native `user.has_perm()`. Trusts-owned inquiries use the
-registered user rules; they do not install a superuser override implicitly.
+registered user conditions and overrides; they do not install a superuser override implicitly.
 
 Where practical, configuration failures should surface during startup or system
 checks. Runtime denial should not fall back to a broader Trusts path.
 
 ## Authorization policy SQL and lockfile
 
-The user-facing [permission policy SQL guide](docs/source/permission-policy-sql.rst)
+The user-facing [permission policy SQL guide](docs/dev/permission-policy-sql.rst)
 describes the schema, command, lockfile, and system-check workflow. This section
 records the additional security boundaries.
 
@@ -509,7 +508,7 @@ The generated YAML is organized by backend and protected content model. Each
 trust exposes its declared relationships. Each content with trusts records SQL
 for `permitted`, `has_perm`, `get_all_permissions`, and
 `get_permitted_users`. The locked reverse statement is that backend's
-branch, including its registered user rules. Filter-only
+branch, including its registered user conditions and overrides. Filter-only
 contents carry their model and `named_filters`, and empty relationship
 backends remain visible as `contents: []`.
 

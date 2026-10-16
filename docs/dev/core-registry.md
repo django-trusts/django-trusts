@@ -1,5 +1,8 @@
 # TrustsRegistry (internal development primitive)
 
+Historical development record. Last source update: 2026-10-14.
+This reorganization has not been reviewed by a human for current accuracy.
+
 Additive registration and projection surface for issues #57, #60, #65,
 #83, #92, #98, and the first historical reader in #67. Import from `trusts.core`.
 This slice does **not** re-export a process-global registry from `trusts`.
@@ -38,7 +41,7 @@ raises `TrustsConfigurationError` when the root is absent. There is no
 Exact duplicate normalized registration raises. The same root plus the
 same content terminal with different content/user/permission/along
 bindings is an explicit conflict. The same bindings with a different
-closed condition is an allowed alternative; the plan ORs complete
+closed condition is an allowed alternative; the plan ORs matching
 records. Different roots remain supported.
 
 A permission path ends on one forward to-one step, or on one forward
@@ -99,7 +102,7 @@ These shapes raise `TrustsConfigurationError` during `register`:
   permission primary key
 - multi-step all-forward permission without a terminal collection
 - extra or intermediate multi-valued walks on user, content, or
-  predicate paths
+  condition paths
 - generic foreign keys/relations
 - more than two steps after the gateway
 - multi-step all-forward content (no gateway reverse)
@@ -113,7 +116,7 @@ trust-rooted symbolic callable (`==`, `.contains(member)`, `&`) and rejects
 prebuilt `All` / `Equal` / `permission_in` values. The callable is invoked
 once after freeze and is not stored.
 
-Internal `TrustsRegistry.register` may still accept a closed predicate tree
+Internal `TrustsRegistry.register` may still accept a closed condition tree
 exported from `trusts.core`. `condition` may also be omitted or `None`. The
 nodes below are that stored planning representation:
 
@@ -148,7 +151,7 @@ registry.register(
   targets fail closed at zero SQL. The compiler emits the whole
   accepted path.
 
-Those predicates compile as an AND overlay on the same
+Those conditions compile as an AND overlay on the same
 permission-bearing root row. They do not create a grant. Callables,
 `Q` objects, lookup strings, and tuples are not a condition dialect
 and raise `TrustsConfigurationError` with zero SQL. Untyped values
@@ -211,7 +214,7 @@ closed with the same error as any other unsupported engine, at runtime
 and in `trusts.E005`, before the probe. A closure table is a documented
 fallback only and is not generated.
 
-Reverse inquiry uses the same statement in the inverse direction. The
+The inquiry for users from content uses the same statement in the inverse direction. The
 seed is the content-derived walk-site identity or identities. A
 non-empty suffix selects the walk-site rows related to the bound
 content, such as Cabinet identities for a Sheet. The recursive member
@@ -231,11 +234,11 @@ Along subset and no reverse-name guessing. When the suffix is exactly one
 reverse O2M/O2O step whose FK lives on the candidate and targets
 `walk_ident`, the compiler may rewrite to `candidate.<fk> IN W`.
 
-Conditions remain an AND overlay on a complete proof and never run on
+Conditions remain an AND overlay on a proof and never run on
 intermediate walk nodes. The same expression drives instance
 authorization, lazy `filter_authorized` before pagination, `all_match`,
 and `permissions` / `common_permissions` (including nested permission
-`OuterRef`). Reverse inquiry derives walk-site identities from the bound
+`OuterRef`). The inquiry for users from content derives walk-site identities from the bound
 content, traverses the inverse graph without the outer candidate user, and
 joins eligible grants and users outside the CTE. It preserves the terminal
 condition and user checks from the forward proof; conditions do not apply to
@@ -244,16 +247,16 @@ before walk SQL. Residual database errors stay loud and are not remapped to
 `TrustsCompilerError`. Runtime authorization does not repeat the recursive
 CTE capability probe.
 
-Policy SQL exports the same recursive predicate for every supported inquiry,
-including reverse users. Each trust row records the complete public `along`
+Policy SQL exports the same recursive condition for every supported inquiry,
+including users from content. Each trust row records the public `along`
 path, resolved shape, and bound. The bound is a registration constant, not a
 runtime binding. Rendering fails before returning a partial document if any
 applicable recursive statement or parameter cannot be represented.
 
-Implementation agreement tests compare the reverse user set with per-user
-forward checks for the same content and permission. They cover depth exactly
+Implementation agreement tests compare the returned user set with per-user
+object checks for the same content and permission. They cover depth exactly
 at the bound and one hop beyond it, cycles, a failing condition, an inactive
-principal, two `Along` registrations on one content model ORed together, and
+user, two `Along` registrations on one content model ORed together, and
 policy-lock rendering for each registered walk. The implementation change
 records combined statement-plus-branch coverage before and after and does not
 lower it.
@@ -265,7 +268,7 @@ opens no connections, executes no SQL, and is not an all-clear. Isolated
 `TrustsRegistry()` instances are not scanned. Silencing `trusts.E005`
 hides only the diagnostic.
 
-Each step's terminal model, complete root-relative lookup
+Each step's terminal model, root-relative lookup
 (`'__'.join(path)`, for example `folder__rows__content`), and outer comparison
 field come from resolved path metadata. Correlation does not assume `pk`,
 does not assume the terminal field lives on the root, and does not
@@ -329,4 +332,4 @@ that implementation's registry store). Do not list `'trusts'` in
 `INSTALLED_APPS`.
 
 This primitive does not change historical authorization results or add a
-database schema. See [../migrates.md](../migrates.md).
+database schema. See [../migrates.md](../../migrates.md).

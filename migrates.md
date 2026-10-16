@@ -6,7 +6,7 @@ surface that was previously refused and is now supported does not need an
 entry, because no application could have depended on it. It is not a
 development log. New features and changes that require no application action
 belong in [What's new](docs/whats-new.md); development history belongs in
-[DEV.md](DEV.md).
+[DEV.md](docs/dev/development.md).
 
 ## `filter_authorized_scopes` renamed (#302)
 
@@ -34,14 +34,14 @@ See [User conditions and overrides](docs/source/index.rst#user-conditions-and-ov
 
 | | 1.0.0 | 1.1.0 |
 | --- | --- | --- |
-| Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, `.authorized()`, reverse users, and lockfile SQL that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
+| Permission row used on a different model than `Permission.content_type`, including a group that contains both | Grant on `has_perm`, enumeration, `.authorized()`, users from content, and lockfile SQL that matched `permission_id` only | Denial: `False` / empty. The shared grant joins `content_type` and requires the protected object's `app_label` and `model` |
 | `authorization_required` for that pair | Already `PermissionDenied` for an ordinary user | Same denial |
 | Same-model grant, including a custom codename that does not end with the model name | Grant on instance projections | Unchanged grant |
 | Permission terminal that is not `auth.Permission`, including a custom model with a `content_type` foreign key | Primary-key identity | Unchanged |
 
 For an ordinary owner of one organization, the shared owner group used to
 grant both content types on both objects. Enumeration, `.authorized()`,
-reverse users, and lockfile SQL follow the same split: the crossed
+users from content, and lockfile SQL follow the same split: the crossed
 permission drops out, and the same-model permission stays.
 
 ```python
@@ -164,7 +164,7 @@ backend.register(
 )
 ```
 
-The predicate runs once after the freeze check, in the same `AppConfig.ready()`
+The condition runs once after the freeze check, in the same `AppConfig.ready()`
 world as path lambdas. The stored overlay is private `Equal` /
 `PermissionIn` / `All` and contains no callable. Literal Python `in` is
 unsupported and is not recovered through AST, bytecode, `dis`, or a
@@ -208,11 +208,11 @@ Migration-bot checklist:
 - custom manager definitions
 - application-owned `authorized(` methods
 
-## Reverse permission inquiry (#255)
+## Permission inquiry from content to users (#255)
 
 | | Old | New |
 | --- | --- | --- |
-| Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
+| Users who hold one permission on one saved content object | No public inquiry for users from content | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
 
 No mandatory consumer change to adopt this adapter. Stock `auth.User` does not
 grow the manager method, and a content manager still returns content rows.

@@ -1,5 +1,8 @@
 # Legacy baseline (pre-modernization)
 
+Historical development record. Last source update: 2026-09-07.
+This reorganization has not been reviewed by a human for current accuracy.
+
 This document records the django-trusts source as it existed on the default
 branch before any modernization. It is a historical snapshot, not a supported
 install or test matrix. The active development version after this snapshot is
@@ -14,7 +17,7 @@ required because no API or method changed.
 Recorded on 2026-09-06 from
 [`django-trusts/django-trusts`](https://github.com/django-trusts/django-trusts)
 `origin/master`. Machine-readable values live in
-[`docs/legacy/baseline.json`](legacy/baseline.json).
+[`docs/legacy/baseline.json`](../legacy/baseline.json).
 
 ## Preserved commit
 
@@ -138,13 +141,13 @@ repository:
 
 | Field | Value |
 | --- | --- |
-| Path | [`docs/legacy/django-trusts-legacy-pre-modernization.tar.gz`](legacy/django-trusts-legacy-pre-modernization.tar.gz) |
+| Path | [`docs/legacy/django-trusts-legacy-pre-modernization.tar.gz`](../legacy/django-trusts-legacy-pre-modernization.tar.gz) |
 | SHA-256 | `ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084` |
 | Size | 26404 bytes |
 | Originating commit | `20ef23946d4fcfd9463fcf5953bb9414b8f0521b` |
 | Prefix | `django-trusts-20ef23946d4fcfd9463fcf5953bb9414b8f0521b/` |
-| Checksums file | [`docs/legacy/SHA256SUMS`](legacy/SHA256SUMS) |
-| Contents list | [`docs/legacy/MANIFEST`](legacy/MANIFEST) |
+| Checksums file | [`docs/legacy/SHA256SUMS`](../legacy/SHA256SUMS) |
+| Contents list | [`docs/legacy/MANIFEST`](../legacy/MANIFEST) |
 
 How it was created:
 

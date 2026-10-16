@@ -1,5 +1,8 @@
 # Releasing django-trusts
 
+Historical development record. Last source update: 2026-09-15.
+This reorganization has not been reviewed by a human for current accuracy.
+
 This is the standing maintainer runbook for django-trusts release
 candidates, later RC increments, and the final release. It transcribes
 the decisions in [#224](https://github.com/django-trusts/django-trusts/issues/224)
@@ -81,8 +84,8 @@ may change with the django-trusts version:
 | --- | --- |
 | `pyproject.toml` | Authoritative package version |
 | `docs/source/conf.py` | Sphinx `version` / `release` |
-| `docs/development-version.md` | Development-line record |
-| `docs/support-matrix.md` | Support-claim version wording |
+| `docs/dev/development-version.md` | Development-line record |
+| `docs/dev/support-matrix.md` | Support-claim version wording |
 | `scripts/verify-package-metadata.py` | `EXPECTED_VERSION` and sdist/wheel name prefix |
 | `scripts/verify-wheel-install.py` | Installed-wheel version assertion |
 | `scripts/verify-pair-zero.py` | Pair-proof version wording |
@@ -126,7 +129,7 @@ Apply the new django-trusts version and the coupled Core version
 assertions listed above. Verify `COMPANION_ZERO_SHA` and update it only
 if the intended Zero candidate changed. Review release notes,
 migration-boundary wording (`migrates.md`), dependency metadata, and
-[docs/support-matrix.md](docs/support-matrix.md).
+[docs/support-matrix.md](support-matrix.md).
 
 Companion repositories receive version changes only when those changes
 are independently intended.

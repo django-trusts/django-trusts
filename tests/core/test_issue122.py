@@ -86,7 +86,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'Trusts cannot revoke authorization supplied by another backend',
             'relationship-family',
             'Fail-closed principle',
-            'one-argument symbolic predicate',
+            'one-argument symbolic condition',
             'collection-rooted `.contains(member)`',
             'Discrepancies must be surfaced in the PR',
             'Both use the shared user checks.',
@@ -102,7 +102,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertNotIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True', guide)
         self.assertNotIn('## Change sizing and surface discovery', guide)
 
-        dev = (ROOT / 'DEV.md').read_text()
+        dev = (ROOT / 'docs/dev/development.md').read_text()
         self.assertIn('## Change sizing and surface discovery', dev)
         self.assertIn('Whole ticket: 34–144', dev)
         self.assertIn('Completed: 5 (S1 accepted)', dev)
@@ -147,7 +147,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             text,
         )
         self.assertNotIn('Python `in` or `permission_in', text)
-        self.assertTrue((ROOT / 'docs' / 'core-registry.md').is_file())
+        self.assertTrue((ROOT / 'docs/dev' / 'core-registry.md').is_file())
         self.assertFalse((ROOT / 'docs' / 'registry.md').exists())
         self.assertIn(
             'https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md',

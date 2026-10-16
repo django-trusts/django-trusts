@@ -163,12 +163,11 @@ concrete forms when no custom queryset is required. Plain
 ``user.has_perm(permission, document)`` object checks do not require
 either one. ``.authorized()`` remains the lower-level instance
 projection. The `permitted queryset inquiry contract
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/permitted-queryset-inquiry.md>`_
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-inquiries.md>`_
 records that split.
 
 ``PermittedUsersMixin`` adds
-``document.get_permitted_users(permission)``, the reverse inquiry that
-returns the users permitted on one saved document. It does not replace or
+``document.get_permitted_users(permission)``, which returns the users permitted on one saved document. It does not replace or
 change ``Document.objects``.
 
 Granting and revoking permission are ordinary changes to persisted application
@@ -331,7 +330,7 @@ Permission checks keep the familiar Django spelling:
    )
 
 The same correlated policy drives object checks, permission enumeration,
-``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
+``QuerySet.permitted()``, users from content, and authorization
 policy SQL. The sponsor's authority limits all of those inquiries.
 
 Several delegated relationship models may target the same content model. Each
@@ -624,7 +623,7 @@ A named filter further constrains an existing permission; it cannot grant
 permission by itself. Register it against the protected model during
 ``AppConfig.ready()`` with ``backend.add_named_filter(...)``.
 
-Its predicate is a three-argument lambda or function: ``u`` is the requesting
+Its condition is a three-argument lambda or function: ``u`` is the requesting
 user, ``p`` is the requested permission, and ``o`` is the protected object. It
 must return a supported boolean expression that django-trusts can translate
 into the Django QuerySet used for authorization. The example above registers
@@ -653,7 +652,7 @@ API also supports paths through multiple relationships:
    )
 
 For an ordinary registration, the ``condition=`` argument is a one-argument
-symbolic predicate rooted at the trust model. A delegated registration may
+symbolic condition rooted at the trust model. A delegated registration may
 use the same one-argument form for row-only restrictions or the two-argument
 form shown above when its relationship scope must compare with the requested
 permission. django-trusts invokes either builder once during registration and
@@ -695,12 +694,12 @@ declared with ``along=("parent", 8)`` on ``backend.register``.
 django-trusts evaluates the walk with a recursive common table expression
 rather than traversing the hierarchy in Python. The database combinations
 currently exercised by CI are recorded in the `support matrix
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/support-matrix.md>`_.
 The same bounded walk participates in object checks, permitted-content
-querysets, permission enumeration, reverse permitted-user inquiry, and
+querysets, permission enumeration, users from content, and
 authorization-policy SQL. For one content and
-permission, reverse inquiry returns exactly the users whose
-forward object check succeeds, including the terminal condition and user
+permission, the returned users are exactly those whose
+object check succeeds, including the terminal condition and user
 checks.
 
 Ordered allow and deny
@@ -732,15 +731,15 @@ with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
 passes through another model before the protected object, it also lists
 ``filter_by_permitted_content``: one statement for each of those models,
 the same SQL and parameter values ``filter_by_permitted_content`` runs.
-The locked ``get_permitted_users`` statement is that backend's reverse
-query. A content with named filters lists those queries.
+The locked ``get_permitted_users`` statement is that backend's query for users
+from content. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
 
 User conditions appear in the SQL, each with a ``skip_<name>=False`` parameter.
 
 ``content.get_permitted_users(perm)`` and
 ``User.objects.permitted(content, perm)`` call the same compiler, so the
-artifact contains one reverse-user query rather than duplicate entries. The
+artifact contains one query for users from content rather than duplicate entries. The
 lockfile key remains ``get_permitted_users``. For the direct
 ``DocumentPermission`` example on SQLite, that entry is:
 
@@ -810,7 +809,7 @@ alias consistently in settings and every render or E009 job. For example,
 MySQL ``default`` plus SQLite ``policy`` reviews one SQLite lockfile; E009
 follows ``policy``. Run ``python manage.py check`` in CI and before deployment.
 
-See the :doc:`permission policy SQL guide <permission-policy-sql>` for
+See the `permission policy SQL reference <https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-policy-sql.rst>`_ for
 the schema, identifiers, renderer selection, and review workflow. See the
 `lockfile security audit guide
 <../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
@@ -896,11 +895,6 @@ fail closed.
 
 Current Python, Django, database, and evaluation-strategy support is recorded
 in the `support matrix
-<https://github.com/django-trusts/django-trusts/blob/dev/docs/support-matrix.md>`_.
-
-.. toctree::
-   :hidden:
-
-   permission-policy-sql
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/support-matrix.md>`_.
 
 Copyright BeeDesk, Inc., 2015--2026. Released under the BSD 2-Clause License.

@@ -1,5 +1,8 @@
 # Supported Python and Django matrix
 
+Historical development record. Last source update: 2026-10-11.
+This reorganization has not been reviewed by a human for current accuracy.
+
 Recorded on **2026-09-07** while implementing #14 and the coordinated
 Django/CI work from #15. This is the current development-line claim for
 `1.0.0rc1`. It is not a published PyPI release.

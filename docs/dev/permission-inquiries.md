@@ -1,5 +1,8 @@
 # Permission inquiries
 
+Historical development record. Last source update: 2026-10-15.
+This reorganization has not been reviewed by a human for current accuracy.
+
 Development reference consolidated from the #270 content-queryset contract,
 the #255 users-from-content contract, and the registry projection record.
 
@@ -8,7 +11,7 @@ the #255 users-from-content contract, and the registry projection record.
 Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), **skip_options)`
 is implemented on `PermittedQuerySet`.
 
-The [user conditions, overrides, and named skip options](source/index.rst#user-conditions-and-overrides)
+The [user conditions, overrides, and named skip options](../source/index.rst#user-conditions-and-overrides)
 apply to this inquiry.
 
 ### Question
@@ -16,7 +19,7 @@ apply to this inquiry.
 Given one user and one permission, which rows in this content queryset may the
 user access?
 
-This is the forward queryset inquiry in the user × permission × content map:
+This is the content queryset inquiry in the user × permission × content map:
 
 ```python
 Repository.objects.permitted(
@@ -27,7 +30,7 @@ Repository.objects.permitted(
 
 It asks the same question as `user.has_perm(permission, object)` for a whole
 queryset. It is not exact codec parity with the current `has_perm` string
-parser, and it is not the reverse inquiry answered by
+parser, and it is not the inquiry for users from content answered by
 `content.get_permitted_users(permission)`.
 
 ### Public API
@@ -82,7 +85,7 @@ not a second implementation of the current `has_perm` codec.
 
 A saved `auth.Permission` instance is bound by its primary key. Building
 that queryset does not read `permission.content_type`. The shared grant
-predicate requires the row's content type to be the queryset model's
+condition requires the row's content type to be the queryset model's
 content type. A same codename on another model does not become this model's
 permission.
 
@@ -146,8 +149,8 @@ An auth permission primary key is never compared with a custom terminal
 that happens to use the same integer.
 
 Non-owners contribute nothing. Their unconditioned grants are not OR'd in.
-If no participating backend owns the complete name set, the call raises
-`TrustsConfigurationError`. Backend order does not change the predicate.
+If no participating backend owns the name set, the call raises
+`TrustsConfigurationError`. Backend order does not change the condition.
 
 `trusts.E008` reports this ownership rule for `authorization_required`
 declarations only. A runtime `.permitted()` call is not registered with
@@ -164,7 +167,7 @@ normalized `register()` plans and named-condition registry as
 For every participating backend, the method compiles:
 
 ```text
-registered user rules composed with the grant path and selected named conditions
+registered user conditions and overrides composed with the grant path and selected named conditions
 ```
 
 Participating backends are ORed. The final queryset is distinct and stays
@@ -173,12 +176,12 @@ lazy, so pagination applies in SQL.
 ### User and backend boundary
 
 The registry's user conditions and optional override apply to this inquiry.
-Named skip options select which registered user rules to omit for that call.
+Named skip options select which registered user conditions and overrides to omit for that call.
 
 The result is Trusts' registered relationship-family projection. It does not
 call `user.has_perm()` per row and does not OR results from arbitrary Django
 authorization backends. Django has no general protocol through which a backend
-can contribute a queryset predicate.
+can contribute a queryset condition.
 
 Authentication method does not change these semantics. A session, bearer
 token, or another authenticator establishes the user; it does not select
@@ -251,11 +254,11 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the recursive agreement boundary below.
 
-Both adapters use the [user conditions, overrides, and named skip options](source/index.rst#user-conditions-and-overrides).
+Both adapters use the [user conditions, overrides, and named skip options](../source/index.rst#user-conditions-and-overrides).
 
 ### Decision
 
-Core exposes two public adapters for the same reverse inquiry:
+Core exposes two public adapters for the same inquiry for users from content:
 
 ```python
 users = document.get_permitted_users(perm)
@@ -264,7 +267,7 @@ users = User.objects.permitted(document, perm)
 
 Both accept exactly one saved content object, one permission, and the
 named `skip_<name>` keyword arguments, call one
-internal reverse-query compiler, and return a lazy queryset of
+internal compiler for users from content, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
 
@@ -350,7 +353,7 @@ authorization-policy lockfile rules.
   selected Trusts backend explicitly declares that its singular object
   `has_perm` path accepts that instance type as the same permission identity.
 
-The registered permission row is the canonical reverse-query identity. A
+The registered permission row is the canonical permission identity for users from content. A
 Django `auth.Permission` instance is validated and used directly. A string is
 a Django-facing alias: Core parses it with the same rules as
 `user.has_perm(perm, content)` and binds it to the permission row applicable
@@ -385,7 +388,7 @@ user in User.objects.permitted(content, perm)
 ```
 
 must agree when called with the same skip options. Each supported backend
-contribution retains its own user rules and the same candidate queryset.
+contribution retains its own user conditions and overrides and the same candidate queryset.
 
 A Trusts contribution matches that Trusts backend's object check under the
 same permission identity, registered conditions, override, and skip options.
@@ -398,12 +401,12 @@ backends and cannot forward Trusts skip options. The locked
 `get_permitted_users` statement is one Trusts backend contribution, not the
 aggregate result across authentication backends.
 
-#### User rules and Django's backend boundary
+#### User conditions and overrides and Django's backend boundary
 
-Trusts user rules are described once in the guide linked above. A registered
-override participates in reverse inquiries; no superuser grant is implicit.
+Trusts user conditions and overrides are described once in the guide linked above. A registered
+override participates in inquiries for users from content; no superuser grant is implicit.
 Django's native `PermissionsMixin.has_perm()` can return before consulting
-backends. See the [security audit's Django boundary](../SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
+backends. See the [security audit's Django boundary](../../SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
 
 A supported backend must express its contribution in SQL. Arbitrary
 Python-only state is unsupported and fails loudly.
@@ -415,7 +418,7 @@ optional user-manager adapter uses the application manager on which the mixin
 is installed; installing it on the default manager gives both adapters the
 same candidate universe.
 
-### Backend completeness
+### Backend coverage
 
 Django grants an object permission when any configured authentication backend
 grants. Exact reverse lookup therefore needs a closed backend set.
@@ -423,15 +426,15 @@ grants. Exact reverse lookup therefore needs a closed backend set.
 At construction time, every configured backend must fall into one of three
 classes:
 
-1. **Backend that can add users to the query.** It can compile a predicate over candidate
+1. **Backend that can add users to the query.** It can compile a condition over candidate
    user rows for the supplied permission and content.
 2. **Backend known to grant no object permissions.** It declares, or is a precisely
    recognized built-in backend whose contract establishes, that it cannot
    grant when an object is supplied.
 3. **Unsupported.** It might grant an object permission but cannot express the
-   reverse predicate.
+   reverse condition.
 
-Core ORs the backend predicates in one user query. A backend that grants no
+Core ORs the backend conditions in one user query. A backend that grants no
 object permissions adds nothing. The presence of an unsupported backend raises
 `TrustsConfigurationError` before SQL instead of returning an incomplete
 queryset.
@@ -440,7 +443,7 @@ The implementation may use a protected backend hook or capability marker.
 Its exact internal name is not part of the application-facing API selected in
 this document. The semantics are mandatory:
 
-- a `TrustModelBackendMixin` backend contributes the same complete
+- a `TrustModelBackendMixin` backend contributes the same
   relationship plan and named-filter overlay used by its singular
   `has_perm`;
 - separate Trusts backend paths OR together, just as Django's authentication backend
@@ -448,7 +451,7 @@ this document. The semantics are mandatory:
 - the stock `ModelBackend` contributes no object grant;
 - a third-party authentication-only backend must be explicitly known as a
   unable to grant object permissions rather than inferred from a class name;
-- a third-party object-permission backend must supply a reverse-query
+- a third-party object-permission backend must supply a users-from-content
   contribution or make the inquiry unsupported.
 
 A rejection by one backend never cancels a grant from another backend.
@@ -467,15 +470,15 @@ WHERE
         trusts_user_conditions(user, skip_options)
         AND (
             trusts_user_override(user, skip_options)
-            OR trusts_complete_grant_predicate(user, permission, content)
+            OR trusts_grant(user, permission, content)
         )
     )
-    OR custom_backend_complete_predicate(user, permission, content)
+    OR custom_backend_grant(user, permission, content)
     OR ...
 ```
 
-The named predicates are conceptual SQL placeholders, not Python callbacks.
-Each Trusts backend composes its own user rules with its complete grant.
+The named conditions are conceptual SQL placeholders, not Python callbacks.
+Each Trusts backend composes its own user conditions and overrides with its grant.
 Other backend branches retain their own conditions.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
@@ -495,7 +498,7 @@ it is not the existing `permitted` operation, which means user-to-content.
 The content adapter begins with
 `get_user_model()._default_manager.get_queryset()`. The optional user-manager
 adapter begins with that manager instance's existing queryset and adds the same
-reverse predicate.
+reverse condition.
 
 A saved content instance supplies its database alias when available. Otherwise
 Django's router selects the read database. All correlated Trusts and permission
@@ -510,7 +513,7 @@ so later application filtering and ordering compose normally.
 
 For ordinary users, the result is empty when:
 
-- no complete registered path applies to the content model;
+- no registered path applies to the content model;
 - the permission is well formed but unknown;
 - a required membership, attachment, ceiling, alignment, or other registered
   condition is absent;
@@ -527,7 +530,7 @@ Implementation must cover:
 
 - direct-user and membership-shaped grants;
 - explicit `group=` registrations contributing their member users;
-- multiple complete roots and multiple backends;
+- multiple roots and multiple backends;
 - duplicate elimination;
 - missing membership or attachment;
 - permission ceilings, equality conditions, and named filters;
@@ -579,8 +582,8 @@ estimate.
 - Phase B1, private reverse relationship compiler and agreement fixtures:
   **8**
 - Phase B2, public content and optional user-manager adapters,
-  permission-string/named-filter codec, backend-completeness preflight,
-  user rules, routing, lockfile, and migration record: **8**
+  permission-string/named-filter codec, backend-coverage preflight,
+  user conditions and overrides, routing, lockfile, and migration record: **8**
 - GH adoption: separate consumer issue, not included
 
 Phase B1 ships no public application method. Phase B2 exposes
@@ -604,15 +607,15 @@ as a backend that grants no object permissions. The exact classes `ModelBackend`
 inferred from that ancestry. Any other object-capable `has_perm` without
 `permitted_users_predicate` raises `TrustsConfigurationError` before SQL.
 
-An `Along` registration grants through a user-seeded walk. Reverse inquiry
+An `Along` registration grants through a user-seeded walk. The inquiry for users from content
 derives walk-site identities from the bound content, traverses the inverse
 graph without the outer candidate user, and joins eligible grants and users
 outside the CTE. It uses the same bound, terminal `condition=` overlay, and
 user checks as the forward proof. The condition is
 not evaluated on intermediate walk nodes. For a fixed content and permission,
-the result must agree with the forward object check for every candidate user.
-The policy-lock statement uses this same reverse compiler. An unsupported
-renderer or unrenderable recursive predicate raises before SQL or partial
+the result must agree with the object check for every candidate user.
+The policy-lock statement uses this same compiler for users from content. An unsupported
+renderer or unrenderable recursive condition raises before SQL or partial
 policy output; the path is never dropped or widened to every user.
 
 The content adapter's candidate model is `settings.AUTH_USER_MODEL`. A
@@ -624,7 +627,7 @@ that owns it.
 ### Related work
 
 Issue #185 keeps the broader inquiry map and earlier user-to-content history.
-This document owns only the reverse content-and-permission-to-users inquiry.
+This document owns only the inquiry from content and permission to users.
 
 Async dispatch #247 and the GH organization-admin work are independent.
 Most `OrgScopedAdmin` code protects Django admin services such as form
@@ -644,7 +647,7 @@ folded into the Core implementation or the active GH admin PR.
 `plan_for` selects applicable records by content/user/permission terminal
 and compiles them into one `RelationPlan`. Root selection, field
 correlation, and `EXISTS` assembly live in that plan. Bindings and
-`EXISTS` use the complete stored lookup. `OuterRef` uses the last step's
+`EXISTS` use the stored lookup. `OuterRef` uses the last step's
 single target `attname`. The three development projections only change
 the terminal:
 
@@ -660,12 +663,12 @@ registry.filter_authorized(Document.objects.all(), user, permission)
   permission in that same relational result. It does not materialize a
   Python list from enumeration.
 - Authorized-content filtering returns a lazy `QuerySet` and correlates
-  the same predicate to each candidate content row. Filtering happens in
+  the same condition to each candidate content row. Filtering happens in
   SQL before pagination or aggregation.
 
 `RelationPlan.content_exists(user, permission)` is the shared
-content-`EXISTS` predicate. `filter_content` / `filter_authorized`
-consume that same object. A later reader may OR it with another predicate
+content-`EXISTS` condition. `filter_content` / `filter_authorized`
+consume that same object. A later reader may OR it with another condition
 on the original candidate queryset; do not filter trustee rows first and
 then try to restore another branch.
 
@@ -677,7 +680,7 @@ content model fails closed: empty enumeration, `False`, and
 When the permission terminal's concrete model is `auth.Permission`, the
 same `EXISTS` requires that row's content type to be the protected
 object's content identity (`app_label` and `model_name`, proxy models
-included). A mismatch is an empty predicate on every projection. The
+included). A mismatch is an empty condition on every projection. The
 codename is not consulted. Any other terminal keeps primary-key identity,
 including a custom permission model that has a `content_type` foreign key.
 
@@ -686,13 +689,13 @@ This slice does not accept codename strings or dotted permission syntax.
 
 `RelationPlan` projection methods require model-instance bindings; a
 supplied `None` or other non-instance value raises
-`TrustsConfigurationError` and is never omitted from the predicate.
+`TrustsConfigurationError` and is never omitted from the condition.
 
 
 ## Historical adapters and public projections
 
 `ContentQuerySet.permitted` is a thin aggregate caller. It ORs each
-applicable handle compiler's complete predicate (`trusts.core.granted`)
+applicable handle compiler's condition (`trusts.core.granted`)
 and then applies the unchanged condition overlay. Concrete
 `TrustModelBackend` routes keep the transitional historical TrustGroup
 compiler; mixin-only routes receive only their registered-plan proof.
@@ -746,12 +749,12 @@ later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse
 `:condition` or call `get_permission`. It uses the
-[user conditions and overrides](source/index.rst#user-conditions-and-overrides).
+[user conditions and overrides](../source/index.rst#user-conditions-and-overrides).
 `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
-`.authorized` does not call it; the inquiries share user rules without sharing
+`.authorized` does not call it; the inquiries share user conditions and overrides without sharing
 permission-input validation. `skip_options` contains the named `skip_<name>`
 keywords described in the guide.
 Core `.authorized` includes relationship-family handles
@@ -769,8 +772,8 @@ uses that same bounded walk: a prefix at the walk site is kept when
 its identity is in the walk, and a later proper prefix is kept when
 it hangs off a walk-site row the walk reaches. An ancestor of the walk
 site stays the row stored on that grant, including when an ordinary sponsor
-grant supplies the sponsor-authority predicate. A one-level delegation keeps
-a prefix only when the delegation and the complete sponsor-authority predicate
+grant supplies the ordinary sponsor-grant query. A one-level delegation keeps
+a prefix only when the delegation and the ordinary sponsor-grant query
 both reach it. Each contributing ordinary sponsor grant's `along=` walk or
 exact match must reach the prefix. A second delegation level does not. A
 delegated `along=` whose content suffix is longer than one reverse hop raises

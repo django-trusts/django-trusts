@@ -235,7 +235,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         )
         self.assertIn('[Security audit guide](SECURITY_AUDIT.md)', readme)
         self.assertIn('[Migration boundary](migrates.md)', readme)
-        self.assertIn('DEV.md', readme)
+        self.assertIn('docs/dev/development.md', readme)
         self.assertIn('django-trusts-zero', readme)
         self.assertIn('django-trusts-gh-permissions', readme)
         self.assertIn('django-trusts-ordered-fold', readme)

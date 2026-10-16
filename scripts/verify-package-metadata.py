@@ -136,10 +136,10 @@ def _check_sdist(sdist: Path) -> None:
             or 'Installation in the usage guide' not in readme
         ):
             raise SystemExit('sdist README.md is not the concise user README')
-        if any(name.endswith('/DEV.md') for name in names):
+        if any(name.endswith('/docs/dev/development.md') for name in names):
             pass
         else:
-            raise SystemExit('sdist missing DEV.md')
+            raise SystemExit('sdist missing docs/dev/development.md')
         management_hits = ships_trusts_management(names)
         if management_hits:
             raise SystemExit(

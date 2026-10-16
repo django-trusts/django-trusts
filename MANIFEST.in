@@ -1,6 +1,6 @@
 include LICENSE
 include README.md
-include DEV.md
+include docs/dev/development.md
 include requirements.txt
 include migrates.md
 include pyproject.toml
