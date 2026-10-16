@@ -212,6 +212,20 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
         )
         self.assertIn('apps-option-ok', stdout)
 
+    def test_rewrites_do_not_import_core(self):
+        source = (ROOT / 'trusts' / 'plan' / 'rewrites.py').read_text()
+        self.assertNotIn('trusts.core', source)
+        stdout = self._run_isolated(
+            'import sys\n'
+            'import trusts.plan.rewrites\n'
+            'assert "trusts.core" not in sys.modules\n'
+            'from trusts._bind_once import bind_once\n'
+            'assert bind_once is trusts.plan.rewrites.bind_once\n'
+            'assert "trusts.core" not in sys.modules\n'
+            'print("rewrites-without-core")\n'
+        )
+        self.assertIn('rewrites-without-core', stdout)
+
     def test_import_ir_then_construct_is_not_circular(self):
         stdout = self._run_isolated(
             'import trusts.conditions._ir\n'
