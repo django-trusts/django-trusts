@@ -111,10 +111,11 @@ These shapes raise `TrustsConfigurationError` during `register`:
 - composite / multi-column correlation (`get_path_info()` must yield
   exactly one `PathInfo` with exactly one target field)
 
-Public `BackendHandle.register(..., condition=...)` accepts a one-argument
-trust-rooted symbolic callable (`==`, `.contains(member)`, `&`) and rejects
-prebuilt `All` / `Equal` / `permission_in` values. The callable is invoked
-once after freeze and is not stored.
+An ordinary `BackendHandle.register(..., condition=...)` accepts a one-argument
+trust-rooted symbolic callable using the [condition expressions in the setup
+guide](../source/index.rst#condition-expressions) and rejects prebuilt `All` /
+`Equal` / `permission_in` values. The callable is invoked once after freeze
+and is not stored.
 
 Internal `TrustsRegistry.register` may still accept a closed condition tree
 exported from `trusts.core`. `condition` may also be omitted or `None`. The
