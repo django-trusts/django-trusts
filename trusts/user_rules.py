@@ -33,22 +33,30 @@ BUILTIN_USER_CONDITIONS = (
 )
 
 
+def builtin_user_conditions(model):
+    """The default ``is_active`` rule, or nothing when that field is absent."""
+    try:
+        field = model._meta.get_field('is_active')
+    except FieldDoesNotExist:
+        return ()
+    if (
+        getattr(field, 'concrete', False)
+        and field.get_internal_type() == 'BooleanField'
+    ):
+        return BUILTIN_USER_CONDITIONS
+    return ()
+
+
 def rule_applies(on, role):
     return on == '*' or on == role
 
 
 def normalize_on(on):
-    """``*``, ``user``, ``sponsor``, or a non-empty tuple of those names."""
-    if on in ('*', 'user', 'sponsor'):
+    """Conditions accept only ``*``, ``user``, or ``sponsor``."""
+    if isinstance(on, str) and on in ('*', 'user', 'sponsor'):
         return on
-    if (
-        isinstance(on, tuple) and on
-        and all(item in ('user', 'sponsor') for item in on)
-    ):
-        return '*' if len(set(on)) == 2 else on[0]
     raise TrustsConfigurationError(
-        'User condition on= must be "*", "user", "sponsor", or a '
-        'non-empty tuple of "user" and "sponsor", not %r.' % (on,)
+        'User condition on= must be "*", "user", or "sponsor", not %r.' % (on,)
     )
 
 
@@ -219,20 +227,17 @@ def _stored(conditions):
     return tuple(conditions)
 
 
-def compile_user_rules(model, path, conditions, *, role, values, missing='omit'):
+def compile_user_rules(model, path, conditions, *, role, values):
     """``(skip_<name> OR condition)`` for rules that apply to ``role``.
 
-    ``conditions is None`` is the built-in ``is_active`` rule. A missing
-    column is omitted for the checked user and fails closed for a sponsor.
+    ``conditions is None`` is the built-in ``is_active`` rule. The registry
+    passes that rule only when ``model`` has the field, and one fragment
+    for every inquiry.
     """
     values = values or {}
     combined = None
     for rule in _stored(conditions):
         if not rule_applies(rule.on, role):
-            continue
-        if field_state(model, rule.expr) == 'missing':
-            if missing == 'closed':
-                return None
             continue
         flag = SkipFlag(rule.name, values.get(rule.name, False))
         part = Q(flag) | _compile(path, rule.expr)

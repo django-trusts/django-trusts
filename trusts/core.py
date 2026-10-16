@@ -228,20 +228,17 @@ def _relationship_handles(handles):
 def _apply_checked_user(grant, plan, user, values, permission, content_identity,
                         permission_model, *, complete):
     """Bind this plan's registration-time rules around ``grant``."""
-    override = None
+    with_override = complete and bool(plan.records or plan.delegations)
     identity = None
-    if complete and (plan.records or plan.delegations):
-        override = plan.user_override_q
-        if override is not None:
-            identity = _bound_permission_identity(
-                permission, content_identity,
-                permission_model or plan.permission_model,
-            )
-    if grant is None and override is None:
-        return None
-    return user_predicate(
-        grant, user, plan.user_rules, override, values, identity,
-    )
+    if with_override and plan.user_override_q is not None:
+        identity = _bound_permission_identity(
+            permission, content_identity,
+            permission_model or plan.permission_model,
+        )
+    return bind_checked_user(
+        user, grant, plan=plan, identity=identity, values=values,
+        with_override=with_override,
+    ).predicate
 
 
 def _compile_granted(handles, candidates, user, permission, *, kind='complete',
@@ -680,7 +677,7 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
-    inquiry = user_skip_params(user, skip_flags, handles=handles)
+    inquiry = bind_checked_user(user, skip_flags=skip_flags, handles=handles)
     if not handles or inquiry.denied:
         return queryset.none()
     skipped = inquiry.values
@@ -849,7 +846,8 @@ def common_permissions(handles, candidates, user, *, kind='complete',
     a handle applies, and ``None`` only when no handle applies.
     """
     participating = _relationship_handles(handles)
-    inquiry = user_skip_params(user, skip_flags, handles=participating)
+    inquiry = bind_checked_user(
+        user, skip_flags=skip_flags, handles=participating)
     if inquiry.denied:
         return _anonymous_common_permissions(participating, candidates)
     return _compile_common_permissions(
@@ -1926,13 +1924,14 @@ def _permission_content_type_filters(record, content_identity):
 
 
 class SkipParams(object):
-    """Bound skip values for one inquiry, or an anonymous denial."""
+    """Skip values for one inquiry, and the bound predicate when built."""
 
-    __slots__ = ('denied', 'values')
+    __slots__ = ('denied', 'values', 'predicate')
 
-    def __init__(self, denied, values):
+    def __init__(self, denied, values, predicate=None):
         self.denied = denied
         self.values = values
+        self.predicate = predicate
 
 
 def user_skip_params(user, skip_flags, *, handles=None, registry=None,
@@ -2039,18 +2038,33 @@ def _or_q(left, right):
     return left | right
 
 
-def user_predicate(grant, subject, rules, override, values, identity=None):
-    """``rules AND (override OR grant)`` for forward, reverse, and sponsor.
+def bind_checked_user(subject, grant=None, *, rules=None, override=None,
+                      identity=None, values=None, plan=None, closed=False,
+                      with_override=True, skip_flags=None, require_user=True,
+                      registry=None, handles=None):
+    """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
-    ``rules`` and ``override`` are the fragments compiled at registration.
-    ``subject`` is a user instance (forward ``EXISTS``) or a model class
-    (reverse row, or a sponsor path already baked into ``rules``).
-    ``rules is None`` fails closed. A call only binds skip parameters.
+    ``skip_flags`` is a public inquiry. ``values`` means that inquiry
+    already ran. ``plan`` selects compiled fragments (``closed`` for the
+    reverse row). ``with_override`` is false for a group check.
     """
+    if skip_flags is not None:
+        inquiry = user_skip_params(
+            subject, skip_flags, handles=handles, registry=registry,
+            require_user=require_user,
+        )
+        if inquiry.denied:
+            return SkipParams(True, {}, None)
+        values = inquiry.values
+    else:
+        values = values or {}
+    if plan is not None:
+        rules = plan.user_rules_closed if closed else plan.user_rules
+        override = plan.user_override_q if with_override else None
     from trusts.user_rules import bind_skip_flags
 
     if rules is None:
-        return None
+        return SkipParams(False, values, None)
     rules_q = bind_skip_flags(rules, values)
     override_q = None if override is None else bind_skip_flags(override, values)
     if isinstance(subject, Model):
@@ -2065,10 +2079,10 @@ def user_predicate(grant, subject, rules, override, values, identity=None):
         override_q = override_q & identity
     combined = _or_q(grant, override_q)
     if combined is None:
-        return None
+        return SkipParams(False, values, None)
     if not rules_q:
-        return combined
-    return rules_q & combined
+        return SkipParams(False, values, combined)
+    return SkipParams(False, values, rules_q & combined)
 
 
 def _record_predicate(record, correlation=None, *, content_identity=None,
@@ -2117,7 +2131,7 @@ def _shift_outer_ref(value):
 def _principal_eligibility_q(model, path, rules, values):
     """Sponsor rules compiled at registration, plus identity columns.
 
-    ``rules`` is that fragment, or ``None`` when a column was missing.
+    ``rules`` is that fragment. A missing fragment contributes nothing.
     Anonymous and authenticated attributes use their runtime defaults
     when they are not concrete fields.
     """
@@ -2139,7 +2153,9 @@ def _principal_eligibility_q(model, path, rules, values):
             )
         lookups['%s__%s' % (path, name)] = expected
     identity = Q(**lookups) if lookups else Q()
-    return user_predicate(identity, model, rules, None, values)
+    return bind_checked_user(
+        model, identity, rules=rules, values=values,
+    ).predicate
 
 
 def _ordinary_records(handles, content, permission_model=None):
@@ -3895,6 +3911,16 @@ class RelationPlan:
             'user_field', content=content, permission=permission,
         )
 
+    def _bound_queryset(self, subject, grant, values, identity, queryset,
+                        empty, *, distinct=True):
+        checked = bind_checked_user(
+            subject, grant, plan=self, identity=identity, values=values,
+        )
+        if checked.predicate is None:
+            return empty
+        filtered = queryset.filter(checked.predicate)
+        return bind_once(filtered.distinct() if distinct else filtered)
+
     def common_permissions(self, user, content, *,
                            skipped=()):
         """Trustee permissions held on every candidate through this plan.
@@ -3916,15 +3942,11 @@ class RelationPlan:
         identity = Exists(qs) & _outer_permission_identity(
             self.permission_model, _candidate_model(content),
         )
-        predicate = user_predicate(
-            ordinary, user, self.user_rules, self.user_override_q,
-            skipped, identity,
+        return self._bound_queryset(
+            user, ordinary, skipped, identity,
+            self.permission_model._default_manager.all(),
+            self.permission_model._default_manager.none(),
         )
-        if predicate is None:
-            return self.permission_model._default_manager.none()
-        return bind_once(self.permission_model._default_manager.filter(
-            predicate,
-        ).distinct())
 
     def permissions(self, user, content, *, skipped=()):
         """Distinct permission rows for ``(user, content)``."""
@@ -3935,17 +3957,14 @@ class RelationPlan:
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
         )
-        predicate = user_predicate(
-            exists, user, self.user_rules, self.user_override_q, skipped,
+        return self._bound_queryset(
+            user, exists, skipped,
             _outer_permission_identity(
                 self.permission_model, content.__class__,
             ),
+            self.permission_model._default_manager.all(),
+            self.permission_model._default_manager.none(),
         )
-        if predicate is None:
-            return self.permission_model._default_manager.none()
-        return bind_once(self.permission_model._default_manager.filter(
-            predicate,
-        ).distinct())
 
     def has_permission(self, user, content, permission, *,
                        skipped=()):
@@ -3960,31 +3979,32 @@ class RelationPlan:
         exists = self._correlated_exists(
             'permission_field', user=user, content=content,
         )
-        predicate = user_predicate(
-            exists, user, self.user_rules, self.user_override_q, skipped,
+        found = self._bound_queryset(
+            user, exists, skipped,
             _outer_permission_identity(
                 self.permission_model, content.__class__,
             ),
+            self.permission_model._default_manager.filter(pk=permission.pk),
+            None,
+            distinct=False,
         )
-        if predicate is None:
+        if found is None:
             return False
-        return bind_once(self.permission_model._default_manager.filter(
-            pk=permission.pk,
-        ).filter(predicate)).exists()
+        return found.exists()
 
     def filter_content(self, queryset, user, permission, *,
                        skipped=()):
         """Lazy queryset of candidate rows correlated to the same plan."""
-        exists = self.content_exists(user, permission)
-        predicate = user_predicate(
-            exists, user, self.user_rules, self.user_override_q, skipped,
+        return self._bound_queryset(
+            user,
+            self.content_exists(user, permission),
+            skipped,
             _bound_permission_identity(
                 permission, queryset.model, self.permission_model,
             ),
+            queryset,
+            queryset.none(),
         )
-        if predicate is None:
-            return queryset.none()
-        return bind_once(queryset.filter(predicate).distinct())
 
 
 class TrustsRegistry(object):
@@ -4096,10 +4116,18 @@ class TrustsRegistry(object):
         )
 
     def user_conditions(self):
-        """Effective user conditions. ``None`` store means the built-in rule."""
+        """Effective user conditions.
+
+        ``None`` store means the built-in ``is_active`` rule when the
+        configured user model has that concrete boolean field, and no
+        conditions otherwise. Compilation for a registered model uses
+        that model's own fields.
+        """
         if self._user_conditions is None:
-            from trusts.user_rules import BUILTIN_USER_CONDITIONS
-            return BUILTIN_USER_CONDITIONS
+            from django.contrib.auth import get_user_model
+
+            from trusts.user_rules import builtin_user_conditions
+            return builtin_user_conditions(get_user_model())
         return tuple(self._user_conditions.values())
 
     def _stored_user_conditions(self):
@@ -4115,18 +4143,32 @@ class TrustsRegistry(object):
             self._stored_user_conditions(), self._user_override,
         )
 
-    def _rule_fragment(self, model, *, role, path='', missing='omit'):
+    def _conditions_for_model(self, model):
+        """Conditions compiled for ``model``.
+
+        With no caller-set rules, the built-in ``is_active`` condition is
+        included only when ``model`` has that concrete boolean field.
+        A caller-set list is used as stored, including a replacement
+        ``is_active`` condition. Every inquiry uses this same list.
+        """
+        stored = self._stored_user_conditions()
+        if stored is not None:
+            return stored
+        from trusts.user_rules import builtin_user_conditions
+        return builtin_user_conditions(model)
+
+    def _rule_fragment(self, model, *, role, path=''):
         """Registration-time ``(skip OR condition)`` for one model and role."""
         from trusts.user_rules import compile_user_rules
 
         model = model._meta.concrete_model
-        key = (model, role, path, missing)
+        key = (model, role, path)
         try:
             return self._rule_fragments[key]
         except KeyError:
             compiled = compile_user_rules(
-                model, path, self._stored_user_conditions(),
-                role=role, values={}, missing=missing,
+                model, path, self._conditions_for_model(model),
+                role=role, values={},
             )
             self._rule_fragments[key] = compiled
             return compiled
@@ -4167,7 +4209,7 @@ class TrustsRegistry(object):
     def _open_for_rules(self, kind):
         if self._frozen:
             verb = (
-                'register a user condition' if kind == 'condition'
+                'set a user condition' if kind == 'condition'
                 else 'set a user override'
             )
             raise TrustsConfigurationError(
@@ -4179,16 +4221,18 @@ class TrustsRegistry(object):
                 'register() or register_delegation().'
             )
 
-    def register_user_condition(self, name, expr, on='*'):
-        """Register, replace, or remove one named user condition.
+    def set_user_condition(self, name, expr, on='*'):
+        """Set, replace, or remove one named user condition.
 
         Call this before ``register()`` or ``register_delegation()``.
-        ``None`` removes that name. ``on`` is ``*``, ``user``, ``sponsor``,
-        or a non-empty tuple of those two. The lambda is walked once.
+        ``None`` removes that name. ``on`` is ``*``, ``user``, or ``sponsor``.
+        The lambda is walked once and must use concrete boolean fields.
         """
+        from django.contrib.auth import get_user_model
+
         from trusts.user_rules import (
-            BUILTIN_USER_CONDITIONS,
             UserCondition,
+            builtin_user_conditions,
             concrete_rule,
             normalize_on,
             validate_user_rule_name,
@@ -4208,7 +4252,8 @@ class TrustsRegistry(object):
         created = self._user_conditions is None
         if created:
             self._user_conditions = {
-                rule.name: rule for rule in BUILTIN_USER_CONDITIONS
+                rule.name: rule
+                for rule in builtin_user_conditions(get_user_model())
             }
         try:
             if expr is None:
@@ -4229,29 +4274,20 @@ class TrustsRegistry(object):
         return rule
 
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
-        """Fail when a fixed rule is not a concrete boolean on these models.
-
-        The unmodified built-in ``is_active`` comparison is omitted when a
-        model has no such column.
-        """
+        """Require each applicable rule's concrete booleans on these models."""
         from trusts.user_rules import assert_concrete_booleans, rule_applies
 
-        for rule in self.user_conditions():
-            expr = rule.expr
-            if (
-                rule.name == 'is_active' and rule.on == '*'
-                and expr.kind == 'field' and expr.name == 'is_active'
-            ):
-                continue
-            models = []
-            if user_model is not None and rule_applies(rule.on, 'user'):
-                models.append(user_model)
-            if sponsor_model is not None and rule_applies(rule.on, 'sponsor'):
-                models.append(sponsor_model)
-            for model in models:
-                assert_concrete_booleans(
-                    model._meta.concrete_model, rule.expr, rule.name,
-                )
+        pairs = []
+        if user_model is not None:
+            pairs.append((user_model, 'user'))
+        if sponsor_model is not None:
+            pairs.append((sponsor_model, 'sponsor'))
+        for model, role in pairs:
+            concrete = model._meta.concrete_model
+            for rule in self._conditions_for_model(concrete):
+                if not rule_applies(rule.on, role):
+                    continue
+                assert_concrete_booleans(concrete, rule.expr, rule.name)
         slot = self._user_override
         if slot is not None and user_model is not None:
             assert_concrete_booleans(
@@ -4435,12 +4471,10 @@ class TrustsRegistry(object):
             user_model=delegate_model,
             sponsor_model=sponsor_model,
         )
-        self._rule_fragment(delegate_model, role='user', missing='omit')
-        self._rule_fragment(delegate_model, role='user', missing='closed')
+        self._rule_fragment(delegate_model, role='user')
         self._override_fragment(delegate_model)
         record = replace(record, sponsor_rules=self._rule_fragment(
             sponsor_model, role='sponsor', path=sponsor_field,
-            missing='closed',
         ))
         if existing_rows:
             existing_rows.append(record)
@@ -4587,8 +4621,7 @@ class TrustsRegistry(object):
                         )
                     )
         self._assert_rules_for_registration(user_model=user_model)
-        self._rule_fragment(user_model, role='user', missing='omit')
-        self._rule_fragment(user_model, role='user', missing='closed')
+        self._rule_fragment(user_model, role='user')
         self._override_fragment(user_model)
         if existing_rows:
             existing_rows.append(record)
@@ -4657,10 +4690,8 @@ class TrustsRegistry(object):
         subject = self._compiled_subject(records, delegations, user_model)
         rules = closed = override = None
         if subject is not None:
-            rules = self._rule_fragment(subject, role='user', missing='omit')
-            closed = self._rule_fragment(
-                subject, role='user', missing='closed',
-            )
+            rules = self._rule_fragment(subject, role='user')
+            closed = rules
             override = self._override_fragment(subject)
         return RelationPlan(
             records=records,
@@ -4676,7 +4707,8 @@ class TrustsRegistry(object):
         """Distinct permission rows granted to ``user`` on ``content``."""
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
-        inquiry = user_skip_params(user, skip_flags, registry=self)
+        inquiry = bind_checked_user(
+            user, skip_flags=skip_flags, registry=self)
         plan = self.plan_for(content, user=user)
         if inquiry.denied:
             if not plan.records or plan.permission_model is None:
@@ -4693,7 +4725,8 @@ class TrustsRegistry(object):
         user = _require_instance(user, 'user')
         content = _require_instance(content, 'content')
         permission = _require_instance(permission, 'permission')
-        inquiry = user_skip_params(user, skip_flags, registry=self)
+        inquiry = bind_checked_user(
+            user, skip_flags=skip_flags, registry=self)
         plan = self.plan_for(
             content, user=user, permission=permission,
         )
@@ -4716,7 +4749,8 @@ class TrustsRegistry(object):
             )
         user = _require_instance(user, 'user')
         permission = _require_instance(permission, 'permission')
-        inquiry = user_skip_params(user, skip_flags, registry=self)
+        inquiry = bind_checked_user(
+            user, skip_flags=skip_flags, registry=self)
         plan = self.plan_for(
             queryset, user=user, permission=permission,
         )

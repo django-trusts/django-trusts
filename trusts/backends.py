@@ -101,42 +101,39 @@ class TrustModelBackendMixin(object):
         return _perm_codes(qs)
 
     def _skip_inquiry(self, user_obj, skip_flags):
-        from trusts.core import user_skip_params
+        from trusts.core import bind_checked_user
 
-        return user_skip_params(
-            user_obj, skip_flags,
+        return bind_checked_user(
+            user_obj, skip_flags=skip_flags,
             registry=lambda: self._own_handle().registry,
         )
+
+    def _listed_permissions(self, user_obj, obj, skip_flags, *, kind,
+                            cache=False):
+        inquiry = self._skip_inquiry(user_obj, skip_flags)
+        if obj is None or inquiry.denied:
+            return set()
+        if cache:
+            self._ensure_perm_cache(user_obj)
+        if isinstance(obj, QuerySet) or isinstance(obj, Model):
+            return self._path_permissions(
+                user_obj, obj, kind=kind, skipped=inquiry.values,
+            )
+        return set()
 
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
         """
         Returns a set of permission strings that this user has through his/her
         groups.
         """
-        inquiry = self._skip_inquiry(user_obj, skip_flags)
-        if obj is None or inquiry.denied:
-            return set()
-
-        if isinstance(obj, QuerySet) or isinstance(obj, Model):
-            return self._path_permissions(
-                user_obj, obj, kind='group',
-                skipped=inquiry.values,
-            )
-        return set()
+        return self._listed_permissions(
+            user_obj, obj, skip_flags, kind='group',
+        )
 
     def get_all_permissions(self, user_obj, obj=None, **skip_flags):
-        inquiry = self._skip_inquiry(user_obj, skip_flags)
-        if obj is None or inquiry.denied:
-            return set()
-
-        self._ensure_perm_cache(user_obj)
-
-        if isinstance(obj, QuerySet) or isinstance(obj, Model):
-            return self._path_permissions(
-                user_obj, obj, kind='complete',
-                skipped=inquiry.values,
-            )
-        return set()
+        return self._listed_permissions(
+            user_obj, obj, skip_flags, kind='complete', cache=True,
+        )
 
     def permission_condition_met(self, record, user_obj, perm, obj):
         if record.expr is None:
