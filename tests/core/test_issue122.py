@@ -74,7 +74,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('django-trusts-zero-example', rst)
 
     def test_security_audit_records_the_current_boundary(self):
-        guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
+        guide = (ROOT / 'docs/source/security-audit.md').read_text()
         for needle in (
             'security boundary that implementation and',
             'register(*, trust, user=None, permission=None, content, group=None, '
@@ -119,10 +119,10 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'blob/dev/docs/source/index.rst',
             pyproject,
         )
-        self.assertIn('blob/dev/migrates.md', (ROOT / 'docs' / 'source' / 'index.rst').read_text())
+        self.assertIn('blob/dev/docs/source/migrates.md', (ROOT / 'docs' / 'source' / 'index.rst').read_text())
 
     def test_migration_record_leads_with_current_contract(self):
-        migration = (ROOT / 'migrates.md').read_text()
+        migration = (ROOT / 'docs/source/migrates.md').read_text()
         current = migration[:1800]
         self.assertIn('# Migrating from django-trusts 1.0 to 1.1', current)
         legacy = migration.split('## Migrating to django-trusts 1.0', 1)[1]
@@ -131,7 +131,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('supported 0.x migration path', legacy)
 
     def test_live_router_points_at_merged_zero_and_rejects_zero_schema(self):
-        path = ROOT / 'migrates.md'
+        path = ROOT / 'docs/source/migrates.md'
         text = path.read_text()
         rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
         readme = (ROOT / 'README.md').read_text()
@@ -169,14 +169,14 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         self.assertIn('not an alternative 0.x migration path', text)
         self.assertNotIn('Current 1.x contract', text)
         self.assertNotIn('backend.register_relationship', text)
-        self.assertIn('[Migration boundary](migrates.md)', readme)
+        self.assertIn('[Migration boundary](docs/source/migrates.md)', readme)
         self.assertIn(
-            'https://github.com/django-trusts/django-trusts/blob/dev/migrates.md',
+            'https://github.com/django-trusts/django-trusts/blob/dev/docs/source/migrates.md',
             rst,
         )
         self.assertIn(
             'Migration = "https://github.com/django-trusts/'
-            'django-trusts/blob/dev/migrates.md"',
+            'django-trusts/blob/dev/docs/source/migrates.md"',
             pyproject,
         )
         self.assertLess(path.stat().st_size, 211222 // 4)

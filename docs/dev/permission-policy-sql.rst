@@ -11,7 +11,7 @@ Permission policy in SQL
 
 For current use, see the `setup guide
 <../source/index.rst#permission-policy-in-sql>`_. The `security audit
-<../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ defines the
+<../source/security-audit.md#authorization-policy-sql-and-lockfile>`_ defines the
 inspection and change-detection purpose and its version/dependency boundary.
 
 Inspecting the generated SQL

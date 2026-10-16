@@ -332,4 +332,4 @@ that implementation's registry store). Do not list `'trusts'` in
 `INSTALLED_APPS`.
 
 This primitive does not change historical authorization results or add a
-database schema. See [../migrates.md](../../migrates.md).
+database schema. See [../migrates.md](../source/migrates.md).

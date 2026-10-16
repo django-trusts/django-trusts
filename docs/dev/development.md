@@ -61,7 +61,7 @@ AUTHENTICATION_BACKENDS = (
 )
 ```
 
-API and compatibility notes are in [migrates.md](../../migrates.md).
+API and compatibility notes are in [migrates.md](../source/migrates.md).
 
 ## Terminal permission collections (#263)
 

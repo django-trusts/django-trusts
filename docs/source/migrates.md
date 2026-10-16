@@ -5,8 +5,8 @@ applications to change their code, settings, or data when they upgrade. A
 surface that was previously refused and is now supported does not need an
 entry, because no application could have depended on it. It is not a
 development log. New features and changes that require no application action
-belong in [What's new](docs/whats-new.md); development history belongs in
-[development history](docs/dev/development.md).
+belong in [What's new](../whats-new.md); development history belongs in
+[development history](../dev/development.md).
 
 ## `filter_authorized_scopes` renamed (#302)
 
@@ -25,7 +25,7 @@ Migration-bot checklist:
 ## Superuser bypass (#273)
 
 Trusts superuser bypass now requires an explicit `set_user_override()`.
-See [User conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
+See [User conditions and overrides](index.rst#user-conditions-and-overrides).
 
 ## Permission content type must match the object (#267)
 
@@ -88,7 +88,7 @@ Migration-bot checklist:
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
 New code should use `.permitted()`. For user checks and audit options, see
-[User conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
+[User conditions and overrides](index.rst#user-conditions-and-overrides).
 Zero's `ContentQuerySet.permitted(perm, user)` retains its permission codec.
 
 ```python

@@ -2,7 +2,7 @@ include LICENSE
 include README.md
 include docs/dev/development.md
 include requirements.txt
-include migrates.md
+include docs/source/migrates.md
 include pyproject.toml
 include django_trusts.py
 recursive-include trusts *

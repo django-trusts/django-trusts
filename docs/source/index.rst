@@ -26,7 +26,7 @@ QuerySet, keeping permission decisions based on persisted truth. The same
 declarations support object checks, permitted querysets,
 ``filter_by_permitted_content``, permission enumeration, and decorators
 for protecting views. The separate `security audit guide
-<https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md>`_
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md>`_
 defines the boundary these APIs enforce and the responsibilities that remain
 with the application.
 
@@ -585,7 +585,7 @@ lambdas must return Boolean expressions.
 Use ``set_user_override()`` to set the single override; setting another
 replaces it. Pass its current name with ``None`` to remove it.
 
-Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md#django-auths-checks-before-calling-backends>`_.
+Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#django-auths-checks-before-calling-backends>`_.
 
 .. _protect-a-view:
 
@@ -699,7 +699,7 @@ delegated registrations. For example, ``along=("parent", 8)`` on
 ``backend.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
 authorization-policy output. See the `bounded-reach security audit
-<https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md#bounded-inherited-relationships>`_
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries.
 
 Ordered allow and deny
@@ -778,7 +778,7 @@ the Django query structure required by the rewrite, django-trusts keeps the
 plain SQL and logs a warning.
 
 See the `lockfile security audit guide
-<../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#authorization-policy-sql-and-lockfile>`_ for the
 renderer, dependency, connection, and enforcement boundaries.
 
 Reference implementations
@@ -838,7 +838,7 @@ the explicit ``trusts.zero`` paths described in the `Zero migration guide
 <https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md>`_.
 
 django-trusts keeps a terse migration-boundary record in `migrates.md
-<https://github.com/django-trusts/django-trusts/blob/dev/migrates.md>`_,
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/source/migrates.md>`_,
 while the supported 0.x migration guide is Zero's ``migrates.md``
 (linked above).
 

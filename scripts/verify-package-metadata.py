@@ -55,7 +55,7 @@ def _check_metadata(meta_text: str, origin: str) -> None:
         '# django-trusts',
         '## How permissions are represented',
         'Installation in the usage guide',
-        '[Security audit guide](SECURITY_AUDIT.md)',
+        '[Security audit guide](docs/source/security-audit.md)',
     )
     for marker in readme_markers:
         if marker not in description:

@@ -21,7 +21,7 @@ and every authorization backend installed beside django-trusts.
 
 django-trusts's direct runtime dependencies are Django and PyYAML. The supported
 Python, Django, and database
-combinations are recorded in [the support matrix](docs/dev/support-matrix.md).
+combinations are recorded in [the support matrix](../dev/support-matrix.md).
 Build and test dependencies are not part of the runtime authorization boundary.
 
 Django selects and loads the database backend and driver configured by the
@@ -92,7 +92,7 @@ backend.register(
 )
 ```
 
-The [setup guide](docs/source/index.rst#register-the-trust) also shows the
+The [setup guide](index.rst#register-the-trust) also shows the
 lambda spelling.
 
 Each path accepts either a Django `__` string or a one-argument path lambda;
@@ -184,7 +184,7 @@ AND (
 group grants; it does not include the override or delegated grants.
 
 User conditions and overrides and named skip options follow the
-[usage guide](docs/source/index.rst#user-conditions-and-overrides).
+[usage guide](index.rst#user-conditions-and-overrides).
 These names describe compiled conditions, not runtime callbacks. Audit every
 registered condition, optional override, and permitted skip option. An override
 can stand in for an ordinary grant; include any requirements that must remain
@@ -262,7 +262,7 @@ own their application labels, migrations, tables, and registration calls.
 ## Ask permission questions
 
 All Trusts projections follow the
-[registered user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
+[registered user conditions and overrides](index.rst#user-conditions-and-overrides).
 
 The supported projections consume the same normalized registration:
 
@@ -287,7 +287,7 @@ a registration shape, Django version, database backend, or compiler changes.
 
 ## User conditions and overrides
 
-The [setup guide](docs/source/index.rst#user-conditions-and-overrides) explains
+The [setup guide](index.rst#user-conditions-and-overrides) explains
 registration, replacement, removal, and per-inquiry skip options.
 
 ### Django auth's checks before calling backends
@@ -351,7 +351,7 @@ def edit_document(request, pk):
     ...
 ```
 
-The [setup guide](docs/source/index.rst#protect-a-view) shows the surrounding
+The [setup guide](index.rst#protect-a-view) shows the surrounding
 application setup.
 
 The guard performs structural preflight before candidate lookup. An absent
@@ -377,7 +377,7 @@ backend.add_named_filter(
 )
 ```
 
-The [setup guide](docs/source/index.rst#named-filters) shows how callers select
+The [setup guide](index.rst#named-filters) shows how callers select
 that filter.
 
 The backend invokes the callable once with symbolic user, permission, and
@@ -530,7 +530,7 @@ and PyYAML, and the same selected renderer. A version or dependency change may
 alter the output without changing application declarations. Regenerate the
 lockfile and review that diff with the upgrade.
 
-The [historical policy-output record](docs/dev/permission-policy-sql.rst) and
+The [historical policy-output record](../dev/permission-policy-sql.rst) and
 its examples describe one implementation snapshot. Their field names, ordering,
 identifiers, parameter notation, and SQL/YAML layout are not compatibility
 promises or a supported input format.
@@ -569,7 +569,7 @@ proof.
 
 ## Reference implementations
 
-The [setup guide's reference implementations](docs/source/index.rst#reference-implementations)
+The [setup guide's reference implementations](index.rst#reference-implementations)
 illustrate supported declaration shapes; their examples are not application
 security assessments.
 

@@ -29,7 +29,7 @@ wrapper. Obsolete Python 2 classifiers and `six` / `funcsigs` / `mock` / `pbr`
 install dependencies are removed.
 
 The 0.x compatibility boundary and the historical migration archive are
-recorded in [../migrates.md](../../migrates.md).
+recorded in [../migrates.md](../source/migrates.md).
 
 ## What this line still does not do
 

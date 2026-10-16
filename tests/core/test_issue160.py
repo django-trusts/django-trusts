@@ -58,5 +58,5 @@ class DevMdTransitionalFramingTest(SimpleTestCase):
         self.assertTrue((ROOT / 'docs/dev' / 'legacy-baseline.md').is_file())
         self.assertTrue((ROOT / 'docs/dev' / 'development-version.md').is_file())
         self.assertTrue((ROOT / 'README.md').is_file())
-        self.assertTrue((ROOT / 'migrates.md').is_file())
+        self.assertTrue((ROOT / 'docs/source/migrates.md').is_file())
         self.assertTrue((ROOT / '.github' / 'workflows' / 'ci.yml').is_file())

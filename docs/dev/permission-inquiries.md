@@ -94,7 +94,7 @@ That gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/2
 not a second implementation of the current `has_perm` codec.
 
 A saved `auth.Permission` instance is bound by its primary key. Building
-that queryset does not read `permission.content_type`. The [content-type boundary](../../SECURITY_AUDIT.md#permission-content-type)
+that queryset does not read `permission.content_type`. The [content-type boundary](../source/security-audit.md#permission-content-type)
 prevents a same codename on another model from becoming this model's permission.
 
 ### Manager attachment
@@ -273,7 +273,7 @@ a Django-facing alias: Core parses it with the same rules as
 `user.has_perm(perm, content)` and binds it to the permission row applicable
 to the supplied content and registration. The row lookup remains inside the
 eventual SQL query; accepting a string does not add a construction-time query.
-The [content-type boundary](../../SECURITY_AUDIT.md#permission-content-type)
+The [content-type boundary](../source/security-audit.md#permission-content-type)
 applies to accepted permission rows.
 
 For the singular agreement check, a Django `auth.Permission` instance is
@@ -315,7 +315,7 @@ aggregate result across authentication backends.
 #### User conditions and overrides
 
 See the [user conditions and overrides](../source/index.rst#user-conditions-and-overrides)
-and the [Django backend boundary](../../SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
+and the [Django backend boundary](../source/security-audit.md#django-auths-checks-before-calling-backends).
 
 A supported backend must express its contribution in SQL. Arbitrary
 Python-only state is unsupported and fails loudly.
