@@ -98,8 +98,9 @@ condition of its own; the reverse locked queryset includes `is_active` checks,
 while ordinary forward/registry exports consume projections without that
 `is_active` check. Python actor checks are not automatically represented in SQL.
 S2 must explicitly identify runtime checks versus exported SQL and propose the
-flag representation before claiming matching lockfile behavior. The current
-schema version is 1; there is no pre-authorized schema bump.
+flag representation before claiming matching lockfile behavior. At the time of
+this proposal, the output recorded schema version 1; that observation does not
+establish a supported file-format contract.
 
 User-facing pages describe finished behavior in present tense. Planned status,
 review inventory, sizing, and unresolved representation decisions stay here.

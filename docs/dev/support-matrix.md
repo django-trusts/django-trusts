@@ -51,7 +51,7 @@ engines. That fan-out is bounded by the depth cap. The final `DISTINCT`
 keeps the reachable set correct. That growth is the accepted tradeoff for
 dropping the JSON seen-set.
 
-The checked-in lockfile records the portable statement as Django's SQLite
+The lockfile in this snapshot records the portable statement as Django's SQLite
 connection quotes it. MySQL quotes identifiers with backticks and does not
 otherwise change the statement. A PostgreSQL rendering is the locked
 statement plus that one clause. There is no second lockfile.

@@ -387,11 +387,13 @@ permission lookup. Registered relationship conditions and named filters remain
 inside the applicable branch. Multiple paths and multiple backends OR together;
 duplicate users collapse with `DISTINCT`.
 
-The new query is a policy-lock operation. Phase B adds a
+In this implementation snapshot, policy output included a
 `get_permitted_users` statement for each applicable backend/content pair,
 with candidate-user, permission, content, and named-filter parameter roles
-represented in the generated authorization-policy SQL. That lockfile key is
-not the optional manager method `User.objects.permitted(content, perm)`, and
+represented in the generated authorization-policy SQL. These are historical
+output details, not a format contract; see the
+[policy-output record](permission-policy-sql.rst). That recorded key is not the
+optional manager method `User.objects.permitted(content, perm)`, and
 it is not the existing `permitted` operation, which means user-to-content.
 
 ### Database routing

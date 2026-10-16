@@ -87,8 +87,8 @@ fixed content and permission, the user queryset must contain exactly the
 users whose object check succeeds, including the terminal
 condition and is_active condition.
 
-The unreleased policy schema records the public walk path, resolved shape, and
-bound on each recursive trust row, includes the path in its stable identifier,
+The policy output in this snapshot records the public walk path, resolved shape,
+and bound on each recursive trust row, includes the path in its identifier,
 and renders the bound as a registration constant. This expands a previously
 fail-closed development surface. It requires no consumer migration entry, but
 applications using development lockfiles must deliberately regenerate and

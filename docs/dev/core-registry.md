@@ -204,7 +204,7 @@ set correct. That growth is the accepted tradeoff for dropping the JSON
 seen-set. There is no JSON frontier or seen-array.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
 NULL and dangling steps deny. Direct and recursive registrations `OR`.
-The lockfile records that portable statement (SQLite identifier quotes).
+In this snapshot, the lockfile records that portable statement (SQLite identifier quotes).
 SQLite and MySQL 8.4+ execute it unchanged, aside from MySQL's backtick
 quotes. PostgreSQL keeps the depth cap and appends that one clause.
 The outer query still selects only the walk identity, so `is_cycle`
@@ -247,7 +247,7 @@ before walk SQL. Residual database errors stay loud and are not remapped to
 `TrustsCompilerError`. Runtime authorization does not repeat the recursive
 CTE capability probe.
 
-Policy SQL exports the same recursive condition for every supported inquiry,
+In this snapshot, policy SQL exports the same recursive condition for each inquiry,
 including users from content. Each trust row records the public `along`
 path, resolved shape, and bound. The bound is a registration constant, not a
 runtime binding. Rendering fails before returning a partial document if any
