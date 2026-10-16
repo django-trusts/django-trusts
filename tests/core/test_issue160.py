@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class DevMdTransitionalFramingTest(SimpleTestCase):
     def test_dev_md_is_0x_versus_current_without_dev_pins(self):
-        dev = (ROOT / 'DEV.md').read_text()
+        dev = (ROOT / 'docs/dev/development.md').read_text()
         forbidden = (
             '1.0.0.dev3',
             '1.0.0.dev0',
@@ -54,9 +54,9 @@ class DevMdTransitionalFramingTest(SimpleTestCase):
         self.assertIn('python -m pip install -e ".[test]"', dev)
         self.assertIn('python -m tests.runtests', dev)
         self.assertIn('python -m django check --settings=tests.settings', dev)
-        self.assertTrue((ROOT / 'docs' / 'support-matrix.md').is_file())
-        self.assertTrue((ROOT / 'docs' / 'legacy-baseline.md').is_file())
-        self.assertTrue((ROOT / 'docs' / 'development-version.md').is_file())
+        self.assertTrue((ROOT / 'docs/dev' / 'support-matrix.md').is_file())
+        self.assertTrue((ROOT / 'docs/dev' / 'legacy-baseline.md').is_file())
+        self.assertTrue((ROOT / 'docs/dev' / 'development-version.md').is_file())
         self.assertTrue((ROOT / 'README.md').is_file())
-        self.assertTrue((ROOT / 'migrates.md').is_file())
+        self.assertTrue((ROOT / 'docs/source/migrates.md').is_file())
         self.assertTrue((ROOT / '.github' / 'workflows' / 'ci.yml').is_file())

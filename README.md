@@ -21,7 +21,7 @@ authorization paths begin:
 
 Each matching trust record is a candidate grant. A trust model is often an
 explicit many-to-many relation model, but it may represent another relational
-shape. More than one complete trust may reach the same protected model; each is
+shape. More than one trust may reach the same protected model; each is
 an alternative grant and the branches combine with OR.
 
 django-trusts supplies the compiler and authorization APIs. It does not impose a
@@ -37,12 +37,12 @@ named filters, object and queryset authorization, and inherited relationships.
 
 ## Other documents
 
-- [What's new](docs/whats-new.md)
-- [Security audit guide](SECURITY_AUDIT.md)
-- [Migration boundary](migrates.md)
-- [Supported Python, Django, and database combinations](docs/support-matrix.md)
-- [Development and contribution guide](DEV.md)
-- [Release runbook](RELEASING.md)
+- [What's new](docs/source/whats-new.md)
+- [Security audit guide](docs/source/security-audit.md)
+- [Migration boundary](docs/source/migrates.md)
+- [Supported Python, Django, and database combinations](docs/dev/support-matrix.md)
+- [Development and contribution guide](docs/dev/development.md)
+- [Release runbook](docs/dev/releasing.md)
 - [BSD 2-Clause License](LICENSE)
 
 ## Other repositories

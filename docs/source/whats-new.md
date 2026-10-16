@@ -5,7 +5,7 @@ arranged by release version, summarized in one to three lines, and linked to
 their full documentation or implementing pull request. Only implemented
 behavior appears here.
 
-Migration instructions remain in [`migrates.md`](../migrates.md). That guide
+Migration instructions remain in [`migrates.md`](migrates.md). That guide
 records only changes requiring application attention; it is not a development
 log.
 
@@ -15,73 +15,57 @@ log.
   `set_user_override()` add named user checks to Trusts inquiries. Skip one
   with `skip_<name>=True`. Rules use user model fields; Python properties raise
   at registration. See the
-  [user guide](source/index.rst#user-conditions-and-overrides) and
-  [migration record](../migrates.md#superuser-bypass-273).
+  [user guide](index.rst#user-conditions-and-overrides) and
+  [migration record](migrates.md#superuser-bypass-273).
 
-- **Provisional `along=` reachability.** Reverse inquiry, policy SQL, and
-  delegation support bounded provisional `along=` on SQLite, PostgreSQL,
-  and MySQL 8.4+. `along=` is improved and remains provisional. See the
-  [core registry](core-registry.md) and [#286].
+- **Bounded `along=` reachability.** Object, queryset, users-from-content,
+  policy-output, and delegation inquiries support bounded `along=` on the
+  documented databases. See the [user guide](index.rst) and [#286].
 
 - **Permitted content follows `along=`.** `filter_by_permitted_content` uses the
   same bounded walk and the same one-level delegation as the object
-  check. The policy lockfile records that statement for each proper prefix
-  model. See the [user guide](source/index.rst) and [#304].
+  check. Policy output includes that statement. See the
+  [user guide](index.rst) and [#304].
 
-- **Readable policy-lock SQL.** Each lockfile statement is broken between
-  tokens onto predictable lines, including a `WITH RECURSIVE` walk and
-  PostgreSQL's `CYCLE` clause. `AND` and `OR` keep an `EXISTS (` or
-  `NOT EXISTS (` operand on the same line, at the sibling operand's
-  indent, and `EXISTS (` is spaced the same way throughout. Delegation
-  `delegate` and `sponsor`
-  are one-line flow maps. A `__cond` id includes the stored condition
-  as one double-quoted Python expression, with `$permission` only for
-  the requested permission. SQL parameters are reviewable strings: call
-  inputs use `$role.field`, bound constants use `source=value`, bounded
-  walks use `$along_bound=<n>`, and `EXISTS` marker literals are not
-  parameters. There is no parallel hint field. The formatter accepts only
-  the tokens those statements use
-  and fails closed on anything else. Schema version stays 1.
-  See the
-  [permission-policy SQL guide](source/permission-policy-sql.rst)
+- **Readable policy-lock SQL.** Policy output is formatted for review, and the
+  formatter fails closed on unexpected SQL tokens. The output is not a public
+  file format. See the [security audit](security-audit.md#authorization-policy-sql-and-lockfile)
   and [#292].
 
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
   use a sponsor's live ordinary permissions within delegation scope. See the
-  [user guide](source/index.rst), [driver contract](dev/delegation-registration.md),
+  [user guide](index.rst), [driver contract](../dev/delegation-registration.md),
   and [#279].
 
 - **Permitted content querysets.**
   `QuerySet.permitted(permission, user, conditions=())` lazily filters an
   application queryset before pagination. See the
-  [permitted-queryset inquiry contract](permitted-queryset-inquiry.md) and [#271].
+  [user guide](index.rst) and [#271].
 
-- **Reverse permission inquiry.**
+- **Permission inquiry from content to users.**
   `content.get_permitted_users(permission)` and the optional
   `User.objects.permitted(content, permission)` adapter return the users
   permitted on one saved object. See the
-  [reverse-inquiry contract](reverse-permission-inquiry.md) and [#259].
+  [user guide](index.rst) and [#259].
 
 - **Explicit Django group registrations.** `register(group=...)` declares
   group-derived authority separately from direct permission paths. See the
-  [user guide](source/index.rst) and [#254].
+  [user guide](index.rst) and [#254].
 
 - **Permission collection terminals.** A `permission=` path may end on one
   forward many-to-many collection of Django `auth.Permission` rows after
-  zero or more to-one hops. See the [user guide](source/index.rst) and [#264].
+  zero or more to-one hops. See the [user guide](index.rst) and [#264].
 
 - **Permission content-type isolation.** A Django `auth.Permission` now
   grants only on content with the same Django content type; crossed
-  permission/object pairs deny. See the [migration record](../migrates.md#permission-content-type-must-match-the-object-267)
+  permission/object pairs deny. See the [migration record](migrates.md#permission-content-type-must-match-the-object-267)
   and [#269].
 
 - **Authorization policy SQL and lockfiles.** `trusts_policy_sql` renders
   registered inquiries as reviewable SQL, and `trusts.E009` can compare the
   generated bytes with a committed YAML lockfile. See the
-  [permission-policy SQL guide](source/permission-policy-sql.rst), [#252],
-  and the [param format][params-counts].
-
-[params-counts]: https://github.com/django-trusts/django-trusts/pull/310#issuecomment-6176951703
+  [security audit](security-audit.md#authorization-policy-sql-and-lockfile)
+  and [#252].
 [#252]: https://github.com/django-trusts/django-trusts/pull/252
 [#254]: https://github.com/django-trusts/django-trusts/pull/254
 [#259]: https://github.com/django-trusts/django-trusts/pull/259

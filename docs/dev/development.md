@@ -1,8 +1,11 @@
 # DEV.md — contributor / development history
 
+Historical development record. Last source update: 2026-10-14.
+This reorganization has not been reviewed by a human for current accuracy.
+
 This file is an internal development record. It may describe
 unsupported or superseded states. The user-facing package introduction
-is [README.md](README.md). `pyproject.toml` long-description metadata
+is [README.md](../../README.md). `pyproject.toml` long-description metadata
 points at `README.md`, not this file.
 
 ## Current architecture
@@ -12,7 +15,7 @@ implementation. Current django-trusts is the schema-neutral django-trusts
 library. [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
 is the continuation and bridge for that historical concrete behavior.
 Package-version identity for this tree is recorded in
-[docs/development-version.md](docs/development-version.md), not here.
+[docs/development-version.md](development-version.md), not here.
 
 django-trusts is a Python dependency only: do **not** list `'trusts'` in
 `INSTALLED_APPS`. Current django-trusts ships no Django `AppConfig`, no
@@ -23,7 +26,7 @@ live only in `django-trusts-zero`.
 
 Pair CI runs historical tests from the pinned Zero companion
 `tests/legacy/`, not from current django-trusts package paths. Exact companion pins
-are in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+are in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 
 ## What this package is not
 
@@ -36,9 +39,9 @@ current django-trusts. Readers who want that 0.x behavior should use
 ## Supported versions
 
 Supported Python, Django, and database versions are in
-[docs/support-matrix.md](docs/support-matrix.md). Exact test and
+[docs/support-matrix.md](support-matrix.md). Exact test and
 companion pins are in CI and project metadata. User installation is
-in [README.md](README.md).
+in [README.md](../../README.md).
 
 Install from a local checkout with current project metadata:
 
@@ -58,7 +61,7 @@ AUTHENTICATION_BACKENDS = (
 )
 ```
 
-API and compatibility notes are in [migrates.md](migrates.md).
+API and compatibility notes are in [migrates.md](../source/migrates.md).
 
 ## Terminal permission collections (#263)
 
@@ -74,18 +77,18 @@ closed at registration. A direct to-one permission relation is
 unchanged, including one that names a custom permission model. A
 `permission=` collection does not contribute to
 `get_group_permissions()`. The grammar is in
-[docs/core-registry.md](docs/core-registry.md).
+[docs/core-registry.md](core-registry.md).
 
-## Complete Along inquiry surfaces (#282)
+## Along inquiry surfaces (#282)
 
 Bounded `along=` registrations now participate in reverse permitted-user
 inquiry and its authorization-policy SQL instead of raising before SQL. For a
-fixed content and permission, the reverse queryset must contain exactly the
-users whose complete forward object check succeeds, including the terminal
-condition and active-principal eligibility rule.
+fixed content and permission, the user queryset must contain exactly the
+users whose object check succeeds, including the terminal
+condition and is_active condition.
 
-The unreleased policy schema records the public walk path, resolved shape, and
-bound on each recursive trust row, includes the path in its stable identifier,
+The policy output in this snapshot records the public walk path, resolved shape,
+and bound on each recursive trust row, includes the path in its identifier,
 and renders the bound as a registration constant. This expands a previously
 fail-closed development surface. It requires no consumer migration entry, but
 applications using development lockfiles must deliberately regenerate and
@@ -192,7 +195,7 @@ permanent user docs.
 - Use the terms Django's docs already use: user, active user, superuser,
   authentication backend, permission, object permissions, `has_perm()`.
 - Describe what the code does instead of inventing labels. No "mode",
-  "principal", "contributor", "invariant" or "outer rules".
+  "user", "contributor", "invariant" or "outer rules".
 - Prefer examples to abstract rules.
 - User docs read as already shipped. No version disclaimers.
 - Don't imply hooks or flags that code outside Trusts must support.
@@ -296,7 +299,7 @@ fails. The file is uploaded as the artifact
 
 The exact pre-modernization default-branch commit, existing release tags,
 source archive checksum, and historical Python/Django requirements are
-recorded in [docs/legacy-baseline.md](docs/legacy-baseline.md). That
+recorded in [docs/legacy-baseline.md](legacy-baseline.md). That
 snapshot is historical documentation only.
 
 ## License

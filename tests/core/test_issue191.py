@@ -68,7 +68,7 @@ class LegacyDecoratorFamilyRemovedTest(SimpleTestCase):
 
     def test_docs_do_not_publish_the_legacy_core_import(self):
         rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
-        security = (ROOT / 'SECURITY_AUDIT.md').read_text()
+        security = (ROOT / 'docs/source/security-audit.md').read_text()
         readme = (ROOT / 'README.md').read_text()
         for text in (rst, security, readme):
             self.assertNotIn('from trusts.decorators import permission_required', text)

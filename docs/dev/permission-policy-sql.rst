@@ -1,10 +1,18 @@
 Permission policy in SQL
 ========================
 
-django-trusts can render its registered authorization policy as parameterized
-SQL for inspection. The same stable output can be committed as an authorization
-policy lockfile, making changes to the policy and its SQL visible during normal
-code review.
+.. note::
+
+   Historical development record. The sections and examples below are a
+   snapshot of the implementation documented on 2026-10-15, not a supported
+   schema or file-format contract. Field names, ordering, identifiers,
+   parameter notation, and SQL/YAML layout describe that snapshot only.
+   This record has not been reviewed by a human for current accuracy.
+
+For current use, see the `setup guide
+<../source/index.rst#permission-policy-in-sql>`_. The `security audit
+<../source/security-audit.md#authorization-policy-sql-and-lockfile>`_ defines the
+inspection and change-detection purpose and its version/dependency boundary.
 
 Inspecting the generated SQL
 ----------------------------
@@ -50,7 +58,7 @@ The document is organized by application meaning:
 * a content with named filters lists those queries; and
 * a filter-only content contains ``model`` and ``named_filters``.
 
-The following abridged example shows the schema:
+The following abridged example records the output shape in that snapshot:
 
 .. code-block:: yaml
 
@@ -113,28 +121,28 @@ to be the protected model's content identity. Those two values stay
 bound parameters, written ``$content.app_label="..."`` and
 ``$content.model="..."``. A proxy model would use its
 own identity. Any other permission terminal, including a custom model
-with a ``content_type`` foreign key, does not gain the predicate and
+with a ``content_type`` foreign key, does not gain the condition and
 stays a primary-key comparison. The codename is not parsed to choose the
-model. Regenerating the lockfile after this predicate is present changes
+model. Regenerating the lockfile after this condition is present changes
 the SQL bytes for every ``auth.Permission`` grant.
 
 ``get_permitted_users`` is the reverse of ``permitted``: one saved content
 object and one permission, compiled to the users that backend can grant.
 The locked statement is that backend branch only. It carries the backend's
-registered user conditions, any user override, and the complete-grant
+registered user conditions, any user override, and the grant
 ``EXISTS``. It does not OR other authentication backends. The content primary
 key is the call input ``$content.<target>``. The permission row is the call
 input ``$permission.<target>``. The candidate
 user is the outer row. ``content.get_permitted_users(perm)`` and optional
 ``User.objects.permitted(content, perm)`` share this one policy entry
-because they use the same reverse compiler; the document does not duplicate
+because they use the same compiler for users from content; the document does not duplicate
 their SQL. The lockfile key stays ``get_permitted_users``. For an ``Along``
 registration, the recursive query walks the inverse graph from the supplied
 content without the outer candidate user, then joins eligible grants and users.
 The same terminal ``condition=`` overlay and user eligibility check apply
 outside the recursive query. The locked reverse statement must therefore agree
-with the complete forward object check. An unsupported renderer or unrenderable
-recursive predicate raises before a partial document is returned.
+with the object check. An unsupported renderer or unrenderable
+recursive condition raises before a partial document is returned.
 
 A django-trusts backend issues one SQL statement for each permission inquiry.
 When more than one trust in that backend authorizes the same content model, the
@@ -147,16 +155,15 @@ A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 ``user`` and ``permission`` already use:
 ``{path: "...", model: "...", target: "..."}``. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
-correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
+correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor-grant query
 combines all applicable ordinary sponsor grants with OR. Reviewers should
 verify the delegate/sponsor direction, the relationship's explicit conditions,
-and the complete sponsor-authority predicate in the document and generated
+and the ordinary sponsor-grant query in the document and generated
 SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
 used ``along=``. The depth cap is the bound constant ``$along_bound=<n>``.
-The delegate is allowed only where the delegation walk and the complete
-sponsor-authority predicate both reach the requested object. Each contributing
+The delegate is allowed only where the delegation walk and the ordinary sponsor-grant query both reach the requested object. Each contributing
 ordinary grant's ``along=`` walk or exact match must reach that object.
 
 Backends remain independent. When more than one Trusts backend targets the same
@@ -168,11 +175,11 @@ Permission inquiries and named filters
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. Named filters are listed in ``add_named_filter()`` order.
 
-User rules
-~~~~~~~~~~
+User conditions and overrides
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Registered user conditions appear in inquiry SQL and ordered ``params``.
-The optional override participates in complete inquiries;
+The optional override participates in permission inquiries;
 ``get_group_permissions`` uses conditions and group grants without it. The lockfile does not add a
 parallel user-rule expression or a second statement for skipped rules. Every
 registered rule must compile completely to SQL over concrete user fields; a
@@ -228,7 +235,7 @@ A registration without a condition omits that key.
 
 ``Along`` adds ``__along_{path}_{shape}_{bound}``, where ``path`` uses the
 registered Django relationship segments. Each recursive trust row also records
-``along`` with the complete registered ``path``, resolved ``shape``, and
+``along`` with the registered ``path``, resolved ``shape``, and
 integer ``bound``. The recursive SQL records the bound as
 ``$along_bound=<n>``, not a call input. For repeated bases, the first ID keeps the unsuffixed
 base and the second and later IDs add ``__2``, ``__3``, and so on. Named-filter

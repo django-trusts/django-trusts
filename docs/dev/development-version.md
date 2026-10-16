@@ -1,5 +1,8 @@
 # Development version 1.0.0rc1
 
+Historical development record. Last source update: 2026-10-10.
+This reorganization has not been reviewed by a human for current accuracy.
+
 The revived Trusts development line is **1.0.0rc1**. This is a
 release-candidate mark. It is not a production 1.0 release, not a PyPI
 publication, and not a claim that the declarative permission model has been
@@ -26,7 +29,7 @@ wrapper. Obsolete Python 2 classifiers and `six` / `funcsigs` / `mock` / `pbr`
 install dependencies are removed.
 
 The 0.x compatibility boundary and the historical migration archive are
-recorded in [../migrates.md](../migrates.md).
+recorded in [../migrates.md](../source/migrates.md).
 
 ## What this line still does not do
 
@@ -49,12 +52,12 @@ module is gone. Historical concrete models and `TrustModelBackend` live under
 
 Development contracts record implementation choices and acceptance tests.
 
-- [Delegation registration contract](dev/delegation-registration.md) defines the
+- [Delegation registration contract](delegation-registration.md) defines the
   `register(delegate=..., sponsor=...)` mode and its relationship to ordinary
   `register(permission=..., user=...)` registrations. The initial implementation
   landed in [PR #280](https://github.com/django-trusts/django-trusts/pull/280).
 
-Release-train feature summaries live in [What's new](whats-new.md).
+Release-train feature summaries live in [What's new](../source/whats-new.md).
 
 ## Preserved legacy source
 
@@ -65,7 +68,7 @@ The pre-modernization tree remains available at:
 | Annotated tag | `legacy-pre-modernization` → `20ef23946d4fcfd9463fcf5953bb9414b8f0521b` |
 | Record | [docs/legacy-baseline.md](legacy-baseline.md) |
 | Release archive | https://github.com/django-trusts/django-trusts/releases/download/legacy-pre-modernization/django-trusts-legacy-pre-modernization.tar.gz |
-| In-repo archive | [docs/legacy/django-trusts-legacy-pre-modernization.tar.gz](legacy/django-trusts-legacy-pre-modernization.tar.gz) |
+| In-repo archive | [docs/legacy/django-trusts-legacy-pre-modernization.tar.gz](../legacy/django-trusts-legacy-pre-modernization.tar.gz) |
 | SHA-256 | `ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084` |
 
 Those artifacts are historical. Retrieve them as documented in

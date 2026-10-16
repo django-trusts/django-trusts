@@ -1,5 +1,8 @@
 # Delegation registration contract
 
+Historical development record. Last source update: 2026-10-15.
+This reorganization has not been reviewed by a human for current accuracy.
+
 Status: implementation-driver contract for [issue #266][issue-266].
 
 - Release train: 1.1
@@ -22,7 +25,7 @@ delegated registration is only one side of a conditional grant.
 
 ## Registration modes
 
-An ordinary permission registration identifies the principal receiving a
+An ordinary permission registration identifies the user receiving a
 grant and the permission granted:
 
 ```python
@@ -35,8 +38,8 @@ backend.register(
 )
 ```
 
-A delegated registration instead identifies the acting principal and the
-principal whose live ordinary authority sponsors that action:
+A delegated registration instead identifies the acting user and the
+user whose live ordinary authority sponsors that action:
 
 ```python
 backend.register(
@@ -50,21 +53,21 @@ backend.register(
 
 The mode switch is therefore:
 
-| Mode | Principal arguments | Meaning |
+| Mode | User arguments | Meaning |
 | --- | --- | --- |
 | Ordinary permission | `user=` and `permission=` | The matching row is an ordinary grant. |
 | Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires live sponsor authority. |
 
-`delegate=` binds the current principal who is acting and receiving delegated
+`delegate=` binds the current user who is acting and receiving delegated
 access. It takes the place of `user=` for the delegated mode. `sponsor=` binds
-the principal who delegated the authority. The complete sponsor-authority
-predicate provides the ceiling.
+the user who delegated the authority. The sponsor-authority
+condition provides the ceiling.
 
 The delegated row does not carry an ordinary `permission=` grant. The
 permission being checked comes from the inquiry and must be satisfied by the
-sponsor-authority predicate on the same content. A delegated condition may
+ordinary sponsor-grant query on the same content. A delegated condition may
 compare that requested permission with relationship-owned scope data, but it
-cannot grant an operation that the sponsor-authority predicate does not
+cannot grant an operation that the ordinary sponsor-grant query does not
 currently provide.
 
 `content=` identifies the meeting point of the two sides. In ordinary mode,
@@ -99,15 +102,15 @@ content terminal or gateway.
 
 A delegated registration accepts the same `along=` walk as an ordinary
 registration. The delegate is allowed on an object only when that walk
-reaches the object and the sponsor-authority predicate also reaches it. That
-predicate is the OR-union of applicable ordinary grants. If the delegation has
+reaches the object and the ordinary sponsor-grant query also reaches it. That
+condition is the OR-union of applicable ordinary grants. If the delegation has
 no `along=`, the delegation row must name that object. If the applicable
 ordinary sponsor grant has no `along=`, that grant must name that object. When
 both relationship and ordinary-grant sides walk, the delegate gets only the
 objects both walks reach. A longer content suffix than one reverse hop is not one
 column on the content row; compiling that delegated walk raises
 `TrustsConfigurationError` before a grant, on a forward check and on
-reverse inquiry. The sponsor comparison keeps the full root-relative
+inquiry for users from content. The sponsor comparison keeps the full root-relative
 sponsor path, so `sponsor_link__user` uses `sponsor_link__user_id` and
 not a bare `user_id` on the delegation row. One delegation cannot sponsor
 another; that chain stays rejected.
@@ -144,14 +147,14 @@ condition builder or mutating registry state:
 - delegated mode requires both `delegate=` and `sponsor=` and forbids
   `user=`, `permission=`, and `group=`;
 - either member of the delegated pair without the other is invalid; and
-- supplying none of the complete modes is invalid;
+- supplying none of the registration forms is invalid;
 - an ordinary condition builder must take one argument; and
 - a delegated condition builder may take one or two arguments, while any
   other arity is invalid.
 
 The first implementation should require `delegate=` and `sponsor=` to resolve
-to the same persisted principal model used by applicable ordinary authority
-registrations. Heterogeneous principal models remain a separate design
+to the same persisted user model used by applicable ordinary authority
+registrations. Heterogeneous user models remain a separate design
 question.
 
 ## Authorization rule
@@ -173,7 +176,7 @@ AND (
 )
 ```
 
-That check was the eligibility predicate where the inquiry projected persisted
+That check was the eligibility condition where the inquiry projected persisted
 principals. A delegate or sponsor that fails it cannot authorize through
 delegation, even while its ordinary grants and delegation rows remain stored.
 The delegate gate applies to both the actor's ordinary branch and delegated
@@ -185,7 +188,7 @@ one installation cannot borrow the sponsor, approval, content, or condition
 state of another relationship.
 
 More than one delegated relationship model may target the same content model.
-Those registrations are ORed only after each branch is complete:
+Those registrations are ORed only after each branch matches:
 
 ```text
 ordinary(u, c, p)
@@ -200,7 +203,7 @@ the same relationship branch.
 
 `delegation_reaches(d, c)` is equality when the delegated registration has
 no `along=`, and the bounded walk otherwise. `ordinary(d.sponsor, c, p)` is
-the complete live OR-union of applicable ordinary registrations, including
+the live OR-union of applicable ordinary registrations, including
 registrations under other configured handles, evaluated on the requested
 object. An ordinary `along=` grant in that union counts when its walk
 reaches that object. It is not one selected permission path. Delegated
@@ -235,7 +238,7 @@ The same correlated rule must drive:
 - point permission checks;
 - permitted-content querysets;
 - permission enumeration;
-- reverse permitted-user inquiry; and
+- inquiry for users from content; and
 - authorization-policy SQL and lockfiles.
 
 The implementation compiles the actor's direct branch and every correlated
@@ -243,7 +246,7 @@ delegation branch into one queryset statement for each inquiry. An
 application helper that loads a sponsor and calls `sponsor.has_perm()` is
 not an implementation of this contract. It bypasses the shared declarative
 plan, can import an outer permission shortcut, and cannot provide equivalent
-queryset, reverse-inquiry, or policy-SQL behavior.
+queryset, users-from-content inquiry, or policy-SQL behavior.
 
 ## Separate prerequisites and policy decisions
 
@@ -259,7 +262,7 @@ condition language to express null tests and ordered comparison against a
 database-side query clock. That condition-language work remains a separate
 prerequisite and should not be hidden inside the correlated-plan patch.
 
-Applicable registrations with incompatible principal, content, or permission
+Applicable registrations with incompatible user, content, or permission
 models must fail closed during registration or planning. An ordinary handle
 that is genuinely inapplicable contributes no sponsor authority; a malformed
 applicable handle must not disappear as though it were merely inapplicable.

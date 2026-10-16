@@ -1,5 +1,8 @@
 # TrustsRegistry (internal development primitive)
 
+Historical development record. Last source update: 2026-10-14.
+This reorganization has not been reviewed by a human for current accuracy.
+
 Additive registration and projection surface for issues #57, #60, #65,
 #83, #92, #98, and the first historical reader in #67. Import from `trusts.core`.
 This slice does **not** re-export a process-global registry from `trusts`.
@@ -38,7 +41,7 @@ raises `TrustsConfigurationError` when the root is absent. There is no
 Exact duplicate normalized registration raises. The same root plus the
 same content terminal with different content/user/permission/along
 bindings is an explicit conflict. The same bindings with a different
-closed condition is an allowed alternative; the plan ORs complete
+closed condition is an allowed alternative; the plan ORs matching
 records. Different roots remain supported.
 
 A permission path ends on one forward to-one step, or on one forward
@@ -99,7 +102,7 @@ These shapes raise `TrustsConfigurationError` during `register`:
   permission primary key
 - multi-step all-forward permission without a terminal collection
 - extra or intermediate multi-valued walks on user, content, or
-  predicate paths
+  condition paths
 - generic foreign keys/relations
 - more than two steps after the gateway
 - multi-step all-forward content (no gateway reverse)
@@ -113,7 +116,7 @@ trust-rooted symbolic callable (`==`, `.contains(member)`, `&`) and rejects
 prebuilt `All` / `Equal` / `permission_in` values. The callable is invoked
 once after freeze and is not stored.
 
-Internal `TrustsRegistry.register` may still accept a closed predicate tree
+Internal `TrustsRegistry.register` may still accept a closed condition tree
 exported from `trusts.core`. `condition` may also be omitted or `None`. The
 nodes below are that stored planning representation:
 
@@ -148,7 +151,7 @@ registry.register(
   targets fail closed at zero SQL. The compiler emits the whole
   accepted path.
 
-Those predicates compile as an AND overlay on the same
+Those conditions compile as an AND overlay on the same
 permission-bearing root row. They do not create a grant. Callables,
 `Q` objects, lookup strings, and tuples are not a condition dialect
 and raise `TrustsConfigurationError` with zero SQL. Untyped values
@@ -201,7 +204,7 @@ set correct. That growth is the accepted tradeoff for dropping the JSON
 seen-set. There is no JSON frontier or seen-array.
 Depth 0 is the seed. Nodes at `bound` are reachable and not expanded.
 NULL and dangling steps deny. Direct and recursive registrations `OR`.
-The lockfile records that portable statement (SQLite identifier quotes).
+In this snapshot, the lockfile records that portable statement (SQLite identifier quotes).
 SQLite and MySQL 8.4+ execute it unchanged, aside from MySQL's backtick
 quotes. PostgreSQL keeps the depth cap and appends that one clause.
 The outer query still selects only the walk identity, so `is_cycle`
@@ -211,7 +214,7 @@ closed with the same error as any other unsupported engine, at runtime
 and in `trusts.E005`, before the probe. A closure table is a documented
 fallback only and is not generated.
 
-Reverse inquiry uses the same statement in the inverse direction. The
+The inquiry for users from content uses the same statement in the inverse direction. The
 seed is the content-derived walk-site identity or identities. A
 non-empty suffix selects the walk-site rows related to the bound
 content, such as Cabinet identities for a Sheet. The recursive member
@@ -231,11 +234,11 @@ Along subset and no reverse-name guessing. When the suffix is exactly one
 reverse O2M/O2O step whose FK lives on the candidate and targets
 `walk_ident`, the compiler may rewrite to `candidate.<fk> IN W`.
 
-Conditions remain an AND overlay on a complete proof and never run on
+Conditions remain an AND overlay on a proof and never run on
 intermediate walk nodes. The same expression drives instance
 authorization, lazy `filter_authorized` before pagination, `all_match`,
 and `permissions` / `common_permissions` (including nested permission
-`OuterRef`). Reverse inquiry derives walk-site identities from the bound
+`OuterRef`). The inquiry for users from content derives walk-site identities from the bound
 content, traverses the inverse graph without the outer candidate user, and
 joins eligible grants and users outside the CTE. It preserves the terminal
 condition and user checks from the forward proof; conditions do not apply to
@@ -244,16 +247,16 @@ before walk SQL. Residual database errors stay loud and are not remapped to
 `TrustsCompilerError`. Runtime authorization does not repeat the recursive
 CTE capability probe.
 
-Policy SQL exports the same recursive predicate for every supported inquiry,
-including reverse users. Each trust row records the complete public `along`
+In this snapshot, policy SQL exports the same recursive condition for each inquiry,
+including users from content. Each trust row records the public `along`
 path, resolved shape, and bound. The bound is a registration constant, not a
 runtime binding. Rendering fails before returning a partial document if any
 applicable recursive statement or parameter cannot be represented.
 
-Implementation agreement tests compare the reverse user set with per-user
-forward checks for the same content and permission. They cover depth exactly
+Implementation agreement tests compare the returned user set with per-user
+object checks for the same content and permission. They cover depth exactly
 at the bound and one hop beyond it, cycles, a failing condition, an inactive
-principal, two `Along` registrations on one content model ORed together, and
+user, two `Along` registrations on one content model ORed together, and
 policy-lock rendering for each registered walk. The implementation change
 records combined statement-plus-branch coverage before and after and does not
 lower it.
@@ -265,61 +268,15 @@ opens no connections, executes no SQL, and is not an all-clear. Isolated
 `TrustsRegistry()` instances are not scanned. Silencing `trusts.E005`
 hides only the diagnostic.
 
-Each step's terminal model, complete root-relative lookup
+Each step's terminal model, root-relative lookup
 (`'__'.join(path)`, for example `folder__rows__content`), and outer comparison
 field come from resolved path metadata. Correlation does not assume `pk`,
 does not assume the terminal field lives on the root, and does not
 hand-code forward versus reverse identity. A non-primary
 `ForeignKey(..., to_field=...)` still uses that target field (`#64`).
 
-## One plan, three projections
-
-`plan_for` selects applicable records by content/user/permission terminal
-and compiles them into one `RelationPlan`. Root selection, field
-correlation, and `EXISTS` assembly live in that plan. Bindings and
-`EXISTS` use the complete stored lookup. `OuterRef` uses the last step's
-single target `attname`. The three development projections only change
-the terminal:
-
-```python
-registry.permissions_for(user, document)
-registry.has_permission(user, document, permission)
-registry.filter_authorized(Document.objects.all(), user, permission)
-```
-
-- Permission enumeration projects distinct permission rows for
-  `(user, content)`.
-- Object authorization is SQL `EXISTS` membership of the requested
-  permission in that same relational result. It does not materialize a
-  Python list from enumeration.
-- Authorized-content filtering returns a lazy `QuerySet` and correlates
-  the same predicate to each candidate content row. Filtering happens in
-  SQL before pagination or aggregation.
-
-`RelationPlan.content_exists(user, permission)` is the shared
-content-`EXISTS` predicate. `filter_content` / `filter_authorized`
-consume that same object. A later reader may OR it with another predicate
-on the original candidate queryset; do not filter trustee rows first and
-then try to restore another branch.
-
-Multiple applicable relation roots combine by SQL `OR`. Duplicate grant
-rows do not duplicate permission or content results. An unregistered
-content model fails closed: empty enumeration, `False`, and
-`queryset.none()`.
-
-When the permission terminal's concrete model is `auth.Permission`, the
-same `EXISTS` requires that row's content type to be the protected
-object's content identity (`app_label` and `model_name`, proxy models
-included). A mismatch is an empty predicate on every projection. The
-codename is not consulted. Any other terminal keeps primary-key identity,
-including a custom permission model that has a `content_type` foreign key.
-
-Callers pass model instances for `user`, `content`, and `permission`.
-This slice does not accept codename strings or dotted permission syntax.
-
-`RelationPlan` projection methods require model-instance bindings; a
-supplied `None` or other non-instance value raises
-`TrustsConfigurationError` and is never omitted from the predicate.
+Inquiry projections are documented in
+[permission inquiries](permission-inquiries.md#one-plan-three-projections).
 
 The live store is `TrustsImplementationConfig.registries[path]`, one
 `TrustsRegistry` per configured Trusts-derived `AUTHENTICATION_BACKENDS`
@@ -359,106 +316,8 @@ neither Content nor Junction are outside E003 and fail closed at
 runtime. The check issues zero SQL and does not register.
 `trusts.E005` is the Along renderer database check described above.
 
-`ContentQuerySet.permitted` is a thin aggregate caller. It ORs each
-applicable handle compiler's complete predicate (`trusts.core.granted`)
-and then applies the unchanged condition overlay. Concrete
-`TrustModelBackend` routes keep the transitional historical TrustGroup
-compiler; mixin-only routes receive only their registered-plan proof.
-Public signature and documented one-path results are unchanged.
-Unknown or undeclared terminals fail closed (empty / false / none).
-`historical_fallback` identifies the concrete
-`HistoricalGroupQueryCompiler` for mixin isolation; it does not reopen
-a static content map. Mixin-only routes receive only their registered
-plan proof.
-
-Declared Category, Ticket, Trust, Group, documented dependents, and
-any other registered content model — including ordinary non-`Content`
-models — use the same handle and compiler for backend `has_perm` /
-`get_all_permissions` / `get_group_permissions`. An instance consults
-that backend's handle first. A QuerySet is coordinated by the first
-configured Trusts path: one aggregate all-match / common-permission
-query; other Trusts backends return false/empty with no SQL.
-`obj is None` is false/empty on a Trusts backend; hosts that want
-global Django permissions list
-`django.contrib.auth.backends.ModelBackend` separately. Declared
-Junction-backed Group uses the registered J1 plan and the concrete
-compiler's TrustGroup OR. Group-as-protected-content does not replace
-Django Group membership as the historical trustee path for Category /
-Ticket / Trust. QuerySet plus a legacy callable condition raises
-`PermissionConditionNotQueryable` before candidate SQL or callback
-invocation. The Trusts app contributes Trust-as-content to every
-configured `TrustModelBackend` (or subclass) path; the test app
-contributes Category, Ticket, and Junction-backed Group onto the
-unique handle. Hosts contribute documented dependents from their own
-`AppConfig`.
-
-`TrustManager.filter_by_user_content_perm` is a create-under-Trust
-picker, not a content-row filter. Its support gate is
-`any_plan_records`: any configured path with `plan_for(content).records`
-establishes that the terminal is known. The grant remains
-`trust_grant_q` on Trust rows. A declaration on one path does not
-authorize through another path's compiler or `historical_fallback`, and
-the method is not redirected through `filter_authorized(Trust)` or the
-Trust-as-content parent relation. Unregistered models return `none()`.
-Declared Group is a known terminal; create-under-Trust still uses
-`trust_grant_q` on Trust rows.
-
-## Generic public seams (#54 C1)
-
-These additive APIs are the instance-only / metadata-driven surfaces that
-later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
-`filter_by_user_content_perm`, the app label, or the historical compiler.
-
-`AuthorizedQuerySet.authorized(user, permission, extra_q=None, **skip_options)` and
-`AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
-`trusts.query`. `permission` is a model instance. Strings raise
-`TrustsConfigurationError` with zero SQL. The method does not parse
-`:condition` or call `get_permission`. It uses the
-[user conditions and overrides](source/index.rst#user-conditions-and-overrides).
-`extra_q` is the same AND overlay as `all_match` /
-`instance_match`. There is no `.permitted` and no `.get_permission` on
-this class. The public content-list inquiry is
-`PermittedQuerySet.permitted(permission, user, conditions=())`.
-`.authorized` does not call it; the inquiries share user rules without sharing
-permission-input validation. `skip_options` contains the named `skip_<name>`
-keywords described in the guide.
-Core `.authorized` includes relationship-family handles
-only; it is not Django's object-level authentication-backend OR.
-
-`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, **skip_options)`
-in `trusts.core` filters rows of an intermediate model that is a
-**proper prefix** of some applicable `RegisteredRelation.content_path`
-whose content terminal is `content`. The function compiles `EXISTS` of root rows
-correlated to `OuterRef` of that step's resolved target field (the
-related `attname` from `get_path_info()`, including non-PK
-`ForeignKey(..., to_field=...)`) at that node, binds user +
-permission, and ORs applicable records. An `along=` registration
-uses that same bounded walk: a prefix at the walk site is kept when
-its identity is in the walk, and a later proper prefix is kept when
-it hangs off a walk-site row the walk reaches. An ancestor of the walk
-site stays the row stored on that grant, including when an ordinary sponsor
-grant supplies the sponsor-authority predicate. A one-level delegation keeps
-a prefix only when the delegation and the complete sponsor-authority predicate
-both reach it. Each contributing ordinary sponsor grant's `along=` walk or
-exact match must reach the prefix. A second delegation level does not. A
-delegated `along=` whose content suffix is longer than one reverse hop raises
-`TrustsConfigurationError`. An ordinary sponsor grant's `along=` has that
-same limit. `queryset.model` equal to the
-content terminal is allowed when a proper prefix step of that same model
-exists (self-referential trees). A terminal-only path, an unknown
-terminal, empty handles, or a scope model not on the path return
-`none()`. Default and explicit handle lists include relationship-family
-handles only. Core does not import Zero schema models
-(`Trust`, `TrustUserPermission`, `TrustGroup`, …).
-
-`PlanQueryCompiler.group_exists` compiles only records registered with
-explicit `group=` (a forward path ending at `auth.Group`; the compiler
-appends `Group.permissions`) via `RelationPlan.content_exists`.
-`permission=` records stay out of that slice, including when the user
-path ends in a many-to-many membership step. Core plans are relationship
-records only. A plan with no explicit `group=` record makes
-`group_exists` inapplicable (`None`). `complete_exists` still includes
-both `permission=` and `group=` records.
+Public and historical inquiry adapters are documented in
+[permission inquiries](permission-inquiries.md#generic-public-seams-54-c1).
 
 `ConditionLookup` (`record_for`, `compile_q`) is self-bound at
 `TrustsRegistry` construct. `set_condition_lookup` remains for tests
@@ -473,4 +332,4 @@ that implementation's registry store). Do not list `'trusts'` in
 `INSTALLED_APPS`.
 
 This primitive does not change historical authorization results or add a
-database schema. See [../migrates.md](../migrates.md).
+database schema. See [../migrates.md](../source/migrates.md).
