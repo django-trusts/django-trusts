@@ -1,20 +1,18 @@
 # Legacy baseline (pre-modernization)
 
+Historical development record. Last source update: 2026-09-07. Reorganized
+2026-10-16; this revision has not been reviewed by a human for current accuracy.
+
 This document records the django-trusts source as it existed on the default
 branch before any modernization. It is a historical snapshot, not a supported
 install or test matrix. The active development version after this snapshot is
 documented in [development-version.md](development-version.md). Version numbers
 below describe the preserved baseline, not current package metadata.
 
-**This preservation work makes no API, method, runtime, packaging, or
-authorization behavior changes.** At preservation time, `setup.py` declared
-version `0.10.3`. `requirements.txt` is unchanged. No `migrates.md` update is
-required because no API or method changed.
-
 Recorded on 2026-09-06 from
 [`django-trusts/django-trusts`](https://github.com/django-trusts/django-trusts)
 `origin/master`. Machine-readable values live in
-[`docs/legacy/baseline.json`](legacy/baseline.json).
+[`docs/legacy/baseline.json`](../legacy/baseline.json).
 
 ## Preserved commit
 
@@ -32,7 +30,7 @@ the legacy tag and archive must point at.
 
 ## Last published version vs unreleased commits
 
-The last published package version is **0.10.3**.
+At preservation time, the last published package was **0.10.3**.
 
 | Channel | Identifier | Commit |
 | --- | --- | --- |
@@ -100,36 +98,9 @@ Notes:
 | Target | `20ef23946d4fcfd9463fcf5953bb9414b8f0521b` |
 | Why this name | It is not a version tag, so it cannot be confused with `v0.10.3` or a future major version. |
 
-Create this as a **new annotated tag**. Do not retarget `v0.10.3` or any other
-existing release tag.
-
-```bash
-git fetch origin
-git tag -a legacy-pre-modernization 20ef23946d4fcfd9463fcf5953bb9414b8f0521b \
-  -m "Legacy django-trusts baseline immediately before modernization.
-
-Points at origin/master as recorded on 2026-09-06:
-20ef23946d4fcfd9463fcf5953bb9414b8f0521b
-
-This is not a PyPI release. Last published version remains 0.10.3
-(tag v0.10.3 / 6222652de6f85e7870e878fb131a93cb39e0ccf7).
-Two unreleased formatting commits follow that tag."
-git push origin refs/tags/legacy-pre-modernization
-```
-
-Verify after the push:
-
-```bash
-test "$(git rev-parse legacy-pre-modernization^{commit})" = 20ef23946d4fcfd9463fcf5953bb9414b8f0521b
-```
-
-The annotated tag was pushed to `origin` on 2026-09-06 and resolves to
-`20ef23946d4fcfd9463fcf5953bb9414b8f0521b`. Confirm with:
-
-```bash
-git ls-remote --tags origin legacy-pre-modernization
-git rev-parse legacy-pre-modernization^{commit}
-```
+The annotated tag was pushed on 2026-09-06. Its tag object is
+`772990cd53dc5932377daf4b26d4052c9d44ac06`. The preservation work is complete;
+no new tag or release action is required. Existing version tags must not move.
 
 ## Source archive
 
@@ -138,13 +109,13 @@ repository:
 
 | Field | Value |
 | --- | --- |
-| Path | [`docs/legacy/django-trusts-legacy-pre-modernization.tar.gz`](legacy/django-trusts-legacy-pre-modernization.tar.gz) |
+| Path | [`docs/legacy/django-trusts-legacy-pre-modernization.tar.gz`](../legacy/django-trusts-legacy-pre-modernization.tar.gz) |
 | SHA-256 | `ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084` |
 | Size | 26404 bytes |
 | Originating commit | `20ef23946d4fcfd9463fcf5953bb9414b8f0521b` |
 | Prefix | `django-trusts-20ef23946d4fcfd9463fcf5953bb9414b8f0521b/` |
-| Checksums file | [`docs/legacy/SHA256SUMS`](legacy/SHA256SUMS) |
-| Contents list | [`docs/legacy/MANIFEST`](legacy/MANIFEST) |
+| Checksums file | [`docs/legacy/SHA256SUMS`](../legacy/SHA256SUMS) |
+| Contents list | [`docs/legacy/MANIFEST`](../legacy/MANIFEST) |
 
 How it was created:
 
@@ -166,9 +137,8 @@ git archive --format=tar --prefix="django-trusts-${COMMIT}/" "$COMMIT" \
    `docs/legacy/django-trusts-legacy-pre-modernization.tar.gz`
 4. **Git object:** commit `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`
 
-The release asset was uploaded on 2026-09-06 and downloads to the same
-SHA-256 as the in-repository archive
-(`ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084`).
+The release asset was uploaded on 2026-09-06 and verified against the digest
+in the archive table.
 
 GitHub's automatic `archive/` tarballs for a commit or tag are convenient but
 are **not** the recorded artifact. Their prefix and gzip metadata can differ,
@@ -216,16 +186,7 @@ cd docs/legacy
 sha256sum -c SHA256SUMS
 ```
 
-Or run the helper from the repository root. A complete pass requires the
-local tag; fetch it first if this clone does not have it:
-
-```bash
-git fetch origin tag legacy-pre-modernization
-./scripts/verify-legacy-baseline.sh
-```
-
-`--partial` checks the archive, commit, and tree only. That mode always
-reports an incomplete result (exit 2) and never a complete pass.
+The [verification procedure](#verification) checks the archive against git.
 
 ## Historical Python and Django requirements
 
@@ -342,29 +303,7 @@ The script checks:
 5. Unless `--partial` is set, `refs/tags/legacy-pre-modernization` exists
    locally and peels to `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`.
 
-Verification performed while writing this document (2026-09-06):
-
-- `git rev-parse origin/master` = `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`
-- `git rev-parse 20ef239^{tree}` = `2a0613d074456c44d07006f7d3692b42e3011ff0`
-- Recreated archive SHA-256 matched
-  `ae79e1f0e45c957b33a9acabeb7389aa75dcea714f1621eed6c714d3ef71e084`
-- Archive file list matched `git ls-tree -r --name-only` of the recorded
-  commit (plus the directory prefix entries that `git archive` adds)
-- Local tag `legacy-pre-modernization` peeled to the recorded commit
-
-## Maintainer follow-up
-
-Completed on 2026-09-06:
-
-1. Annotated tag `legacy-pre-modernization` pushed to `origin`. The tag object
-   is `772990cd53dc5932377daf4b26d4052c9d44ac06`; the peeled commit is
-   `20ef23946d4fcfd9463fcf5953bb9414b8f0521b`. Existing `v*` tags were not
-   moved (`v0.10.3` remains `6222652de6f85e7870e878fb131a93cb39e0ccf7`).
-2. GitHub Release
-   [legacy-pre-modernization](https://github.com/django-trusts/django-trusts/releases/tag/legacy-pre-modernization)
-   uploaded the archive and `SHA256SUMS`. The downloaded asset SHA-256 matched
-   the recorded digest.
-3. `./scripts/verify-legacy-baseline.sh` passed, including the tag-target
-   check.
-
-No further tag or release action is required for this preservation step.
+Verification passed on 2026-09-06, including the tag target, tree, archive
+contents, and the downloaded release asset. The
+[original preservation record](https://github.com/django-trusts/django-trusts/blob/426b7ea33f817e78290cf2e769105aaa6bfd69a5/docs/legacy-baseline.md)
+retains the one-time creation commands and detailed proof.

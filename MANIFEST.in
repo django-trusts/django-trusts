@@ -1,6 +1,11 @@
 include LICENSE
 include README.md
 include DEV.md
+include RELEASING.md
+include SECURITY_AUDIT.md
+recursive-include docs *.md *.rst *.png
+recursive-include docs/legacy *
+prune docs/_build
 include requirements.txt
 include migrates.md
 include pyproject.toml

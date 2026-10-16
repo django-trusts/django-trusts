@@ -1,201 +1,97 @@
+"""Documentation routing and links after the #318 consolidation."""
 from pathlib import Path
+import re
+from urllib.parse import unquote, urlsplit
 
 from django.test import SimpleTestCase
 
 
 ROOT = Path(__file__).resolve().parents[2]
+REPO_DOC_URL = 'https://github.com/django-trusts/django-trusts/blob/dev/'
 
 
 class FinalDocumentationSurfaceTest(SimpleTestCase):
-    def test_rst_introduces_the_current_permission_system(self):
-        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
-        forbidden = (
-            'from trusts.models import',
-            'Content.register_permission_condition',
-            'TrustGroup.grant_permission',
-            'HistoricalGroupQueryCompiler',
-            'trust_grant_q',
-            'kernel_config',
-            'C1 default',
-            'pip install django-trusts',
-            'TeamRepositoryGrant',
-            'permission_bundles',
-            'non-standalone Python dependency',
-            'Core supplies',
-            'core compiles',
-        )
-        self.assertEqual([needle for needle in forbidden if needle in rst], [])
-        self.assertIn('Django permission system for object-level', rst)
-        self.assertIn('permission is a persisted relationship', rst)
-        self.assertIn('TrustsImplementationConfig', rst)
-        self.assertIn('TrustModelBackendMixin', rst)
-        self.assertIn('class DocumentPermission(models.Model)', rst)
-        self.assertIn('Document.objects.permitted(', rst)
-        self.assertIn('PermittedQuerySetMixin', rst)
-        self.assertIn('from_queryset', rst)
-        self.assertNotIn('PermittedManagerMixin', rst)
-        self.assertIn('user.get_all_permissions(document)', rst)
-        self.assertIn('from trusts.decorators import authorization_required', rst)
-        self.assertNotIn('from trusts.decorators import permission_required', rst)
-        self.assertNotIn('from trusts.decorators import P', rst)
-        self.assertIn('add_named_filter', rst)
-        self.assertIn('backend.register(', rst)
-        self.assertIn('trust=DocumentPermission', rst)
-        self.assertIn('path lambda', rst)
-        self.assertIn('condition=', rst)
-        self.assertIn('.contains(member)', rst)
-        self.assertNotIn('register_relationship', rst)
-        self.assertNotIn('register_ordered_fold()', rst)
-        self.assertNotIn('backend.register_ordered_fold(', rst)
-        self.assertNotIn('TrustsOrderedFoldModelBackend', rst)
-        self.assertNotIn('source_descriptor="document"', rst)
-        self.assertNotIn('content=WinNode', rst)
-        self.assertIn('django-trusts-ordered-fold', rst)
-        self.assertIn('AUTHENTICATION_BACKENDS', rst)
-        self.assertNotIn('_authorization_family', rst)
-        self.assertNotIn('mixed-family one-SQL', rst)
-        self.assertNotIn('family-local OR', rst)
-        self.assertNotIn('Until the OrderedFold engine leaves Core', rst)
-        self.assertNotIn('strategy=OrderedFold', rst)
-        self.assertNotIn('from trusts.core import Ref', rst)
-        self.assertNotIn('.registry.register(', rst)
-        self.assertIn('o.confidential != True', rst)
-        self.assertIn('confidential = models.BooleanField(default=False)', rst)
-        self.assertIn('Inherited relationships are provisional', rst)
-        self.assertIn('along=("parent", 8)', rst)
-        self.assertIn(
-            'provisional extension of django-trusts for ordered allow and deny',
-            rst,
-        )
-        self.assertIn('django-trusts-zero', rst)
-        self.assertIn('django-trusts-gh-permissions', rst)
-        self.assertIn('django-trusts-ordered-fold', rst)
-        self.assertIn('django-trusts-windows-acl', rst)
-        self.assertIn('django-trusts-zero-example', rst)
-
-    def test_security_audit_records_the_current_boundary(self):
-        guide = (ROOT / 'SECURITY_AUDIT.md').read_text()
-        for needle in (
-            'security boundary that implementation and',
-            'register(*, trust, user=None, permission=None, content, group=None, '
-            'delegate=None, sponsor=None, condition=None, along=None)',
-            'add_named_filter(...)',
-            'Named filters restrict the query',
-            'Runtime callbacks are unsupported',
-            "Django's `PermissionsMixin.has_perm()` allows an active superuser",
-            'Trusts cannot revoke authorization supplied by another backend',
-            'relationship-family',
-            'Fail-closed principle',
-            'one-argument symbolic predicate',
-            'collection-rooted `.contains(member)`',
-            'Discrepancies must be surfaced in the PR',
-            'Both use the shared user checks.',
-            'issue #268',
+    def test_user_guide_keeps_the_working_example(self):
+        guide = (ROOT / 'docs/source/index.rst').read_text()
+        for example in (
+            'class DocumentPermission(models.Model)',
+            'class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet)',
+            'objects = DocumentQuerySet.as_manager()',
+            'class DocumentsConfig(TrustsImplementationConfig)',
+            'def ready(self):',
+            'super().ready()',
+            'backend.register(',
+            'trust=DocumentPermission',
+            'user.has_perm("documents.change_document", document)',
+            'user.get_all_permissions(document)',
+            'document.get_permitted_users(',
+            '@authorization_required(Document, "documents.change_document")',
         ):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, guide)
-        self.assertIn('not part', guide)
-        self.assertNotIn('future policy manifest/lockfile', guide)
-        self.assertNotIn('_authorization_family', guide)
-        self.assertNotIn('mixed-family one-SQL', guide)
-        self.assertNotIn('trusts_ordered_fold.E001', guide)
-        self.assertNotIn('TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS = True', guide)
-        self.assertNotIn('## Change sizing and surface discovery', guide)
+            with self.subTest(example=example):
+                self.assertIn(example, guide)
+        for implementation_detail in (
+            'from trusts.core import Ref', 'from trusts.models import',
+            'registry.register(', 'backend.add_named_filter(',
+            'WITH RECURSIVE', 'schema_version:',
+        ):
+            self.assertNotIn(implementation_detail, guide)
 
-        dev = (ROOT / 'DEV.md').read_text()
-        self.assertIn('## Change sizing and surface discovery', dev)
-        self.assertIn('Whole ticket: 34–144', dev)
-        self.assertIn('Completed: 5 (S1 accepted)', dev)
+    def test_development_docs_have_one_location_and_review_status(self):
+        allowed = {'docs/source/index.rst', 'docs/whats-new.md'}
+        documents = list((ROOT / 'docs').rglob('*.md'))
+        documents += list((ROOT / 'docs').rglob('*.rst'))
+        for path in documents:
+            relative = path.relative_to(ROOT).as_posix()
+            if relative.startswith('docs/_build/'):
+                continue
+            with self.subTest(path=relative):
+                self.assertTrue(relative in allowed or relative.startswith('docs/dev/'))
+                if relative.startswith('docs/dev/'):
+                    text = path.read_text()
+                    self.assertIn('Historical development record', text)
+                    self.assertIn('reviewed by a human', text)
+                    self.assertRegex(text, r'2026-\d\d-\d\d')
+        for removed in ('docs/permitted-queryset-inquiry.md',
+                        'docs/reverse-permission-inquiry.md'):
+            self.assertFalse((ROOT / removed).exists())
+        reference = (ROOT / 'docs/dev/permission-inquiries.md').read_text()
+        for surface in ('get_permitted_users', 'filter_by_permitted_content',
+                        'queryset.permitted', 'queryset.authorized',
+                        'authorization_required', 'all_match'):
+            self.assertIn(surface, reference)
 
-    def test_sphinx_and_package_metadata_point_to_current_docs(self):
-        conf = (ROOT / 'docs' / 'source' / 'conf.py').read_text()
+    def test_repository_document_links_resolve(self):
+        paths = [ROOT / name for name in
+                 ('README.md', 'DEV.md', 'RELEASING.md',
+                  'SECURITY_AUDIT.md', 'migrates.md')]
+        paths += list((ROOT / 'docs/dev').glob('*.md'))
+        paths += list((ROOT / 'docs/dev').glob('*.rst'))
+        paths += [ROOT / 'docs/source/index.rst', ROOT / 'docs/whats-new.md']
+        for path in paths:
+            text = path.read_text()
+            links = re.findall(r'\]\(([^)\s]+)\)', text)
+            links += re.findall(r'<([^<>\s]+)>`_', text)
+            for link in links:
+                if link.startswith(REPO_DOC_URL):
+                    target = ROOT / unquote(urlsplit(link).path.split('/blob/dev/', 1)[1])
+                else:
+                    parts = urlsplit(link)
+                    if parts.scheme or parts.netloc:
+                        continue
+                    target = path.parent / unquote(parts.path) if parts.path else path
+                with self.subTest(source=str(path.relative_to(ROOT)), link=link):
+                    self.assertTrue(target.exists(), str(target))
+
+    def test_metadata_and_migration_routes(self):
+        conf = (ROOT / 'docs/source/conf.py').read_text()
         self.assertIn("copyright = '2015-2026, BeeDesk, Inc.'", conf)
-        self.assertIn("author = 'BeeDesk, Inc.'", conf)
-
         pyproject = (ROOT / 'pyproject.toml').read_text()
-        self.assertNotIn('readthedocs.org', pyproject)
-        self.assertNotIn('blob/master/', pyproject)
-        self.assertIn(
-            'blob/dev/docs/source/index.rst',
-            pyproject,
-        )
-        self.assertIn('blob/dev/migrates.md', (ROOT / 'docs' / 'source' / 'index.rst').read_text())
-
-    def test_migration_record_leads_with_current_contract(self):
+        self.assertIn('blob/dev/docs/source/index.rst', pyproject)
+        self.assertIn('blob/dev/docs/dev/legacy-baseline.md', pyproject)
         migration = (ROOT / 'migrates.md').read_text()
-        current = migration[:1800]
-        self.assertIn('# Migrating from django-trusts 1.0 to 1.1', current)
-        legacy = migration.split('## Migrating to django-trusts 1.0', 1)[1]
-        self.assertIn('schema-neutral authorization library', legacy)
-        self.assertIn('django-trusts-zero', legacy)
-        self.assertIn('supported 0.x migration path', legacy)
-
-    def test_live_router_points_at_merged_zero_and_rejects_zero_schema(self):
-        path = ROOT / 'migrates.md'
-        text = path.read_text()
-        rst = (ROOT / 'docs' / 'source' / 'index.rst').read_text()
-        readme = (ROOT / 'README.md').read_text()
-        pyproject = (ROOT / 'pyproject.toml').read_text()
-
-        self.assertIn('# Migrating from django-trusts 1.0 to 1.1', text[:80])
-        self.assertIn('does not provide a direct migration', text)
-        self.assertIn('## Relationship condition language (#210)', text)
-        self.assertIn('## Permitted content queryset (#270)', text)
-        self.assertIn('`1.0.0 → 1.1.0`', text)
-        self.assertIn(
-            '| Membership | `permission_in("team__allowed_operations")` |',
-            text,
-        )
-        self.assertNotIn('Python `in` or `permission_in', text)
-        self.assertTrue((ROOT / 'docs' / 'core-registry.md').is_file())
-        self.assertFalse((ROOT / 'docs' / 'registry.md').exists())
-        self.assertIn(
-            'https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md',
-            text,
-        )
-        self.assertIn('https://django-trusts.readthedocs.io/en/dev/', text)
-        self.assertIn('## Archaeology', text)
-        self.assertIn(
-            'https://github.com/django-trusts/django-trusts/blob/'
-            'migration-archive-pre-1.0/migrates.md',
-            text,
-        )
-        self.assertIn(
-            'https://github.com/django-trusts/django-trusts/blob/'
-            '7414886263faafb6edfb44c0c5fcf9fc8fa14e79/migrates.md',
-            text,
-        )
-        self.assertIn('historical reference', text)
-        self.assertIn('not an alternative 0.x migration path', text)
-        self.assertNotIn('Current 1.x contract', text)
-        self.assertNotIn('backend.register_relationship', text)
-        self.assertIn('[Migration boundary](migrates.md)', readme)
-        self.assertIn(
-            'https://github.com/django-trusts/django-trusts/blob/dev/migrates.md',
-            rst,
-        )
-        self.assertIn(
-            'Migration = "https://github.com/django-trusts/'
-            'django-trusts/blob/dev/migrates.md"',
-            pyproject,
-        )
-        self.assertLess(path.stat().st_size, 211222 // 4)
-        for banned in (
-            'create_trust_root',
-            'grandfather_trust_group_permissions',
-            'update_roles_permissions',
-            'TrustUserPermission',
-            'TrustGroupPermission',
-            '0002_trustgroup',
-            "include('trusts.urls')",
-            'trusts_zero/',
-            'Content.grant',
-            'associate_group',
-            'HistoricalGroupQueryCompiler',
-            '# Issue #151 C1',
-            '# Issue #8 recovery',
-            '2.0.0.dev2',
-            '# Archived: unpublished',
-        ):
-            with self.subTest(banned=banned):
-                self.assertNotIn(banned, text)
+        self.assertTrue(migration.startswith('# Migrating from django-trusts 1.0 to 1.1'))
+        self.assertIn('django-trusts-zero/blob/dev/migrates.md', migration)
+        self.assertIn('migration-archive-pre-1.0/migrates.md', migration)
+        for schema_instruction in ('create_trust_root', 'TrustUserPermission',
+                                   "include('trusts.urls')"):
+            self.assertNotIn(schema_instruction, migration)

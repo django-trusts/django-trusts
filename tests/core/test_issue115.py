@@ -227,20 +227,14 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertEqual([needle for needle in forbidden if needle in readme], [])
         self.assertLess(len(readme.splitlines()), 80)
         self.assertIn('django-trusts-mascot.png', readme)
-        self.assertIn('## How permissions are represented', readme)
         self.assertIn('## Usage', readme)
         self.assertIn(
-            'https://django-trusts.readthedocs.io/en/latest/#installation',
+            'https://django-trusts.readthedocs.io/en/dev/#installation',
             readme,
         )
         self.assertIn('[Security audit guide](SECURITY_AUDIT.md)', readme)
         self.assertIn('[Migration boundary](migrates.md)', readme)
         self.assertIn('DEV.md', readme)
-        self.assertIn('django-trusts-zero', readme)
-        self.assertIn('django-trusts-gh-permissions', readme)
-        self.assertIn('django-trusts-ordered-fold', readme)
-        self.assertIn('django-trusts-windows-acl', readme)
-        self.assertIn('django-trusts-zero-example', readme)
         self.assertIn('Copyright BeeDesk, Inc., 2015–2026.', readme)
 
     def test_readme_routes_to_the_executable_rst_guide(self):
@@ -253,15 +247,15 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn('TrustModelBackendMixin', rst)
         self.assertIn('backend.register(', rst)
         self.assertIn('trust=DocumentPermission', rst)
-        self.assertIn('path lambda', rst)
-        self.assertIn('condition=', rst)
         self.assertNotIn('register_relationship', rst)
         self.assertNotIn('backend.register_ordered_fold(', rst)
         self.assertNotIn('register_ordered_fold()', rst)
         self.assertIn('django-trusts-ordered-fold', rst)
         self.assertIn('django-trusts-windows-acl', rst)
-        self.assertIn('backend.add_named_filter(', rst)
-        self.assertIn('Document.objects.permitted(', rst)
+        audit = (ROOT / 'SECURITY_AUDIT.md').read_text()
+        self.assertIn('backend.add_named_filter(', audit)
+        self.assertIn('condition=lambda', audit)
+        self.assertIn('Document.objects.filter(', rst)
         self.assertIn('class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet)', rst)
         self.assertIn('objects = DocumentQuerySet.as_manager()', rst)
         self.assertNotIn('PermittedManagerMixin', rst)

@@ -4,53 +4,16 @@
 
 [![Coverage](https://coveralls.io/repos/github/django-trusts/django-trusts/badge.svg?branch=dev)](https://coveralls.io/github/django-trusts/django-trusts?branch=dev)
 
-`django-trusts` is a Django permission system for object-level authorization.
-It integrates with Django's authentication backend interface, allowing
-applications to use familiar checks such as
-`user.has_perm(permission, object)` while defining authorization policies
-with ordinary Django models.
-
-## How permissions are represented
-
-A **trust model** is the application-owned Django model from which three
-authorization paths begin:
-
-- **user** — who is requesting access;
-- **permission** — the operation being requested; and
-- **content** — the object being protected.
-
-Each matching trust record is a candidate grant. A trust model is often an
-explicit many-to-many relation model, but it may represent another relational
-shape. More than one complete trust may reach the same protected model; each is
-an alternative grant and the branches combine with OR.
-
-django-trusts supplies the compiler and authorization APIs. It does not impose a
-permission schema, grant editor, or application workflow.
-
 ## Usage
 
-Start with **[Installation in the usage guide](https://django-trusts.readthedocs.io/en/latest/#installation)**.
-The RST guide covers models, backend configuration, trust registration
-(both one-argument path lambdas and Django `__` strings,
-shown together),
-named filters, object and queryset authorization, and inherited relationships.
+Start with [Installation in the usage guide](https://django-trusts.readthedocs.io/en/dev/#installation).
+The [same guide in this repository](docs/source/index.rst) is the canonical working example.
 
-## Other documents
-
-- [What's new](docs/whats-new.md)
 - [Security audit guide](SECURITY_AUDIT.md)
 - [Migration boundary](migrates.md)
-- [Supported Python, Django, and database combinations](docs/support-matrix.md)
-- [Development and contribution guide](DEV.md)
-- [Release runbook](RELEASING.md)
+- [What's new](docs/whats-new.md)
+- [Development workflow](DEV.md)
+- [Release procedure](RELEASING.md)
 - [BSD 2-Clause License](LICENSE)
-
-## Other repositories
-
-- [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero) — continuation of the concrete django-trusts 0.x model
-- [django-trusts-zero-example](https://github.com/django-trusts/django-trusts-zero-example) — runnable application using Zero
-- [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions) — organization, team, and repository relationship reference
-- [django-trusts-ordered-fold](https://github.com/django-trusts/django-trusts-ordered-fold) — provisional PostgreSQL ordered allow/deny extension
-- [django-trusts-windows-acl](https://github.com/django-trusts/django-trusts-windows-acl) — Windows ACL example built on the OrderedFold extension
 
 Copyright BeeDesk, Inc., 2015–2026. Released under the BSD 2-Clause License.

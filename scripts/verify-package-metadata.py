@@ -53,7 +53,7 @@ def _check_metadata(meta_text: str, origin: str) -> None:
     description = meta.get('Description') or meta_text
     readme_markers = (
         '# django-trusts',
-        '## How permissions are represented',
+        '## Usage',
         'Installation in the usage guide',
         '[Security audit guide](SECURITY_AUDIT.md)',
     )
@@ -140,6 +140,10 @@ def _check_sdist(sdist: Path) -> None:
             pass
         else:
             raise SystemExit('sdist missing DEV.md')
+        for doc in ('docs/dev/development.md', 'SECURITY_AUDIT.md',
+                    'docs/source/index.rst', 'docs/whats-new.md'):
+            if not any(name.endswith('/' + doc) for name in names):
+                raise SystemExit('sdist missing linked documentation: ' + doc)
         management_hits = ships_trusts_management(names)
         if management_hits:
             raise SystemExit(
