@@ -52,17 +52,11 @@ def rule_applies(on, role):
 
 
 def normalize_on(on):
-    """``*``, ``user``, ``sponsor``, or a non-empty tuple of those names."""
-    if on in ('*', 'user', 'sponsor'):
+    """Conditions accept only ``*``, ``user``, or ``sponsor``."""
+    if isinstance(on, str) and on in ('*', 'user', 'sponsor'):
         return on
-    if (
-        isinstance(on, tuple) and on
-        and all(item in ('user', 'sponsor') for item in on)
-    ):
-        return '*' if len(set(on)) == 2 else on[0]
     raise TrustsConfigurationError(
-        'User condition on= must be "*", "user", "sponsor", or a '
-        'non-empty tuple of "user" and "sponsor", not %r.' % (on,)
+        'User condition on= must be "*", "user", or "sponsor", not %r.' % (on,)
     )
 
 
@@ -178,10 +172,7 @@ def assert_concrete_booleans(model, expr, name):
 
 
 def concrete_rule(expr, name):
-    """Walk ``expr`` and require concrete booleans on the user model.
-
-    ``set_user_condition('is_active', ...)`` does not use this field check.
-    """
+    """Walk ``expr`` and require concrete booleans on the user model."""
     from django.contrib.auth import get_user_model
 
     walked = walk_user_lambda(expr)

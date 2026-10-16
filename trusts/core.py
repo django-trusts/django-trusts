@@ -4225,10 +4225,8 @@ class TrustsRegistry(object):
         """Set, replace, or remove one named user condition.
 
         Call this before ``register()`` or ``register_delegation()``.
-        ``None`` removes that name. ``on`` is ``*``, ``user``, ``sponsor``,
-        or a non-empty tuple of those two. The lambda is walked once.
-        ``is_active`` replaces the default and is not checked against the
-        user model's fields. Other names must be concrete booleans.
+        ``None`` removes that name. ``on`` is ``*``, ``user``, or ``sponsor``.
+        The lambda is walked once and must use concrete boolean fields.
         """
         from django.contrib.auth import get_user_model
 
@@ -4238,7 +4236,6 @@ class TrustsRegistry(object):
             concrete_rule,
             normalize_on,
             validate_user_rule_name,
-            walk_user_lambda,
         )
 
         self._open_for_rules('condition')
@@ -4267,11 +4264,7 @@ class TrustsRegistry(object):
                 del self._user_conditions[name]
                 self._clear_compiled_rules()
                 return None
-            if name == 'is_active':
-                walked = walk_user_lambda(expr)
-            else:
-                walked = concrete_rule(expr, name)
-            rule = UserCondition(name, walked, target)
+            rule = UserCondition(name, concrete_rule(expr, name), target)
         except TrustsConfigurationError:
             if created:
                 self._user_conditions = None
@@ -4281,12 +4274,7 @@ class TrustsRegistry(object):
         return rule
 
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
-        """Fail when a fixed rule is not a concrete boolean on these models.
-
-        ``is_active`` is not checked. The default rule is added only when
-        that field exists, and ``set_user_condition('is_active', ...)``
-        replaces it without a field error.
-        """
+        """Require each applicable rule's concrete booleans on these models."""
         from trusts.user_rules import assert_concrete_booleans, rule_applies
 
         pairs = []
@@ -4297,7 +4285,7 @@ class TrustsRegistry(object):
         for model, role in pairs:
             concrete = model._meta.concrete_model
             for rule in self._conditions_for_model(concrete):
-                if rule.name == 'is_active' or not rule_applies(rule.on, role):
+                if not rule_applies(rule.on, role):
                     continue
                 assert_concrete_booleans(concrete, rule.expr, rule.name)
         slot = self._user_override

@@ -59,6 +59,27 @@ class UserConditionSuiteTest(TestCase):
 
 
 class UserConditionRegistrationTest(TransactionTestCase):
+    def test_is_active_name_does_not_bypass_expression_validation(self):
+        for expr in (lambda u: u.username, lambda u: u.is_authenticated,
+                     lambda u: u.does_not_exist):
+            with self.subTest(expr=expr):
+                registry = TrustsRegistry()
+                with self.assertNumQueries(0):
+                    with self.assertRaises(TrustsConfigurationError):
+                        registry.set_user_condition('is_active', expr)
+                self.assertIsNone(registry._user_conditions)
+
+    def test_tuple_targets_are_rejected_without_mutation(self):
+        for target in ((), ('user',), ('sponsor',), ('user', 'sponsor')):
+            with self.subTest(target=target):
+                registry = TrustsRegistry()
+                with self.assertNumQueries(0):
+                    with self.assertRaises(TrustsConfigurationError):
+                        registry.set_user_condition(
+                            'staff', lambda u: u.is_staff, on=target,
+                        )
+                self.assertIsNone(registry._user_conditions)
+
     def test_registration_walk_replace_and_remove(self):
         class Note(models.Model):
             title = models.CharField(max_length=20)
@@ -94,11 +115,11 @@ class UserConditionRegistrationTest(TransactionTestCase):
                 'staff', lambda u: u.is_active & u.is_superuser,
             )
             replaced = registry.set_user_condition(
-                'staff', lambda u: ~u.is_superuser, on=('user',),
+                'staff', lambda u: ~u.is_superuser, on='user',
             )
             self.assertEqual(replaced.on, 'user')
             both = registry.set_user_condition(
-                'either', lambda u: u.is_staff, on=('user', 'sponsor'),
+                'either', lambda u: u.is_staff, on='*',
             )
             self.assertEqual(both.on, '*')
             registry.set_user_condition('either', None)
@@ -1936,64 +1957,37 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             )
         self.assertEqual(len(registry.records), 1)
 
-    def test_set_is_active_replaces_the_default_without_raising(self):
-        """``set_user_condition('is_active', ...)`` replaces the default.
-
-        The call, ``register()``, and ``register_delegation()`` do not
-        raise when this model has no ``is_active`` column. Another
-        condition name still requires a concrete boolean field.
-        """
+    def test_explicit_is_active_requires_a_boolean_field(self):
+        """Only the implicit default is optional when the field is absent."""
         from unittest.mock import patch
 
-        user_model, note_model, grant_model, link_model = self._create(
-            'Replaced',
-        )
+        user_model, note_model, grant_model, link_model = self._create('Replaced')
         try:
-            grant = Ref(grant_model)
-            link = Ref(link_model)
+            registry = TrustsRegistry()
+            with patch('django.contrib.auth.get_user_model', return_value=user_model):
+                with self.assertNumQueries(0):
+                    with self.assertRaises(TrustsConfigurationError):
+                        registry.set_user_condition('is_active', lambda u: u.is_active)
+            self.assertIsNone(registry._user_conditions)
+            self.assertEqual(len(registry.records), 0)
 
-            def set_active(registry):
-                with patch(
-                    'django.contrib.auth.get_user_model',
-                    return_value=user_model,
-                ):
-                    return registry.set_user_condition(
-                        'is_active', lambda u: u.is_active,
+            # A rule valid for AUTH_USER_MODEL must also be valid for a
+            # different user or sponsor model used by a registration.
+            registry.set_user_condition('is_active', lambda u: u.is_active)
+            grant, link = Ref(grant_model), Ref(link_model)
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError):
+                    registry.register(
+                        content=grant.note, user=grant.user,
+                        permission=grant.permission,
                     )
-
-            explicit = TrustsRegistry()
-            rule = set_active(explicit)
-            self.assertEqual(rule.name, 'is_active')
-            with self.assertNumQueries(0):
-                explicit.register(
-                    content=grant.note,
-                    user=grant.user,
-                    permission=grant.permission,
-                )
-            self.assertEqual(len(explicit.records), 1)
-
-            delegated = TrustsRegistry()
-            set_active(delegated)
-            with self.assertNumQueries(0):
-                delegated.register_delegation(
-                    content=link.note,
-                    delegate=link.delegate,
-                    sponsor=link.sponsor,
-                )
-            self.assertEqual(len(delegated.delegations), 1)
-
-            other = TrustsRegistry()
-            with patch(
-                'django.contrib.auth.get_user_model',
-                return_value=user_model,
-            ):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    other.set_user_condition('staff', lambda u: u.is_staff)
-            message = str(ctx.exception)
-            self.assertIn("User condition 'staff'", message)
-            self.assertIn('concrete BooleanField', message)
-            self.assertIn(user_model._meta.label, message)
-            self.assertIsNone(other._user_conditions)
+                with self.assertRaises(TrustsConfigurationError):
+                    registry.register_delegation(
+                        content=link.note, delegate=link.delegate,
+                        sponsor=link.sponsor,
+                    )
+            self.assertEqual(len(registry.records), 0)
+            self.assertEqual(len(registry.delegations), 0)
         finally:
             self._drop(user_model, note_model, grant_model, link_model)
 
