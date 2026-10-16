@@ -444,8 +444,8 @@ walk, bound, generated recursive SQL, and returned-user parity together.
 Current CI exercises Along only for the database combinations listed in the
 support matrix.
 
-For time-dependent conditions, audit database session time zones and timestamp
-precision; use fresh inquiries when expiration must be checked again.
+For time-dependent conditions, audit the
+[setup guide's clock and queryset-cache boundaries](index.rst#condition-expressions).
 
 ## Fail-closed principle
 
