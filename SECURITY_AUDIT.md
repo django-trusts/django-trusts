@@ -200,8 +200,8 @@ effective when other user conditions are skipped in the override itself.
 | Override | `"user"` | Alternative to ordinary grants | Never supported | Removed |
 | Condition with `on="sponsor"` (e.g. `superuser_cannot_sponsor`) | n/a | Not checked | Required | Removed for the sponsor |
 
-Conditions accept `on="*"` (default), `"user"`, `"sponsor"`, or a non-empty
-tuple of `"user"` and `"sponsor"`. Overrides accept only `"user"`. Other values
+Conditions accept `on="*"` (default), `"user"`, or `"sponsor"`.
+Overrides accept only `"user"`. Other values
 raise at registration. One skip removes a condition for every target in its
 `on=`.
 
