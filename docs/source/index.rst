@@ -129,6 +129,7 @@ The application owns its protected content and trust models.
            on_delete=models.CASCADE,
        )
        permissions = models.ManyToManyField(Permission)
+       expires_at = models.DateTimeField()
 
 ``DocumentPermission`` connects one user and one permission to one document.
 ``GroupDocumentPermission`` connects a Django group to one document; users
@@ -234,6 +235,8 @@ Register the model paths when the application starts:
        def ready(self):
            super().ready()
 
+           from django.db.models.functions import Now
+
            from .models import (
                Document,
                DocumentDelegation,
@@ -259,7 +262,9 @@ Register the model paths when the application starts:
                delegate=lambda d: d.delegate,
                sponsor=lambda d: d.sponsor,
                content=lambda d: d.document,
-               condition=lambda d, p: d.permissions.contains(p),
+               condition=lambda d, p: (
+                   d.permissions.contains(p) & (d.expires_at > Now())
+               ),
            )
            backend.add_named_filter(
                Document,
@@ -312,15 +317,20 @@ available as independent alternatives.
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
 The one-argument form applies row-only restrictions. The two-argument form in
-the example checks the requested permission against ``permissions``.
+the example checks the requested permission against ``permissions`` and
+requires that the same relationship has not expired.
 Create the relationship and its scope with ordinary application data writes:
 
 .. code-block:: python
+
+   from datetime import timedelta
+   from django.utils import timezone
 
    delegation = DocumentDelegation.objects.create(
        delegate=automation_user,
        sponsor=owner,
        document=document,
+       expires_at=timezone.now() + timedelta(hours=1),
    )
    delegation.permissions.add(change_document)
 
@@ -657,19 +667,35 @@ API also supports paths through multiple relationships:
        content=lambda t: t.document,  # or "document"
    )
 
+.. _condition-expressions:
+
 For an ordinary registration, the ``condition=`` argument is a one-argument
 symbolic condition rooted at the trust model. A delegated registration may
 use the same one-argument form for row-only restrictions or the two-argument
 form shown above when its relationship scope must compare with the requested
 permission. django-trusts invokes either builder once during registration and
-stores no callable. The condition grammar is path equality
-(``==``), collection-rooted membership (``.contains(member)``), and
-conjunction (``&``). Parenthesize ``==`` when combining it with ``&``.
+stores no callable. Conditions support path equality (``==``), scalar
+comparisons (``<``, ``<=``, ``>``, ``>=``), collection-rooted membership
+(``.contains(member)``), and conjunction (``&``). Parenthesize comparisons
+when combining them with ``&``.
 Python ``in``, ``and`` / ``or`` / ``not``, and prebuilt ``All`` /
 ``Equal`` / ``permission_in`` values are not accepted. ``.contains`` is a
 reserved method on the condition proxy; a model field actually named
 ``contains`` cannot be walked there. ``predicate=`` is reserved and
-unsupported in 1.0.
+unsupported.
+
+The supported SQL functions are ``Now()``, ``Lower(expression)``, and
+``Coalesce(first, second, ...)`` from ``django.db.models.functions``.
+Function arguments may be field references, typed constants, or nested
+supported functions. Comparisons put the symbolic field on the left; function
+calls may appear on the right or as function arguments. Use Django's ``Value``
+for a literal string inside a function. ``Lower`` accepts text; ``Coalesce``
+requires at least two compatible arguments. The same expressions can be used in
+named filters.
+``Now()`` uses the database time when the query executes; clock precision and
+time-zone behavior follow the database backend. An evaluated
+queryset keeps its cached results; make a fresh inquiry to check expiration
+again.
 
 .. code-block:: python
 
