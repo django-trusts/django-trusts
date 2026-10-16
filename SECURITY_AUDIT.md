@@ -80,24 +80,11 @@ The public registration signature is
 An ordinary registration supplies `user=` and exactly one of `permission=` or
 `group=`. The required `trust=` model is the root of its non-empty paths:
 
-```python
-backend.register(
-    trust=DocumentPermission,
-    user=lambda t: t.user,
-    permission=lambda t: t.permission,
-    content=lambda t: t.document,
-)
-
-backend.register(
-    trust=DocumentPermission,
-    user="user",
-    permission="permission",
-    content="document",
-)
-```
+The [setup guide](docs/source/index.rst#register-the-trust) shows lambda and
+string declarations for this registration.
 
 Each path accepts either a Django `__` string or a one-argument path lambda;
-both forms of the same registration are shown above. django-trusts calls the
+django-trusts calls the
 lambda once with a symbolic path value. Attribute access records a path rooted
 at the `trust=` model; other operations are unsupported. django-trusts
 validates the resulting path with Django model metadata, stores its normalized
@@ -205,7 +192,7 @@ raise at registration. One skip removes a condition for every target in its
 `on=`.
 
 Audit the user-rule SQL as described in the
-[policy SQL guide](docs/dev/permission-policy-sql.rst#user-rules).
+[policy SQL guide](docs/dev/permission-policy-sql.rst#user-conditions-and-overrides).
 
 ### Delegation boundaries
 
@@ -248,55 +235,6 @@ and then query only its first hop.
 The `user`, `permission`, and `content` relationship path arguments may
 not be empty.
 
-### Named filters restrict the query
-
-A named filter is registered against the protected model:
-
-```python
-backend.add_named_filter(
-    Document,
-    "non_confidential",
-    predicate=lambda u, p, o: o.confidential != True,
-)
-```
-
-The backend invokes the callable once with symbolic user, permission, and
-object references. Operations on those references construct a closed expression
-tree; django-trusts validates and normalizes that result, stores only the
-immutable IR, and discards the callable. The condition runs in the same
-application-startup context as its surrounding code and receives no additional
-authority from django-trusts. django-trusts does not inspect or sandbox the
-callable body; SQL, I/O, request state, and mutable captures remain application
-behavior outside the returned-expression validation.
-
-At an authorization site, the named filter restricts an existing grant:
-
-```text
-SelectedAuthorizationEngine(object, user, permission)
-AND
-NamedFilter(object, user, permission)
-```
-
-Unknown, unbound, or untranslatable named filters are intended to produce no
-grant. A filter restricts an existing grant; it is not intended to create one.
-Permission enumeration returns bare permissions rather than every possible
-combination of permission and filter names.
-
-### Runtime callbacks are unsupported
-
-Arbitrary runtime permission callbacks are not part of the public surface. They
-are outside the supported object/queryset parity, startup-validation,
-deterministic-inspection, and fixed-query model.
-
-The obsolete `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` setting does not
-restore callbacks. If it remains true, Django's system checks report
-`trusts.E007`.
-
-Policy conditions define fixed query structure during registration. Runtime
-request values may bind only to a predeclared lookup and must remain
-parameterized data; they may not choose a model, backend, permission, path,
-operator, condition structure, ordering, or SQL fragment.
-
 ## Configure Django
 
 Audit all of the following:
@@ -310,6 +248,37 @@ Audit all of the following:
 
 django-trusts is schema-neutral and has no final `AppConfig`. Concrete implementations
 own their application labels, migrations, tables, and registration calls.
+
+## Ask permission questions
+
+All Trusts projections follow the
+[registered user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
+
+The supported projections consume the same normalized registration:
+
+| Question | Public shape | Expected database behavior |
+| --- | --- | --- |
+| Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
+| Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user conditions and overrides within each Trusts branch |
+| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
+
+`.permitted(permission, user)` is the public content-list inquiry.
+`.authorized(user, permission, extra_q=None)` is the lower-level instance
+projection: it accepts permission instances rather than strings and does not
+select named conditions. Both use the shared user checks.
+
+Fixed-query behavior is intentional: registration-time structure and
+parameterized runtime bindings keep the authorization surface closed and
+inspectable. It is not proof that application data, neighboring backends, or
+deployment choices are trustworthy. Review the actual generated query whenever
+a registration shape, Django version, database backend, or compiler changes.
+
+## User conditions and overrides
+
+The [setup guide](docs/source/index.rst#user-conditions-and-overrides) explains
+registration, replacement, removal, and per-inquiry skip options.
 
 ### Django auth's checks before calling backends
 
@@ -360,39 +329,14 @@ grants. Trusts cannot revoke authorization supplied by another backend. Audit
 every configured backend for object-permission behavior; do not rely on a
 rejecting Trusts branch as a global deny.
 
-## Ask permission questions
-
-All Trusts projections follow the
-[registered user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
-
-The supported projections consume the same normalized registration:
-
-| Question | Public shape | Expected database behavior |
-| --- | --- | --- |
-| Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
-| Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user conditions and overrides within each Trusts branch |
-| View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
-
-`.permitted(permission, user)` is the public content-list inquiry.
-`.authorized(user, permission, extra_q=None)` is the lower-level instance
-projection: it accepts permission instances rather than strings and does not
-select named conditions. Both use the shared user checks.
+## Protect a view
 
 The django-trusts view guard deliberately accepts only `view_kwargs["pk"]`, coerces it
 through the protected model's primary-key field, and keeps it as a parameter.
 Request data cannot select query structure.
 
-```python
-@authorization_required(
-    Document,
-    "documents.change_document",
-    ("non_confidential",),
-)
-def edit_document(request, pk):
-    ...
-```
+The [view example](docs/source/index.rst#protect-a-view) shows the guard's
+application setup.
 
 The guard performs structural preflight before candidate lookup. An absent
 candidate produces 404; an existing but unauthorized candidate produces 403.
@@ -402,13 +346,51 @@ override still requires the candidate to exist and required user conditions
 to pass.
 
 
-Fixed-query behavior is intentional: registration-time structure and
-parameterized runtime bindings keep the authorization surface closed and
-inspectable. It is not proof that application data, neighboring backends, or
-deployment choices are trustworthy. Review the actual generated query whenever
-a registration shape, Django version, database backend, or compiler changes.
-
 ## More expressive policies
+
+### Named filters restrict the query
+
+A named filter is registered against the protected model:
+
+The [named-filter example](docs/source/index.rst#named-filters) supplies the
+registration used here.
+
+The backend invokes the callable once with symbolic user, permission, and
+object references. Operations on those references construct a closed expression
+tree; django-trusts validates and normalizes that result, stores only the
+immutable IR, and discards the callable. The condition runs in the same
+application-startup context as its surrounding code and receives no additional
+authority from django-trusts. django-trusts does not inspect or sandbox the
+callable body; SQL, I/O, request state, and mutable captures remain application
+behavior outside the returned-expression validation.
+
+At an authorization site, the named filter restricts an existing grant:
+
+```text
+SelectedAuthorizationEngine(object, user, permission)
+AND
+NamedFilter(object, user, permission)
+```
+
+Unknown, unbound, or untranslatable named filters are intended to produce no
+grant. A filter restricts an existing grant; it is not intended to create one.
+Permission enumeration returns bare permissions rather than every possible
+combination of permission and filter names.
+
+### Runtime callbacks are unsupported
+
+Arbitrary runtime permission callbacks are not part of the public surface. They
+are outside the supported object/queryset parity, startup-validation,
+deterministic-inspection, and fixed-query model.
+
+The obsolete `TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS` setting does not
+restore callbacks. If it remains true, Django's system checks report
+`trusts.E007`.
+
+Policy conditions define fixed query structure during registration. Runtime
+request values may bind only to a predeclared lookup and must remain
+parameterized data; they may not choose a model, backend, permission, path,
+operator, condition structure, ordering, or SQL fragment.
 
 ### Many-to-many paths
 
@@ -592,19 +574,9 @@ mechanism, not a complete security proof.
 
 ## Reference implementations
 
-Reference repositories validate bounded portions of the django-trusts contract:
-
-- [django-trusts-zero](https://github.com/django-trusts/django-trusts-zero)
-  preserves the concrete 0.x Trust model and migration identity.
-- [django-trusts-zero-example](https://github.com/django-trusts/django-trusts-zero-example)
-  is a runnable Zero application.
-- [django-trusts-gh-permissions](https://github.com/django-trusts/django-trusts-gh-permissions)
-  demonstrates direct and team-derived relationship grants, ceilings, and
-  organization alignment.
-
-Each reference repository provides an example for its listed schema and
-operations. It should not be read as a security assessment of applications
-adapted from it.
+The [setup guide's reference implementations](docs/source/index.rst#reference-implementations)
+illustrate supported declaration shapes; their examples are not application
+security assessments.
 
 ## Validation and review discipline
 

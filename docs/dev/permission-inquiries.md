@@ -6,6 +6,16 @@ This reorganization has not been reviewed by a human for current accuracy.
 Development reference consolidated from the #270 content-queryset contract,
 the #255 users-from-content contract, and the registry projection record.
 
+## Inquiry map
+
+| Inquiry | Public spelling |
+| --- | --- |
+| May this user do this on one object? | `user.has_perm(permission, object)` |
+| Which permissions does this user hold on one object? | `user.get_all_permissions(object)` |
+| Which objects may this user access with one permission? | `queryset.permitted(permission, user)` |
+| Which users may access one object with one permission? | `content.get_permitted_users(permission)` |
+
+
 ## Permitted content querysets
 
 Public contract for issue #270. `queryset.permitted(permission, user, conditions=(), **skip_options)`
@@ -84,52 +94,13 @@ That gap is [issue #268](https://github.com/django-trusts/django-trusts/issues/2
 not a second implementation of the current `has_perm` codec.
 
 A saved `auth.Permission` instance is bound by its primary key. Building
-that queryset does not read `permission.content_type`. The shared grant
-condition requires the row's content type to be the queryset model's
-content type. A same codename on another model does not become this model's
-permission.
+that queryset does not read `permission.content_type`. The [content-type boundary](../../SECURITY_AUDIT.md#permission-content-type)
+prevents a same codename on another model from becoming this model's permission.
 
 ### Manager attachment
 
-The method has to live on the queryset. `Repository.objects.filter(...).permitted(...)`
-uses whatever queryset class `filter()` returned.
-
-```python
-from django.db import models
-from trusts.query import PermittedQuerySetMixin
-
-
-class RepositoryQuerySet(PermittedQuerySetMixin, models.QuerySet):
-    def for_organization(self, organization):
-        return self.filter(organization=organization)
-
-
-class Repository(models.Model):
-    objects = RepositoryQuerySet.as_manager()
-```
-
-An application that already owns a manager class supplies that queryset
-with `from_queryset`:
-
-```python
-class RepositoryManager(models.Manager.from_queryset(RepositoryQuerySet)):
-    def application_method(self):
-        return "owned"
-
-
-class Repository(models.Model):
-    objects = RepositoryManager()
-```
-
-`PermittedQuerySet` and `PermittedManager = Manager.from_queryset(PermittedQuerySet)`
-are the concrete forms when the application does not need its own queryset
-methods. There is no `PermittedManagerMixin`: a manager-only method is absent
-from the queryset returned by `filter()`.
-
-`AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager`, and
-`.authorized(user, permission, extra_q=None)` stay exported. New user
-documentation teaches `.permitted()` for this inquiry. `.authorized()` is
-the lower-level instance projection, not a second spelling of the same call.
+The [setup guide](../source/index.rst#define-the-models) shows queryset mixins,
+`as_manager()`, `from_queryset()`, and the concrete manager alternatives.
 
 ### Participating backends
 
@@ -216,24 +187,6 @@ A string whose application label does not match the model is that second
 case. `authorization_required` still rejects a mismatched application label
 when the view is declared. That static check stays on the decorator.
 
-### Relationship to existing APIs
-
-| Inquiry | Public spelling |
-| --- | --- |
-| May this user do this on one object? | `user.has_perm(permission, object)` |
-| Which permissions does this user hold on one object? | `user.get_all_permissions(object)` |
-| Which objects may this user access with one permission? | `queryset.permitted(permission, user)` |
-| Which users may access one object with one permission? | `content.get_permitted_users(permission)` |
-
-`.authorized(user, permission, extra_q=None)` remains available. It accepts
-any saved permission-terminal instance, including a custom model, applies the
-shared user checks, and ANDs `extra_q`. It is not routed
-through `.permitted()` validation. Its docstring points here.
-
-Zero already exposes `ContentQuerySet.permitted(perm, user)`. This slice
-does not change that method. It keeps Zero's wider codec, its own handles,
-and its own contract checks.
-
 ### Non-goals
 
 This API does not infer:
@@ -271,28 +224,8 @@ internal compiler for users from content, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
 
-The universally available adapter is `PermittedUsersMixin` on a protected
-content model:
-
-```python
-from django.db import models
-from trusts.query import PermittedUsersMixin
-
-
-class Document(PermittedUsersMixin, models.Model):
-    ...
-```
-
-The optional ergonomic adapter is `PermittedUsersManagerMixin` composed
-with the application's existing user manager:
-
-```python
-from trusts.query import PermittedUsersManagerMixin
-
-
-class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
-    ...
-```
+The [setup guide](../source/index.rst#ask-permission-questions) shows
+`PermittedUsersMixin` and the optional `PermittedUsersManagerMixin` attachment.
 
 The mixin does not replace the application's manager, user model, or queryset
 class. Applications using stock `auth.User` or a concrete third-party user
@@ -300,46 +233,27 @@ model may be unable to install it without changing `AUTH_USER_MODEL`; they use
 the content adapter instead. Zero's migration-identity technique does not make
 such a user-model substitution migration-free.
 
-The user-manager method is `permitted(content, perm)`. The manager already
-identifies the returned user model, and Django's `get` convention implies
-one row, while this method returns a lazy queryset. The mixin name stays
-`PermittedUsersManagerMixin`. The content spelling
-`get_permitted_users(perm)` is the compatibility path because protected
-content models are already application-owned Trusts participants. Neither
-spelling is semantically stronger.
-
 There is no `ContentManagerMixin.get_permitted_users()`. A content manager
 normally returns content rows; making it return users would switch result
 models and require passing a content instance already in hand. The content
 instance method still returns a normal user queryset, so downstream
 `.filter()`, `.exclude()`, `.annotate()`, and ordering remain available.
 
-### The inquiry
-
-Both adapters answer one question:
-
-> Which users may perform this permission on this content object?
-
-It is the reverse of the existing user-to-content projection:
-
-```python
-Document.objects.authorized(user, permission)
-```
-
-It is also different from Zero's content-queryset `.permitted(perm, user)`,
-which is a string-friendly user-to-content projection. The optional
-user-manager method `User.objects.permitted(content, perm)` is not that
-method and does not wrap it. Neither existing method is renamed by this API.
-
-Each adapter accepts exactly one saved content instance and exactly one
-permission. Neither argument accepts a queryset. Passing an unsaved content
-instance is invalid and fails before SQL rather than silently returning an
-empty or partial result.
+### Inquiry scope
 
 Queryset-valued content or permission inputs are deliberately deferred. They
 would require explicit ANY/ALL quantifiers, including separate quantifiers when
 both axes are querysets, defined empty-set behavior, and additional
 authorization-policy lockfile rules.
+
+### Candidate users
+
+The comparison uses the candidate users from the application's existing
+default user manager. A custom default manager may intentionally exclude rows.
+The content adapter preserves that manager's queryset type and filters. The
+optional user-manager adapter uses the application manager on which the mixin
+is installed; installing it on the default manager gives both adapters the
+same candidate universe.
 
 ### Permission input
 
@@ -359,11 +273,8 @@ a Django-facing alias: Core parses it with the same rules as
 `user.has_perm(perm, content)` and binds it to the permission row applicable
 to the supplied content and registration. The row lookup remains inside the
 eventual SQL query; accepting a string does not add a construction-time query.
-When that row's concrete model is `auth.Permission`, the grant also
-requires the protected object's content identity. A proxy keeps its own.
-A mismatch returns no ordinary users. Any other permission terminal stays
-primary-key identity, including a custom model with a `content_type`
-foreign key.
+The [content-type boundary](../../SECURITY_AUDIT.md#permission-content-type)
+applies to accepted permission rows.
 
 For the singular agreement check, a Django `auth.Permission` instance is
 represented by its Django 6.1 `instance.user_perm_str` property,
@@ -401,22 +312,13 @@ backends and cannot forward Trusts skip options. The locked
 `get_permitted_users` statement is one Trusts backend contribution, not the
 aggregate result across authentication backends.
 
-#### User conditions and overrides and Django's backend boundary
+#### User conditions and overrides
 
-Trusts user conditions and overrides are described once in the guide linked above. A registered
-override participates in inquiries for users from content; no superuser grant is implicit.
-Django's native `PermissionsMixin.has_perm()` can return before consulting
-backends. See the [security audit's Django boundary](../../SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
+See the [user conditions and overrides](../source/index.rst#user-conditions-and-overrides)
+and the [Django backend boundary](../../SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
 
 A supported backend must express its contribution in SQL. Arbitrary
 Python-only state is unsupported and fails loudly.
-
-The comparison uses the candidate users from the application's existing
-default user manager. A custom default manager may intentionally exclude rows.
-The content adapter preserves that manager's queryset type and filters. The
-optional user-manager adapter uses the application manager on which the mixin
-is installed; installing it on the default manager gives both adapters the
-same candidate universe.
 
 ### Backend coverage
 
@@ -432,27 +334,26 @@ classes:
    recognized built-in backend whose contract establishes, that it cannot
    grant when an object is supplied.
 3. **Unsupported.** It might grant an object permission but cannot express the
-   reverse condition.
+   condition over candidate users.
 
 Core ORs the backend conditions in one user query. A backend that grants no
 object permissions adds nothing. The presence of an unsupported backend raises
 `TrustsConfigurationError` before SQL instead of returning an incomplete
 queryset.
 
-The implementation may use a protected backend hook or capability marker.
-Its exact internal name is not part of the application-facing API selected in
-this document. The semantics are mandatory:
+`TrustModelBackendMixin.permitted_users_predicate(content, perm)` returns
+the backend branch as a `Q`, or `None` when that path does not apply.
+`singular_permission_accepted(perm)` is how a backend declares that
+singular object `has_perm` accepts a non-string permission instance. The
+mixin default accepts `django.contrib.auth.models.Permission` only.
 
-- a `TrustModelBackendMixin` backend contributes the same
-  relationship plan and named-filter overlay used by its singular
-  `has_perm`;
-- separate Trusts backend paths OR together, just as Django's authentication backend
-  loop does;
-- the stock `ModelBackend` contributes no object grant;
-- a third-party authentication-only backend must be explicitly known as a
-  unable to grant object permissions rather than inferred from a class name;
-- a third-party object-permission backend must supply a users-from-content
-  contribution or make the inquiry unsupported.
+`trusts_object_permissions = False` marks an authentication-only backend
+as a backend that grants no object permissions. The exact classes `ModelBackend`,
+`AllowAllUsersModelBackend`, `RemoteUserBackend`, and
+`AllowAllUsersRemoteUserBackend` are object-blind. A subclass is not
+inferred from that ancestry. Any other object-capable `has_perm` without
+`permitted_users_predicate` raises `TrustsConfigurationError` before SQL.
+
 
 A rejection by one backend never cancels a grant from another backend.
 
@@ -498,7 +399,7 @@ it is not the existing `permitted` operation, which means user-to-content.
 The content adapter begins with
 `get_user_model()._default_manager.get_queryset()`. The optional user-manager
 adapter begins with that manager instance's existing queryset and adds the same
-reverse condition.
+condition over candidate users.
 
 A saved content instance supplies its database alias when available. Otherwise
 Django's router selects the read database. All correlated Trusts and permission
@@ -592,31 +493,9 @@ Phase B1 ships no public application method. Phase B2 exposes
 contract and their result equivalence are proven. Each implementation slice
 must be re-sized from the accepted previous head.
 
-### Phase B compiler boundary
-
-`TrustModelBackendMixin.permitted_users_predicate(content, perm)` returns
-the backend branch as a `Q`, or `None` when that path does not apply.
-`singular_permission_accepted(perm)` is how a backend declares that
-singular object `has_perm` accepts a non-string permission instance. The
-mixin default accepts `django.contrib.auth.models.Permission` only.
-
-`trusts_object_permissions = False` marks an authentication-only backend
-as a backend that grants no object permissions. The exact classes `ModelBackend`,
-`AllowAllUsersModelBackend`, `RemoteUserBackend`, and
-`AllowAllUsersRemoteUserBackend` are object-blind. A subclass is not
-inferred from that ancestry. Any other object-capable `has_perm` without
-`permitted_users_predicate` raises `TrustsConfigurationError` before SQL.
-
-An `Along` registration grants through a user-seeded walk. The inquiry for users from content
-derives walk-site identities from the bound content, traverses the inverse
-graph without the outer candidate user, and joins eligible grants and users
-outside the CTE. It uses the same bound, terminal `condition=` overlay, and
-user checks as the forward proof. The condition is
-not evaluated on intermediate walk nodes. For a fixed content and permission,
-the result must agree with the object check for every candidate user.
-The policy-lock statement uses this same compiler for users from content. An unsupported
-renderer or unrenderable recursive condition raises before SQL or partial
-policy output; the path is never dropped or widened to every user.
+For `along=`, returned users must agree with the backend object check under
+the same bound, terminal condition, and user conditions and overrides; see the
+[registry walk implementation](core-registry.md) for the SQL construction.
 
 The content adapter's candidate model is `settings.AUTH_USER_MODEL`. A
 registration whose user terminal is a different model fails that adapter
@@ -627,7 +506,6 @@ that owns it.
 ### Related work
 
 Issue #185 keeps the broader inquiry map and earlier user-to-content history.
-This document owns only the inquiry from content and permission to users.
 
 Async dispatch #247 and the GH organization-admin work are independent.
 Most `OrgScopedAdmin` code protects Django admin services such as form

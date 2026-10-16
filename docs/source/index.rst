@@ -583,6 +583,8 @@ replaces it. Pass its current name with ``None`` to remove it.
 
 Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md#django-auths-checks-before-calling-backends>`_.
 
+.. _protect-a-view:
+
 Protect a view with the Trusts-only primary-key guard:
 
 .. code-block:: python
@@ -725,22 +727,9 @@ YAML containing parameterized compiler SQL:
 The command uses ``TRUSTS_POLICY_DATABASE``, or Django's ``default`` alias when
 unset. ``--database`` selects another configured alias for one invocation.
 
-The artifact is organized by backend and protected content model. A content
-with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
-``get_all_permissions``, and ``get_permitted_users``. When the content path
-passes through another model before the protected object, it also lists
-``filter_by_permitted_content``: one statement for each of those models,
-the same SQL and parameter values ``filter_by_permitted_content`` runs.
-The locked ``get_permitted_users`` statement is that backend's query for users
-from content. A content with named filters lists those queries.
-Empty relationship backends remain visible as ``contents: []``.
-
-User conditions appear in the SQL, each with a ``skip_<name>=False`` parameter.
-
-``content.get_permitted_users(perm)`` and
-``User.objects.permitted(content, perm)`` call the same compiler, so the
-artifact contains one query for users from content rather than duplicate entries. The
-lockfile key remains ``get_permitted_users``. For the direct
+Output is grouped by backend and protected content; see the `SQL reference
+<https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-policy-sql.rst>`_
+for its schema and parameter notation. For the direct
 ``DocumentPermission`` example on SQLite, that entry is:
 
 .. code-block:: yaml
