@@ -712,6 +712,12 @@ An example Windows declaration lives in
 `django-trusts-windows-acl
 <https://github.com/django-trusts/django-trusts-windows-acl>`_.
 
+Registration errors
+-------------------
+
+The first registration error may be available as ``trusts.E010`` in Django's
+system checks and permission-policy SQL output.
+
 Permission policy in SQL
 ------------------------
 
@@ -768,6 +774,8 @@ committed lockfile when the conventional file exists or
            )
            LIMIT 1
          ) )
+
+Registration errors may be listed as one ``code: message`` entry.
 
 ``TRUSTS_SQL_BIND_ONCE`` defaults to true and enables the one-row bind-table
 rewrite. Leave it enabled. Set it to false only if that SQL misbehaves;
