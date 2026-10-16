@@ -1032,7 +1032,7 @@ def _project_named_filters(registry, alias):
 
 
 def _compile_named_filter(model, expr, alias):
-    from trusts.conditions._ir import compile_expression_q
+    from trusts.plan.conditions import compile_expression_q
 
     compiled = compile_expression_q(
         expr, model,
@@ -1279,7 +1279,7 @@ def _lockfile_enforcement_applies(location):
 
 
 def _filter_queues(expr):
-    from trusts.conditions import _ir
+    from trusts.plan import conditions as _ir
 
     queues = {}
 
@@ -1302,7 +1302,7 @@ def _filter_queues(expr):
 
 
 def _comparison_symbol(node):
-    from trusts.conditions import _ir
+    from trusts.plan import conditions as _ir
 
     left = node.left
     right = node.right
@@ -1686,7 +1686,7 @@ def _json_const(value):
     mappings as ordinary mappings and quotes every string inside them,
     so YAML 1.1 does not reinterpret dates, bool words, or decimals.
     """
-    from trusts.conditions._ir import ModelIdentity
+    from trusts.plan.conditions import ModelIdentity
 
     if isinstance(value, bool) or value is None or isinstance(value, str):
         return value
@@ -1741,7 +1741,7 @@ def _json_const(value):
 
 def _const_from_json(value):
     """Inverse of :func:`_json_const` for one recorded constant value."""
-    from trusts.conditions._ir import ModelIdentity
+    from trusts.plan.conditions import ModelIdentity
 
     if isinstance(value, dict):
         kind = value.get('type')

@@ -5,13 +5,13 @@ Register named filters as builders on the configured backend
 condition exceptions and permission-code helpers.
 
 Construction nodes, ref factories, reserved ``Query`` / ``TQ``, and
-registry/compiler store types live in ``trusts.conditions._ir``.
+registry/compiler store types live in ``trusts.plan.conditions``.
 ``from trusts.conditions import Expr`` and
 ``from trusts.conditions import ConditionRegistry`` raise
 ``ImportError``.
 """
 
-from trusts.conditions._ir import (
+from trusts.plan.conditions import (
     permission_condition_code,
     permission_has_condition,
 )

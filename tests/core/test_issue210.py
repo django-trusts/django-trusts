@@ -27,8 +27,8 @@ from tests.core.test_issue98 import (
 )
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.conditions._ir import Eq as IrEq
-from trusts.conditions._ir import Ref as IrRef
+from trusts.plan.conditions import Eq as IrEq
+from trusts.plan.conditions import Ref as IrRef
 from trusts.core import (
     All,
     Along,

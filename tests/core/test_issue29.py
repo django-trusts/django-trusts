@@ -24,7 +24,7 @@ from trusts.checks import (
     permission_condition_check_messages,
 )
 from trusts.conditions import PermissionConditionError
-from trusts.conditions._ir import (
+from trusts.plan.conditions import (
     ConditionRecord,
     Ref,
     condition_refs,

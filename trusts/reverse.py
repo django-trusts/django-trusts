@@ -416,7 +416,7 @@ def _named_filter_q(backend, content, perm, singular, user_model):
 
 
 def _condition_outcome(expr, content, singular, user_model):
-    from trusts.conditions import _ir
+    from trusts.plan import conditions as _ir
 
     if isinstance(expr, _ir.And):
         return _combine_and(
@@ -478,7 +478,7 @@ def _comparison_outcome(expr, content, singular, user_model, *, equal):
 
 
 def _condition_side(node, content, singular, user_model):
-    from trusts.conditions import _ir
+    from trusts.plan import conditions as _ir
 
     if isinstance(node, _ir.Const):
         return ('const', node.value)
@@ -562,7 +562,7 @@ def _user_lookup(user_model, path):
 
 
 def _user_const_q(lookup, value, equal):
-    from trusts.conditions._ir import ModelIdentity
+    from trusts.plan.conditions import ModelIdentity
 
     if isinstance(value, ModelIdentity):
         value = value.pk

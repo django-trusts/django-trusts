@@ -22,7 +22,7 @@ from django.core import checks as django_checks
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.policy_lock  # noqa: F401
 from trusts.conditions import PermissionConditionError
-from trusts.conditions._ir import (
+from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )

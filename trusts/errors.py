@@ -1,9 +1,8 @@
 """Configuration and permission-condition errors.
 
-``TrustsConfigurationError`` and ``TrustsCompilerError`` used to be
-defined in ``trusts.core``. The permission-condition errors used to be
-defined in ``trusts.conditions._ir``. Both locations re-export these
-classes so existing imports keep working.
+``TrustsConfigurationError`` and ``TrustsCompilerError`` are re-exported
+from ``trusts.core``. The permission-condition errors are re-exported
+from ``trusts.conditions``.
 """
 
 

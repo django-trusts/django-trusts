@@ -1,7 +1,7 @@
 """#16 / #142 Stage A: per-handle condition registry and builders.
 
 Library-only proofs. Does not import Zero nouns. Prebuilt ``Expr``
-registration is rejected; compiler tests import ``trusts.conditions._ir``.
+registration is rejected; compiler tests import ``trusts.plan.conditions``.
 """
 
 from contextlib import contextmanager
@@ -30,7 +30,7 @@ from trusts.conditions import (
     PermissionConditionError,
     PermissionConditionUnsupported,
 )
-from trusts.conditions._ir import (
+from trusts.plan.conditions import (
     ConditionLookup,
     ConditionRecord,
     ConditionRegistry,
@@ -467,7 +467,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         uid = uuid4()
         amount = Decimal('1.5')
         # Construction of unused extras proves as_node accepts the types.
-        from trusts.conditions._ir import as_node
+        from trusts.plan.conditions import as_node
         self.assertEqual(as_node(amount).value, amount)
         self.assertEqual(as_node(uid).value, uid)
         self.assertEqual(as_node(None).value, None)

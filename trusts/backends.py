@@ -12,7 +12,7 @@ from trusts.conditions import (
     PermissionConditionError,
     permission_has_condition,
 )
-from trusts.conditions._ir import evaluate_registered_expression
+from trusts.plan.conditions import evaluate_registered_expression
 from trusts.core import (
     PlanQueryCompiler,
     _compile_common_permissions,

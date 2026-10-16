@@ -43,7 +43,7 @@ compiler, ``any_plan_records()``, ``granted()``, ``all_match()``,
 ``common_permissions()``, ``filter_by_permitted_content()``,
 ``ConditionLookup``, and configuration/compiler exceptions live here.
 Permission-condition *records* live on each ``TrustsRegistry`` via
-``trusts.conditions._ir.ConditionRegistry``. Construction self-binds
+``trusts.plan.conditions.ConditionRegistry``. Construction self-binds
 the private store adapter; ``set_condition_lookup`` remains for
 tests and explicit unbind.
 """
@@ -4019,9 +4019,9 @@ class TrustsRegistry(object):
     """
 
     def __init__(self):
-        # Lazy: trusts.core must finish loading before _ir imports
-        # ConditionLookup. A module-level Core↔_ir import is circular.
-        from trusts.conditions._ir import (
+        # Lazy: trusts.core must finish loading before the condition IR
+        # imports ConditionLookup. A module-level import is circular.
+        from trusts.plan.conditions import (
             ConditionRegistry,
             RegistryConditionLookup,
         )
@@ -5229,7 +5229,7 @@ def _lower_public_condition(node, trust, token, permission_path):
 
 def _reject_public_condition_value(condition):
     """Public ``condition=`` is a callable, not a prebuilt IR node."""
-    from trusts.conditions._ir import Expr
+    from trusts.plan.conditions import Expr
 
     if (
         condition is All
