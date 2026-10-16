@@ -6,6 +6,8 @@ delegation. The skip flag is a bound parameter, so one statement serves
 every skip state. The lockfile records that statement.
 """
 
+__all__ = []
+
 import copy
 from collections import namedtuple
 

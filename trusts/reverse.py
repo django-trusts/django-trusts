@@ -6,6 +6,8 @@ Private compiler for ``content.get_permitted_users(perm)`` and
 resolved inside the eventual SQL. Construction does not query.
 """
 
+__all__ = []
+
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist

@@ -19,6 +19,8 @@ does not parse them. It is the only lockfile enforcement.
 
 from __future__ import annotations
 
+__all__ = []
+
 import contextvars
 import datetime
 import errno

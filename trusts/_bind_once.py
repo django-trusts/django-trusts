@@ -13,6 +13,8 @@ or the rewrite fails, the original queryset is returned unchanged and one
 warning is logged. The lockfile then records that plain SQL.
 """
 
+__all__ = []
+
 import copy
 import logging
 import re

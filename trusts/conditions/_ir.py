@@ -33,6 +33,8 @@ comparisons cannot be overloaded and raise
 ``PermissionConditionBooleanError``.
 """
 
+__all__ = []
+
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from io import IOBase

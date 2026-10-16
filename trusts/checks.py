@@ -15,6 +15,8 @@ diagnostics live in ``django-trusts-ordered-fold`` as
 ``trusts_ordered_fold.E001``.
 """
 
+__all__ = []
+
 from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.

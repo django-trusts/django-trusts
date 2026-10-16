@@ -12,6 +12,8 @@ not execute the exported statements.
 
 from __future__ import annotations
 
+__all__ = []
+
 from django.core.management.base import BaseCommand, CommandError
 
 from trusts.core import TrustsConfigurationError
