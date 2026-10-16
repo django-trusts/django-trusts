@@ -197,4 +197,3 @@ unknown operator, or any other unrecognized token raises
 Formatting does not strip comments, guess, or return the original text.
 After formatting, the token stream must match the original stream, or
 formatting raises. The formatted text is that same statement.
-
