@@ -59,9 +59,8 @@ owner.has_perm("gh_permissions.read_repository", repository)  # True
 ```
 
 No schema migration. Existing crossed positives become denials. Regenerate
-`trusts-policy.lock.yaml`; `auth.Permission` grants gain
-`$content.app_label="..."` and `$content.model="..."` parameters for the
-protected model's content identity.
+`trusts-policy.lock.yaml` and review the diff; `auth.Permission` grants now
+also match the protected object's content type.
 
 Migration-bot checklist:
 

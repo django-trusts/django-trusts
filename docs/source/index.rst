@@ -735,6 +735,12 @@ committed lockfile when the conventional file exists or
 ``TRUSTS_POLICY_LOCKFILE`` selects an explicit absolute path. Run
 ``python manage.py check`` in CI and before deployment.
 
+``TRUSTS_SQL_BIND_ONCE`` defaults to true and enables the one-row bind-table
+rewrite. Leave it enabled. Set it to false only if that SQL misbehaves;
+django-trusts then uses the plain queryset SQL. If the queryset does not have
+the Django query structure required by the rewrite, django-trusts keeps the
+plain SQL and logs a warning.
+
 See the `lockfile security audit guide
 <../../SECURITY_AUDIT.md#authorization-policy-sql-and-lockfile>`_ for the
 renderer, dependency, connection, and enforcement boundaries.

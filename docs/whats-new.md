@@ -24,8 +24,8 @@ log.
 
 - **Permitted content follows `along=`.** `filter_by_permitted_content` uses the
   same bounded walk and the same one-level delegation as the object
-  check. The policy lockfile records that statement for each proper prefix
-  model. See the [user guide](source/index.rst) and [#304].
+  check. Policy output includes that statement. See the
+  [user guide](source/index.rst) and [#304].
 
 - **Readable policy-lock SQL.** Policy output is formatted for review, and the
   formatter fails closed on unexpected SQL tokens. The output is not a public
