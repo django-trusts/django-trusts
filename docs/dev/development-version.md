@@ -57,7 +57,7 @@ Development contracts record implementation choices and acceptance tests.
   `register(permission=..., user=...)` registrations. The initial implementation
   landed in [PR #280](https://github.com/django-trusts/django-trusts/pull/280).
 
-Release-train feature summaries live in [What's new](../whats-new.md).
+Release-train feature summaries live in [What's new](../source/whats-new.md).
 
 ## Preserved legacy source
 
