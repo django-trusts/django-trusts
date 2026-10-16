@@ -52,7 +52,7 @@ trust is an independent way to receive permission.
 Installation
 ------------
 
-The current development version requires Python 3.12--3.14 and Django 6.1.
+django-trusts requires Python 3.12--3.14 and Django 6.1.
 
 .. code-block:: console
 
@@ -737,10 +737,8 @@ committed lockfile when the conventional file exists or
 
 .. note::
 
-   Historical example: this SQLite output illustrates the direct
-   ``DocumentPermission`` registration as documented on 2026-10-15.
-   Its fields and layout are a snapshot, not a supported file-format contract;
-   current output may differ. The `historical policy-output record
+   Example SQLite output for the direct ``DocumentPermission`` registration
+   above; the layout is not a stable format. The `historical policy-output record
    <https://github.com/django-trusts/django-trusts/blob/dev/docs/dev/permission-policy-sql.rst>`_
    retains the wider example and implementation details.
 
