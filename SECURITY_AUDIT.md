@@ -54,18 +54,25 @@ boundary. Application code uses the object returned by
 `configured_backend()`; it must not construct private registry or compiler
 objects.
 
-The django-trusts 1.x public surface has one grant-producing family and one restricting
-overlay:
+The registration APIs define permission sources and restrictions:
 
 | API | Meaning | Can grant independently? |
 | --- | --- | --- |
 | `register(...)` | Register an ordinary grant or a delegated relationship and its protected content | Yes, when the complete registered policy matches |
 | `add_named_filter(...)` | Bind a model-scoped name to a registration-time predicate | No |
+| `registry.set_user_condition(..., on="*")` | Require a named user predicate on the users named by `on=` unless skipped | No |
+| `registry.set_user_override(..., on="user")` | Register an optional alternative to ordinary grants for the checked user only | Yes, subject to required user conditions |
 
 django-trusts registration is intended not to issue SQL. Unsupported paths,
 types, constants, and combinations are intended to be rejected during setup.
-Registration closes when the configured registry freezes; late mutation is
-rejected.
+User rules must use database fields; properties such as `is_authenticated`
+raise at registration. Registration closes when the registry freezes.
+
+Set user conditions and overrides before `register()` or
+`register_delegation()`; later calls raise without changing the registry.
+Names must be unique Python identifiers and must not conflict with inquiry
+parameters. Skip values must be booleans. Replacing the override also replaces
+its skip name.
 
 ### Ordinary relationship authorization
 
@@ -135,7 +142,7 @@ backend.register(
     delegate=lambda d: d.delegate,
     sponsor=lambda d: d.sponsor,
     content=lambda d: d.document,
-    condition=lambda d, p: d.allowed_permissions.contains(p),
+    condition=lambda d, p: d.permissions.contains(p),
 )
 ```
 
@@ -153,24 +160,55 @@ approval, tenant alignment, revocation, or expiry. The compiler stores
 normalized expression data and retains no callable. A two-argument builder on
 an ordinary registration, or any unsupported arity, is a configuration error.
 
-For actor `u`, content `c`, and permission `p`, every projection compiles the
-same shape:
+Inputs and configuration are validated before any override. Invalid input
+raises even for a user the override would grant. An override cannot turn a
+permission for another content type into a grant or bypass content identity
+and candidate-existence checks, including those enforced in SQL.
+
+For a valid complete inquiry by actor `u`, content `c`, and permission `p`,
+the projections compile this authorization shape:
 
 ```text
-(allow_inactive_user OR u.is_active)
+user_conditions(u, "user", skip_options)
 AND (
-    ordinary(u, c, p)
+    user_override(u, "user", skip_options)
+    OR ordinary(u, c, p)
     OR EXISTS delegation d:
         d.delegate = u
         AND d.content = c
         AND delegated_condition(d, p)
-        AND (allow_inactive_user OR d.sponsor.is_active)
+        AND user_conditions(d.sponsor, "sponsor", skip_options)
         AND ordinary(d.sponsor, c, p)
 )
 ```
 
-The `is_active` checks follow the [shared inquiry rule](docs/source/index.rst#user-is-active-checks).
-Explicit registration conditions remain restrictions whether or not `allow_inactive_user=True`.
+`get_group_permissions` instead combines required user conditions with
+group grants; it does not include the override or delegated grants.
+
+User rules and named skip options follow the
+[usage guide](docs/source/index.rst#user-conditions-and-overrides).
+These names describe compiled predicates, not runtime callbacks. Audit every
+registered condition, optional override, and permitted skip option. An override
+can stand in for an ordinary grant; include any requirements that must remain
+effective when other user conditions are skipped in the override itself.
+`user_conditions(x, target, ...)` includes only conditions whose `on=` covers
+`target`; `"*"` covers both. Conditions default to `on="*"`.
+
+| Rule | Default `on=` | Checked user | Sponsor | With `skip_<name>=True` |
+| --- | --- | --- | --- | --- |
+| Condition | `"*"` | Required | Required | Removed for both |
+| Override | `"user"` | Alternative to ordinary grants | Never supported | Removed |
+| Condition with `on="sponsor"` (e.g. `superuser_cannot_sponsor`) | n/a | Not checked | Required | Removed for the sponsor |
+
+Conditions accept `on="*"` (default), `"user"`, or `"sponsor"`.
+Overrides accept only `"user"`. Other values
+raise at registration. One skip removes a condition for every target in its
+`on=`.
+
+Audit the user-rule SQL as described in the
+[policy SQL guide](docs/source/permission-policy-sql.rst#user-rules).
+
+### Delegation boundaries
 
 Audit the following boundaries:
 
@@ -179,10 +217,9 @@ Audit the following boundaries:
 - the sponsor predicate is the live OR-union of applicable ordinary grants,
   including other configured Trusts handles;
 - the current compiler excludes delegated registrations from the sponsor
-  union, preventing an unbounded chain or cycle; this implementation boundary
-  does not rule out a future bounded multi-level or recursive design;
+  ordinary-grant union, preventing an unbounded chain or cycle;
 - relationship scope can narrow the sponsor ceiling but cannot manufacture a
-  permission the sponsor does not hold;
+  permission the sponsor-authority predicate does not provide;
 - delegate and sponsor eligibility must be enforced inside the shared plan,
   without loading the sponsor or issuing a second authorization inquiry;
 - the actor's independent ordinary grant remains a separate OR branch;
@@ -191,11 +228,11 @@ Audit the following boundaries:
 - object checks, permitted querysets, enumeration, reverse inquiry, and policy
   SQL must agree and remain one queryset statement per inquiry.
 
-A delegated registration rejects `along=` as unsupported.
-[Issue #282](https://github.com/django-trusts/django-trusts/issues/282) tracks
-delegated hierarchical reach. An ordinary
-sponsor grant may still use `along=`, and its effective bounded reach
-participates in the live sponsor-authority ceiling.
+A delegated registration may use the same bounded `along=` grammar as an
+ordinary registration. Its relationship walk and the sponsor-authority
+predicate must authorize the same object. Each ordinary sponsor grant's
+effective bounded reach participates in the ceiling. A delegation cannot
+sponsor another delegation.
 
 Delegation remains inside the registered declarative policy and its correlated
 sponsor-authority predicate. An application-level nested call to
@@ -277,11 +314,47 @@ own their application labels, migrations, tables, and registration calls.
 
 ### Django auth's checks before calling backends
 
-Django treats an active superuser as globally authorized in
-`PermissionsMixin.has_perm()` before consulting authentication backends.
-Treat `is_superuser` as an unrestricted root override. Use
-staff/non-superuser accounts for administrators who must remain subject to
-tenant, parent, object, or named-filter restrictions.
+Django's `PermissionsMixin.has_perm()` allows an active superuser before
+consulting authentication backends. Trusts does not change that shortcut.
+Trusts inquiries and policy SQL have no implicit superuser grant, including
+`authorization_required`. Django's stock `has_perm()` and permission-enumeration
+methods do not forward Trusts-specific skip keywords; use a Trusts inquiry API
+when a skip is needed.
+
+An application can opt out of Django's shortcut in its custom user model by
+overriding `has_perm()` and `has_module_perms()` to ask the backends without
+the superuser early return. This also changes superuser behavior in Django
+admin. Use staff/non-superuser accounts for administrators who must remain
+subject to tenant, parent, object, or named-filter restrictions.
+
+To opt into a Trusts override, register its own activity requirement:
+
+```python
+registry.set_user_override(
+    "superuser",
+    lambda u: u.is_active & u.is_superuser,
+)
+```
+
+`skip_is_active` does not skip the activity check inside this override.
+To inspect only ordinary
+grants, use a Trusts inquiry with `skip_superuser=True`. That keyword is valid
+only while `superuser` names the current override. Pass
+`set_user_override("superuser", None)` to remove it; any other name raises.
+
+Conditions apply to both the checked user and sponsors by default. To prevent
+superusers from sponsoring even their ordinary grants, an application can add:
+
+```python
+registry.set_user_condition(
+    "superuser_cannot_sponsor",
+    lambda u: ~u.is_superuser,
+    on="sponsor",
+)
+```
+
+This condition is not installed by default. `skip_superuser` skips the override,
+not this condition.
 
 For ordinary users, Django grants when any configured authentication backend
 grants. Trusts cannot revoke authorization supplied by another backend. Audit
@@ -290,7 +363,8 @@ rejecting Trusts branch as a global deny.
 
 ## Ask permission questions
 
-All projections follow the [shared user.is_active rule](docs/source/index.rst#user-is-active-checks).
+All Trusts projections follow the
+[registered user conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
 
 The supported projections consume the same normalized registration:
 
@@ -298,8 +372,8 @@ The supported projections consume the same normalized registration:
 | --- | --- | --- |
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
-| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Shared user checks; relationship-family SQL before pagination; not Django backend OR or a superuser shortcut |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query OR-ing complete grants and Django's active-superuser rule; shared user checks within Trusts-owned grants |
+| Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user rules and relationship-family SQL before pagination |
+| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user rules within each Trusts branch |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.
@@ -323,9 +397,10 @@ def edit_document(request, pk):
 
 The guard performs structural preflight before candidate lookup. An absent
 candidate produces 404; an existing but unauthorized candidate produces 403.
-Its selected named filters are AND restrictions. Active superusers bypass
-grants and filters only after configuration preflight and still require the
-candidate to exist.
+Its selected named filters constrain the relationship proof. Audit how an
+explicitly registered user override composes with those filters. A successful
+override still requires the candidate to exist and required user conditions
+to pass.
 
 
 Fixed-query behavior is intentional: registration-time structure and
@@ -417,11 +492,9 @@ protected model's content type instead. `trusts.E008` covers declared
 the same ownership rule and raises, but it is not registered with that
 check.
 
-Django's active-superuser rule runs before authentication backends, so
-`user.has_perm` can return `True` for a mismatched pair when the user is an
-active superuser. Enumeration, `.permitted()`, the reverse inquiry, and the
-lockfile do not copy that shortcut. `authorization_required` still has its
-own active-superuser existence shortcut after configuration preflight.
+The [Django backend boundary](#django-auths-checks-before-calling-backends)
+still applies to native `user.has_perm()`. Trusts-owned inquiries use the
+registered user rules; they do not install a superuser override implicitly.
 
 Where practical, configuration failures should surface during startup or system
 checks. Runtime denial should not fall back to a broader Trusts path.
@@ -436,7 +509,7 @@ The generated YAML is organized by backend and protected content model. Each
 trust exposes its declared relationships. Each content with trusts records SQL
 for `permitted`, `has_perm`, `get_all_permissions`, and
 `get_permitted_users`. The locked reverse statement is that backend's
-branch, not Django's superuser check. Filter-only
+branch, including its registered user rules. Filter-only
 contents carry their model and `named_filters`, and empty relationship
 backends remain visible as `contents: []`.
 
@@ -470,10 +543,11 @@ artifact describes SQLite rather than production SQL.
 The writer uses the installed supported `PyYAML` release. Strings, parameter
 flow sequences, SQL literal blocks, key order, line endings, and the trailing
 newline are part of the emitted byte profile. The writer does not emit YAML
-tags, anchors, or aliases. Runtime user and permission roles appear as `bind`; candidate primary keys
-used to compile object checks are typed sentinel values recorded as `const`,
-not application data. A repeated `const: 1` must therefore be reviewed by SQL
-position rather than assumed to be an `EXISTS` probe.
+tags, anchors, or aliases. Call inputs use `$role.field` tokens and bound
+constants use `source=value`, including `$along_bound=<n>` and concrete field
+comparisons. The literal `SELECT 1` inside an `EXISTS` probe is not a
+parameter. Review every token by its SQL position rather than inferring a
+role from a repeated scalar value.
 
 `trusts.E009` compares raw bytes and does not parse the committed document.
 Hand formatting, reordering, a dependency-induced spelling change, or a changed

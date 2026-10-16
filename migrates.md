@@ -1,4 +1,4 @@
-# Migrating to django-trusts 1.0
+# Migrating from django-trusts 1.0 to 1.1
 
 This guide records only changes from a released version that require
 applications to change their code, settings, or data when they upgrade. A
@@ -8,21 +8,6 @@ development log. New features and changes that require no application action
 belong in [What's new](docs/whats-new.md); development history belongs in
 [DEV.md](DEV.md).
 
-django-trusts 1.0 is a step change from django-trusts 0.x. It is not API,
-model, or schema compatible with the 0.x package. Version 1.0 is a
-schema-neutral authorization library and does not provide a direct migration
-path for applications using the historical Trust and Content implementation.
-
-The compatibility layer for django-trusts 0.x is
-[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
-Existing 0.x applications should install that package and follow its
-[migration guide](https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md).
-That is the supported 0.x migration path.
-
-Applications adopting schema-neutral django-trusts 1.0 as a new integration
-should follow the
-[usage guide](https://django-trusts.readthedocs.io/en/dev/).
-
 ## `filter_authorized_scopes` renamed (#302)
 
 `filter_authorized_scopes` is deprecated. Call `filter_by_permitted_content`.
@@ -31,37 +16,16 @@ the new one.
 
 | | Old | New |
 | --- | --- | --- |
-| Rows with permitted content under them | `filter_authorized_scopes(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` | `filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)` |
+| Rows with permitted content under them | `filter_authorized_scopes(...)` | `filter_by_permitted_content(...)` |
 
 Migration-bot checklist:
 
 - search `filter_authorized_scopes(` and replace with `filter_by_permitted_content(`
 
-## user.is_active checks (#284)
+## Superuser bypass (#273)
 
-The shared [user.is_active rule](docs/source/index.rst#user-is-active-checks)
-also applies to `.authorized()` and ordinary registry/intermediate-model
-inquiries, superseding their earlier ungated behavior described below.
-Their default results change for an inactive user:
-
-| Before #284 | After #284 |
-| --- | --- |
-| Ordinary `.authorized()`, `permissions_for`, `has_permission`, `filter_authorized`, and `filter_authorized_scopes` can produce a positive result for an inactive user | The same default inquiry returns false/empty |
-
-Use the optional keyword in the usage guide when those calls intentionally inspect
-stored grants. Content/permission/boolean inquiries use `allow_inactive_user`;
-user-list inquiries use `allow_inactive`.
-Existing permission inputs, query shapes, and positional arguments remain.
-Review affected compiler/backend overrides and regenerate policy locks with
-the runtime change.
-
-Migration-bot checklist:
-
-- `.authorized(`, `permissions_for(`, `has_permission(`, and `filter_authorized(`
-- `filter_authorized_scopes(` and its `allow_inactive_user` keyword
-- `.permitted(`, `get_permitted_users(`, and backend inquiry overrides
-- custom reverse/compiler hooks and candidate-manager `is_active` filters
-- permission-result caches, if present, and `trusts_policy_sql`
+Trusts superuser bypass now requires an explicit `set_user_override()`.
+See [User conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
 
 ## Permission content type must match the object (#267)
 
@@ -74,7 +38,6 @@ Migration-bot checklist:
 | `authorization_required` for that pair | Already `PermissionDenied` for an ordinary user | Same denial |
 | Same-model grant, including a custom codename that does not end with the model name | Grant on instance projections | Unchanged grant |
 | Permission terminal that is not `auth.Permission`, including a custom model with a `content_type` foreign key | Primary-key identity | Unchanged |
-| Active superuser `user.has_perm` | Django returns `True` before backends | Unchanged. Queryset and enumeration projections do not copy that shortcut |
 
 For an ordinary owner of one organization, the shared owner group used to
 grant both content types on both objects. Enumeration, `.authorized()`,
@@ -96,8 +59,9 @@ owner.has_perm("gh_permissions.read_repository", repository)  # True
 ```
 
 No schema migration. Existing crossed positives become denials. Regenerate
-`trusts-policy.lock.yaml`; `auth.Permission` grants gain `const` parameters
-for the protected model's content identity.
+`trusts-policy.lock.yaml`; `auth.Permission` grants gain
+`$content.app_label="..."` and `$content.model="..."` parameters for the
+protected model's content identity.
 
 Migration-bot checklist:
 
@@ -120,15 +84,13 @@ Migration-bot checklist:
 | Content rows one user may access for one permission | Resolve an `auth.Permission` row, then `.authorized(user, permission)` | `queryset.permitted(permission, user, conditions=())` |
 | Chained queryset | The list method is not on `QuerySet` | `Repository.objects.filter(...).permitted(...)` when the queryset mixes in `PermittedQuerySetMixin` and is supplied with `as_manager()` or `from_queryset` |
 | Attachment names | `AuthorizedQuerySet`, `AuthorizedManagerMixin`, `AuthorizedManager` | Those names stay. Add `PermittedQuerySetMixin`, `PermittedQuerySet`, and `PermittedManager` |
-| `.authorized(user, permission, extra_q=None)` | Instance projection, no user check, any registered terminal | Unchanged. Not routed through `.permitted` validation |
-| Anonymous or inactive user | `.authorized()` can still return granted rows | `.permitted()` returns an empty queryset. `.authorized()` does not |
+| `.authorized(user, permission, extra_q=None)` | Instance projection, any registered terminal | Retained. User conditions and overrides apply; not routed through `.permitted` validation |
 | Malformed permission, bad `conditions`, missing `auth.Permission` plan, or conditions no backend owns together | n/a | `TypeError` or `TrustsConfigurationError` before SQL, including for an anonymous user |
 | Well-formed permission for another content type | Denial on the instance projection when the row's content type does not match | Empty `.permitted()` queryset |
 
-No mandatory consumer change. Existing `.authorized()` callers keep their
-results, including an inactive user who holds a grant. New code should
-use `.permitted()`. Zero's `ContentQuerySet.permitted(perm, user)` is
-unchanged.
+New code should use `.permitted()`. For user checks and audit options, see
+[User conditions and overrides](docs/source/index.rst#user-conditions-and-overrides).
+Zero's `ContentQuerySet.permitted(perm, user)` retains its permission codec.
 
 ```python
 # Old
@@ -252,7 +214,11 @@ Migration-bot checklist:
 | --- | --- | --- |
 | Users who hold one permission on one saved content object | No public reverse inquiry | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
 
-No mandatory consumer change. Stock `auth.User` does not grow the manager method, and a content manager still returns content rows. The registered permission row is the identity used in SQL. A permission string is resolved inside that statement, not by a construction-time query. Core does not add its own `is_active` exclusion. An `Along` registration cannot be reversed exactly and raises `TrustsConfigurationError` before SQL, including when rendering the policy lock.
+No mandatory consumer change to adopt this adapter. Stock `auth.User` does not
+grow the manager method, and a content manager still returns content rows.
+The registered permission row is the identity used in SQL. A permission string
+is resolved inside that statement, not by a construction-time query. User
+conditions and overrides apply as described above.
 
 Migration-bot checklist:
 
@@ -269,3 +235,20 @@ at the
 and an
 [immutable commit](https://github.com/django-trusts/django-trusts/blob/7414886263faafb6edfb44c0c5fcf9fc8fa14e79/migrates.md).
 Those records describe unpublished development transitions; they are not an alternative 0.x migration path.
+
+## Migrating to django-trusts 1.0
+
+django-trusts 1.0 is a step change from django-trusts 0.x. It is not API,
+model, or schema compatible with the 0.x package. Version 1.0 is a
+schema-neutral authorization library and does not provide a direct migration
+path for applications using the historical Trust and Content implementation.
+
+The compatibility layer for django-trusts 0.x is
+[django-trusts-zero](https://github.com/django-trusts/django-trusts-zero).
+Existing 0.x applications should install that package and follow its
+[migration guide](https://github.com/django-trusts/django-trusts-zero/blob/dev/migrates.md).
+That is the supported 0.x migration path.
+
+Applications adopting schema-neutral django-trusts 1.0 as a new integration
+should follow the
+[usage guide](https://django-trusts.readthedocs.io/en/dev/).

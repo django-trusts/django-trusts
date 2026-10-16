@@ -3,13 +3,18 @@
 Status: implementation-driver contract for [issue #266][issue-266].
 
 - Release train: 1.1
-- Last updated: 2026-10-10
+- Last updated: 2026-10-15
 - Documentation PR: [#279][docs-pr]
 - Implementation PR: [#280][implementation-pr] (merged)
 
 This document records the contract used to drive implementation and its
 acceptance tests. The public guide and security audit describe behavior on the
 development branch; What's New records release-train changes.
+
+The fixed user eligibility and superuser discussions below are historical.
+[User conditions and overrides](../source/index.rst#user-conditions-and-overrides)
+supersede those parts. The relationship and ordinary-sponsor ceiling
+remain.
 
 The public `register()` API has two different authorization modes. They must
 remain visibly different because an ordinary registration is a grant, while a
@@ -48,18 +53,19 @@ The mode switch is therefore:
 | Mode | Principal arguments | Meaning |
 | --- | --- | --- |
 | Ordinary permission | `user=` and `permission=` | The matching row is an ordinary grant. |
-| Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires the sponsor's live ordinary authority. |
+| Delegated | `delegate=` and `sponsor=` | The matching row is a relationship that requires live sponsor authority. |
 
 `delegate=` binds the current principal who is acting and receiving delegated
 access. It takes the place of `user=` for the delegated mode. `sponsor=` binds
-the principal who delegated the authority and whose live ordinary permission
-paths provide the ceiling.
+the principal who delegated the authority. The complete sponsor-authority
+predicate provides the ceiling.
 
 The delegated row does not carry an ordinary `permission=` grant. The
 permission being checked comes from the inquiry and must be satisfied by the
-sponsor's ordinary authority union on the same content. A delegated condition
-may compare that requested permission with relationship-owned scope data, but
-it cannot grant an operation that the sponsor does not currently hold.
+sponsor-authority predicate on the same content. A delegated condition may
+compare that requested permission with relationship-owned scope data, but it
+cannot grant an operation that the sponsor-authority predicate does not
+currently provide.
 
 `content=` identifies the meeting point of the two sides. In ordinary mode,
 `condition=` keeps its existing one-argument builder. In delegated mode, it
@@ -82,7 +88,7 @@ backend.register(
     delegate="delegate",
     sponsor="sponsor",
     content="sponsor__personal_organization__repositories",
-    condition=lambda d, p: d.allowed_permissions.contains(p),
+    condition=lambda d, p: d.permissions.contains(p),
 )
 ```
 
@@ -93,11 +99,12 @@ content terminal or gateway.
 
 A delegated registration accepts the same `along=` walk as an ordinary
 registration. The delegate is allowed on an object only when that walk
-reaches the object and the sponsor's ordinary authority also reaches it.
-If the delegation has no `along=`, the delegation row must name that
-object. If the sponsor's ordinary grant has no `along=`, that grant must
-name that object. When both sides walk, the delegate gets only the objects
-both walks reach. A longer content suffix than one reverse hop is not one
+reaches the object and the sponsor-authority predicate also reaches it. That
+predicate is the OR-union of applicable ordinary grants. If the delegation has
+no `along=`, the delegation row must name that object. If the applicable
+ordinary sponsor grant has no `along=`, that grant must name that object. When
+both relationship and ordinary-grant sides walk, the delegate gets only the
+objects both walks reach. A longer content suffix than one reverse hop is not one
 column on the content row; compiling that delegated walk raises
 `TrustsConfigurationError` before a grant, on a forward check and on
 reverse inquiry. The sponsor comparison keeps the full root-relative
@@ -105,7 +112,7 @@ sponsor path, so `sponsor_link__user` uses `sponsor_link__user_id` and
 not a bare `user_id` on the delegation row. One delegation cannot sponsor
 another; that chain stays rejected.
 
-For example, a delegation row with an `allowed_permissions` relation may
+For example, a delegation row with a `permissions` relation may
 narrow the sponsor ceiling without adding another public registration
 argument:
 
@@ -115,7 +122,7 @@ backend.register(
     delegate=lambda d: d.delegate,
     sponsor=lambda d: d.sponsor,
     content=lambda d: d.repository,
-    condition=lambda d, p: d.allowed_permissions.contains(p),
+    condition=lambda d, p: d.permissions.contains(p),
 )
 ```
 
@@ -149,7 +156,8 @@ question.
 
 ## Authorization rule
 
-For actor `u`, content `c`, and permission `p`, the compiled result is:
+The superseded #284 eligibility rule for actor `u`, content `c`, and
+permission `p` was:
 
 ```text
 u is active and authenticated and not anonymous
@@ -165,7 +173,7 @@ AND (
 )
 ```
 
-That check is the eligibility predicate where the inquiry projects persisted
+That check was the eligibility predicate where the inquiry projected persisted
 principals. A delegate or sponsor that fails it cannot authorize through
 delegation, even while its ordinary grants and delegation rows remain stored.
 The delegate gate applies to both the actor's ordinary branch and delegated
@@ -239,11 +247,12 @@ queryset, reverse-inquiry, or policy-SQL behavior.
 
 ## Separate prerequisites and policy decisions
 
-This feature contract does not settle whether active-superuser status supplies
-direct or sponsor-side authority. [Issue #273][issue-273] owns that decision.
-The compiler must represent the chosen policy at the direct-actor and
-sponsor-authority composition points rather than inheriting it accidentally
-from a nested `has_perm()` call.
+This feature contract does not add implicit superuser authority. A checked-user
+override may supply direct authority under the user-rule contract, but sponsor
+authority remains the ordinary-grant union described above. The compiler must
+not inherit either Django's superuser shortcut or another backend's result from
+a nested `has_perm()` call. [Issue #273][issue-273] records the Trusts-owned
+superuser boundary.
 
 Real expiry and revocation rules also require the existing registration
 condition language to express null tests and ordered comparison against a

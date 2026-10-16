@@ -47,12 +47,7 @@ same trust model. In the simplest cases, that model connects the protected
 object to either a user and Django permission or a Django group.
 
 Multiple registered trusts may authorize the same kind of content. Each
-complete trust is an independent way to receive permission.
-
-A delegated trust connects a **delegate** who is acting, a **sponsor** whose
-live ordinary authority supplies the ceiling, and the protected content. Its
-condition may narrow that authority to relationship-owned scope such as
-approved operations or selected repositories.
+trust is an independent way to receive permission.
 
 Installation
 ------------
@@ -133,7 +128,7 @@ The application owns its protected content and trust models.
            Document,
            on_delete=models.CASCADE,
        )
-       allowed_permissions = models.ManyToManyField(Permission)
+       permissions = models.ManyToManyField(Permission)
 
 ``DocumentPermission`` connects one user and one permission to one document.
 ``GroupDocumentPermission`` connects a Django group to one document; users
@@ -261,7 +256,7 @@ Register the model paths when the application starts:
                delegate=lambda d: d.delegate,
                sponsor=lambda d: d.sponsor,
                content=lambda d: d.document,
-               condition=lambda d, p: d.allowed_permissions.contains(p),
+               condition=lambda d, p: d.permissions.contains(p),
            )
            backend.add_named_filter(
                Document,
@@ -303,19 +298,18 @@ equivalent of the first registration is:
 Delegate live authority
 -----------------------
 
-The delegated registration makes ``delegate`` the current actor and
-``sponsor`` the source of live ordinary authority. For a requested permission,
+A delegation lets a **delegate** act with a **sponsor**'s live ordinary
+permissions on the protected content. For a requested permission,
 django-trusts requires the same delegation row, its selected content and
-condition, and an ordinary sponsor grant on that content. The actor's own
-ordinary grants remain available as independent alternatives.
-
-By default, both sponsoring and delegated users must have ``is_active=True``.
-See :ref:`user-is-active-checks` for the shared inquiry rule.
+condition, and sponsor authority on that content. Conditions that apply to
+the sponsor are described in :ref:`user conditions and overrides
+<user-conditions-and-overrides>`. The actor's own ordinary grants remain
+available as independent alternatives.
 
 The delegated ``condition=`` builder receives the relationship as a symbolic
 value and may receive the requested permission as a second symbolic value.
 The one-argument form applies row-only restrictions. The two-argument form in
-the example checks the requested permission against ``allowed_permissions``.
+the example checks the requested permission against ``permissions``.
 Create the relationship and its scope with ordinary application data writes:
 
 .. code-block:: python
@@ -325,7 +319,7 @@ Create the relationship and its scope with ordinary application data writes:
        sponsor=owner,
        document=document,
    )
-   delegation.allowed_permissions.add(change_document)
+   delegation.permissions.add(change_document)
 
 Permission checks keep the familiar Django spelling:
 
@@ -338,14 +332,13 @@ Permission checks keep the familiar Django spelling:
 
 The same correlated policy drives object checks, permission enumeration,
 ``QuerySet.permitted()``, reverse permitted-user inquiry, and authorization
-policy SQL. The sponsor's live ordinary permissions provide the authority
-ceiling.
+policy SQL. The sponsor's authority limits all of those inquiries.
 
 Several delegated relationship models may target the same content model. Each
-relationship remains a complete alternative: its own delegate, content,
-condition, and sponsor's ordinary-authority ceiling are ANDed before that
-branch is ORed with the others. A branch cannot borrow another relationship's
-approval or sponsor.
+relationship provides another way to receive permission: its own delegate,
+content, condition, and sponsor authority are ANDed before that branch is
+ORed with the others. A branch cannot borrow another relationship's approval
+or sponsor.
 
 For ordinary and delegated registrations, ``content=`` may also reach a bounded content
 set rather than a foreign key on the relationship row. For example,
@@ -358,10 +351,10 @@ supported content terminal or gateway.
 A sponsor's ordinary grant may use ``along=``. That bounded walk is part of
 the sponsor's live authority on every object it reaches, including when the
 check is a delegation. A delegated registration may use ``along=`` on the
-same call. The delegate is allowed on an object only when the delegation
-walk and the sponsor's ordinary permission both reach that object. If only
-one side uses ``along=``, the other side still has to match the object. A
-delegate cannot sponsor a further delegation.
+same call. The delegate is allowed on an object only when the delegation walk
+and the sponsor's ordinary grant both reach that object. Each contributing
+ordinary sponsor grant's ``along=`` walk or exact match must reach the object.
+A delegate cannot sponsor a further delegation.
 
 
 Configure Django
@@ -408,10 +401,7 @@ organization is a denial (``False``, and the codename is absent from
 holds both permissions and a registration reaches both models. A proxy
 model keeps its own content type. Any other permission terminal, including
 a custom model with a ``content_type`` foreign key, is still matched by
-primary key. Django's active-superuser shortcut can still make
-``user.has_perm`` return ``True`` before this check runs.
-``.permitted()``, enumeration, and the reverse user inquiry do not copy
-that shortcut.
+primary key.
 
 List the user's permissions on an object:
 
@@ -462,8 +452,7 @@ declarations only. A runtime ``.permitted()`` call is not one of those
 declarations; it still validates and raises on first use.
 
 Malformed permissions and conditions raise before SQL. A well-formed
-permission for another content type produces an empty queryset. There is no
-active-superuser shortcut. Named conditions remain explicit:
+permission for another content type produces an empty queryset. Named conditions remain explicit:
 
 .. code-block:: python
 
@@ -480,18 +469,9 @@ Filter by permitted content
 permitted content sits under those rows. The result is a lazy queryset of
 the same model.
 
-.. code-block:: python
-
-   def filter_by_permitted_content(
-       queryset, user, permission, *, content, handles=None,
-       allow_inactive_user=False,
-   ):
-       ...
-
 ``permission`` is a saved permission row. ``content`` is the protected
 model. ``handles`` is optional and defaults to the installed relationship
-backends. ``allow_inactive_user`` is the same option as the other content
-inquiries.
+backends.
 
 A cabinet holds sheets. This call keeps the cabinets that have a sheet
 the user may read:
@@ -558,39 +538,51 @@ does not grow ``permitted``.
 
 .. _user-is-active-checks:
 
-user.is_active checks
-~~~~~~~~~~~~~~~~~~~~~
+.. _user-conditions-and-overrides:
 
-All Trusts permission inquiries check ``user.is_active`` for Trusts-owned grants
-by default, including ordinary and delegated grants, permission enumeration,
-reverse user listing, and ``filter_by_permitted_content``. Anonymous and
-unauthenticated users cannot supply persisted grants
-and receive no positive permission result. Input and configuration errors
-still raise before a denied result is returned. Permission SQL is compiled
-against a user model; a non-model user object is not a SQL principal.
+User conditions and overrides
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Including inactive users
-~~~~~~~~~~~~~~~~~~~~~~~~
+A user condition must hold for every grant. A user override grants the
+checked user without an ordinary grant.
 
-To include inactive users in an inquiry, use the keyword-only option
-(default ``False``). Inquiries returning content, permissions, or a boolean
-use ``allow_inactive_user``; inquiries returning users use ``allow_inactive``.
-It skips only the built-in ``is_active`` checks for the user, delegate, and
-sponsor. Explicit conditions and candidate-queryset filters still apply.
-For example, inspect a suspended user's grants before reactivating them:
+The only default condition is ``is_active``, if the field exists.
+No user override is registered by default.
+
+Set user conditions and overrides in ``AppConfig.ready()``, before
+registering permissions or delegations. For example, replace the activity
+condition:
+
+.. code-block:: python
+
+   registry = backend.registry
+   registry.set_user_condition("is_active", lambda u: u.is_active)
+
+Setting the same name replaces that condition. Pass ``None`` to remove it:
+
+.. code-block:: python
+
+   registry.set_user_condition("is_active", None)
+
+Use ``skip_<name>=True`` to skip a condition for one Trusts inquiry. For
+example, inspect an inactive user's grants:
 
 .. code-block:: python
 
    documents = Document.objects.permitted(
-       "documents.change_document", suspended_user, allow_inactive_user=True,
+       "documents.change_document", user, skip_is_active=True,
    )
    users = document.get_permitted_users(
-       "documents.change_document", allow_inactive=True,
+       "documents.change_document", skip_is_active=True,
    )
 
-Stock Django user methods do not forward either keyword. Use the Trusts
-adapters; view guards and login behavior are unchanged. Custom backends retain
-their own rules and do not receive either keyword.
+Condition names must be Python identifiers with no name conflict; their
+lambdas must return Boolean expressions.
+
+Use ``set_user_override()`` to set the single override; setting another
+replaces it. Pass its current name with ``None`` to remove it.
+
+Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md#django-auths-checks-before-calling-backends>`_.
 
 Protect a view with the Trusts-only primary-key guard:
 
@@ -616,7 +608,11 @@ Protect a view with the Trusts-only primary-key guard:
 The guard binds only the URL keyword argument named ``pk`` to the model's
 primary-key field. It performs configuration preflight before candidate lookup;
 a missing object produces 404 and an existing unauthorized object produces
-403.
+403. Named ``skip_<name>`` values may be passed after ``conditions`` when a
+view deliberately needs one, for example
+``authorization_required(Document, permission, (), skip_is_active=True)``.
+Those values are fixed when the decorator is created and forwarded to the
+Trusts inquiry; they are not selected from request data.
 
 Object checks, permission enumeration, queryset filtering, and view protection
 consume the same normalized registrations.
@@ -687,7 +683,7 @@ A relationship condition is always applied to its branch; a named filter is
 selected by an authorization caller. Neither can create permission by itself.
 
 Applications may register more than one valid path to the same content. A
-direct user grant and a team-derived grant can coexist, with either complete
+direct user grant and a team-derived grant can coexist, with either
 path providing permission.
 
 Inherited relationships
@@ -703,7 +699,7 @@ currently exercised by CI are recorded in the `support matrix
 The same bounded walk participates in object checks, permitted-content
 querysets, permission enumeration, reverse permitted-user inquiry, and
 authorization-policy SQL. For one content and
-permission, reverse inquiry returns exactly the users whose complete
+permission, reverse inquiry returns exactly the users whose
 forward object check succeeds, including the terminal condition and user
 checks.
 
@@ -736,11 +732,11 @@ with trusts lists its relationships and SQL for ``permitted``, ``has_perm``,
 passes through another model before the protected object, it also lists
 ``filter_by_permitted_content``: one statement for each of those models,
 the same SQL and parameter values ``filter_by_permitted_content`` runs.
-The locked
-``get_permitted_users`` statement is that backend's reverse predicate
-(eligibility and complete grants), not Django's superuser check and
-not other backends. A content with named filters lists those queries.
+The locked ``get_permitted_users`` statement is that backend's reverse
+query. A content with named filters lists those queries.
 Empty relationship backends remain visible as ``contents: []``.
+
+User conditions appear in the SQL, each with a ``skip_<name>=False`` parameter.
 
 ``content.get_permitted_users(perm)`` and
 ``User.objects.permitted(content, perm)`` call the same compiler, so the
@@ -751,14 +747,16 @@ lockfile key remains ``get_permitted_users``. For the direct
 .. code-block:: yaml
 
    get_permitted_users:
-     params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+     params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
      sql: |-
        SELECT DISTINCT "auth_user"."id", "auth_user"."password", "auth_user"."last_login", "auth_user"."is_superuser", "auth_user"."username", "auth_user"."first_name", "auth_user"."last_name", "auth_user"."email", "auth_user"."is_staff", "auth_user"."is_active", "auth_user"."date_joined"
        FROM "auth_user"
        CROSS JOIN (
          SELECT %s AS "permission_id", %s AS "content_id", %s AS "is_active", %s AS "app_label", %s AS "model"
        ) "trusts_bind"
-       WHERE ("auth_user"."is_active" = ("trusts_bind"."is_active")
+       WHERE (((%s)
+             OR "auth_user"."is_active" = ("trusts_bind"."is_active")
+         )
          AND EXISTS (
            SELECT 1 AS "a"
            FROM "documents_documentpermission" "U0"

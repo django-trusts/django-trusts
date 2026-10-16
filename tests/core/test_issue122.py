@@ -82,7 +82,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
             'add_named_filter(...)',
             'Named filters restrict the query',
             'Runtime callbacks are unsupported',
-            'Django treats an active superuser as globally authorized',
+            "Django's `PermissionsMixin.has_perm()` allows an active superuser",
             'Trusts cannot revoke authorization supplied by another backend',
             'relationship-family',
             'Fail-closed principle',
@@ -124,10 +124,11 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
     def test_migration_record_leads_with_current_contract(self):
         migration = (ROOT / 'migrates.md').read_text()
         current = migration[:1800]
-        self.assertIn('# Migrating to django-trusts 1.0', current)
-        self.assertIn('schema-neutral authorization library', current)
-        self.assertIn('django-trusts-zero', current)
-        self.assertIn('supported 0.x migration path', current)
+        self.assertIn('# Migrating from django-trusts 1.0 to 1.1', current)
+        legacy = migration.split('## Migrating to django-trusts 1.0', 1)[1]
+        self.assertIn('schema-neutral authorization library', legacy)
+        self.assertIn('django-trusts-zero', legacy)
+        self.assertIn('supported 0.x migration path', legacy)
 
     def test_live_router_points_at_merged_zero_and_rejects_zero_schema(self):
         path = ROOT / 'migrates.md'
@@ -136,7 +137,7 @@ class FinalDocumentationSurfaceTest(SimpleTestCase):
         readme = (ROOT / 'README.md').read_text()
         pyproject = (ROOT / 'pyproject.toml').read_text()
 
-        self.assertIn('# Migrating to django-trusts 1.0', text[:80])
+        self.assertIn('# Migrating from django-trusts 1.0 to 1.1', text[:80])
         self.assertIn('does not provide a direct migration', text)
         self.assertIn('## Relationship condition language (#210)', text)
         self.assertIn('## Permitted content queryset (#270)', text)

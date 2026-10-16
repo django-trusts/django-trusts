@@ -409,23 +409,23 @@ These additive APIs are the instance-only / metadata-driven surfaces that
 later Zero and GH hosts call. They do not change `ContentQuerySet.permitted`,
 `filter_by_user_content_perm`, the app label, or the historical compiler.
 
-`AuthorizedQuerySet.authorized(user, permission, extra_q=None, *, allow_inactive_user=False)` and
+`AuthorizedQuerySet.authorized(user, permission, extra_q=None, **skip_options)` and
 `AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)` live in
 `trusts.query`. `permission` is a model instance. Strings raise
 `TrustsConfigurationError` with zero SQL. The method does not parse
 `:condition` or call `get_permission`. It uses the
-[shared user.is_active checks](source/index.rst#user-is-active-checks).
+[user conditions and overrides](source/index.rst#user-conditions-and-overrides).
 `extra_q` is the same AND overlay as `all_match` /
 `instance_match`. There is no `.permitted` and no `.get_permission` on
 this class. The public content-list inquiry is
 `PermittedQuerySet.permitted(permission, user, conditions=())`.
-`.authorized` does not call it; both inquiries apply the `is_active` check
-(or skip it with `allow_inactive_user=True`) without sharing permission-input
-validation.
+`.authorized` does not call it; the inquiries share user rules without sharing
+permission-input validation. `skip_options` contains the named `skip_<name>`
+keywords described in the guide.
 Core `.authorized` includes relationship-family handles
 only; it is not Django's object-level authentication-backend OR.
 
-`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, allow_inactive_user=False)`
+`filter_by_permitted_content(queryset, user, permission, *, content, handles=None, **skip_options)`
 in `trusts.core` filters rows of an intermediate model that is a
 **proper prefix** of some applicable `RegisteredRelation.content_path`
 whose content terminal is `content`. The function compiles `EXISTS` of root rows
@@ -436,13 +436,14 @@ permission, and ORs applicable records. An `along=` registration
 uses that same bounded walk: a prefix at the walk site is kept when
 its identity is in the walk, and a later proper prefix is kept when
 it hangs off a walk-site row the walk reaches. An ancestor of the walk
-site stays the row stored on that grant, including when the sponsor's
-ordinary grant is the walk. A one-level delegation
-keeps a prefix only when the delegation and the sponsor's ordinary
-permission both reach it. A second delegation level does not. A
-delegated `along=` whose content suffix is longer than one reverse hop
-raises `TrustsConfigurationError`. The sponsor's ordinary `along=`
-has that same limit. `queryset.model` equal to the
+site stays the row stored on that grant, including when an ordinary sponsor
+grant supplies the sponsor-authority predicate. A one-level delegation keeps
+a prefix only when the delegation and the complete sponsor-authority predicate
+both reach it. Each contributing ordinary sponsor grant's `along=` walk or
+exact match must reach the prefix. A second delegation level does not. A
+delegated `along=` whose content suffix is longer than one reverse hop raises
+`TrustsConfigurationError`. An ordinary sponsor grant's `along=` has that
+same limit. `queryset.model` equal to the
 content terminal is allowed when a proper prefix step of that same model
 exists (self-referential trees). A terminal-only path, an unknown
 terminal, empty handles, or a scope model not on the path return

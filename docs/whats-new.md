@@ -11,6 +11,13 @@ log.
 
 ## 1.1.0
 
+- **User conditions and overrides.** `set_user_condition()` and
+  `set_user_override()` add named user checks to Trusts inquiries. Skip one
+  with `skip_<name>=True`. Rules use user model fields; Python properties raise
+  at registration. See the
+  [user guide](source/index.rst#user-conditions-and-overrides) and
+  [migration record](../migrates.md#superuser-bypass-273).
+
 - **Provisional `along=` reachability.** Reverse inquiry, policy SQL, and
   delegation support bounded provisional `along=` on SQLite, PostgreSQL,
   and MySQL 8.4+. `along=` is improved and remains provisional. See the
@@ -29,17 +36,18 @@ log.
   `delegate` and `sponsor`
   are one-line flow maps. A `__cond` id includes the stored condition
   as one double-quoted Python expression, with `$permission` only for
-  the requested permission. Each SQL param keeps its `bind` or `const`
-  and adds a `hint`. The formatter accepts only the tokens those
-  statements use
+  the requested permission. SQL parameters are reviewable strings: call
+  inputs use `$role.field`, bound constants use `source=value`, bounded
+  walks use `$along_bound=<n>`, and `EXISTS` marker literals are not
+  parameters. There is no parallel hint field. The formatter accepts only
+  the tokens those statements use
   and fails closed on anything else. Schema version stays 1.
   See the
   [permission-policy SQL guide](source/permission-policy-sql.rst)
   and [#292].
 
 - **Delegated authority.** `register(delegate=..., sponsor=...)` lets an actor
-  use a sponsor's live ordinary permissions within delegation scope; an
-  inactive delegate or sponsor fails closed. See the
+  use a sponsor's live ordinary permissions within delegation scope. See the
   [user guide](source/index.rst), [driver contract](dev/delegation-registration.md),
   and [#279].
 

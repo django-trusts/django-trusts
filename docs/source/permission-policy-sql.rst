@@ -28,12 +28,11 @@ database backend and driver determine SQL quoting, placeholders, operators, and
 dialect. The alias is not stored; ``database.engine`` records its configured
 engine.
 
-Runtime user and permission roles remain symbolic ``bind`` parameters. For
-candidate-object checks, the exporter compiles a type-correct sentinel primary
-key and records it as ``const``. That value identifies the compiled comparison
-position; it is not a primary key read from application data. Rendering compiles
-the exported queries without executing them or reading application or
-authorization rows.
+Call inputs remain symbolic ``$role.field`` parameters, for example
+``$user.id``, ``$permission.id``, and ``$content.id``. Bound constants use
+``source=value`` tokens, for example ``user.is_active=True`` and
+``$content.model="document"``. Rendering compiles the exported queries without
+executing them or reading application or authorization rows.
 
 Document shape
 --------------
@@ -69,19 +68,19 @@ The following abridged example shows the schema:
                permission: {path: "permission", model: "auth.Permission", target: "id"}
                content: {path: "document", model: "documents.Document", target: "id"}
            permitted:
-             params: ["$user.id", "$permission.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+             params: ["$user.id", "$permission.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
              sql: |-
                SELECT DISTINCT ...
            has_perm:
-             params: ["$user.id", "$permission.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+             params: ["$user.id", "$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
              sql: |-
                SELECT ... WHERE candidate-primary-key AND grant-exists
            get_all_permissions:
-             params: ["$user.id", "$content.id", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+             params: ["$user.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
              sql: |-
                SELECT DISTINCT ... FROM auth_permission ...
            get_permitted_users:
-             params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\""]
+             params: ["$permission.id", "$content.id", "user.is_active=True", "$content.app_label=\"documents\"", "$content.model=\"document\"", "skip_is_active=False"]
              sql: |-
                SELECT DISTINCT ... FROM auth_user ... WHERE grant-exists
            named_filters:
@@ -122,10 +121,10 @@ the SQL bytes for every ``auth.Permission`` grant.
 ``get_permitted_users`` is the reverse of ``permitted``: one saved content
 object and one permission, compiled to the users that backend can grant.
 The locked statement is that backend branch only. It carries the backend's
-eligibility predicate and the complete-grant ``EXISTS``. It does not include
-Django's check that an active superuser has every permission, and it does not OR other
-authentication backends. The content primary key is the call input ``$content.<target>``.
-The permission row is ``$permission.<target>``. The candidate
+registered user conditions, any user override, and the complete-grant
+``EXISTS``. It does not OR other authentication backends. The content primary
+key is the call input ``$content.<target>``. The permission row is the call
+input ``$permission.<target>``. The candidate
 user is the outer row. ``content.get_permitted_users(perm)`` and optional
 ``User.objects.permitted(content, perm)`` share this one policy entry
 because they use the same reverse compiler; the document does not duplicate
@@ -149,17 +148,16 @@ A delegated trust exposes its normalized ``delegate``, ``sponsor``,
 ``{path: "...", model: "...", target: "..."}``. Its inquiry
 SQL remains one statement: the actor's ordinary branch is ORed with a
 correlated delegation ``EXISTS``. Inside that ``EXISTS``, the sponsor predicate
-combines all applicable ordinary grants with OR: any matching ordinary grant
-may supply the sponsor's authority on the same content and permission.
-Reviewers should verify the delegate/sponsor direction, the relationship's
-explicit conditions, the :ref:`user.is_active checks <user-is-active-checks>`,
-and the sponsor's ordinary-grant predicate in the document and generated SQL.
+combines all applicable ordinary sponsor grants with OR. Reviewers should
+verify the delegate/sponsor direction, the relationship's explicit conditions,
+and the complete sponsor-authority predicate in the document and generated
+SQL.
 A delegated row records the same ``along`` path, shape, and bound, and the
 same ``__along_{path}_{shape}_{bound}`` id suffix, when that registration
 used ``along=``. The depth cap is the bound constant ``$along_bound=<n>``.
-The delegate is allowed only where the delegation walk and the sponsor's
-ordinary authority both reach the requested object. When only one side uses
-``along=``, the other side matches that object exactly.
+The delegate is allowed only where the delegation walk and the complete
+sponsor-authority predicate both reach the requested object. Each contributing
+ordinary grant's ``along=`` walk or exact match must reach that object.
 
 Backends remain independent. When more than one Trusts backend targets the same
 content model, the document records each backend separately.
@@ -169,6 +167,25 @@ Permission inquiries and named filters
 
 Every permission inquiry row contains one SQL statement and its ordered
 parameters. Named filters are listed in ``add_named_filter()`` order.
+
+User rules
+~~~~~~~~~~
+
+Registered user conditions appear in inquiry SQL and ordered ``params``.
+The optional override participates in complete inquiries;
+``get_group_permissions`` uses conditions and group grants without it. The lockfile does not add a
+parallel user-rule expression or a second statement for skipped rules. Every
+registered rule must compile completely to SQL over concrete user fields; a
+Python property such as ``is_authenticated`` or ``is_anonymous`` is rejected.
+
+Each registered rule adds its default bound skip value, for example
+``skip_is_active=False`` or ``skip_superuser=False``. User Boolean comparisons
+are labeled ``user.<field>=True``, for example ``user.is_superuser=True``.
+At runtime a caller may
+bind ``True`` for a valid ``skip_<name>`` keyword without changing the
+statement shape. A condition is compiled as ``skip_<name> OR condition``. An
+override is compiled as ``NOT skip_<name> AND override`` and ORed with the
+ordinary grant proof. Review that Boolean grouping directly in the SQL.
 
 Permitted content
 ~~~~~~~~~~~~~~~~~
@@ -186,11 +203,11 @@ that model. The parameter values are the values in that statement. An
 object check. The depth cap is the bound constant ``$along_bound=<n>``. A
 prefix at the walk site is compared with the walk. An ancestor of the walk
 site stays the value stored on the grant. A one-level delegation keeps a
-row only where the delegation and the sponsor's ordinary permission both
-reach it. Ordinary sponsor grants may come from another backend in the
-same document, as they do for ``has_perm``. A content path with no proper
-prefix omits the key. A prefix whose queryset is empty also omits that
-model, because that call runs no SQL. Schema version stays 1.
+row only where the delegation and the sponsor's authority both reach it. By
+default that authority comes from ordinary sponsor grants, which may come from
+another backend in the same document as they do for ``has_perm``. A content
+path with no proper prefix omits the key. A prefix whose queryset is empty
+also omits that model, because that call runs no SQL. Schema version stays 1.
 
 Identifiers and ordering
 ~~~~~~~~~~~~~~~~~~~~~~~~

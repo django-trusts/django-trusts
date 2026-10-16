@@ -5,7 +5,7 @@ Status: implemented for
 The scalar contract in this document is unchanged. Phase B records the
 protected backend hooks and the recursive agreement boundary below.
 
-Both adapters use the [`is_active` check and `allow_inactive` argument](source/index.rst#user-is-active-checks).
+Both adapters use the [user conditions, overrides, and named skip options](source/index.rst#user-conditions-and-overrides).
 
 ## Decision
 
@@ -17,7 +17,7 @@ users = User.objects.permitted(document, perm)
 ```
 
 Both accept exactly one saved content object, one permission, and the
-keyword-only `allow_inactive=False` argument, call one
+named `skip_<name>` keyword arguments, call one
 internal reverse-query compiler, and return a lazy queryset of
 `settings.AUTH_USER_MODEL`. For the same candidate queryset, content, and
 permission, they must return identical rows.
@@ -126,10 +126,9 @@ An instance type without an explicit matching singular-backend capability is
 unsupported and raises before SQL. Malformed strings raise the same public
 configuration/permission-code error selected for the singular object check. A
 well-formed string that identifies no permission row applicable to the supplied
-content does not authorize an ordinary user. Active superusers remain governed
-by Django's superuser check.
+content does not produce an ordinary grant.
 
-## How the result matches `has_perm()`
+## How forward and reverse checks agree
 
 For every user row in the configured user model's candidate queryset and every
 accepted `perm` / saved `content` pair:
@@ -139,33 +138,26 @@ user in content.get_permitted_users(perm)
 user in User.objects.permitted(content, perm)
 ```
 
-must agree when called with the same `allow_inactive` value. Each supported
-backend contribution retains its own eligibility rules, composed with the
-same candidate queryset and Django's superuser check.
+must agree when called with the same skip options. Each supported backend
+contribution retains its own user rules and the same candidate queryset.
 
-By default, membership in either queryset matches `user.has_perm(perm, content)`.
-For an `auth.Permission` instance, use its `app_label.codename` string in
-`has_perm()`; supported strings and custom permission instances are unchanged.
-Reverse compilation still uses the canonical permission row.
-`allow_inactive=True` skips only Trusts' built-in `is_active` checks. Custom
-backend contributions are unchanged, and stock `user.has_perm()` cannot
-forward this keyword.
+A Trusts contribution matches that Trusts backend's object check under the
+same permission identity, registered conditions, override, and skip options.
+Custom backend contributions retain their own rules. Core ORs those supported
+contributions rather than silently omitting a backend that might grant.
 
-This is stronger than the Trusts-only contract of
-`Model.objects.authorized(user, permission)`. The reverse inquiry must not
-silently omit a grant supplied by another backend and still call the result
-complete.
+This contract does not promise row-for-row parity with native
+`user.has_perm()`. Django's user method can apply outer checks before calling
+backends and cannot forward Trusts skip options. The locked
+`get_permitted_users` statement is one Trusts backend contribution, not the
+aggregate result across authentication backends.
 
-### Django auth's checks before calling backends
+### User rules and Django's backend boundary
 
-The reverse query reproduces Django auth's checks and each supported
-backend's own eligibility rules:
-
-- an active superuser is included for every accepted permission/content pair;
-- an inactive superuser is not automatically granted every permission;
-- Trusts-owned grants follow the shared user checks;
-- custom backend grants follow that backend's own rules, including any grants
-  to inactive users.
+Trusts user rules are described once in the guide linked above. A registered
+override participates in reverse inquiries; no superuser grant is implicit.
+Django's native `PermissionsMixin.has_perm()` can return before consulting
+backends. See the [security audit's Django boundary](../SECURITY_AUDIT.md#django-auths-checks-before-calling-backends).
 
 A supported backend must express its contribution in SQL. Arbitrary
 Python-only state is unsupported and fails loudly.
@@ -225,19 +217,20 @@ Evaluation performs one user query. Its conceptual shape is:
 SELECT DISTINCT user.*
 FROM user
 WHERE
-    django_superuser_check(user)
-    OR (
-        user.is_active
-        AND trusts_complete_grant_predicate(user, permission, content)
+    (
+        trusts_user_conditions(user, skip_options)
+        AND (
+            trusts_user_override(user, skip_options)
+            OR trusts_complete_grant_predicate(user, permission, content)
+        )
     )
     OR custom_backend_complete_predicate(user, permission, content)
     OR ...
 ```
 
 The named predicates are conceptual SQL placeholders, not Python callbacks.
-`user.is_active` is included only when `allow_inactive` is false.
-Backend branches retain their explicit conditions. Django's superuser
-check is unchanged.
+Each Trusts backend composes its own user rules with its complete grant.
+Other backend branches retain their own conditions.
 
 Permission strings use a SQL binding/subquery rather than a preliminary
 permission lookup. Registered relationship conditions and named filters remain
@@ -308,10 +301,9 @@ Implementation must cover:
 - preservation of an application's existing user manager and queryset class;
 - Python 3.12--3.14, package, and exact-Zero pairing CI.
 
-With `allow_inactive=False`, compare the result row for row with `has_perm()`
-for the same candidate users and normalized permission in every behavioral
-fixture. With `allow_inactive=True`, verify that only Trusts-owned
-`is_active` checks are skipped.
+Compare results with each contributing backend's object check for the same
+candidate users and normalized permission. Verify default rules, each named
+skip option, removed conditions, and an explicitly registered override.
 
 ## Non-goals
 
