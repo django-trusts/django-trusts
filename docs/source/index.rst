@@ -698,7 +698,7 @@ Inherited relationships
 delegated registrations. For example, ``along=("parent", 8)`` on
 ``backend.register`` applies the same bounded walk to object checks,
 permitted-content querysets, permission enumeration, users from content, and
-authorization-policy output. See the `security audit
+authorization-policy output. See the `bounded-reach security audit
 <https://github.com/django-trusts/django-trusts/blob/dev/SECURITY_AUDIT.md#bounded-inherited-relationships>`_
 for the recursive-query and database boundaries.
 
