@@ -12,12 +12,14 @@ registry/compiler store types live in ``trusts.conditions._ir``.
 """
 
 from trusts.conditions._ir import (
+    permission_condition_code,
+    permission_has_condition,
+)
+from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
     PermissionConditionNotQueryable,
     PermissionConditionUnsupported,
-    permission_condition_code,
-    permission_has_condition,
 )
 
 __all__ = [

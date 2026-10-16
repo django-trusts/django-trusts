@@ -405,7 +405,9 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             for value in vars(core).values()
             if isinstance(value, types.ModuleType)
         }
-        allowed_trusts_modules = {'trusts.core', 'trusts._bind_once'}
+        allowed_trusts_modules = {
+            'trusts.core', 'trusts._bind_once', 'trusts.errors',
+        }
         self.assertTrue(
             all(
                 name in allowed_trusts_modules or not name.startswith('trusts.')

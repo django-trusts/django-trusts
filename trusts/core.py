@@ -64,16 +64,9 @@ from django.db.models.expressions import Expression
 from django.db.models.query import QuerySet
 
 from trusts._bind_once import bind_once
+from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-
-
-class TrustsConfigurationError(Exception):
-    """Malformed or unsupported ``TrustsRegistry`` registration."""
-
-
-class TrustsCompilerError(TrustsConfigurationError):
-    """Configured Trusts backend is missing or has a malformed query compiler."""
 
 
 class QueryCompiler(object):
