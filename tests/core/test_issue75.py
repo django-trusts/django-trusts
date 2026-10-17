@@ -33,6 +33,7 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import implementation_for_path
+from trusts.plan.aggregates import compiler_for_class
 from trusts.backends import TrustModelBackendMixin
 from trusts.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.core import (
@@ -41,7 +42,6 @@ from trusts.core import (
     TrustsCompilerError,
     TrustsConfigurationError,
     TrustsRegistry,
-    compiler_for_class,
     granted,
 )
 import tests as tests_module

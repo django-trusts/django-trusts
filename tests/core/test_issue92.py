@@ -24,6 +24,7 @@ from trusts.policy_sql_format import (
     _format_policy_sql,
     _tokenize_policy_sql,
 )
+from trusts.plan.aggregates import all_match, common_permissions
 from trusts.reverse import lock_permitted_users_queryset
 from trusts.core import (
     Along,
@@ -35,8 +36,6 @@ from trusts.core import (
     TrustsCompilerError,
     TrustsConfigurationError,
     TrustsRegistry,
-    all_match,
-    common_permissions,
     granted,
 )
 

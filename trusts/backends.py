@@ -13,8 +13,8 @@ from trusts.plan.conditions import (
     evaluate_registered_expression,
     permission_has_condition,
 )
-from trusts.core import (
-    PlanQueryCompiler,
+from trusts.core import PlanQueryCompiler
+from trusts.plan.aggregates import (
     _compile_common_permissions,
     _compiler_applies,
     all_match,

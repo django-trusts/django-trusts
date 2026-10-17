@@ -544,6 +544,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             'trusts.plan.handles',
             'trusts.plan.registry',
             'trusts.plan.standards',
+            'trusts.plan.aggregates',
         }
         self.assertTrue(
             all(

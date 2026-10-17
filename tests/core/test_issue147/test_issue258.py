@@ -531,7 +531,10 @@ class PolicyLockSentinelTest(SimpleTestCase):
                 render_policy_sql_bytes(handles=[handle])
         self.assertIn('no grant', str(ctx.exception))
 
-        with patch('trusts.core._compile_common_permissions', return_value=None):
+        with patch(
+            'trusts.plan.aggregates._compile_common_permissions',
+            return_value=None,
+        ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(handles=[handle])
         self.assertIn('no permissions query', str(ctx.exception))
@@ -551,7 +554,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
             group='group',
             content='paper',
         )
-        from trusts.core import _compile_common_permissions
+        from trusts.plan.aggregates import _compile_common_permissions
 
         def hide_group(handles, instance, user, kind='complete'):
             if kind == 'group':
@@ -560,7 +563,9 @@ class PolicyLockSentinelTest(SimpleTestCase):
                 handles, instance, user, kind=kind,
             )
 
-        with patch('trusts.core._compile_common_permissions', hide_group):
+        with patch(
+            'trusts.plan.aggregates._compile_common_permissions', hide_group,
+        ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(handles=[handle])
         self.assertIn('no group-permissions query', str(ctx.exception))

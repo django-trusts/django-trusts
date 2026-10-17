@@ -125,7 +125,8 @@ class _TrustsRegistryOwner(object):
         """
         from django.utils.module_loading import import_string
 
-        from trusts.core import TrustsConfigurationError, compiler_for_class
+        from trusts.core import TrustsConfigurationError
+        from trusts.plan.aggregates import compiler_for_class
 
         paths = self._configured_trusts_paths()
         if path is None:

@@ -30,10 +30,10 @@ from trusts.core import (
     TrustsConfigurationError,
     _as_q,
     _bound_permission_identity,
-    _delegated_user_exists,
     _ordinary_records,
     bind_checked_user,
 )
+from trusts.plan.aggregates import _delegated_user_exists
 from trusts.plan import conditions as _ir
 
 

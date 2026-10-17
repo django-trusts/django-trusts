@@ -20,14 +20,13 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
+from trusts.plan.aggregates import all_match, common_permissions
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    all_match,
-    common_permissions,
 )
 
 

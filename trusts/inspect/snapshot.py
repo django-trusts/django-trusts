@@ -724,7 +724,7 @@ def _compile_has_perm(handle, alias, records, model, handles):
 
 
 def _compile_get_all_permissions(handle, alias, records, model, handles):
-    from trusts.core import _compile_common_permissions
+    from trusts.plan.aggregates import _compile_common_permissions
 
     user = _role_sentinel(records[0], 'user', alias)
     instance = _content_sentinel(model, alias)
@@ -830,7 +830,7 @@ def _compile_filter_by_permitted_content(handle, alias, records, model, handles)
 
 
 def _compile_get_group_permissions(handle, alias, records, model):
-    from trusts.core import _compile_common_permissions
+    from trusts.plan.aggregates import _compile_common_permissions
 
     user = _role_sentinel(records[0], 'user', alias)
     instance = _content_sentinel(model, alias)
