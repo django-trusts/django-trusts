@@ -20,7 +20,9 @@ from trusts.commons import (
     _auth_group_and_permission,
     _bind_record_qs,
     _lookup_text,
+    _path_text,
     _require_instance,
+    _resolved_hop,
 )
 from trusts.compile.nodes import (
     All,
@@ -49,14 +51,12 @@ from trusts.compile.resolution import (
     _SUFFIX_KINDS,
     _append_group_permissions,
     _classify_field,
-    _path_text,
     _require_one_permission_source,
     _resolve_forward_singles,
     _resolve_group_path,
     _resolve_path,
     _resolve_permission_in_path,
     _resolve_permission_path,
-    _resolved_hop,
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.recursions import GrantReach

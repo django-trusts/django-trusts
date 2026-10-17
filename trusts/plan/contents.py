@@ -16,10 +16,8 @@ from trusts._bind_once import bind_once
 from trusts.commons import (
     _bind_record_qs,
     _bind_terminal,
-    _require_instance,
-)
-from trusts.compile.resolution import (
     _path_text,
+    _require_instance,
     _root_relative_column,
     _scope_prefix_lookups,
 )
