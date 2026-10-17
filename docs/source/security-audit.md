@@ -282,20 +282,8 @@ a registration shape, Django version, database backend, or compiler changes.
 The [setup guide](index.rst#user-conditions-and-overrides) explains
 registration, replacement, removal, and per-inquiry skip options.
 
-### Django auth's checks before calling backends
-
-Django's `PermissionsMixin.has_perm()` allows an active superuser before
-consulting authentication backends. Trusts does not change that shortcut.
 Trusts inquiries and policy SQL have no implicit superuser grant, including
-`authorization_required`. Django's stock `has_perm()` and permission-enumeration
-methods do not forward Trusts-specific skip keywords; use a Trusts inquiry API
-when a skip is needed.
-
-An application can opt out of Django's shortcut in its custom user model by
-overriding `has_perm()` and `has_module_perms()` to ask the backends without
-the superuser early return. This also changes superuser behavior in Django
-admin. Use staff/non-superuser accounts for administrators who must remain
-subject to tenant, parent, object, or named-filter restrictions.
+`authorization_required`.
 
 To opt into a Trusts override, register its own activity requirement:
 
@@ -326,10 +314,37 @@ registry.set_user_condition(
 This condition is not installed by default. `skip_superuser` skips the override,
 not this condition.
 
-For ordinary users, Django grants when any configured authentication backend
-grants. Trusts cannot revoke authorization supplied by another backend. Audit
-every configured backend for object-permission behavior; do not rely on a
-rejecting Trusts branch as a global deny.
+### Apply the policy through Django
+
+Django's `PermissionsMixin.has_perm()` allows an active superuser before
+asking authentication backends. Add `UserPermissionsMixin` before your custom user model's Django
+base class to remove this shortcut for object permission checks:
+
+```python
+from django.contrib.auth.models import AbstractUser
+from trusts.models import UserPermissionsMixin
+
+
+class User(UserPermissionsMixin, AbstractUser):
+    pass
+```
+
+With an object supplied, permission checks ask the configured backends in order.
+Before calling each backend, the mixin requires an active, authenticated user
+unless that backend declares that it handles user conditions itself. Trusts
+declares this and applies its registered conditions before either an override
+or an ordinary grant.
+
+This applies to `has_perm()`, `has_perms()`, and their asynchronous equivalents.
+Checks without an object retain the inherited behavior, as do
+`has_module_perms()` and its asynchronous equivalent.
+
+Each authentication backend can grant independently, including through its own
+superuser rules. Trusts cannot revoke authorization supplied by another backend.
+Review every configured backend; Trusts user conditions restrict only Trusts grants.
+
+Django's permission methods do not forward Trusts-specific skip keywords. Use a
+Trusts inquiry API when a skip is needed.
 
 ## Protect a view
 
@@ -489,7 +504,7 @@ protected model's content type instead. `trusts.E008` covers declared
 the same ownership rule and raises, but it is not registered with that
 check.
 
-The [Django backend boundary](#django-auths-checks-before-calling-backends)
+The [Django backend boundary](#apply-the-policy-through-django)
 still applies to native `user.has_perm()`. Trusts-owned inquiries use the
 registered user conditions and overrides; they do not install a superuser override implicitly.
 
@@ -554,10 +569,7 @@ prove:
 - that the inspection renderer matches production; or
 - that a code and lockfile change is safe merely because they match.
 
-Django still grants when any configured authentication backend grants. An
-active superuser remains globally authorized in `PermissionsMixin.has_perm()`
-before backends run. Lockfile equality is a change-control aid, not a security
-proof.
+Lockfile equality is a change-control aid, not a security proof.
 
 ## Reference implementations
 

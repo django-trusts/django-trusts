@@ -585,7 +585,8 @@ lambdas must return Boolean expressions.
 Use ``set_user_override()`` to set the single override; setting another
 replaces it. Pass its current name with ``None`` to remove it.
 
-Django allows active superusers before asking backends; see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#django-auths-checks-before-calling-backends>`_.
+To apply registered user conditions and overrides through Django object checks,
+see the `security audit <https://github.com/django-trusts/django-trusts/blob/dev/docs/source/security-audit.md#apply-the-policy-through-django>`_.
 
 .. _protect-a-view:
 
