@@ -17,6 +17,7 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
 from tests.myapp.models import Document, DocumentGrant
+from trusts.compile.resolution import _resolve_path
 from trusts.core import (
     All,
     Along,
@@ -27,7 +28,6 @@ from trusts.core import (
     TrustsConfigurationError,
     TrustsRegistry,
     _public_path_segments,
-    _resolve_path,
     _validate_condition,
     permission_in,
 )
@@ -199,7 +199,7 @@ class HandleFreezeOrderTest(SimpleTestCase):
             'trusts.core._public_path_segments',
             wraps=_public_path_segments,
         ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch(
                     'trusts.core._validate_condition',
                     wraps=_validate_condition,
@@ -486,7 +486,7 @@ class CMethodsFreezeAndIsolationTest(SimpleTestCase):
             'trusts.core._public_path_segments',
             wraps=_public_path_segments,
         ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch(
                     'trusts.core._validate_condition',
                     wraps=_validate_condition,

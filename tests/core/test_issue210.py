@@ -29,6 +29,7 @@ from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.conditions import Eq as IrEq
 from trusts.plan.conditions import Ref as IrRef
+from trusts.compile.resolution import _resolve_path
 from trusts.core import (
     All,
     Along,
@@ -43,7 +44,6 @@ from trusts.core import (
     TrustsRegistry,
     _normalize_public_condition,
     _public_path_segments,
-    _resolve_path,
     _validate_condition,
     permission_in,
 )
@@ -417,7 +417,7 @@ class RegisterConditionFailClosedTest(TestCase):
             'trusts.core._public_path_segments',
             wraps=_public_path_segments,
         ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch(
                     'trusts.core._validate_condition',
                     wraps=_validate_condition,
