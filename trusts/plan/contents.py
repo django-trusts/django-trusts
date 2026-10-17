@@ -26,6 +26,7 @@ from trusts.plan.delegations import (
     _matched_delegation_q,
     _sponsor_record_matches,
 )
+from trusts.plan.walk import _delegation_walk_seed, _sponsor_walk_seed
 from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
@@ -655,49 +656,6 @@ def _candidate_outer_ref(walk):
         return OuterRef(walk.rewrite_attname)
     _reject_unsupported_delegated_suffix(walk)
     return OuterRef(walk.walk_ident)
-
-
-def _sponsor_walk_seed(ordinary, permission, content_identity):
-    """Grant identities that carry the sponsoring user through the walk.
-
-    The seed is not filtered to one user. The delegation row matches its
-    sponsor column to ``carrier`` outside the recursive member, so the
-    CTE does not reference the delegation row.
-    """
-    walk = ordinary.along
-    qs = _bind_record_qs(
-        ordinary,
-        permission=permission,
-        correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
-        content_identity=content_identity,
-    )
-    seed = qs.values(
-        carrier=F(ordinary.user_field),
-        ident=F(walk.walk_field),
-    ).distinct()
-    query = seed.query.clone()
-    query.subquery = True
-    return query
-
-
-def _delegation_walk_seed(record, user):
-    """Delegation-row identities for one delegate.
-
-    ``user`` is the bound actor, a constant in the seed. Reach is matched
-    back to ``carrier`` (the delegation primary key) outside the CTE.
-    """
-    walk = record.along
-    qs = record.root._default_manager.filter(**{
-        record.delegate_field: _bind_terminal(user, 'delegate'),
-        '%s__isnull' % walk.walk_field: False,
-    })
-    seed = qs.values(
-        carrier=F(record.root._meta.pk.attname),
-        ident=F(walk.walk_field),
-    ).distinct()
-    query = seed.query.clone()
-    query.subquery = True
-    return query
 
 
 def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,

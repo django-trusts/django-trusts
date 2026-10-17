@@ -536,10 +536,8 @@ def check_along_renderer(app_configs, **kwargs):
     from django.db.utils import OperationalError
 
     from trusts.apps import implementation_configs
-    from trusts.core import (
-        along_connection_supported,
-        probe_along_capabilities,
-    )
+    from trusts.core import probe_along_capabilities
+    from trusts.plan.walk import along_connection_supported
 
     owners = implementation_configs()
     if not owners:

@@ -132,28 +132,18 @@ from trusts.compile.visitors import (
     _CONDITION_EXPR_TYPES,
 )
 from trusts.commons import (
-    _ALONG_ENGINES,
     _BINDING_FIELDS,
-    _DJANGO_SQLITE3,
-    _along_cycle_clause,
     _auth_group_and_permission,
     _bind_record_qs,
     _bind_terminal,
     _compile_predicate,
     _content_type_identity,
-    _content_walk_seed,
-    _grant_walk_attname,
-    _inverse_neighbor_sql,
     _is_lookup_expression,
     _lookup_text,
-    _neighbor_sql,
     _permission_content_type_filters,
     _permission_terminal_is_auth_permission,
     _record_predicate,
-    _render_reach_sql,
-    _require_along_renderer,
     _require_instance,
-    along_connection_supported,
 )
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.handles import BackendHandle
@@ -170,7 +160,6 @@ from trusts.plan.contents import (
     _delegation_prefix_reach_q,
     _delegation_reaches,
     _delegation_sponsor_q,
-    _delegation_walk_seed,
     _exact_prefix_exists,
     _materialize_related_model,
     _ordinary_prefix_predicate,
@@ -187,7 +176,6 @@ from trusts.plan.contents import (
     _root_relative_column,
     _scope_prefix_lookups,
     _shift_outer_ref,
-    _sponsor_walk_seed,
     filter_authorized_scopes,
     filter_by_permitted_content,
     granted,
@@ -214,8 +202,6 @@ from trusts.plan.recursions import (
     _IdentInReach,
     _KeyedReach,
     _PrefixInForwardWalk,
-    _render_keyed_reach_sql,
-    _unwrap_seed_sql,
 )
 from trusts.plan.aggregates import (
     any_plan_records,
