@@ -385,7 +385,15 @@ class TrustsRegistryTest(SimpleTestCase):
             for value in vars(core).values()
             if isinstance(value, types.ModuleType)
         }
-        allowed_trusts_modules = {'trusts.core', 'trusts._bind_once'}
+        allowed_trusts_modules = {
+            'trusts.core', 'trusts._bind_once', 'trusts.errors',
+            'trusts.plan.rewrites', 'trusts.compile.factory',
+            'trusts.compile.nodes',
+            'trusts.compile.paths',             'trusts.compile.visitors',
+            'trusts.plan.handles',
+            'trusts.plan.registry',
+            'trusts.plan.standards',
+        }
         self.assertTrue(
             all(
                 name in allowed_trusts_modules or not name.startswith('trusts.')

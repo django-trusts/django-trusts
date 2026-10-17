@@ -8,11 +8,11 @@ are ``trusts.zero.backends``. ``trusts.core_backends`` is gone.
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts.conditions import (
-    PermissionConditionError,
+from trusts.errors import PermissionConditionError
+from trusts.plan.conditions import (
+    evaluate_registered_expression,
     permission_has_condition,
 )
-from trusts.conditions._ir import evaluate_registered_expression
 from trusts.core import (
     PlanQueryCompiler,
     _compile_common_permissions,

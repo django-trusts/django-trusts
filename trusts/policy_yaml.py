@@ -16,6 +16,8 @@ regenerate reviewed lockfiles when the emitted bytes change.
 
 from __future__ import annotations
 
+__all__ = []
+
 import json
 import math
 import re

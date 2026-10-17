@@ -7,6 +7,8 @@ another package can supply its own later. Runtime ``.permitted()`` calls
 are not recorded for ``trusts.E008``.
 """
 
+__all__ = []
+
 from functools import reduce
 from operator import or_
 

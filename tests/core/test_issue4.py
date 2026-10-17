@@ -15,7 +15,7 @@ from trusts.conditions import (
     PermissionConditionError,
     PermissionConditionUnsupported,
 )
-from trusts.conditions._ir import (
+from trusts.plan.conditions import (
     Const,
     Expr,
     Query,

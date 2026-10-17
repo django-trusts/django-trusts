@@ -1,3 +1,5 @@
+__all__ = []
+
 from django.db.models import Model
 
 
