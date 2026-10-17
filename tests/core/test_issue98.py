@@ -14,6 +14,7 @@ from django.db.models.query import QuerySet
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
+from trusts.compile.nodes import permission_in
 from trusts.core import (
     All,
     BackendHandle,
@@ -23,7 +24,6 @@ from trusts.core import (
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    permission_in,
 )
 from trusts.query import AuthorizedManager
 
@@ -138,7 +138,12 @@ def _tables(*model_classes):
 
 def _register_team(registry, grant):
     """Accepted GH team spelling. Do not change this registration."""
-    from trusts.core import All, Equal, Ref, permission_in
+    from trusts.compile.nodes import permission_in
+    from trusts.core import (
+        All,
+        Equal,
+        Ref,
+    )
 
     t = Ref(grant)
     return registry.register(

@@ -10,15 +10,14 @@ import trusts.checks
 import trusts.core as core
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from trusts.plan.relations import QueryCompiler
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
-    QueryCompiler,
     RelationPlan,
     TrustsRegistry,
-    _compiler_applies,
-    any_plan_records,
 )
+from trusts.plan.aggregates import _compiler_applies, any_plan_records
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,7 +103,7 @@ class CoreOrderedFoldDeletedTest(SimpleTestCase):
     def test_e006_and_renderer_check_are_retired(self):
         self.assertFalse(hasattr(trusts.checks, 'CHECK_ID_ORDERED_FOLD_RENDERER'))
         self.assertFalse(hasattr(trusts.checks, 'check_ordered_fold_renderer'))
-        source = (ROOT / 'trusts' / 'checks.py').read_text()
+        source = (ROOT / 'trusts' / 'inspect' / 'checks.py').read_text()
         self.assertIn("``trusts.E006``", source)
         self.assertIn('trusts_ordered_fold.E001', source)
         self.assertNotIn("CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'", source)

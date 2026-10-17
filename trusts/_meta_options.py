@@ -6,6 +6,8 @@ the option when a host loads ``TrustsImplementationConfig``. Applications
 do not import this module.
 """
 
+__all__ = []
+
 from django.db.models import options as model_options
 
 

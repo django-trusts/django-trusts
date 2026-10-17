@@ -15,9 +15,9 @@ from django.db import models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
+from trusts.compile.factory import RegisteredRelation
 from trusts.core import (
     Ref,
-    RegisteredRelation,
     TrustsConfigurationError,
     TrustsRegistry,
 )
@@ -385,7 +385,20 @@ class TrustsRegistryTest(SimpleTestCase):
             for value in vars(core).values()
             if isinstance(value, types.ModuleType)
         }
-        allowed_trusts_modules = {'trusts.core', 'trusts._bind_once'}
+        allowed_trusts_modules = {
+            'trusts.core', 'trusts._bind_once', 'trusts.errors',
+            'trusts.plan.rewrites', 'trusts.compile.factory',
+            'trusts.compile.nodes',
+            'trusts.compile.paths',             'trusts.compile.visitors',
+            'trusts.commons',
+            'trusts.plan.contents',
+            'trusts.plan.relations',
+            'trusts.plan.recursions',
+            'trusts.plan.handles',
+            'trusts.plan.registry',
+            'trusts.plan.standards',
+            'trusts.plan.aggregates',
+        }
         self.assertTrue(
             all(
                 name in allowed_trusts_modules or not name.startswith('trusts.')

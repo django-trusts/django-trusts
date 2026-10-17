@@ -21,7 +21,7 @@ from tests.core.test_issue147.test_sql_export import (
 )
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-import trusts._bind_once as bind_once_module
+import trusts.plan.rewrites as bind_once_module
 from trusts._bind_once import (
     BIND_ALIAS,
     BindRef,
@@ -31,12 +31,12 @@ from trusts._bind_once import (
     strip_exists_marker,
     trusts_bind_once,
 )
+from trusts.plan.walk import _render_reach_sql
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     TrustsConfigurationError,
     TrustsRegistry,
-    _render_reach_sql,
     granted,
 )
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
@@ -409,7 +409,7 @@ class Issue300ShapeFallbackTest(TestCase):
         def boom(*args, **kwargs):
             raise RuntimeError('bind row failed')
 
-        with patch('trusts._bind_once._install', boom):
+        with patch('trusts.plan.rewrites._install', boom):
             with self.assertLogs('trusts', level='WARNING') as logs:
                 returned = bind_once(queryset)
                 other = User.objects.filter(id=user.pk).filter(pk=user.pk)
@@ -593,7 +593,7 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             )
             candidates = RetargetNode.objects.order_by('pk')
             with patch(
-                'trusts.core._render_reach_sql', _render_parenthesized_depth,
+                'trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth,
             ):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
                     plain = handle.registry.filter_authorized(
@@ -682,7 +682,7 @@ def _published(user, permission, obj):
 
 class Issue300ManagerAnnotationTest(SimpleTestCase):
     def test_value_annotation_stays_in_the_lockfile_for_both_settings(self):
-        from trusts.core import _compile_granted
+        from trusts.plan.contents import _compile_granted
         from trusts.policy_lock import _content_manager, _role_sentinel
 
         for enabled in (True, False):

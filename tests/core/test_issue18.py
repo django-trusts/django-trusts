@@ -22,6 +22,8 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
+from trusts.compile.nodes import permission_in
+from trusts.plan.contents import filter_by_permitted_content
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
@@ -29,13 +31,9 @@ from trusts.core import (
     RelationPlan,
     TrustsConfigurationError,
     TrustsRegistry,
-    all_match,
-    common_permissions,
-    filter_by_permitted_content,
     granted,
-    instance_match,
-    permission_in,
 )
+from trusts.plan.aggregates import all_match, common_permissions, instance_match
 from trusts.query import AuthorizedManager
 
 
@@ -308,7 +306,7 @@ class CoreImportBoundaryTest(SimpleTestCase):
 
 class PermissionConditionsMetaOptionTest(SimpleTestCase):
     def test_generic_option_is_registered_idempotently(self):
-        from trusts.conditions._ir import _ensure_permission_conditions_option
+        from trusts.plan.conditions import _ensure_permission_conditions_option
 
         self.assertIn('permission_conditions', model_options.DEFAULT_NAMES)
         before = model_options.DEFAULT_NAMES

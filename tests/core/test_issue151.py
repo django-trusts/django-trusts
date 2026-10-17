@@ -1,7 +1,7 @@
 """#151 C1: construct-time self-bind of Core's private condition lookup.
 
 Library-only proofs. Applications register builders; they do not import
-``trusts.conditions._ir`` or call ``set_condition_lookup``.
+``trusts.plan.conditions`` or call ``set_condition_lookup``.
 """
 
 import os
@@ -24,7 +24,7 @@ from trusts.conditions import (
     permission_condition_code,
     permission_has_condition,
 )
-from trusts.conditions._ir import ConditionRecord, RegistryConditionLookup
+from trusts.plan.conditions import ConditionRecord, RegistryConditionLookup
 from trusts.core import TrustsConfigurationError, TrustsRegistry
 
 
@@ -191,8 +191,10 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
             'import sys\n'
             'import trusts.core\n'
             'assert "trusts.conditions._ir" not in sys.modules\n'
+            'assert "trusts.plan.conditions" not in sys.modules\n'
             'registry = trusts.core.TrustsRegistry()\n'
-            'assert "trusts.conditions._ir" in sys.modules\n'
+            'assert "trusts.plan.conditions" in sys.modules\n'
+            'assert "trusts.conditions._ir" not in sys.modules\n'
             'lookup = registry.condition_lookup\n'
             'assert lookup is not None\n'
             'assert lookup.conditions is registry.conditions\n'
@@ -208,18 +210,33 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
             'assert "permission_conditions" in model_options.DEFAULT_NAMES\n'
             'assert "trusts.core" not in sys.modules\n'
             'assert "trusts.conditions._ir" not in sys.modules\n'
+            'assert "trusts.plan.conditions" not in sys.modules\n'
             'print("apps-option-ok")\n'
         )
         self.assertIn('apps-option-ok', stdout)
 
+    def test_rewrites_do_not_import_core(self):
+        source = (ROOT / 'trusts' / 'plan' / 'rewrites.py').read_text()
+        self.assertNotIn('trusts.core', source)
+        stdout = self._run_isolated(
+            'import sys\n'
+            'import trusts.plan.rewrites\n'
+            'assert "trusts.core" not in sys.modules\n'
+            'from trusts._bind_once import bind_once\n'
+            'assert bind_once is trusts.plan.rewrites.bind_once\n'
+            'assert "trusts.core" not in sys.modules\n'
+            'print("rewrites-without-core")\n'
+        )
+        self.assertIn('rewrites-without-core', stdout)
+
     def test_import_ir_then_construct_is_not_circular(self):
         stdout = self._run_isolated(
-            'import trusts.conditions._ir\n'
+            'import trusts.plan.conditions\n'
             'import trusts.core\n'
             'registry = trusts.core.TrustsRegistry()\n'
             'lookup = registry.condition_lookup\n'
             'assert isinstance(\n'
-            '    lookup, trusts.conditions._ir.RegistryConditionLookup,\n'
+            '    lookup, trusts.plan.conditions.RegistryConditionLookup,\n'
             ')\n'
             'assert lookup.conditions is registry.conditions\n'
             'print("ir-then-construct-ok")\n'

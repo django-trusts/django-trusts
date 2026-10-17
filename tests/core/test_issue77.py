@@ -15,13 +15,12 @@ from tests.backends import RaisingCompilerBackend
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import implementation_for_path
+from trusts.plan.aggregates import common_permissions, compiler_for_class
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     TrustsCompilerError,
     TrustsRegistry,
-    common_permissions,
-    compiler_for_class,
     granted,
 )
 from tests.backends import MissingCompilerBackend

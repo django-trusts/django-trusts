@@ -21,16 +21,16 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts._bind_once import bind_once
+from trusts.plan.contents import filter_by_permitted_content
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    common_permissions,
-    filter_by_permitted_content,
     granted,
 )
+from trusts.plan.aggregates import common_permissions
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -531,7 +531,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 return registry
 
             def holds(handle, user, **skip):
-                from trusts.core import user_skip_params
+                from trusts.plan.relations import user_skip_params
 
                 inquiry = user_skip_params(user, skip, handles=(handle,))
                 predicate = granted(
@@ -545,7 +545,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 ).filter(predicate)).exists()
 
             def sql_for(handle, user, **skip):
-                from trusts.core import user_skip_params
+                from trusts.plan.relations import user_skip_params
 
                 inquiry = user_skip_params(user, skip, handles=(handle,))
                 predicate = granted(
@@ -1964,7 +1964,10 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
         user_model, note_model, grant_model, link_model = self._create('Replaced')
         try:
             registry = TrustsRegistry()
-            with patch('django.contrib.auth.get_user_model', return_value=user_model):
+            with patch(
+                'trusts.plan.standards.get_user_model',
+                return_value=user_model,
+            ):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         registry.set_user_condition('is_active', lambda u: u.is_active)

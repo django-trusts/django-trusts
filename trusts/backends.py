@@ -8,13 +8,13 @@ are ``trusts.zero.backends``. ``trusts.core_backends`` is gone.
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts.conditions import (
-    PermissionConditionError,
+from trusts.errors import PermissionConditionError
+from trusts.plan.conditions import (
+    evaluate_registered_expression,
     permission_has_condition,
 )
-from trusts.conditions._ir import evaluate_registered_expression
-from trusts.core import (
-    PlanQueryCompiler,
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.plan.aggregates import (
     _compile_common_permissions,
     _compiler_applies,
     all_match,
@@ -101,7 +101,7 @@ class TrustModelBackendMixin(object):
         return _perm_codes(qs)
 
     def _skip_inquiry(self, user_obj, skip_flags):
-        from trusts.core import bind_checked_user
+        from trusts.plan.relations import bind_checked_user
 
         return bind_checked_user(
             user_obj, skip_flags=skip_flags,

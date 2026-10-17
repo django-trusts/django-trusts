@@ -33,6 +33,8 @@ comparisons cannot be overloaded and raise
 ``PermissionConditionBooleanError``.
 """
 
+__all__ = []
+
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from io import IOBase
@@ -61,30 +63,15 @@ from django.db.models import (
 from django.db.models.fields import GenericIPAddressField
 
 from trusts._meta_options import _ensure_permission_conditions_option
+from trusts.errors import (
+    PermissionConditionBooleanError,
+    PermissionConditionError,
+    PermissionConditionNotQueryable,
+    PermissionConditionUnsupported,
+)
+from trusts.plan.relations import ConditionLookup
 
 _ensure_permission_conditions_option()
-
-
-class PermissionConditionError(Exception):
-    """Unsupported or malformed declarative permission condition.
-
-    Fail closed: never ignore the condition and return the underlying grant.
-    """
-
-
-class PermissionConditionBooleanError(PermissionConditionError):
-    """Raised when a symbolic condition is truth-tested (``and`` / ``or`` / ``not``)."""
-
-
-class PermissionConditionUnsupported(PermissionConditionError):
-    """Raised for operations outside the V1 grammar (calls, indexing, arithmetic)."""
-
-
-class PermissionConditionNotQueryable(ValueError):
-    """Raised when a SQL list/create filter cannot compile a ``:condition``.
-
-    Generic core exception. Import this name from ``trusts.conditions``.
-    """
 
 
 def permission_has_condition(perm):
@@ -1200,9 +1187,6 @@ class ConditionRegistry(object):
         return evaluate_registered_expression(
             record.expr, user, perm, obj, model=model,
         )
-
-
-from trusts.core import ConditionLookup  # noqa: E402
 
 
 class RegistryConditionLookup(ConditionLookup):

@@ -21,13 +21,13 @@ from django.test.utils import isolate_apps
 
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
+from trusts.plan.contents import filter_by_permitted_content
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    filter_by_permitted_content,
 )
 from trusts.policy_lock import (
     _load_policy_sql_document,

@@ -139,7 +139,7 @@ class OwnerResolutionTest(SimpleTestCase):
         self.assertIn(owner, implementation_configs())
 
     def test_authorized_and_filter_scopes_use_owners(self):
-        from trusts.core import filter_by_permitted_content
+        from trusts.plan.contents import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
         handles = configured_implementation_handles()
