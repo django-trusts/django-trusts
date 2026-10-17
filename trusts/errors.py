@@ -1,8 +1,11 @@
 """Configuration and permission-condition errors.
 
 ``TrustsConfigurationError`` and ``TrustsCompilerError`` are re-exported
-from ``trusts.core``. The permission-condition errors are re-exported
-from ``trusts.conditions``.
+from ``trusts.core``. ``trusts.conditions`` re-exports the
+permission-condition errors as Core's own public surface. That package
+is not a compatibility shim for django-trusts-zero: Zero imports
+``PermissionConditionNotQueryable`` from here and carries its own
+``permission_has_condition``.
 """
 
 
@@ -32,5 +35,5 @@ class PermissionConditionUnsupported(PermissionConditionError):
 class PermissionConditionNotQueryable(ValueError):
     """Raised when a SQL list/create filter cannot compile a ``:condition``.
 
-    Generic core exception. Import this name from ``trusts.conditions``.
+    Generic core exception. Import this name from ``trusts.errors``.
     """
