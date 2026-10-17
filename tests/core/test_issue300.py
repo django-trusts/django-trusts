@@ -593,7 +593,7 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             )
             candidates = RetargetNode.objects.order_by('pk')
             with patch(
-                'trusts.core._render_reach_sql', _render_parenthesized_depth,
+                'trusts.commons._render_reach_sql', _render_parenthesized_depth,
             ):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
                     plain = handle.registry.filter_authorized(
