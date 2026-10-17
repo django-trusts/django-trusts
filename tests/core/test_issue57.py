@@ -390,6 +390,7 @@ class TrustsRegistryTest(SimpleTestCase):
             'trusts.plan.rewrites', 'trusts.compile.nodes',
             'trusts.compile.paths',             'trusts.compile.visitors',
             'trusts.plan.handles',
+            'trusts.plan.registry',
             'trusts.plan.standards',
         }
         self.assertTrue(

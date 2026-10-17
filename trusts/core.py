@@ -87,6 +87,7 @@ from trusts.compile.visitors import (
 )
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.handles import BackendHandle
+from trusts.plan.registry import FrozenRegistry as _FrozenRegistry
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
     UserCondition,
