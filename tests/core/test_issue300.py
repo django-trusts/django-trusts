@@ -31,12 +31,12 @@ from trusts._bind_once import (
     strip_exists_marker,
     trusts_bind_once,
 )
+from trusts.plan.walk import _render_reach_sql
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     TrustsConfigurationError,
     TrustsRegistry,
-    _render_reach_sql,
     granted,
 )
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes

@@ -10,72 +10,16 @@ __all__ = []
 from django.db.models import BooleanField, Exists, F, OuterRef, Q
 from django.db.models.expressions import Expression
 
-from trusts.commons import (
-    _along_cycle_clause,
-    _bind_record_qs,
+from trusts.commons import _bind_record_qs
+from trusts.plan.walk import (
     _content_walk_seed,
     _grant_walk_attname,
     _inverse_neighbor_sql,
-    _neighbor_sql,
+    _render_keyed_reach_sql,
     _render_reach_sql,
     _require_along_renderer,
+    _unwrap_seed_sql,
 )
-
-
-def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
-    """Recursive walk that carries one non-identity column.
-
-    ``seed_sql`` selects ``carrier`` and ``ident``. The recursive member
-    copies ``carrier`` and replaces ``ident`` with the next hop. The final
-    select returns carriers whose ident equals the caller's candidate.
-    The recursive member does not reference the outer query. The depth
-    cap is the same bound as an ordinary ``along=`` walk. PostgreSQL's
-    ``CYCLE`` clause stays the only engine-specific suffix, and it still
-    names the ident column.
-    """
-    qn = connection.ops.quote_name
-    gen = qn('gen')
-    g = qn('g')
-    depth = qn('depth')
-    ident_col = qn('ident')
-    carrier = qn('carrier')
-    ident = qn(walk.walk_ident)
-    walk_table = qn(walk.walk_model._meta.db_table)
-    site = qn('s')
-    seed_alias = qn('seed_rows')
-    if neighbor is None:
-        neighbor = _neighbor_sql
-    frm, project = neighbor(walk, qn, gen, g, ident_col, ident)
-    sql = (
-        'WITH RECURSIVE %(gen)s(%(carrier)s, %(ident_col)s, %(depth)s) AS ('
-        'SELECT %(seed_alias)s.%(carrier)s, %(seed_alias)s.%(ident_col)s, 0 '
-        'FROM (%(seed_sql)s) AS %(seed_alias)s '
-        'UNION ALL '
-        'SELECT %(g)s.%(carrier)s, %(project)s, %(g)s.%(depth)s + 1 '
-        '%(frm)s '
-        'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
-        ') '
-        '%(cycle)s'
-        'SELECT DISTINCT %(gen)s.%(carrier)s '
-        'FROM %(gen)s '
-        'JOIN %(walk_table)s AS %(site)s '
-        'ON %(site)s.%(ident)s = %(gen)s.%(ident_col)s '
-        'WHERE %(site)s.%(ident)s = '
-        % {
-            'gen': gen, 'carrier': carrier, 'ident_col': ident_col,
-            'depth': depth, 'seed_alias': seed_alias, 'seed_sql': seed_sql,
-            'project': project, 'g': g, 'frm': frm,
-            'site': site, 'ident': ident, 'walk_table': walk_table,
-            'cycle': _along_cycle_clause(connection, ident_col, qn),
-        }
-    )
-    return sql, tuple(seed_params) + (walk.bound,)
-
-
-def _unwrap_seed_sql(seed_sql):
-    if seed_sql.startswith('(') and seed_sql.endswith(')'):
-        return seed_sql[1:-1]
-    return seed_sql
 
 
 class _IdentInReach(Expression):

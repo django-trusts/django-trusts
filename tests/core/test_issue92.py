@@ -26,12 +26,12 @@ from trusts.policy_sql_format import (
 )
 from trusts.plan.aggregates import all_match, common_permissions
 from trusts.reverse import lock_permitted_users_queryset
+from trusts.plan.walk import _render_reach_sql
 from trusts.core import (
     Along,
     BackendHandle,
     GrantReach,
     PlanQueryCompiler,
-    _render_reach_sql,
     Ref,
     TrustsCompilerError,
     TrustsConfigurationError,

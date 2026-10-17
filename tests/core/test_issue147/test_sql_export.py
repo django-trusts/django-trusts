@@ -857,7 +857,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         )
         with patch('trusts.core.probe_along_capabilities') as probe:
             with patch(
-                'trusts.commons.along_connection_supported', return_value=False,
+                'trusts.plan.walk.along_connection_supported', return_value=False,
             ):
                 with self.assertRaises(TrustsConfigurationError):
                     render_policy_sql_bytes(handles=[handle])
