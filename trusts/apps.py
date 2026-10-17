@@ -8,7 +8,7 @@ from django.core.exceptions import ImproperlyConfigured
 from trusts._meta_options import _ensure_permission_conditions_option
 
 if TYPE_CHECKING:
-    from trusts.core import BackendHandle
+    from trusts.plan.handles import BackendHandle
 
 # Hosts load this module before Django constructs their models. Register
 # Meta.permission_conditions here so applications do not import _ir.
@@ -26,7 +26,7 @@ def _listed_mixin_paths():
     from django.utils.module_loading import import_string
 
     from trusts.backends import TrustModelBackendMixin
-    from trusts.core import TrustsConfigurationError
+    from trusts.errors import TrustsConfigurationError
 
     listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
     paths = []
@@ -60,7 +60,7 @@ class _TrustsRegistryOwner(object):
     """Path-scoped registry store shared by implementation AppConfigs."""
 
     def _init_registries(self):
-        # Import here: a module-level trusts.core import loads contenttypes
+        # Import here: a module-level compile.factory import loads contenttypes
         # models before Apps.populate finishes. Backends may be imported
         # from _configured_trusts_paths; they must not import trusts.models.
         # Path-scoped store. Empty until ready() / _ensure. Never replace
@@ -89,7 +89,7 @@ class _TrustsRegistryOwner(object):
         return a family-owned store. ``path`` is the exact configured
         backend string; the relationship default does not key on it.
         """
-        from trusts.core import TrustsRegistry
+        from trusts.compile.factory import TrustsRegistry
 
         return TrustsRegistry()
 
@@ -99,7 +99,7 @@ class _TrustsRegistryOwner(object):
         The default is Core ``BackendHandle``. An extension config may
         return a family-owned handle. Not a public family API.
         """
-        from trusts.core import BackendHandle
+        from trusts.plan.handles import BackendHandle
 
         return BackendHandle(path=path, registry=registry, compiler=compiler)
 
@@ -125,7 +125,7 @@ class _TrustsRegistryOwner(object):
         """
         from django.utils.module_loading import import_string
 
-        from trusts.core import TrustsConfigurationError
+        from trusts.errors import TrustsConfigurationError
         from trusts.plan.aggregates import compiler_for_class
 
         paths = self._configured_trusts_paths()
@@ -168,7 +168,7 @@ class _TrustsRegistryOwner(object):
     def path_for_class(self, cls):
         from django.utils.module_loading import import_string
 
-        from trusts.core import TrustsConfigurationError
+        from trusts.errors import TrustsConfigurationError
 
         matches = [
             path for path in self._configured_trusts_paths()
@@ -191,7 +191,7 @@ class _TrustsRegistryOwner(object):
         Zero or several configured Trusts paths fail loud. Isolated
         tests keep constructing their own ``TrustsRegistry()``.
         """
-        from trusts.core import TrustsConfigurationError
+        from trusts.errors import TrustsConfigurationError
 
         paths = self._configured_trusts_paths()
         if len(paths) != 1:
@@ -203,7 +203,7 @@ class _TrustsRegistryOwner(object):
 
     @registry.setter
     def registry(self, value):
-        from trusts.core import TrustsConfigurationError
+        from trusts.errors import TrustsConfigurationError
 
         paths = self._configured_trusts_paths()
         if len(paths) != 1:
@@ -259,7 +259,7 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
         from django.utils.module_loading import import_string
 
         from trusts.backends import TrustModelBackendMixin
-        from trusts.core import TrustsConfigurationError
+        from trusts.errors import TrustsConfigurationError
 
         owned = self.owned_backend_paths()
         if not owned:
@@ -335,7 +335,7 @@ def _handle_authorization_family(handle, apps_registry=None):
     Unowned or pathless handles default to ``"relationship"`` so isolated
     compiler tests stay on the Core contract. Missing owners do not raise.
     """
-    from trusts.core import TrustsConfigurationError
+    from trusts.errors import TrustsConfigurationError
 
     path = getattr(handle, 'path', None)
     if not path:
@@ -380,7 +380,7 @@ def implementation_configs(apps_registry=None):
 
 def implementation_for_path(path, apps_registry=None):
     """Return the unique implementation that owns ``path``."""
-    from trusts.core import TrustsConfigurationError
+    from trusts.errors import TrustsConfigurationError
 
     matches = [
         config for config in implementation_configs(apps_registry)
@@ -408,7 +408,7 @@ def implementation_for_class(cls, apps_registry=None, required=True):
     """
     from django.utils.module_loading import import_string
 
-    from trusts.core import TrustsConfigurationError
+    from trusts.errors import TrustsConfigurationError
 
     matches = []
     for config in implementation_configs(apps_registry):

@@ -35,7 +35,10 @@ def assert_register_signature(register) -> None:
     from collections.abc import Callable as AbcCallable
     from typing import TypeVar, get_args, get_origin, get_type_hints
 
-    from trusts.core import RegisteredDelegation, RegisteredRelation
+    from trusts.compile.factory import (
+        RegisteredDelegation,
+        RegisteredRelation,
+    )
 
     signature = inspect.signature(register)
     param_names = [name for name in signature.parameters if name != 'self']
@@ -182,17 +185,19 @@ def main() -> int:
         implementation_for_path,
     )
     from trusts.backends import TrustModelBackendMixin
-    from trusts.core import (
-        BackendHandle,
-        ConditionLookup,
-        Ref,
+    from trusts.compile.factory import (
         RegisteredDelegation,
         RegisteredRelation,
-        RelationPlan,
-        TrustsRegistry,
-        filter_authorized_scopes,
-        filter_by_permitted_content,
     )
+    from trusts.plan.contents import filter_by_permitted_content
+    from trusts.core import (
+    BackendHandle,
+    ConditionLookup,
+    Ref,
+    RelationPlan,
+    TrustsRegistry,
+    filter_authorized_scopes,
+)
     from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
         PermissionConditionError,

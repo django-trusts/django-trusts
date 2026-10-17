@@ -526,7 +526,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
 
     def test_missing_grant_or_permission_query_fails_closed(self):
         handle = _document_handle('documents.backends.MissingQueryBackend')
-        with patch('trusts.core._compile_granted', return_value=None):
+        with patch('trusts.plan.contents._compile_granted', return_value=None):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(handles=[handle])
         self.assertIn('no grant', str(ctx.exception))

@@ -3,7 +3,7 @@
 ``QueryCompiler``, ``PlanQueryCompiler``, ``ConditionLookup``, and
 ``RelationPlan`` live here with the user-binding and candidate helpers
 they close over. Not a public import surface. ``trusts.core`` re-exports
-the names other modules already import from there.
+``PlanQueryCompiler``, ``RelationPlan``, and ``ConditionLookup``.
 """
 
 __all__ = []

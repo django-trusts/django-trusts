@@ -26,13 +26,9 @@ from django.db.models import F, Model, Q, QuerySet
 from trusts import utils
 from trusts._bind_once import bind_once
 from trusts.backends import TrustModelBackendMixin, _permission_binding
-from trusts.core import (
-    TrustsConfigurationError,
-    _as_q,
-    _bound_permission_identity,
-    _ordinary_records,
-    bind_checked_user,
-)
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.contents import _as_q, _ordinary_records
+from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.compile.resolution import _object_memory_value, _user_lookup
 from trusts.plan.aggregates import _delegated_user_exists
 from trusts.plan import conditions as _ir

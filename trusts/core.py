@@ -1,209 +1,54 @@
-"""Isolated registration and common authorization-plan compiler.
+"""Names downstream packages still import from ``trusts.core``.
 
-``TrustsRegistry`` validates root-relative ``Ref`` paths through Django
-model ``_meta`` and stores immutable records. More than one normalized
-registration may share one permission-bearing root when they terminate
-on different content models. The same registered records compile into
-one correlated relation plan. Three projections change only the
-terminal: permission enumeration, object authorization (SQL ``EXISTS``
-membership over that enumeration), and authorized-content filtering.
+In-repo modules import the defining modules directly. This file
+defines nothing.
 
-Optional ``Along`` replaces equality at one walk-site with bounded
-grant-anchored reachability. V1 compiles that walk only for Django's
-SQLite backend.
+django-trusts-zero production (companion pin ``8d7c729``):
 
-Closed predicate nodes ``All``, ``Equal``, and ``permission_in`` are the
-private stored overlay on one permission-bearing root. Public
-``register(*, trust=..., condition=...)`` accepts only a one-argument
-trust-rooted symbolic callable (path ``==``, collection-rooted
-``.contains(member)``, conjunction with ``&``) and lowers to those
-nodes. A requester path may end in exactly one terminal M2M membership
-hop after zero or more forward single-valued hops. Validation is
-registration-time ``_meta`` only (zero SQL).
+- ``TrustsConfigurationError`` — ``trusts/zero/apps.py``,
+  ``trusts/zero/query.py``
+- ``PlanQueryCompiler`` — ``trusts/zero/backends.py``
+- ``BackendHandle`` — ``trusts/zero/registration.py``
+- ``granted`` and ``filter_authorized_scopes`` — ``trusts/zero/query.py``
+- ``any_plan_records`` — ``trusts/zero/query.py``. The follow-up is for
+  ``TrustManager.filter_by_user_content_perm`` to call
+  ``filter_authorized_scopes`` and drop that gate. Core does not grow a
+  public predicate to replace it.
 
-The configured backend exposes two public registration methods.
-``register(*, trust=...)`` is the AnyPath ``EXISTS`` fast path.
-``add_named_filter`` binds a named restricting predicate and is not
-an authorization source. Core is relationship-only. OrderedFold
-construction, registration, and PostgreSQL remaining-bits rendering
-live in ``django-trusts-ordered-fold``. Core does not import, depend
-on, auto-discover, or fallback-import that package.
+django-trusts-gh-permissions production:
 
-When the permission terminal's concrete model is Django's
-``auth.Permission``, the shared grant requires that row's content type
-to be the protected object's content identity. Proxy models keep their
-own. A mismatch is an empty predicate, not an error. Any other
-terminal, including a custom model that has a ``content_type`` foreign
-key, stays primary-key identity. The codename is not parsed to guess
-the model.
+- ``BackendHandle`` — ``gh_permissions/policy.py``
 
-Import from ``trusts.core``. This slice does not re-export a process-global
-registry from ``trusts``. ``any_plan_records()``, ``common_permissions()``,
-and ``compiler_for_class()`` stay importable here because
-django-trusts-zero imports them; their bodies live in
-``trusts.plan.aggregates``. Generic compiler protocol, the default plan
-compiler, ``granted()``, ``filter_by_permitted_content()``,
-``ConditionLookup``, and configuration/compiler exceptions are re-exported
-from their homes.
-Permission-condition *records* live on each ``TrustsRegistry`` via
-``trusts.plan.conditions.ConditionRegistry``. Construction self-binds
-the private store adapter; ``set_condition_lookup`` remains for
-tests and explicit unbind.
+Test-only movers, one follow-up rather than a name at a time:
+``compiler_for_class`` (Zero ``tests/apps.py`` and
+``tests/legacy/test_issue75.py``) and ``common_permissions`` (Zero
+``tests/legacy/test_issue77.py``, ``tests/legacy/test_issue87.py``,
+and the aggregate tests that assert this Core name). Retarget that
+batch together.
+
+Zero and gh-permissions tests also import ``TrustsRegistry``, ``Ref``,
+``All``, ``Equal``, ``PermissionIn``, ``RelationPlan``,
+``ConditionLookup``, and ``TrustsCompilerError``. Those stay until
+those tests move. Deleting this module waits on that downstream set.
+
+``_FrozenRegistry`` stays because ``test_registry_spike`` asserts this
+alias. ``permission_in`` stays because ``test_issue98`` asserts that
+export. ``plan.registry`` does not import ``compile``.
 """
 
-from trusts.compile.factory import (
-    assemble_frozen,
-    TrustsRegistry,
-    RegisteredDelegation,
-    RegisteredRelation,
-    _ALONG_BOUND_MAX,
-    _ALONG_BOUND_MIN,
-    _INTEGER_IDENTITY_TYPES,
-    _TEXT_IDENTITY_TYPES,
-    _UUID_IDENTITY_TYPES,
-    _bind_public_along,
-    _build_along_walk,
-    _common_prefix,
-    _concrete_fk,
-    _concrete_model,
-    _content_model,
-    _delegated_condition_arity,
-    _flatten_public_all,
-    _ident_family,
-    _lower_public_condition,
-    _normalize_delegated_condition,
-    _normalize_public_condition,
-    _normalize_public_role,
-    _public_condition_path,
-    _public_path_segments,
-    _public_ref,
-    _re_resolve_suffix,
-    _reject_public_condition_value,
-    _require_condition_arity,
-    _resolve_along_edge,
-    _same_terminal_bindings,
-    _suffix_rewrite_attname,
-    _target_field,
-    _validate_condition,
-    _validate_delegated_condition,
-    _validate_equal,
-    _validate_permission_in,
-    probe_along_capabilities,
-)
-from trusts.compile.nodes import (
-    All,
-    Along,
-    Equal,
-    PermissionIn,
-    Ref,
-    _InquiryPermissionMatch,
-    _is_condition_operand,
-    _is_model_class,
-    _require_ref,
-    _require_same_root,
-    permission_in,
-)
-from trusts.compile.paths import AlongWalk, _PathBuilder
-from trusts.compile.visitors import (
-    ConditionAnd as _ConditionAnd,
-    ConditionEq as _ConditionEq,
-    ConditionIn as _ConditionIn,
-    ConditionInquiryMatch as _ConditionInquiryMatch,
-    ConditionProxy as _ConditionProxy,
-    InquiryPermissionProxy as _InquiryPermissionProxy,
-    _CONDITION_ARITY_PROBE,
-    _CONDITION_EXPR_TYPES,
-)
-from trusts.commons import (
-    _BINDING_FIELDS,
-    _auth_group_and_permission,
-    _bind_record_qs,
-    _bind_terminal,
-    _compile_predicate,
-    _content_type_identity,
-    _is_lookup_expression,
-    _lookup_text,
-    _permission_content_type_filters,
-    _permission_terminal_is_auth_permission,
-    _record_predicate,
-    _require_instance,
-)
+from trusts.compile.factory import TrustsRegistry
+from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.plan.handles import BackendHandle
-from trusts.plan.registry import FrozenRegistry as _FrozenRegistry
-from trusts.plan.contents import (
-    _apply_checked_user,
-    _as_q,
-    _candidate_outer_ref,
-    _compile_granted,
-    _compile_permitted_content_queryset,
-    _delegated_content_exists,
-    _delegated_prefix_predicates,
-    _delegation_prefix_exists,
-    _delegation_prefix_reach_q,
-    _delegation_reaches,
-    _delegation_sponsor_q,
-    _exact_prefix_exists,
-    _ordinary_prefix_predicate,
-    _ordinary_records,
-    _plan_for_permission,
-    _prefix_lookup_hops,
-    _prefix_partial_suffix,
-    _prefix_sponsor_q,
-    _prefix_walk_position,
-    _reject_unsupported_delegated_suffix,
-    _relationship_handles,
-    _shift_outer_ref,
-    filter_authorized_scopes,
-    filter_by_permitted_content,
-    granted,
-)
-from trusts.plan.relations import (
-    ConditionLookup,
-    PlanQueryCompiler,
-    QueryCompiler,
-    RelationPlan,
-    SkipParams,
-    _TARGET_ATTRS,
-    _bound_permission_identity,
-    _candidate_model,
-    _known_skip_names,
-    _or_q,
-    _outer_permission_identity,
-    bind_checked_user,
-    candidate_queryset,
-    user_skip_params,
-)
-from trusts.plan.recursions import (
-    GrantReach,
-    _AnchorInInverseReach,
-    _IdentInReach,
-    _KeyedReach,
-    _PrefixInForwardWalk,
-)
 from trusts.plan.aggregates import (
     any_plan_records,
     common_permissions,
     compiler_for_class,
 )
-from trusts.plan.standards import (
-    BUILTIN_USER_CONDITIONS,
-    UserCondition,
-    assert_concrete_booleans,
-    bind_skip_flags,
-    builtin_user_conditions,
-    compile_override_q,
-    compile_user_rules,
-    concrete_rule,
-    condition_names,
-    normalize_on,
-    normalize_override_on,
-    rule_applies,
-    validate_user_rule_name,
+from trusts.plan.contents import filter_authorized_scopes, granted
+from trusts.plan.handles import BackendHandle
+from trusts.plan.registry import FrozenRegistry as _FrozenRegistry
+from trusts.plan.relations import (
+    ConditionLookup,
+    PlanQueryCompiler,
+    RelationPlan,
 )
-
-# ``BackendHandle.register`` annotates these names. Bind the same objects
-# ``trusts.core`` defines so ``get_type_hints`` resolves them. ``plan.handles``
-# does not import this module.
-BackendHandle.register.__globals__['RegisteredRelation'] = RegisteredRelation
-BackendHandle.register.__globals__['RegisteredDelegation'] = RegisteredDelegation

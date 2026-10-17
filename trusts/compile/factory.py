@@ -2,8 +2,8 @@
 
 ``TrustsRegistry`` collects ``register`` and ``set_*`` calls and stores
 lowered rows. ``assemble_frozen`` builds the query-time
-``FrozenRegistry``. ``trusts.core`` re-exports these names. This module
-does not import ``trusts.core``.
+``FrozenRegistry``. ``trusts.core`` re-exports ``TrustsRegistry``. This
+module does not import ``trusts.core``.
 """
 
 __all__ = []
@@ -1799,3 +1799,12 @@ class TrustsRegistry(object):
             queryset, user, permission,
             skipped=skipped,
         )
+
+
+# ``BackendHandle.register`` annotates these names. ``plan.handles`` does
+# not import this module, so ``get_type_hints`` resolves them from the
+# function globals. Compile may import plan; plan does not import compile.
+from trusts.plan.handles import BackendHandle as _BackendHandle
+
+_BackendHandle.register.__globals__['RegisteredRelation'] = RegisteredRelation
+_BackendHandle.register.__globals__['RegisteredDelegation'] = RegisteredDelegation

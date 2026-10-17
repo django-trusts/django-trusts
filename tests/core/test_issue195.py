@@ -10,10 +10,10 @@ import trusts.checks
 import trusts.core as core
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from trusts.plan.relations import QueryCompiler
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
-    QueryCompiler,
     RelationPlan,
     TrustsRegistry,
 )

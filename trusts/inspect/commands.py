@@ -16,7 +16,7 @@ __all__ = []
 
 from django.core.management.base import BaseCommand, CommandError
 
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import (
     render_policy_sql_bytes,
     resolve_policy_database,

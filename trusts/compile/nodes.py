@@ -2,7 +2,8 @@
 
 Root-relative ``Ref``, ``Along``, and the closed predicates ``Equal``,
 ``PermissionIn``, ``_InquiryPermissionMatch``, and ``All``. ``trusts.core``
-re-exports these names. The condition-IR ``Ref`` in
+re-exports ``Ref``, ``Equal``, ``PermissionIn``, ``All``, and
+``permission_in``. The condition-IR ``Ref`` in
 ``trusts.plan.conditions`` is a different type and is not imported here.
 """
 

@@ -22,13 +22,13 @@ from django.db.models.sql.compiler import SQLCompiler
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from trusts.plan.conditions import ModelIdentity
+from trusts.compile.nodes import _InquiryPermissionMatch
+from trusts.plan.recursions import _IdentInReach
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     TrustsConfigurationError,
     TrustsRegistry,
-    _IdentInReach,
-    _InquiryPermissionMatch,
 )
 from trusts.policy_lock import (
     CHECK_ID_POLICY_LOCK,
@@ -588,7 +588,12 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('sponsor:\n', text)
 
     def test_condition_line_quotes_round_trip_through_safe_load(self):
-        from trusts.core import All, Equal, PermissionIn, _InquiryPermissionMatch
+        from trusts.compile.nodes import _InquiryPermissionMatch
+        from trusts.core import (
+            All,
+            Equal,
+            PermissionIn,
+        )
         from trusts.policy_lock import _render_condition
 
         self.assertEqual(
@@ -770,7 +775,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         try:
             with override_settings(DEBUG=True):
                 connection.queries_log.clear()
-                with patch('trusts.core.probe_along_capabilities') as probe:
+                with patch('trusts.compile.factory.probe_along_capabilities') as probe:
                     payload = render_policy_sql_bytes(handles=[_document_handle()])
                 probe.assert_not_called()
                 recorded = ' '.join(item['sql'] for item in connection.queries)
@@ -855,7 +860,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        with patch('trusts.core.probe_along_capabilities') as probe:
+        with patch('trusts.compile.factory.probe_along_capabilities') as probe:
             with patch(
                 'trusts.plan.walk.along_connection_supported', return_value=False,
             ):
@@ -926,7 +931,7 @@ class PolicySqlCommandTest(SimpleTestCase):
                     'trusts.inspect.commands.render_policy_sql_bytes', boom,
                 ):
                     with patch(
-                        'trusts.core.probe_along_capabilities',
+                        'trusts.compile.factory.probe_along_capabilities',
                     ) as probe:
                         with self.assertRaises(CommandError) as ctx:
                             call_command(

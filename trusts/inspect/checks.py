@@ -117,7 +117,7 @@ def check_query_compilers(app_configs, **kwargs):
     from django.utils.module_loading import import_string
 
     from trusts.backends import TrustModelBackendMixin
-    from trusts.core import TrustsCompilerError
+    from trusts.errors import TrustsCompilerError
     from trusts.plan.aggregates import compiler_for_class
 
     messages = []
@@ -170,7 +170,7 @@ def _covered_content_models(config):
     enough. Does not register, does not invent union authority, and
     does not require every backend to hold the declaration.
     """
-    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 
     covered = set()
     try:
@@ -294,7 +294,7 @@ def check_missing_declarations(app_configs, **kwargs):
 
 def _iter_handle_permission_conditions(config):
     """Yield condition records from one implementation owner's handles."""
-    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 
     try:
         paths = config._configured_trusts_paths()
@@ -376,7 +376,7 @@ def _authorization_check_handles():
         configured_implementation_handles,
         implementation_configs,
     )
-    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 
     try:
         return _relationship_family_handles(tuple(configured_implementation_handles()))
@@ -497,7 +497,7 @@ _E005_HINT = (
 
 
 def _live_along_records(config):
-    from trusts.core import TrustsCompilerError, TrustsConfigurationError
+    from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 
     found = []
     try:
@@ -536,7 +536,7 @@ def check_along_renderer(app_configs, **kwargs):
     from django.db.utils import OperationalError
 
     from trusts.apps import implementation_configs
-    from trusts.core import probe_along_capabilities
+    from trusts.compile.factory import probe_along_capabilities
     from trusts.plan.walk import along_connection_supported
 
     owners = implementation_configs()

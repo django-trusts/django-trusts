@@ -19,7 +19,7 @@ from django.db.models import Model
 from trusts.errors import TrustsConfigurationError
 
 if TYPE_CHECKING:
-    from trusts.core import RegisteredDelegation, RegisteredRelation
+    from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 
 T = TypeVar('T', bound=Model)
 
