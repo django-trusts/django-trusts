@@ -535,7 +535,8 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         allowed_trusts_modules = {
             'trusts.core', 'trusts._bind_once', 'trusts.errors',
             'trusts.plan.rewrites', 'trusts.compile.nodes',
-            'trusts.compile.paths', 'trusts.compile.visitors',
+            'trusts.compile.paths',             'trusts.compile.visitors',
+            'trusts.plan.handles',
             'trusts.plan.standards',
         }
         self.assertTrue(

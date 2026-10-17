@@ -86,6 +86,7 @@ from trusts.compile.visitors import (
     _CONDITION_EXPR_TYPES,
 )
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.plan.handles import BackendHandle
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
     UserCondition,
@@ -4358,6 +4359,105 @@ class TrustsRegistry(object):
         self._order.append(record)
         return record
 
+    def _register_public(
+        self, *, trust, user=None, permission=None, content, group=None,
+        delegate=None, sponsor=None, condition=None, along=None,
+    ):
+        """Public ``BackendHandle.register`` body, on the registry it stores.
+
+        The handle forwards here so ``trusts.plan.handles`` does not import
+        this module. Callers keep using ``BackendHandle.register``.
+        """
+        if getattr(self, 'frozen', False):
+            raise TrustsConfigurationError(
+                'Cannot register on a frozen TrustsRegistry.'
+            )
+        ordinary = user is not None or permission is not None or group is not None
+        delegated = delegate is not None or sponsor is not None
+        if ordinary and delegated:
+            raise TrustsConfigurationError(
+                'register accepts ordinary user=/permission=/group= or '
+                'delegated delegate=/sponsor= arguments, not both modes.'
+            )
+        if delegated:
+            if delegate is None or sponsor is None:
+                raise TrustsConfigurationError(
+                    'delegated register requires both delegate= and sponsor=.'
+                )
+            if user is not None or permission is not None or group is not None:
+                raise TrustsConfigurationError(
+                    'delegated register forbids user=, permission=, and group=.'
+                )
+        else:
+            if user is None:
+                raise TrustsConfigurationError(
+                    'ordinary register requires user=.'
+                )
+            _require_one_permission_source(permission, group)
+        if isinstance(trust, Ref):
+            raise TypeError(
+                'register trust must be a Django model class, '
+                'not a Ref.'
+            )
+        if not _is_model_class(trust):
+            raise TrustsConfigurationError(
+                'register trust must be a Django model class, '
+                'not %r.' % (trust,)
+            )
+        token = object()
+        content_path = _normalize_public_role(
+            trust, content, 'content', token=token,
+        )
+        if delegated:
+            delegate_path = _normalize_public_role(
+                trust, delegate, 'delegate', token=token,
+            )
+            sponsor_path = _normalize_public_role(
+                trust, sponsor, 'sponsor', token=token,
+            )
+            return self.register_delegation(
+                content=_public_ref(trust, content_path, 'content'),
+                delegate=_public_ref(trust, delegate_path, 'delegate'),
+                sponsor=_public_ref(trust, sponsor_path, 'sponsor'),
+                condition=_normalize_delegated_condition(
+                    trust, condition, token=token,
+                ),
+                along=_bind_public_along(trust, along),
+            )
+        user_path = _normalize_public_role(trust, user, 'user', token=token)
+        if group is not None:
+            group_text = _normalize_public_role(
+                trust, group, 'group', token=token,
+            )
+            group_segments = _public_path_segments(group_text, 'group')
+            _group_path, _group_model, group_field, _group_target = (
+                _resolve_group_path(trust, group_segments)
+            )
+            _perm_path, _perm_model, permission_text, _perm_target = (
+                _append_group_permissions(group_segments, group_field)
+            )
+            return self.register(
+                content=_public_ref(trust, content_path, 'content'),
+                user=_public_ref(trust, user_path, 'user'),
+                group=_public_ref(trust, group_text, 'group'),
+                condition=_normalize_public_condition(
+                    trust, condition, permission_text, token=token,
+                ),
+                along=_bind_public_along(trust, along),
+            )
+        permission_path = _normalize_public_role(
+            trust, permission, 'permission', token=token,
+        )
+        return self.register(
+            content=_public_ref(trust, content_path, 'content'),
+            user=_public_ref(trust, user_path, 'user'),
+            permission=_public_ref(trust, permission_path, 'permission'),
+            condition=_normalize_public_condition(
+                trust, condition, permission_path, token=token,
+            ),
+            along=_bind_public_along(trust, along),
+        )
+
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
         for record in self._order:
@@ -4824,189 +4924,8 @@ def _bind_public_along(root, along):
     return Along(_public_ref(root, path, 'along'), bound)
 
 
-@dataclass(frozen=True, slots=True)
-class BackendHandle:
-    """Exact configured path, exact registry identity, and class compiler."""
-
-    path: str
-    registry: object
-    compiler: object
-
-    def register(
-        self,
-        *,
-        trust: type[T],
-        user: str | Callable[[T], object] | None = None,
-        permission: str | Callable[[T], object] | None = None,
-        content: str | Callable[[T], object],
-        group: str | Callable[[T], object] | None = None,
-        delegate: str | Callable[[T], object] | None = None,
-        sponsor: str | Callable[[T], object] | None = None,
-        condition: (
-            Callable[[T], object]
-            | Callable[[T, object], object]
-            | None
-        ) = None,
-        along=None,
-    ) -> RegisteredRelation | RegisteredDelegation:
-        """Register one ordinary grant or delegated relationship.
-
-        ``user`` and ``content`` accept a Django ``__`` path string or a
-        one-argument symbolic path builder. A dependent ``content`` path may
-        cross forward single-valued or reverse one-to-one prefix hops before
-        its one reverse one-to-many gateway. ``permission`` and ``group``
-        are mutually exclusive sources. ``permission`` is one direct
-        single-valued hop, or zero or more forward single-valued hops
-        followed by exactly one forward many-to-many to
-        ``auth.Permission``. ``group`` is a forward single-valued path that
-        must end at Django's ``auth.Group``. The compiler appends
-        ``Group.permissions``; applications do not put ``permissions``
-        on the group path. Supplying both, or neither, raises
-        ``TrustsConfigurationError`` before any path builder runs. A
-        ``permission=`` registration does not contribute to
-        ``get_group_permissions``. Delegated mode instead requires exactly
-        ``delegate=`` and ``sponsor=`` and forbids ``user=``, ``permission=``,
-        and ``group=``. ``along=`` is the same bounded walk as an ordinary
-        registration. A delegated row is not an ordinary grant: the delegate
-        is allowed on an object only when that walk reaches the object and
-        the sponsor's ordinary authority reaches it too.
-
-        A builder is called once during registration with a value typed
-        as ``trust``. Attribute access records a path; the callable is
-        discarded and never stored or run during authorization.
-        In ordinary mode, ``condition`` is a one-argument trust-rooted
-        symbolic callable. In delegated mode it accepts either the
-        relationship alone or ``(relationship, requested_permission)``.
-        Conditions use path ``==``, collection-rooted
-        ``.contains(member)``, and ``&``. They are invoked once after the
-        freeze check; the stored overlay contains no callable. For
-        ``group=``, ``.contains`` member is the compiler-owned permission
-        path. Prebuilt predicate nodes are ``TypeError``. ``predicate`` is
-        reserved and unsupported. ``along`` is ``(path, bound)``. Passing
-        a ``Ref`` is ``TypeError``. A frozen backend raises
-        ``TrustsConfigurationError`` before path parsing or builder
-        invocation.
-
-        Only an explicit ``group=`` record contributes to
-        ``get_group_permissions``. That same record also participates in
-        ordinary ``has_perm``, ``get_all_permissions``, and authorized
-        querysets. A ``permission=`` record is never treated as
-        group-derived because its user path is many-to-many.
-        """
-        if getattr(self.registry, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
-        ordinary = user is not None or permission is not None or group is not None
-        delegated = delegate is not None or sponsor is not None
-        if ordinary and delegated:
-            raise TrustsConfigurationError(
-                'register accepts ordinary user=/permission=/group= or '
-                'delegated delegate=/sponsor= arguments, not both modes.'
-            )
-        if delegated:
-            if delegate is None or sponsor is None:
-                raise TrustsConfigurationError(
-                    'delegated register requires both delegate= and sponsor=.'
-                )
-            if user is not None or permission is not None or group is not None:
-                raise TrustsConfigurationError(
-                    'delegated register forbids user=, permission=, and group=.'
-                )
-        else:
-            if user is None:
-                raise TrustsConfigurationError(
-                    'ordinary register requires user=.'
-                )
-            _require_one_permission_source(permission, group)
-        if isinstance(trust, Ref):
-            raise TypeError(
-                'register trust must be a Django model class, '
-                'not a Ref.'
-            )
-        if not _is_model_class(trust):
-            raise TrustsConfigurationError(
-                'register trust must be a Django model class, '
-                'not %r.' % (trust,)
-            )
-        token = object()
-        content_path = _normalize_public_role(
-            trust, content, 'content', token=token,
-        )
-        if delegated:
-            delegate_path = _normalize_public_role(
-                trust, delegate, 'delegate', token=token,
-            )
-            sponsor_path = _normalize_public_role(
-                trust, sponsor, 'sponsor', token=token,
-            )
-            return self.registry.register_delegation(
-                content=_public_ref(trust, content_path, 'content'),
-                delegate=_public_ref(trust, delegate_path, 'delegate'),
-                sponsor=_public_ref(trust, sponsor_path, 'sponsor'),
-                condition=_normalize_delegated_condition(
-                    trust, condition, token=token,
-                ),
-                along=_bind_public_along(trust, along),
-            )
-        user_path = _normalize_public_role(trust, user, 'user', token=token)
-        if group is not None:
-            group_text = _normalize_public_role(
-                trust, group, 'group', token=token,
-            )
-            group_segments = _public_path_segments(group_text, 'group')
-            _group_path, _group_model, group_field, _group_target = (
-                _resolve_group_path(trust, group_segments)
-            )
-            _perm_path, _perm_model, permission_text, _perm_target = (
-                _append_group_permissions(group_segments, group_field)
-            )
-            return self.registry.register(
-                content=_public_ref(trust, content_path, 'content'),
-                user=_public_ref(trust, user_path, 'user'),
-                group=_public_ref(trust, group_text, 'group'),
-                condition=_normalize_public_condition(
-                    trust, condition, permission_text, token=token,
-                ),
-                along=_bind_public_along(trust, along),
-            )
-        permission_path = _normalize_public_role(
-            trust, permission, 'permission', token=token,
-        )
-        return self.registry.register(
-            content=_public_ref(trust, content_path, 'content'),
-            user=_public_ref(trust, user_path, 'user'),
-            permission=_public_ref(trust, permission_path, 'permission'),
-            condition=_normalize_public_condition(
-                trust, condition, permission_path, token=token,
-            ),
-            along=_bind_public_along(trust, along),
-        )
-
-    def add_named_filter(self, model, code, predicate):
-        """Bind a named restricting predicate on this backend.
-
-        Forwards the current registration-time permission-condition
-        builder. A frozen/finalized backend raises
-        ``TrustsConfigurationError`` before ``predicate`` is invoked.
-        A prebuilt ``Expr`` is not accepted. The filter grants nothing
-        independently.
-        """
-        if getattr(self.registry, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register a permission condition on a frozen '
-                'TrustsRegistry.'
-            )
-        return self.registry.register_permission_condition(
-            model, code, predicate,
-        )
-
-    @property
-    def historical_fallback(self):
-        """True when this route uses ``HistoricalGroupQueryCompiler``.
-
-        Noun-blind core does not decide this. The flag identifies the
-        concrete compiler for mixin isolation. It does not reopen a
-        static content map; undeclared terminals fail closed.
-        """
-        return bool(getattr(self.compiler, 'historical_fallback', False))
+# ``BackendHandle.register`` annotates these names. Bind the same objects
+# ``trusts.core`` defines so ``get_type_hints`` resolves them. ``plan.handles``
+# does not import this module.
+BackendHandle.register.__globals__['RegisteredRelation'] = RegisteredRelation
+BackendHandle.register.__globals__['RegisteredDelegation'] = RegisteredDelegation
