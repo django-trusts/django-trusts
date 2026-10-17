@@ -170,9 +170,8 @@ check.
 
 ``PermittedUsersMixin`` adds
 ``document.get_permitted_users(permission)``, which returns the users whose
-object check succeeds for one saved document and permission. The optional
-``User.objects.permitted(document, permission)`` manager adapter asks the same
-question. Neither changes ``Document.objects``.
+object check succeeds for one saved document and permission. It does not
+change ``Document.objects``.
 
 Granting and revoking permission are ordinary changes to persisted application
 data:
@@ -510,19 +509,7 @@ The permission may also use Django's string form:
 The result is a lazy queryset of the configured user model. Normal queryset
 operations remain available.
 
-Applications that own their user model may expose the same inquiry on their
-existing user manager:
-
-.. code-block:: python
-
-   from trusts.query import PermittedUsersManagerMixin
-
-
-   class UserManager(PermittedUsersManagerMixin, ExistingUserManager):
-       pass
-
-After installing that manager on the application's user model, the equivalent
-user-side spelling is:
+To ask one authentication backend, use Django's existing user manager:
 
 .. code-block:: python
 
@@ -530,14 +517,15 @@ user-side spelling is:
 
 
    User = get_user_model()
-   permitted_users = User.objects.permitted(document, change_document)
+   permitted_users = User.objects.with_perm(
+       change_document,
+       obj=document,
+       backend="documents.backends.DocumentBackend",
+   )
 
-The manager method is spelled ``permitted`` because the manager already
-identifies the user model, and Django's ``get`` convention implies one row.
-This method returns a lazy queryset. Both spellings return the same rows.
-The user-manager mixin is optional; an application that cannot change its
-user manager uses ``content.get_permitted_users(perm)``. Stock ``auth.User``
-does not grow ``permitted``.
+``get_permitted_users()`` combines supported authentication backend
+contributions. ``with_perm()`` uses the selected backend; ``backend=`` may be
+omitted when only one backend is configured.
 
 .. _user-is-active-checks:
 

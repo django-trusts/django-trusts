@@ -263,7 +263,7 @@ The supported projections consume the same normalized registration:
 | Object permission | `user.has_perm(code, object)` | Bounded object authorization query |
 | Permission enumeration | `user.get_all_permissions(object)` | Permissions produced from the same plan |
 | Permitted objects | `Model.objects.permitted(permission, user, conditions=())` | Registered user conditions and overrides and relationship-family SQL before pagination |
-| Permitted users | `content.get_permitted_users(perm)`; optional `User.objects.permitted(content, perm)` | One user query combining backend contributions, including registered user conditions and overrides within each Trusts branch |
+| Permitted users | `content.get_permitted_users(perm)`; `User.objects.with_perm(perm, obj=content, backend=...)` | One user query; backend selection follows the [setup guide](index.rst), with registered user conditions and overrides within each Trusts branch |
 | View guard | `authorization_required(Model, code, conditions)` | Fixed `pk` URL binding and relationship-family Trusts-only authorization |
 
 `.permitted(permission, user)` is the public content-list inquiry.
@@ -317,8 +317,9 @@ not this condition.
 ### Apply the policy through Django
 
 Django's `PermissionsMixin.has_perm()` allows an active superuser before
-asking authentication backends. Add `UserPermissionsMixin` before your custom user model's Django
-base class to remove this shortcut for object permission checks:
+asking authentication backends. Add `UserPermissionsMixin` before your custom
+user model's Django base class to remove this shortcut for object permission
+checks:
 
 ```python
 from django.contrib.auth.models import AbstractUser
@@ -329,15 +330,20 @@ class User(UserPermissionsMixin, AbstractUser):
     pass
 ```
 
-With an object supplied, permission checks ask the configured backends in order.
-Before calling each backend, the mixin requires an active, authenticated user
-unless that backend declares that it handles user conditions itself. Trusts
+With an object supplied, permission checks and permission enumeration ask the
+configured backends. Before calling each backend, the mixin requires an active,
+authenticated user unless that backend declares that it handles user conditions
+itself. Trusts
 declares this and applies its registered conditions before either an override
 or an ordinary grant.
 
-This applies to `has_perm()`, `has_perms()`, and their asynchronous equivalents.
-Checks without an object retain the inherited behavior, as do
-`has_module_perms()` and its asynchronous equivalent.
+This covers `has_perm()`, `has_perms()`, the three permission-enumeration
+methods, and their asynchronous equivalents. Checks without an object retain
+the inherited behavior, as do `has_module_perms()` and its asynchronous
+equivalent.
+
+Django's `User.objects.with_perm(..., obj=...)` uses the selected backend's object
+policy; see the [setup guide](index.rst) for both ways to find permitted users.
 
 Each authentication backend can grant independently, including through its own
 superuser rules. Trusts cannot revoke authorization supplied by another backend.
@@ -490,8 +496,8 @@ as `app_label` and `model` constants. There is no second query to load a
 
 A mismatch is ordinary authorization input, not a configuration error.
 `has_perm` for a permission string is `False`. `get_all_permissions` omits
-the codename. `.permitted()` and `get_permitted_users` /
-`User.objects.permitted` are empty for that pair. `authorization_required`
+the codename. `.permitted()`, `get_permitted_users()`, and object
+`with_perm()` return empty querysets for that pair. `authorization_required`
 denies an ordinary user. The generated policy SQL carries the same
 condition. Any other permission terminal stays primary-key identity,
 including a custom model that has a `content_type` foreign key.

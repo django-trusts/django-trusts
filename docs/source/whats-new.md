@@ -43,10 +43,8 @@ log.
   [user guide](index.rst) and [#271].
 
 - **Permission inquiry from content to users.**
-  `content.get_permitted_users(permission)` and the optional
-  `User.objects.permitted(content, permission)` adapter return the users
-  permitted on one saved object. See the
-  [user guide](index.rst) and [#259].
+  `content.get_permitted_users(permission)` returns the users permitted on
+  one saved object. See the [user guide](index.rst) and [#259].
 
 - **Explicit Django group registrations.** `register(group=...)` declares
   group-derived authority separately from direct permission paths. See the
