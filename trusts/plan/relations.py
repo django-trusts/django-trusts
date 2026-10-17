@@ -17,13 +17,13 @@ from django.db.models.base import ModelBase
 
 from trusts._bind_once import bind_once
 from trusts.commons import (
-    GrantReach,
     _bind_record_qs,
     _bind_terminal,
     _content_type_identity,
     _permission_terminal_is_auth_permission,
     _require_instance,
 )
+from trusts.plan.recursions import GrantReach
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
