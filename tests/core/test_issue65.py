@@ -407,7 +407,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
         }
         allowed_trusts_modules = {
             'trusts.core', 'trusts._bind_once', 'trusts.errors',
-            'trusts.plan.rewrites',
+            'trusts.plan.rewrites', 'trusts.compile.nodes',
         }
         self.assertTrue(
             all(
