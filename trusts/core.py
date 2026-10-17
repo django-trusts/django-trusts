@@ -63,6 +63,7 @@ from django.db.models.expressions import Expression
 from django.db.models.query import QuerySet
 
 from trusts._bind_once import bind_once
+from trusts.compile.factory import assemble_frozen
 from trusts.compile.nodes import (
     All,
     Along,
@@ -4494,43 +4495,18 @@ class TrustsRegistry(object):
         Optional ``user`` / ``permission`` instances keep only registrations
         whose inferred terminals match those models. Construction is lazy.
         """
-        content_model = _content_model(content)
-        user_model = None
-        if user is not None:
-            user_model = _concrete_model(_require_instance(user, 'user'))
-        permission_model = None
-        if permission is not None:
-            permission_model = _concrete_model(
-                _require_instance(permission, 'permission')
-            )
-
-        records = self._records_for(content_model, user_model, permission_model)
-        delegations = self._delegations_for(content_model, user_model)
-        plan_permission = permission_model
-        if records:
-            models = {record.permission_model for record in records}
-            if len(models) != 1:
-                raise TrustsConfigurationError(
-                    'Applicable registrations must share one permission '
-                    'model; got %s.'
-                    % ', '.join(sorted(model._meta.label for model in models))
-                )
-            plan_permission = models.pop()
-        subject = self._compiled_subject(records, delegations, user_model)
-        rules = closed = override = None
-        if subject is not None:
-            rules = self._rule_fragment(subject, role='user')
-            closed = rules
-            override = self._override_fragment(subject)
-        return RelationPlan(
-            records=records,
-            delegations=delegations,
-            permission_model=plan_permission,
-            content_identity=_candidate_model(content),
-            user_rules=rules,
-            user_rules_closed=closed,
-            user_override_q=override,
-        )
+        return assemble_frozen(
+            self,
+            compiler=None,
+            handles=(),
+            relation_plan=RelationPlan,
+            bind_record_qs=_bind_record_qs,
+            grant_reach=GrantReach,
+            content_model=_content_model,
+            concrete_model=_concrete_model,
+            require_instance=_require_instance,
+            candidate_model=_candidate_model,
+        ).plan_for(content, user=user, permission=permission)
 
     def permissions_for(self, user, content, **skip_flags):
         """Distinct permission rows granted to ``user`` on ``content``."""

@@ -56,25 +56,29 @@ def _frozen_from(registry, *, compiler, handles):
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
     def test_module_does_not_import_core_or_compile(self):
+        import trusts.compile.factory as factory_module
         import trusts.core as core
         import trusts.plan.registry as registry_module
 
-        tree = ast.parse(Path(registry_module.__file__).read_text())
-        imported = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported.append(node.module)
-        for name in imported:
-            self.assertFalse(
-                name == 'trusts.core' or name.startswith('trusts.core.'),
-                name,
-            )
-            self.assertFalse(
-                name == 'trusts.compile' or name.startswith('trusts.compile.'),
-                name,
-            )
+        for module in (registry_module, factory_module):
+            tree = ast.parse(Path(module.__file__).read_text())
+            imported = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    imported.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported.append(node.module)
+            for name in imported:
+                self.assertFalse(
+                    name == 'trusts.core' or name.startswith('trusts.core.'),
+                    '%s imports %s' % (module.__name__, name),
+                )
+                if module is registry_module:
+                    self.assertFalse(
+                        name == 'trusts.compile'
+                        or name.startswith('trusts.compile.'),
+                        name,
+                    )
         self.assertIs(core._FrozenRegistry, FrozenRegistry)
         self.assertTrue(registry_module.__file__.endswith('registry.py'))
 
