@@ -16,7 +16,9 @@ from django.contrib.auth.models import Permission
 from django.db.models import Subquery
 
 from trusts._bind_once import bind_once
-from trusts.core import TrustsConfigurationError, _ordinary_records, granted
+from trusts.errors import TrustsConfigurationError
+from trusts.plan.contents import _ordinary_records, granted
+from trusts.plan.relations import bind_checked_user
 
 
 def _guard_permission_string(permission, *, api):
@@ -326,8 +328,6 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     _assert_authorization_preflight(
         handles, model, conditions, api='permitted',
     )
-    from trusts.core import bind_checked_user
-
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, handles=handles)
     if inquiry.denied:

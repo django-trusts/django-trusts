@@ -162,7 +162,7 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
         )
         handles = (object(),)
         with patch(
-            'trusts.core.filter_by_permitted_content',
+            'trusts.plan.contents.filter_by_permitted_content',
             return_value=sentinel,
         ) as called:
             result = filter_authorized_scopes(
