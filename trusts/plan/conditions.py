@@ -69,6 +69,7 @@ from trusts.errors import (
     PermissionConditionNotQueryable,
     PermissionConditionUnsupported,
 )
+from trusts.plan.relations import ConditionLookup
 
 _ensure_permission_conditions_option()
 
@@ -1186,9 +1187,6 @@ class ConditionRegistry(object):
         return evaluate_registered_expression(
             record.expr, user, perm, obj, model=model,
         )
-
-
-from trusts.core import ConditionLookup  # noqa: E402
 
 
 class RegistryConditionLookup(ConditionLookup):

@@ -391,6 +391,7 @@ class TrustsRegistryTest(SimpleTestCase):
             'trusts.compile.nodes',
             'trusts.compile.paths',             'trusts.compile.visitors',
             'trusts.commons',
+            'trusts.plan.relations',
             'trusts.plan.handles',
             'trusts.plan.registry',
             'trusts.plan.standards',
