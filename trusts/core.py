@@ -73,6 +73,8 @@ from trusts.compile.nodes import (
     _InquiryPermissionMatch,
     _is_condition_operand,
     _is_model_class,
+    _require_ref,
+    _require_same_root,
     permission_in,
 )
 from trusts.compile.paths import AlongWalk, _PathBuilder
@@ -110,8 +112,6 @@ from trusts.commons import (
     _render_reach_sql,
     _require_along_renderer,
     _require_instance,
-    _require_ref,
-    _require_same_root,
     along_connection_supported,
 )
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError

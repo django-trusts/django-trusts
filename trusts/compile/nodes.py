@@ -72,6 +72,14 @@ class Ref(object):
             return 'Ref(%s)' % self._root.__name__
         return 'Ref(%s).%s' % (self._root.__name__, '.'.join(self._path))
 
+    def require_same_root(self, root, role):
+        if self._root is not root:
+            raise TrustsConfigurationError(
+                '%s must share the registration root %s; got %s.'
+                % (role, root._meta.label, self._root._meta.label)
+            )
+        return self
+
 
 class Along(object):
     """Bounded directed walk that replaces equality at one walk-site.
@@ -149,6 +157,9 @@ class Equal(object):
     def __repr__(self):
         return 'Equal(%r, %r)' % (self.left, self.right)
 
+    def accept(self, visitor):
+        return visitor.visit_equal(self)
+
 
 class PermissionIn(object):
     """Closed membership of the registered permission in one or more refs."""
@@ -182,6 +193,9 @@ class PermissionIn(object):
 
     def __repr__(self):
         return 'permission_in(%s)' % ', '.join(repr(ref) for ref in self.refs)
+
+    def accept(self, visitor):
+        return visitor.visit_permission_in(self)
 
 
 permission_in = PermissionIn
@@ -223,6 +237,9 @@ class _InquiryPermissionMatch(object):
     def __repr__(self):
         return 'inquiry_permission_match(%r)' % (self.ref,)
 
+    def accept(self, visitor):
+        return visitor.visit_inquiry_permission_match(self)
+
 
 class All(object):
     """Closed AND of one or more typed predicate nodes."""
@@ -262,4 +279,20 @@ class All(object):
 
     def __repr__(self):
         return 'All(%s)' % ', '.join(repr(pred) for pred in self.predicates)
+
+    def accept(self, visitor):
+        return visitor.visit_all(self)
+
+
+def _require_ref(value, role):
+    if not isinstance(value, Ref):
+        raise TrustsConfigurationError(
+            '%s must be a root-relative Ref, not %r.' % (role, value)
+        )
+    return value
+
+
+def _require_same_root(ref, root, role):
+    ref = _require_ref(ref, role)
+    return ref.require_same_root(root, role)
 

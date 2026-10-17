@@ -10,13 +10,6 @@ __all__ = []
 from django.db.models import BooleanField, Exists, F, Model, OuterRef, Q
 from django.db.models.expressions import Expression
 
-from trusts.compile.nodes import (
-    All,
-    Equal,
-    PermissionIn,
-    Ref,
-    _InquiryPermissionMatch,
-)
 from trusts.errors import TrustsConfigurationError
 
 
@@ -42,31 +35,26 @@ def _auth_group_and_permission():
     return Group, Permission
 
 
-def _require_ref(value, role):
-    if not isinstance(value, Ref):
-        raise TrustsConfigurationError(
-            '%s must be a root-relative Ref, not %r.' % (role, value)
-        )
-    return value
+class _PredicateCompiler(object):
+    """Compile one stored predicate node. The node dispatches; Q stays here."""
 
+    def __init__(self, record, permission):
+        self.record = record
+        self.permission = permission
 
-def _require_same_root(ref, root, role):
-    ref = _require_ref(ref, role)
-    if ref._root is not root:
-        raise TrustsConfigurationError(
-            '%s must share the registration root %s; got %s.'
-            % (role, root._meta.label, ref._root._meta.label)
-        )
-    return ref
+    def compile(self, node):
+        if node is None:
+            return None
+        accept = getattr(type(node), 'accept', None)
+        if accept is None:
+            raise TrustsConfigurationError(
+                'condition is not supported; omit it or pass None.'
+            )
+        return accept(node, self)
 
-
-def _compile_predicate(node, record, *, permission=None):
-    if node is None:
-        return None
-    if isinstance(node, All):
+    def visit_all(self, node):
         parts = [
-            _compile_predicate(predicate, record, permission=permission)
-            for predicate in node.predicates
+            self.compile(predicate) for predicate in node.predicates
         ]
         parts = [part for part in parts if part is not None]
         if not parts:
@@ -75,32 +63,44 @@ def _compile_predicate(node, record, *, permission=None):
         for part in parts[1:]:
             compiled &= part
         return compiled
-    if isinstance(node, Equal):
+
+    def visit_equal(self, node):
         return Q(**{
             _lookup_text(node.left._path): F(_lookup_text(node.right._path)),
         })
-    if isinstance(node, PermissionIn):
+
+    def visit_permission_in(self, node):
         compiled = Q()
         for ref in node.refs:
             compiled &= Q(**{
-                _lookup_text(ref._path): F(record.permission_field),
+                _lookup_text(ref._path): F(self.record.permission_field),
             })
         return compiled
-    if isinstance(node, _InquiryPermissionMatch):
-        if permission is None:
+
+    def visit_inquiry_permission_match(self, node):
+        if self.permission is None:
             raise TrustsConfigurationError(
                 'Delegated inquiry-permission condition needs the requested '
                 'permission binding.'
             )
-        ref = _require_same_root(
-            node.ref, record.root, 'delegated inquiry permission',
+        require = getattr(type(node.ref), 'require_same_root', None)
+        if require is None:
+            raise TrustsConfigurationError(
+                '%s must be a root-relative Ref, not %r.'
+                % ('delegated inquiry permission', node.ref)
+            )
+        ref = require(
+            node.ref, self.record.root, 'delegated inquiry permission',
         )
         return Q(**{
-            _lookup_text(ref._path): _bind_terminal(permission, 'permission'),
+            _lookup_text(ref._path): _bind_terminal(
+                self.permission, 'permission',
+            ),
         })
-    raise TrustsConfigurationError(
-        'condition is not supported; omit it or pass None.'
-    )
+
+
+def _compile_predicate(node, record, *, permission=None):
+    return _PredicateCompiler(record, permission).compile(node)
 
 
 def _permission_terminal_is_auth_permission(permission_model):
