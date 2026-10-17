@@ -25,13 +25,13 @@ from trusts.apps import (
     configured_implementation_handles,
     implementation_for_path,
 )
+from trusts.plan.contents import filter_by_permitted_content
+from trusts.plan.relations import QueryCompiler
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
-    QueryCompiler,
     TrustsConfigurationError,
     TrustsRegistry,
-    filter_by_permitted_content,
     granted,
 )
 from trusts.plan.aggregates import _compiler_applies, common_permissions

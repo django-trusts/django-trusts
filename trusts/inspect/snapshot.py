@@ -41,7 +41,7 @@ from django.db.models.lookups import Lookup
 
 from trusts.compile.nodes import Ref
 from trusts.compile.resolution import _permitted_content_prefix_models
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -346,7 +346,7 @@ def _project_contents(handle, alias, records, ids, named_filters, handles):
 
 
 def _project_content(handle, alias, group, filters, handles):
-    from trusts.core import RegisteredDelegation
+    from trusts.compile.factory import RegisteredDelegation
 
     legs = group['legs']
     records = tuple(
@@ -666,7 +666,7 @@ def _role_sentinel(record, role, alias):
 
 
 def _compile_permitted(handle, alias, records, model, handles):
-    from trusts.core import _compile_granted
+    from trusts.plan.contents import _compile_granted
 
     from trusts._bind_once import bind_once
 
@@ -688,7 +688,7 @@ def _compile_permitted(handle, alias, records, model, handles):
 
 
 def _compile_has_perm(handle, alias, records, model, handles):
-    from trusts.core import _compile_granted
+    from trusts.plan.contents import _compile_granted
 
     from trusts._bind_once import bound_exists_query
 
@@ -753,7 +753,7 @@ def _compile_get_permitted_users(handle, alias, records, model, handles):
 
 def _compile_filter_by_permitted_content(handle, alias, records, model, handles):
     """One statement per proper prefix, the queryset that actually runs."""
-    from trusts.core import (
+    from trusts.plan.contents import (
         _compile_permitted_content_queryset,
         _relationship_handles,
     )
@@ -1386,7 +1386,7 @@ def _classify_compiled(node, sql, params, query=None):
 
 def _symbol_for_new_param(node, query=None):
     from trusts._bind_once import BindTable
-    from trusts.core import (
+    from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )
@@ -1509,7 +1509,7 @@ def _value_hint(node, query):
 
 def _const_hint(node, value):
     """Readable label for one constant placeholder."""
-    from trusts.core import (
+    from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
     )

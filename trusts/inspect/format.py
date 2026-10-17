@@ -11,7 +11,7 @@ from __future__ import annotations
 
 __all__ = []
 
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 
 # Unquoted words the compilers and ``along=`` SQL emit. Any other bare
 # word is rejected. Quoted identifiers are a separate token class.

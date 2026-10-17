@@ -23,13 +23,13 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
+from trusts.plan.contents import filter_by_permitted_content
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    filter_by_permitted_content,
 )
 from trusts.query import (
     AuthorizedQuerySet,
@@ -173,7 +173,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
             self.assertFalse(self.backend.has_perm(
                 anonymous, PERM, self.open_doc, skip_is_active=True,
             ))
-            with patch('trusts.core.granted') as compiled:
+            with patch('trusts.plan.contents.granted') as compiled:
                 denied = Document.objects.authorized(anonymous, self.change)
                 audited = Document.objects.authorized(
                     anonymous, self.change, skip_is_active=True,
@@ -541,11 +541,11 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                     folder=folder, holder=holder, permission=read,
                 )
 
-            with patch('trusts.core.granted', return_value=Q(pk=note.pk)) as compiled:
+            with patch('trusts.plan.contents.granted', return_value=Q(pk=note.pk)) as compiled:
                 kept = AuthorizedQuerySet(Note).authorized(bare, read)
                 self.assertEqual(_pks(kept), {note.pk})
             compiled.assert_called()
-            with patch('trusts.core.granted') as compiled:
+            with patch('trusts.plan.contents.granted') as compiled:
                 with self.assertNumQueries(0):
                     for holder in (anonymous, guest):
                         for include_inactive in (False, True):

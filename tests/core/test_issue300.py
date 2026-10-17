@@ -682,7 +682,7 @@ def _published(user, permission, obj):
 
 class Issue300ManagerAnnotationTest(SimpleTestCase):
     def test_value_annotation_stays_in_the_lockfile_for_both_settings(self):
-        from trusts.core import _compile_granted
+        from trusts.plan.contents import _compile_granted
         from trusts.policy_lock import _content_manager, _role_sentinel
 
         for enabled in (True, False):

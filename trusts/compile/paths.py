@@ -1,8 +1,8 @@
 """Path recording for ``register()`` and resolved ``Along`` walks.
 
 ``_PathBuilder`` is the symbolic ``trust=`` value. ``AlongWalk`` is the
-immutable walk metadata stored on a registration. ``trusts.core``
-re-exports both.
+immutable walk metadata stored on a registration. ``trusts.core`` does
+not re-export them.
 """
 
 __all__ = []

@@ -21,13 +21,13 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts._bind_once import bind_once
+from trusts.plan.contents import filter_by_permitted_content
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    filter_by_permitted_content,
     granted,
 )
 from trusts.plan.aggregates import common_permissions
@@ -531,7 +531,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 return registry
 
             def holds(handle, user, **skip):
-                from trusts.core import user_skip_params
+                from trusts.plan.relations import user_skip_params
 
                 inquiry = user_skip_params(user, skip, handles=(handle,))
                 predicate = granted(
@@ -545,7 +545,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 ).filter(predicate)).exists()
 
             def sql_for(handle, user, **skip):
-                from trusts.core import user_skip_params
+                from trusts.plan.relations import user_skip_params
 
                 inquiry = user_skip_params(user, skip, handles=(handle,))
                 predicate = granted(

@@ -2,7 +2,7 @@
 
 ``GrantReach``, ``_IdentInReach``, ``_KeyedReach``,
 ``_AnchorInInverseReach``, and ``_PrefixInForwardWalk``. Not a public
-import surface. ``trusts.core`` re-exports these names.
+import surface. ``trusts.core`` does not re-export them.
 """
 
 __all__ = []

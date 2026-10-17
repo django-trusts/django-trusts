@@ -52,7 +52,9 @@ class AuthorizedQuerySet(QuerySet):
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
         from trusts.apps import _relationship_implementation_handles
-        from trusts.core import TrustsConfigurationError, bind_checked_user, granted
+        from trusts.errors import TrustsConfigurationError
+        from trusts.plan.contents import granted
+        from trusts.plan.relations import bind_checked_user
 
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
