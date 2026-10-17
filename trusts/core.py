@@ -3,7 +3,7 @@
 In-repo modules import the defining modules directly. This file
 defines nothing.
 
-django-trusts-zero production on the same-named branch ``4d33fe3``
+django-trusts-zero production on the same-named branch ``45ea795``
 (the pair job still pins ``8d7c729``):
 
 - ``TrustsConfigurationError`` — ``trusts/zero/apps.py``,
@@ -13,7 +13,7 @@ django-trusts-zero production on the same-named branch ``4d33fe3``
 - ``granted`` — ``trusts/zero/query.py``
 - ``filter_authorized_scopes`` and ``any_plan_records`` — still
   imported by the pair pin ``8d7c729`` (``trusts/zero/query.py``).
-  Same-branch Zero ``4d33fe3`` does not import either name from
+  Same-branch Zero ``45ea795`` does not import either name from
   production code. ``filter_authorized_scopes`` remains a Zero test
   import (``tests/legacy/test_issue54.py``). The re-exports stay
   until that pin moves.
