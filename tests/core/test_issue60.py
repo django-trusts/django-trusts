@@ -537,6 +537,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             'trusts.plan.rewrites', 'trusts.compile.factory',
             'trusts.compile.nodes',
             'trusts.compile.paths',             'trusts.compile.visitors',
+            'trusts.commons',
             'trusts.plan.handles',
             'trusts.plan.registry',
             'trusts.plan.standards',
