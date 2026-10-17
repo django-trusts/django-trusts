@@ -181,7 +181,6 @@ from trusts.plan.contents import (
     _prefix_partial_suffix,
     _prefix_sponsor_q,
     _prefix_walk_position,
-    _principal_eligibility_q,
     _reject_unsupported_delegated_suffix,
     _relationship_handles,
     _resolved_hop,
