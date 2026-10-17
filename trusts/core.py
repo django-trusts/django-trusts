@@ -3,17 +3,20 @@
 In-repo modules import the defining modules directly. This file
 defines nothing.
 
-django-trusts-zero production (companion pin ``8d7c729``):
+django-trusts-zero production on the same-named branch ``4d33fe3``
+(the pair job still pins ``8d7c729``):
 
 - ``TrustsConfigurationError`` — ``trusts/zero/apps.py``,
   ``trusts/zero/query.py``
 - ``PlanQueryCompiler`` — ``trusts/zero/backends.py``
 - ``BackendHandle`` — ``trusts/zero/registration.py``
-- ``granted`` and ``filter_authorized_scopes`` — ``trusts/zero/query.py``
-- ``any_plan_records`` — ``trusts/zero/query.py``. The follow-up is for
-  ``TrustManager.filter_by_user_content_perm`` to call
-  ``filter_authorized_scopes`` and drop that gate. Core does not grow a
-  public predicate to replace it.
+- ``granted`` — ``trusts/zero/query.py``
+- ``filter_authorized_scopes`` — Zero ``tests/legacy/test_issue54.py``
+  only. Production ``filter_by_user_content_perm`` is Trust-row
+  filtering again and does not call it.
+
+``any_plan_records`` is not re-exported. That Zero commit does not
+import it. Kernel tests import it from ``trusts.plan.aggregates``.
 
 django-trusts-gh-permissions production:
 
@@ -39,11 +42,7 @@ export. ``plan.registry`` does not import ``compile``.
 from trusts.compile.factory import TrustsRegistry
 from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.plan.aggregates import (
-    any_plan_records,
-    common_permissions,
-    compiler_for_class,
-)
+from trusts.plan.aggregates import common_permissions, compiler_for_class
 from trusts.plan.contents import filter_authorized_scopes, granted
 from trusts.plan.handles import BackendHandle
 from trusts.plan.registry import FrozenRegistry as _FrozenRegistry
