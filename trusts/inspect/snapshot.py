@@ -41,6 +41,7 @@ from django.db.models.lookups import Lookup
 
 from trusts.compile.nodes import Ref
 from trusts.core import TrustsConfigurationError
+from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
     PolicyYamlError,
@@ -602,21 +603,7 @@ def _policy_classifier_records(records, delegations, handles, model):
             if id(ordinary) in seen:
                 continue
             for delegation in delegations:
-                if ordinary.content_model is not delegation.content_model:
-                    continue
-                if ordinary.user_model is not delegation.sponsor_model:
-                    continue
-                expected = delegation.condition_permission_model
-                if (
-                    expected is not None
-                    and ordinary.permission_model is not expected
-                ):
-                    continue
-                if (
-                    expected is not None
-                    and ordinary.permission_target
-                    != delegation.condition_permission_target
-                ):
+                if not _sponsor_record_matches(ordinary, delegation):
                     continue
                 selected.append(ordinary)
                 seen.add(id(ordinary))

@@ -18,11 +18,14 @@ from trusts._bind_once import bind_once
 from trusts.commons import (
     _bind_record_qs,
     _bind_terminal,
-    _compile_predicate,
     _lookup_text,
     _require_instance,
 )
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.delegations import (
+    _matched_delegation_q,
+    _sponsor_record_matches,
+)
 from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
@@ -258,18 +261,9 @@ def _prefix_sponsor_q(record, sponsor_records, permission, content_identity,
     failure as the forward check.
     """
     parts = []
-    expected_model = record.condition_permission_model
-    expected_target = record.condition_permission_target
     for ordinary in sponsor_records:
-        if ordinary.content_model is not record.content_model:
+        if not _sponsor_record_matches(ordinary, record):
             continue
-        if ordinary.user_model is not record.sponsor_model:
-            continue
-        if expected_model is not None:
-            if ordinary.permission_model is not expected_model:
-                continue
-            if ordinary.permission_target != expected_target:
-                continue
         for ordinary_lookup, _attname in _scope_prefix_lookups(
             ordinary, prefix_model,
         ):
@@ -327,27 +321,21 @@ def _delegation_prefix_exists(record, sponsor_records, user, permission,
         record, sponsor_records, permission, content_identity, prefix_model,
         candidate, lookup,
     )
-    if sponsor_q is None:
+
+    def bound():
+        combined = Q(**{
+            record.delegate_field: _bind_terminal(user, 'delegate'),
+        })
+        combined &= _delegation_prefix_reach_q(
+            record, user, lookup, target_attname, candidate, position,
+        )
+        return combined
+
+    combined = _matched_delegation_q(
+        record, sponsor_q, permission, skipped, bound,
+    )
+    if combined is None:
         return None
-    eligibility = _principal_eligibility_q(
-        record.sponsor_model, record.sponsor_field,
-        record.sponsor_rules, skipped,
-    )
-    if eligibility is None:
-        return None
-    combined = Q(**{
-        record.delegate_field: _bind_terminal(user, 'delegate'),
-    })
-    combined &= _delegation_prefix_reach_q(
-        record, user, lookup, target_attname, candidate, position,
-    )
-    condition = _compile_predicate(
-        record.condition, record, permission=permission,
-    )
-    if condition is not None:
-        combined &= condition
-    combined &= eligibility
-    combined &= sponsor_q
     return Exists(record.root._default_manager.filter(combined))
 
 
@@ -601,36 +589,6 @@ def _shift_outer_ref(value):
     return value
 
 
-def _principal_eligibility_q(model, path, rules, values):
-    """Sponsor rules compiled at registration, plus identity columns.
-
-    ``rules`` is that fragment. A missing fragment contributes nothing.
-    Anonymous and authenticated attributes use their runtime defaults
-    when they are not concrete fields.
-    """
-    if rules is None:
-        return None
-    lookups = {}
-    for name, expected in (('is_anonymous', False), ('is_authenticated', True)):
-        try:
-            field = model._meta.get_field(name)
-        except FieldDoesNotExist:
-            continue
-        if (
-            not getattr(field, 'concrete', False)
-            or field.get_internal_type() != 'BooleanField'
-        ):
-            raise TrustsConfigurationError(
-                '%s.%s must be a concrete BooleanField for delegated '
-                'principal eligibility.' % (model._meta.label, name)
-            )
-        lookups['%s__%s' % (path, name)] = expected
-    identity = Q(**lookups) if lookups else Q()
-    return bind_checked_user(
-        model, identity, rules=rules, values=values,
-    ).predicate
-
-
 def _ordinary_records(handles, content, permission_model=None):
     """Applicable ordinary records across relationship handles."""
     records = []
@@ -754,8 +712,6 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
     the sponsor's walked grant to reach that same object.
     """
     parts = []
-    expected_model = record.condition_permission_model
-    expected_target = record.condition_permission_target
     if record.along is None:
         content_binding = OuterRef(record.content_field)
     elif forward:
@@ -763,15 +719,8 @@ def _delegation_sponsor_q(record, sponsor_records, permission, content_identity,
     else:
         content_binding = bound_content
     for ordinary in sponsor_records:
-        if ordinary.content_model is not record.content_model:
+        if not _sponsor_record_matches(ordinary, record):
             continue
-        if ordinary.user_model is not record.sponsor_model:
-            continue
-        if expected_model is not None:
-            if ordinary.permission_model is not expected_model:
-                continue
-            if ordinary.permission_target != expected_target:
-                continue
         if ordinary.along is None:
             inner = _bind_record_qs(
                 ordinary,
@@ -829,25 +778,19 @@ def _delegated_content_exists(delegations, sponsor_records, user, permission,
         sponsor_q = _delegation_sponsor_q(
             record, sponsor_records, permission, content_identity,
         )
-        if sponsor_q is None:
-            continue
-        eligibility = _principal_eligibility_q(
-            record.sponsor_model, record.sponsor_field,
-            record.sponsor_rules, skipped,
+
+        def bound(record=record):
+            combined = Q(**{
+                record.delegate_field: _bind_terminal(user, 'delegate'),
+            })
+            combined &= _delegation_reaches(record, forward=True, user=user)
+            return combined
+
+        combined = _matched_delegation_q(
+            record, sponsor_q, permission, skipped, bound,
         )
-        if eligibility is None:
+        if combined is None:
             continue
-        combined = Q(**{
-            record.delegate_field: _bind_terminal(user, 'delegate'),
-        })
-        combined &= _delegation_reaches(record, forward=True, user=user)
-        condition = _compile_predicate(
-            record.condition, record, permission=permission,
-        )
-        if condition is not None:
-            combined &= condition
-        combined &= eligibility
-        combined &= sponsor_q
         parts.append(Exists(record.root._default_manager.filter(combined)))
     if not parts:
         return None

@@ -14,7 +14,7 @@ from operator import or_
 from django.db.models import Count, Exists, OuterRef, Q
 
 from trusts._bind_once import bind_once
-from trusts.commons import _compile_predicate, _require_instance
+from trusts.commons import _require_instance
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.contents import (
     _apply_checked_user,
@@ -24,10 +24,12 @@ from trusts.plan.contents import (
     _delegation_reaches,
     _delegation_sponsor_q,
     _ordinary_records,
-    _principal_eligibility_q,
     _relationship_handles,
 )
-from trusts.plan.delegations import _compatible_sponsor_records
+from trusts.plan.delegations import (
+    _compatible_sponsor_records,
+    _matched_delegation_q,
+)
 from trusts.plan.relations import (
     _candidate_model,
     _or_q,
@@ -276,27 +278,21 @@ def _delegated_user_exists(delegations, sponsor_records, content, permission,
             record, sponsor_records, permission, content_identity,
             forward=False, bound_content=content,
         )
-        if sponsor_q is None:
+
+        def bound(record=record):
+            combined = Q(**{
+                record.delegate_field: OuterRef(record.delegate_target),
+            })
+            combined &= _delegation_reaches(
+                record, forward=False, content=content,
+            )
+            return combined
+
+        combined = _matched_delegation_q(
+            record, sponsor_q, permission, skipped, bound,
+        )
+        if combined is None:
             continue
-        eligibility = _principal_eligibility_q(
-            record.sponsor_model, record.sponsor_field,
-            record.sponsor_rules, skipped,
-        )
-        if eligibility is None:
-            continue
-        combined = Q(**{
-            record.delegate_field: OuterRef(record.delegate_target),
-        })
-        combined &= _delegation_reaches(
-            record, forward=False, content=content,
-        )
-        condition = _compile_predicate(
-            record.condition, record, permission=permission,
-        )
-        if condition is not None:
-            combined &= condition
-        combined &= eligibility
-        combined &= sponsor_q
         parts.append(Exists(record.root._default_manager.filter(combined)))
     if not parts:
         return None
