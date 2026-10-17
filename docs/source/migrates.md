@@ -211,10 +211,13 @@ Migration-bot checklist:
 
 | | Old | New |
 | --- | --- | --- |
-| Users who hold one permission on one saved content object | No public inquiry for users from content | `content.get_permitted_users(perm)` from `PermittedUsersMixin`. Optionally `User.objects.permitted(content, perm)` from `PermittedUsersManagerMixin` on the application's existing user manager |
+| Users who hold one permission on one saved content object | No public inquiry for users from content | `content.get_permitted_users(perm)` from `PermittedUsersMixin` |
 
-No mandatory consumer change to adopt this adapter. Stock `auth.User` does not
-grow the manager method, and a content manager still returns content rows.
+To adopt this inquiry, add `PermittedUsersMixin` to the content model. Replace
+the development-only `User.objects.permitted(content, perm)` adapter with
+`content.get_permitted_users(perm)` and remove `PermittedUsersManagerMixin`
+from the user manager.
+
 The registered permission row is the identity used in SQL. A permission string
 is resolved inside that statement, not by a construction-time query. User
 conditions and overrides apply as described above.
