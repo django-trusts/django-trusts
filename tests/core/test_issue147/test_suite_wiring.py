@@ -16,15 +16,22 @@ class PolicyLockImportTest(SimpleTestCase):
         import trusts.backends as backends
         import trusts.core as core
         import trusts.decorators as decorators
+        import trusts.inspect.commands as policy_command_impl
+        import trusts.inspect.snapshot as policy_snapshot
+        import trusts.policy_commands as policy_commands
         import trusts.policy_lock as policy_lock
         import trusts.query as query
 
+        self.assertIs(
+            policy_commands.install_policy_commands,
+            policy_command_impl.install_policy_commands,
+        )
         self.assertFalse(hasattr(policy_lock, 'ensure_policy_lockfile_verified'))
         self.assertFalse(hasattr(policy_lock, '_policy_lock_verification_state'))
         for module in (backends, core, decorators, query):
             source = Path(module.__file__).read_text(encoding='utf-8')
             self.assertNotIn('ensure_policy_lockfile_verified', source)
-        lock_source = Path(policy_lock.__file__).read_text(encoding='utf-8')
+        lock_source = Path(policy_snapshot.__file__).read_text(encoding='utf-8')
         self.assertNotIn('ensure_policy_lockfile_verified', lock_source)
         self.assertNotIn('probe_along_capabilities', lock_source)
         self.assertNotIn('INACTIVE', lock_source)

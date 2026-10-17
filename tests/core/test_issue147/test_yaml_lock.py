@@ -274,7 +274,7 @@ class PolicyCompositionTest(SimpleTestCase):
     def test_renderer_does_not_replace_sqlcompiler_execute_sql(self):
         from django.db.models.sql.compiler import SQLCompiler
 
-        import trusts.policy_lock as policy_lock
+        import trusts.inspect.snapshot as policy_lock
 
         self.assertIsNone(importlib.util.find_spec('trusts.policy_composition'))
         self.assertIsNone(importlib.util.find_spec(

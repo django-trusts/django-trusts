@@ -923,7 +923,7 @@ class PolicySqlCommandTest(SimpleTestCase):
 
             with override_settings(TRUSTS_POLICY_LOCKFILE=str(target)):
                 with patch(
-                    'trusts.policy_commands.render_policy_sql_bytes', boom,
+                    'trusts.inspect.commands.render_policy_sql_bytes', boom,
                 ):
                     with patch(
                         'trusts.core.probe_along_capabilities',
@@ -1225,7 +1225,7 @@ class PolicySqlConcurrencyTest(TestCase):
             export_ident.append(threading.get_ident())
             try:
                 with patch(
-                    'trusts.policy_lock._classify_compiled', classifying,
+                    'trusts.inspect.snapshot._classify_compiled', classifying,
                 ):
                     outcome.append(render_policy_sql_bytes(
                         handles=[_document_handle()],
