@@ -6,6 +6,6 @@ import install_policy_commands`` keep working. The Django command
 loader key stays ``trusts.policy_commands``.
 """
 
-from trusts.inspect.commands import install_policy_commands
+from trusts.inspect.commands import PolicySqlCommand, install_policy_commands
 
 __all__ = []

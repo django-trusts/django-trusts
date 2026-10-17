@@ -9,6 +9,9 @@ the ``trusts.E009`` check.
 from trusts.inspect.snapshot import (
     CHECK_ID_POLICY_LOCK,
     CONVENTIONAL_LOCKFILE_NAME,
+    SCHEMA_VERSION,
+    PolicyLockLocation,
+    resolve_policy_database,
     _CALL_INPUT,
     _Symbol,
     _assign_ids,

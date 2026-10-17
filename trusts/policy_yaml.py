@@ -8,6 +8,7 @@ dump_policy_yaml`` keep working.
 from trusts.inspect.yaml import (
     PolicyYamlDumper,
     PolicyYamlError,
+    PolicyYamlLoader,
     _load_policy_yaml,
     canonical_float_scalar,
     dump_policy_yaml,
