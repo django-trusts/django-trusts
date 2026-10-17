@@ -15,6 +15,7 @@ from trusts.inspect.checks import (
     CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_along_renderer,
     check_authorization_required_conditions,
+    check_missing_declarations,
     check_obsolete_legacy_callback_setting,
     check_permission_conditions,
     check_query_compilers,
