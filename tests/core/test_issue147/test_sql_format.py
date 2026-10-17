@@ -320,12 +320,12 @@ class PolicySqlFormatTest(SimpleTestCase):
     def test_round_trip_failure_names_the_query(self):
         raw = 'SELECT 1'
         with patch(
-            'trusts.policy_sql_format._emit', return_value='SELECT 1 FROM',
+            'trusts.inspect.format._emit', return_value='SELECT 1 FROM',
         ):
             message = _rejected(self, raw, raw)
         self.assertIn('token stream', message)
         with patch(
-            'trusts.policy_sql_format._emit', return_value='SELECT 1 -- gone',
+            'trusts.inspect.format._emit', return_value='SELECT 1 -- gone',
         ):
             message = _rejected(self, raw, raw)
         self.assertIn('token stream', message)

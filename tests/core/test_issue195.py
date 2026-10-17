@@ -104,7 +104,7 @@ class CoreOrderedFoldDeletedTest(SimpleTestCase):
     def test_e006_and_renderer_check_are_retired(self):
         self.assertFalse(hasattr(trusts.checks, 'CHECK_ID_ORDERED_FOLD_RENDERER'))
         self.assertFalse(hasattr(trusts.checks, 'check_ordered_fold_renderer'))
-        source = (ROOT / 'trusts' / 'checks.py').read_text()
+        source = (ROOT / 'trusts' / 'inspect' / 'checks.py').read_text()
         self.assertIn("``trusts.E006``", source)
         self.assertIn('trusts_ordered_fold.E001', source)
         self.assertNotIn("CHECK_ID_ORDERED_FOLD_RENDERER = 'trusts.E006'", source)

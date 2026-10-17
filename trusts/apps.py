@@ -305,13 +305,13 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
         # an installed app and does not ship trusts/management (#129), so
         # the command attaches here. Subclasses that replace ready() must
         # call super() or the command stays unregistered.
-        from trusts.policy_commands import install_policy_commands
+        from trusts.inspect.commands import install_policy_commands
 
         install_policy_commands()
         self._validate_ownership()
         for path in self.owned_backend_paths():
             self._ensure(path)
-        from trusts import checks as _trusts_checks  # noqa: F401
+        from trusts.inspect import checks as _trusts_checks  # noqa: F401
 
 
 def configured_implementation_handles(apps_registry=None):
