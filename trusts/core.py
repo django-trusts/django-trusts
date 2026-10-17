@@ -58,8 +58,7 @@ from typing import TypeVar
 
 from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import BooleanField, Count, Exists, F, Model, OuterRef, Q
-from django.db.models.expressions import Expression
+from django.db.models import Count, Exists, F, Model, OuterRef, Q
 from django.db.models.query import QuerySet
 
 from trusts._bind_once import bind_once
@@ -89,11 +88,9 @@ from trusts.compile.visitors import (
     _CONDITION_EXPR_TYPES,
 )
 from trusts.commons import (
-    GrantReach,
     _ALONG_ENGINES,
     _BINDING_FIELDS,
     _DJANGO_SQLITE3,
-    _IdentInReach,
     _along_cycle_clause,
     _auth_group_and_permission,
     _bind_record_qs,
@@ -132,6 +129,15 @@ from trusts.plan.relations import (
     bind_checked_user,
     candidate_queryset,
     user_skip_params,
+)
+from trusts.plan.recursions import (
+    GrantReach,
+    _AnchorInInverseReach,
+    _IdentInReach,
+    _KeyedReach,
+    _PrefixInForwardWalk,
+    _render_keyed_reach_sql,
+    _unwrap_seed_sql,
 )
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
@@ -2422,227 +2428,6 @@ def probe_along_capabilities(connection):
             ') SELECT n FROM t'
         )
         cursor.fetchone()
-
-
-def _render_keyed_reach_sql(walk, seed_sql, seed_params, connection, neighbor=None):
-    """Recursive walk that carries one non-identity column.
-
-    ``seed_sql`` selects ``carrier`` and ``ident``. The recursive member
-    copies ``carrier`` and replaces ``ident`` with the next hop. The final
-    select returns carriers whose ident equals the caller's candidate.
-    The recursive member does not reference the outer query. The depth
-    cap is the same bound as an ordinary ``along=`` walk. PostgreSQL's
-    ``CYCLE`` clause stays the only engine-specific suffix, and it still
-    names the ident column.
-    """
-    qn = connection.ops.quote_name
-    gen = qn('gen')
-    g = qn('g')
-    depth = qn('depth')
-    ident_col = qn('ident')
-    carrier = qn('carrier')
-    ident = qn(walk.walk_ident)
-    walk_table = qn(walk.walk_model._meta.db_table)
-    site = qn('s')
-    seed_alias = qn('seed_rows')
-    if neighbor is None:
-        neighbor = _neighbor_sql
-    frm, project = neighbor(walk, qn, gen, g, ident_col, ident)
-    sql = (
-        'WITH RECURSIVE %(gen)s(%(carrier)s, %(ident_col)s, %(depth)s) AS ('
-        'SELECT %(seed_alias)s.%(carrier)s, %(seed_alias)s.%(ident_col)s, 0 '
-        'FROM (%(seed_sql)s) AS %(seed_alias)s '
-        'UNION ALL '
-        'SELECT %(g)s.%(carrier)s, %(project)s, %(g)s.%(depth)s + 1 '
-        '%(frm)s '
-        'WHERE %(g)s.%(depth)s < %%s AND %(project)s IS NOT NULL'
-        ') '
-        '%(cycle)s'
-        'SELECT DISTINCT %(gen)s.%(carrier)s '
-        'FROM %(gen)s '
-        'JOIN %(walk_table)s AS %(site)s '
-        'ON %(site)s.%(ident)s = %(gen)s.%(ident_col)s '
-        'WHERE %(site)s.%(ident)s = '
-        % {
-            'gen': gen, 'carrier': carrier, 'ident_col': ident_col,
-            'depth': depth, 'seed_alias': seed_alias, 'seed_sql': seed_sql,
-            'project': project, 'g': g, 'frm': frm,
-            'site': site, 'ident': ident, 'walk_table': walk_table,
-            'cycle': _along_cycle_clause(connection, ident_col, qn),
-        }
-    )
-    return sql, tuple(seed_params) + (walk.bound,)
-
-
-def _unwrap_seed_sql(seed_sql):
-    if seed_sql.startswith('(') and seed_sql.endswith(')'):
-        return seed_sql[1:-1]
-    return seed_sql
-
-
-class _KeyedReach(Expression):
-    """``key IN (carriers whose walk ident is the candidate)``.
-
-    Used on a delegation queryset. ``key`` is a column of that row (the
-    sponsor foreign key, or the delegation primary key). ``candidate`` is
-    the requested object's walk identity on the outer content query.
-    """
-
-    filterable = True
-    subquery = True
-
-    def __init__(self, walk, seed_query, key, candidate):
-        super().__init__(output_field=BooleanField())
-        self.walk = walk
-        self.seed_query = seed_query
-        self.key = key
-        self.candidate = candidate
-
-    def copy(self):
-        clone = super().copy()
-        clone.seed_query = clone.seed_query.clone()
-        return clone
-
-    def get_source_expressions(self):
-        return [self.seed_query, self.key, self.candidate]
-
-    def set_source_expressions(self, exprs):
-        self.seed_query, self.key, self.candidate = exprs
-
-    def as_sql(self, compiler, connection):
-        _require_along_renderer(connection)
-        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
-        seed_sql = _unwrap_seed_sql(seed_sql)
-        w_sql, w_params = _render_keyed_reach_sql(
-            self.walk, seed_sql, seed_params, connection,
-        )
-        key_sql, key_params = compiler.compile(self.key)
-        cand_sql, cand_params = compiler.compile(self.candidate)
-        sql = '(%s) IN (%s(%s))' % (key_sql, w_sql, cand_sql)
-        return sql, tuple(key_params) + tuple(w_params) + tuple(cand_params)
-
-
-class _AnchorInInverseReach(Expression):
-    """Delegation walk column ``IN`` the inverse walk from a saved object.
-
-    The seed is the bound content, as in an ordinary reverse ``along=``
-    check. The delegation row is correlated only outside the CTE.
-    """
-
-    filterable = True
-    subquery = True
-
-    def __init__(self, record, content):
-        super().__init__(output_field=BooleanField())
-        self.record = record
-        self.seed_query = _content_walk_seed(record.along, content)
-
-    def copy(self):
-        clone = super().copy()
-        clone.seed_query = clone.seed_query.clone()
-        return clone
-
-    def get_source_expressions(self):
-        return [self.seed_query]
-
-    def set_source_expressions(self, exprs):
-        self.seed_query = exprs[0]
-
-    def as_sql(self, compiler, connection):
-        _require_along_renderer(connection)
-        self.seed_query.where.children[0].trusts_content_bind = True
-        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
-        seed_sql = _unwrap_seed_sql(seed_sql)
-        w_sql, w_params = _render_reach_sql(
-            self.record.along, seed_sql, seed_params, connection,
-            neighbor=_inverse_neighbor_sql,
-        )
-        qn = connection.ops.quote_name
-        alias = compiler.query.get_initial_alias()
-        attname = _grant_walk_attname(self.record)
-        sql = '%s.%s IN (%s)' % (qn(alias), qn(attname), w_sql)
-        return sql, tuple(w_params)
-
-
-class _PrefixInForwardWalk(Expression):
-    """Outer prefix column is in the forward grant walk.
-
-    The seed and ``WITH RECURSIVE`` statement are the ones ``GrantReach``
-    uses for a forward check. ``suffix_lookup`` is empty when the queryset
-    model is the walk site: that identity is compared directly. A later
-    prefix passes the path from the walk site to that prefix, and the
-    walk-site row must be related to the outer row.
-    """
-
-    filterable = True
-    subquery = True
-
-    def __init__(self, record, user, permission, attname, *,
-                 content_identity=None, suffix_lookup=None):
-        super().__init__(output_field=BooleanField())
-        walk = record.along
-        seed = _bind_record_qs(
-            record,
-            user=user,
-            permission=permission,
-            correlation=Q(**{'%s__isnull' % walk.walk_field: False}),
-            content_identity=content_identity,
-        ).values(ident=F(walk.walk_field)).distinct()
-        self.seed_query = seed.query.clone()
-        self.seed_query.subquery = True
-        self.record = record
-        self.lhs = None
-        self.suffix_query = None
-        if suffix_lookup:
-            self.suffix_query = walk.walk_model._default_manager.filter(
-                **{suffix_lookup: OuterRef(attname)},
-            ).query.clone()
-            self.suffix_query.subquery = True
-        else:
-            self.lhs = F(attname)
-
-    def copy(self):
-        clone = super().copy()
-        clone.seed_query = clone.seed_query.clone()
-        if clone.suffix_query is not None:
-            clone.suffix_query = clone.suffix_query.clone()
-        return clone
-
-    def get_source_expressions(self):
-        exprs = [self.seed_query]
-        if self.lhs is not None:
-            exprs.append(self.lhs)
-        if self.suffix_query is not None:
-            exprs.append(self.suffix_query)
-        return exprs
-
-    def set_source_expressions(self, exprs):
-        exprs = list(exprs)
-        self.seed_query = exprs.pop(0)
-        if self.lhs is not None:
-            self.lhs = exprs.pop(0)
-        if self.suffix_query is not None:
-            self.suffix_query = exprs.pop(0)
-
-    def as_sql(self, compiler, connection):
-        _require_along_renderer(connection)
-        seed_sql, seed_params = self.seed_query.as_sql(compiler, connection)
-        seed_sql = _unwrap_seed_sql(seed_sql)
-        w_sql, w_params = _render_reach_sql(
-            self.record.along, seed_sql, seed_params, connection,
-        )
-        if self.lhs is not None:
-            lhs_sql, lhs_params = compiler.compile(self.lhs)
-            return (
-                '%s IN (%s)' % (lhs_sql, w_sql),
-                tuple(lhs_params) + tuple(w_params),
-            )
-        inner = self.suffix_query.clone()
-        inner.add_q(Q(_IdentInReach(
-            self.record.along.walk_ident, w_sql, w_params,
-            self.record.along.bound,
-        )))
-        return Exists(inner).as_sql(compiler, connection)
 
 
 @dataclass(frozen=True, slots=True)
