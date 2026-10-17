@@ -8,18 +8,19 @@ __all__ = []
 from functools import reduce
 from operator import or_
 
-from django.apps import apps as django_apps
-from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Exists, F, Model, OuterRef, Q
-from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
 
 from trusts._bind_once import bind_once
 from trusts.commons import (
     _bind_record_qs,
     _bind_terminal,
-    _lookup_text,
     _require_instance,
+)
+from trusts.compile.resolution import (
+    _path_text,
+    _root_relative_column,
+    _scope_prefix_lookups,
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.delegations import (
@@ -158,33 +159,6 @@ def granted(handles, candidates, user, permission, *, kind='complete',
         permission_model=permission_model,
         skipped=skipped,
     )
-
-
-def _scope_prefix_lookups(record, scope_model):
-    """Root-relative lookups to proper prefix nodes matching ``scope_model``.
-
-    A proper prefix is a hop on ``content_path`` whose related model is
-    ``scope_model`` and that is not the content terminal. Each item is
-    ``(root-relative lookup, target attname)``. The attname is the
-    hop's resolved identity (``to_field`` when set), not assumed to
-    be ``pk``. Uses stored path names and ``_meta`` only (zero SQL).
-    """
-    path = record.content_path
-    if not path:
-        return ()
-    current = record.root
-    lookups = []
-    last = len(path) - 1
-    for index, name in enumerate(path):
-        try:
-            field = current._meta.get_field(name)
-        except FieldDoesNotExist:
-            return ()
-        related, target_attname = _resolved_hop(field, 'content', path)
-        if related._meta.concrete_model is scope_model and index != last:
-            lookups.append((_lookup_text(path[:index + 1]), target_attname))
-        current = related
-    return tuple(lookups)
 
 
 def _prefix_lookup_hops(lookup):
@@ -499,90 +473,6 @@ def filter_authorized_scopes(queryset, user, permission, *, content, handles=Non
     )
 
 
-def _path_text(path):
-    return '.'.join(path)
-
-
-def _materialize_related_model(field):
-    """Resolve a still-string ``remote_field.model`` through the app registry.
-
-    Isolated ``ForeignKey(settings.AUTH_USER_MODEL)`` fields keep a string
-    until Django's lazy related-class hook runs. Path information needs the
-    model class. ``apps.get_model`` is metadata only (zero SQL).
-    """
-    remote = getattr(field, 'remote_field', None)
-    if remote is None:
-        return
-    model = getattr(remote, 'model', None)
-    if isinstance(model, ModelBase):
-        return
-    related = getattr(field, 'related_model', None)
-    if isinstance(related, str) or related is None:
-        label = related if isinstance(related, str) else model
-        if isinstance(label, str):
-            try:
-                related = django_apps.get_model(label)
-            except (LookupError, ValueError):
-                return
-    if isinstance(related, ModelBase):
-        try:
-            remote.model = related
-        except (AttributeError, TypeError):
-            return
-
-
-def _resolved_hop(field, role, path):
-    """Resolve one hop from Django path information.
-
-    Requires exactly one ``PathInfo`` and exactly one target field.
-    Terminal model and outer comparison field come from that metadata.
-    """
-    _materialize_related_model(field)
-    getter = getattr(field, 'get_path_info', None)
-    if not callable(getter):
-        raise TrustsConfigurationError(
-            '%s path %r has no resolvable path information.'
-            % (role, _path_text(path))
-        )
-    infos = getter()
-    if infos is None:
-        infos = ()
-    infos = tuple(infos)
-    if len(infos) != 1:
-        raise TrustsConfigurationError(
-            '%s path %r does not resolve to exactly one relation hop; '
-            'composite and multi-join relations are not supported.'
-            % (role, _path_text(path))
-        )
-    info = infos[0]
-    target_fields = getattr(info, 'target_fields', None) or ()
-    if len(target_fields) != 1:
-        raise TrustsConfigurationError(
-            '%s path %r exposes %s target fields; composite and '
-            'multi-column correlation are not supported.'
-            % (role, _path_text(path), len(target_fields))
-        )
-    to_opts = getattr(info, 'to_opts', None)
-    related = None
-    if to_opts is not None:
-        related = getattr(to_opts, 'concrete_model', None) or getattr(
-            to_opts, 'model', None
-        )
-    if not isinstance(related, ModelBase):
-        raise TrustsConfigurationError(
-            '%s path %r does not terminate on a model.'
-            % (role, _path_text(path))
-        )
-    target = target_fields[0]
-    attname = getattr(target, 'attname', None)
-    if not attname:
-        raise TrustsConfigurationError(
-            '%s path %r does not expose one supported target field.'
-            % (role, _path_text(path))
-        )
-    return related._meta.concrete_model, attname
-
-
 def _shift_outer_ref(value):
     """Add one correlation level to a symbolic outer reference."""
     if isinstance(value, OuterRef):
@@ -603,29 +493,6 @@ def _ordinary_records(handles, content, permission_model=None):
                 continue
             records.append(record)
     return tuple(records)
-
-
-def _root_relative_column(model, path):
-    """Concrete column lookup for a forward single-valued path.
-
-    ``sponsor`` becomes ``sponsor_id``. ``sponsor_link__user`` becomes
-    ``sponsor_link__user_id``. Every prefix stays on the path, so ``F()``
-    cannot bind a bare ``user_id`` on the delegation root. The last
-    component is that field's attname: the column that stores the
-    comparison identity, including a non-PK ``to_field``. The path was
-    already resolved at registration.
-    """
-    parts = str(path).split('__')
-    current = model
-    prefix = []
-    field = None
-    for index, name in enumerate(parts):
-        field = current._meta.get_field(name)
-        if index == len(parts) - 1:
-            break
-        prefix.append(name)
-        current = field.related_model
-    return '__'.join(prefix + [field.attname])
 
 
 def _reject_unsupported_delegated_suffix(walk):

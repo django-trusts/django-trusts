@@ -24,6 +24,7 @@ from django.test.utils import isolate_apps
 
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from trusts.compile.resolution import _resolve_path
 from trusts.core import (
     Along,
     BackendHandle,
@@ -34,7 +35,6 @@ from trusts.core import (
     TrustsConfigurationError,
     TrustsRegistry,
     _public_path_segments,
-    _resolve_path,
     _validate_condition,
 )
 
@@ -477,7 +477,7 @@ class RegisterFailClosedTest(TestCase):
             'trusts.core._public_path_segments',
             wraps=_public_path_segments,
         ) as segments:
-            with patch('trusts.core._resolve_path', wraps=_resolve_path) as resolve:
+            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
                 with patch(
                     'trusts.core._validate_condition',
                     wraps=_validate_condition,

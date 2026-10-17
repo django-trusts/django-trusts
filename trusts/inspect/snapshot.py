@@ -40,6 +40,7 @@ from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
 from trusts.compile.nodes import Ref
+from trusts.compile.resolution import _permitted_content_prefix_models
 from trusts.core import TrustsConfigurationError
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
@@ -748,36 +749,6 @@ def _compile_get_permitted_users(handle, alias, records, model, handles):
         queryset, alias, record=records[0], expr=None, records=records,
         reverse_users=True,
     )
-
-
-def _permitted_content_prefix_models(handle, model):
-    """Concrete models that are a proper prefix of this backend's content path.
-
-    Order is registration order, then path order. A model is listed once.
-    The protected model is included only when an earlier hop on the same
-    path also uses it.
-    """
-    from trusts.core import _resolved_hop
-
-    plan = handle.registry.plan_for(model)
-    legs = tuple(plan.records) + tuple(getattr(plan, 'delegations', ()) or ())
-    found = []
-    seen = set()
-    for record in legs:
-        path = record.content_path
-        if not path:
-            continue
-        current = record.root
-        last = len(path) - 1
-        for index, name in enumerate(path):
-            field = current._meta.get_field(name)
-            related, _target = _resolved_hop(field, 'content', path)
-            concrete = related._meta.concrete_model
-            if index != last and concrete not in seen:
-                seen.add(concrete)
-                found.append(concrete)
-            current = related
-    return tuple(found)
 
 
 def _compile_filter_by_permitted_content(handle, alias, records, model, handles):
