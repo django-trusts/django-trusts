@@ -117,7 +117,8 @@ def check_query_compilers(app_configs, **kwargs):
     from django.utils.module_loading import import_string
 
     from trusts.backends import TrustModelBackendMixin
-    from trusts.core import TrustsCompilerError, compiler_for_class
+    from trusts.core import TrustsCompilerError
+    from trusts.plan.aggregates import compiler_for_class
 
     messages = []
     seen = []

@@ -16,9 +16,8 @@ from trusts.core import (
     QueryCompiler,
     RelationPlan,
     TrustsRegistry,
-    _compiler_applies,
-    any_plan_records,
 )
+from trusts.plan.aggregates import _compiler_applies, any_plan_records
 
 
 ROOT = Path(__file__).resolve().parents[2]

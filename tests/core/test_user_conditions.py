@@ -27,10 +27,10 @@ from trusts.core import (
     Ref,
     TrustsConfigurationError,
     TrustsRegistry,
-    common_permissions,
     filter_by_permitted_content,
     granted,
 )
+from trusts.plan.aggregates import common_permissions
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,

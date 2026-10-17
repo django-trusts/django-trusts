@@ -17,6 +17,7 @@ from tests.core import kernel_host_listed
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
+from trusts.plan.aggregates import _compile_common_permissions
 from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
@@ -24,7 +25,6 @@ from trusts.core import (
     RegisteredDelegation,
     TrustsConfigurationError,
     TrustsRegistry,
-    _compile_common_permissions,
     _compile_granted,
 )
 from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes

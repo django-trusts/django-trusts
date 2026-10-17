@@ -29,13 +29,11 @@ from trusts.core import (
     RelationPlan,
     TrustsConfigurationError,
     TrustsRegistry,
-    all_match,
-    common_permissions,
     filter_by_permitted_content,
     granted,
-    instance_match,
     permission_in,
 )
+from trusts.plan.aggregates import all_match, common_permissions, instance_match
 from trusts.query import AuthorizedManager
 
 

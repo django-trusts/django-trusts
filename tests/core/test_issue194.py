@@ -31,11 +31,10 @@ from trusts.core import (
     QueryCompiler,
     TrustsConfigurationError,
     TrustsRegistry,
-    _compiler_applies,
-    common_permissions,
     filter_by_permitted_content,
     granted,
 )
+from trusts.plan.aggregates import _compiler_applies, common_permissions
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
