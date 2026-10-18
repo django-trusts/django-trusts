@@ -13,7 +13,7 @@ from operator import or_
 
 from django.db.models import Count, Exists, OuterRef, Q
 
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 from trusts.commons import _require_instance
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.contents import (

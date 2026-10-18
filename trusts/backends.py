@@ -297,7 +297,7 @@ class TrustModelBackendMixin(object):
         eligible grants outside that walk. ``skipped`` is the bound
         ``skip_<name>`` parameter map.
         """
-        from trusts.reverse import trusts_mixin_predicate
+        from trusts.plan.users import trusts_mixin_predicate
 
         return trusts_mixin_predicate(
             self, content, perm,

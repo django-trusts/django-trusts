@@ -1,7 +1,6 @@
 """Named user conditions compiled once into each check.
 
-``trusts.user_rules`` re-exports these names. ``Bit`` and ``Proxy`` are
-the tree names; the shim still exposes ``_Bit`` and ``_Proxy``.
+``Bit`` and ``Proxy`` are the tree names.
 
 Each condition is ``(skip_<name> OR condition)``. The override is
 ``(NOT skip_<override> AND override)``, ORed with ordinary grants and

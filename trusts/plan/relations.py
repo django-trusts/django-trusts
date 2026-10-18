@@ -15,7 +15,7 @@ from operator import or_
 from django.db.models import Exists, Model, OuterRef, Q, QuerySet
 from django.db.models.base import ModelBase
 
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 from trusts.commons import (
     _bind_record_qs,
     _bind_terminal,

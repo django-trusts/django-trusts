@@ -11,7 +11,7 @@ from trusts._permitted import (
     _guard_permission_string,
     _permission_binding,
 )
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 
 
