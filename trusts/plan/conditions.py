@@ -70,6 +70,7 @@ from trusts.errors import (
     PermissionConditionUnsupported,
 )
 from trusts.plan.relations import ConditionLookup
+from trusts.utils import parse_perm_code
 
 _ensure_permission_conditions_option()
 
@@ -85,8 +86,7 @@ def permission_condition_code(perm):
         return ''
     if '.' in perm:
         try:
-            from trusts import utils
-            return utils.parse_perm_code(perm)[3]
+            return parse_perm_code(perm)[3]
         except ValueError:
             pass
     return perm.split(':', 1)[1]
