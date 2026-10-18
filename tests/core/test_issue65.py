@@ -19,12 +19,10 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.core import (
-    Ref,
-    RelationPlan,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.compile.nodes import Ref
+from trusts.plan.relations import RelationPlan
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 def _folder_models():
@@ -406,7 +404,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             if isinstance(value, types.ModuleType)
         }
         allowed_trusts_modules = {
-            'trusts.core', 'trusts._bind_once', 'trusts.errors',
+            'trusts.core', 'trusts.errors',
             'trusts.plan.rewrites', 'trusts.compile.factory',
             'trusts.compile.nodes',
             'trusts.compile.paths',             'trusts.compile.visitors',

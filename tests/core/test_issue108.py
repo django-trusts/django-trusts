@@ -23,7 +23,8 @@ from trusts.apps import (
     implementation_for_path,
 )
 from trusts.backends import TrustModelBackendMixin
-from trusts.core import TrustsConfigurationError, TrustsRegistry
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 HOST = 'tests.backends.HostTrustModelBackend'
@@ -109,10 +110,8 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
     def test_generic_declarations_import_without_kernel_config(self):
         import trusts.apps as apps_mod
         from trusts.plan.contents import filter_by_permitted_content
-        from trusts.core import (
-            Ref,
-            TrustsRegistry,
-        )
+        from trusts.compile.nodes import Ref
+        from trusts.compile.factory import TrustsRegistry
         from trusts.query import AuthorizedManager, AuthorizedQuerySet
 
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))

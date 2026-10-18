@@ -18,12 +18,10 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import implementation_for_path
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,

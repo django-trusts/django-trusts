@@ -24,15 +24,15 @@ from django.test.utils import isolate_apps
 
 from trusts.compile.nodes import permission_in
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.core import (
-    BackendHandle,
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import (
     PlanQueryCompiler,
-    Ref,
     RelationPlan,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    granted,
 )
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.contents import granted
 from trusts.plan.aggregates import all_match, common_permissions, instance_match
 from trusts.query import AuthorizedManager
 

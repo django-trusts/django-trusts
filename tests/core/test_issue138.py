@@ -17,12 +17,10 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,

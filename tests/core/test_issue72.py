@@ -12,7 +12,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.core import TrustsRegistry
+from trusts.compile.factory import TrustsRegistry
 
 
 class IsolatedHostDoesNotReceiveDocumentContributionTest(

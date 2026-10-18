@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from trusts.core import TrustsConfigurationError
-from trusts.policy_sql_format import (
+from trusts.errors import TrustsConfigurationError
+from trusts.inspect.format import (
     _emit,
     _format_policy_sql,
     _tokenize_policy_sql,

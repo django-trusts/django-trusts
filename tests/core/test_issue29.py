@@ -16,7 +16,7 @@ from django.db import models
 from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
 
-from trusts.checks import (
+from trusts.inspect.checks import (
     CHECK_ID_INVALID_EXPR,
     CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
@@ -30,7 +30,8 @@ from trusts.plan.conditions import (
     condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
-from trusts.core import TrustsConfigurationError, TrustsRegistry
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 def _store_expr(registry, model, code, expr):

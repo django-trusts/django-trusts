@@ -19,7 +19,7 @@ from django.test.utils import isolate_apps
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.aggregates import common_permissions
 from trusts.decorators import authorization_required
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
@@ -43,7 +43,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
-    from trusts.policy_lock import (
+    from trusts.inspect.snapshot import (
         _CALL_INPUT,
         _json_const,
         _load_policy_sql_document,
@@ -51,7 +51,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
         _role_sentinel,
         render_policy_sql_bytes,
     )
-    from trusts.policy_sql_format import _format_policy_sql, _tokenize_policy_sql
+    from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 
     document = _load_policy_sql_document(
         render_policy_sql_bytes(handles=[handle]),

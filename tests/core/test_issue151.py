@@ -222,7 +222,7 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
             'import sys\n'
             'import trusts.plan.rewrites\n'
             'assert "trusts.core" not in sys.modules\n'
-            'from trusts._bind_once import bind_once\n'
+            'from trusts.plan.rewrites import bind_once\n'
             'assert bind_once is trusts.plan.rewrites.bind_once\n'
             'assert "trusts.core" not in sys.modules\n'
             'print("rewrites-without-core")\n'

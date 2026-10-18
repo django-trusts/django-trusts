@@ -41,16 +41,16 @@ from trusts.compile.nodes import (
     Along,
     permission_in,
 )
-from trusts.core import (
+from trusts.compile.nodes import (
     All,
-    BackendHandle,
     Equal,
     PermissionIn,
-    PlanQueryCompiler,
     Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
 )
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 def _handle(registry=None, path='tests.core.issue210'):

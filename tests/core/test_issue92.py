@@ -19,25 +19,25 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from tests.apps import forget_models, isolate_live_registry, live_config
-from trusts.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
-from trusts.policy_sql_format import (
+from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
+from trusts.inspect.format import (
     _format_policy_sql,
     _tokenize_policy_sql,
 )
 from trusts.plan.aggregates import all_match, common_permissions
-from trusts.reverse import lock_permitted_users_queryset
+from trusts.plan.users import lock_permitted_users_queryset
 from trusts.plan.walk import _render_reach_sql
 from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Ref
+from trusts.errors import (
     TrustsCompilerError,
     TrustsConfigurationError,
-    TrustsRegistry,
-    granted,
 )
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.contents import granted
 
 
 CONCRETE = 'tests.backends.HostTrustModelBackend'

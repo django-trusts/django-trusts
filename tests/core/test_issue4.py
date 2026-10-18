@@ -27,7 +27,7 @@ from trusts.plan.conditions import (
     principal_ref,
     validate_expression,
 )
-from trusts.core import TrustsRegistry
+from trusts.compile.factory import TrustsRegistry
 
 
 u, p, o = condition_refs()

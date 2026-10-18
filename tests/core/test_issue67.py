@@ -15,7 +15,7 @@ from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.core import TrustsRegistry
+from trusts.compile.factory import TrustsRegistry
 
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
