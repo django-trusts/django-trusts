@@ -53,6 +53,39 @@ class _IsolatedConfig(TrustsImplementationConfig):
 
 
 class HeldIdentityTest(SimpleTestCase):
+    def _assert_handle_gate(self, held):
+        """Companions still gate on BackendHandle and donation equality.
+
+        The obtained object is not that class. A bare registry stays
+        outside the gate. Equality is the path, registration store, and
+        compiler triple, so a fresh handle for the same store matches.
+        """
+        from trusts.compile.factory import TrustsRegistry
+        from trusts.plan.handles import BackendHandle
+        from trusts.plan.relations import PlanQueryCompiler
+
+        self.assertIsInstance(held, BackendHandle)
+        self.assertIsNot(type(held), BackendHandle)
+        self.assertNotIsInstance(TrustsRegistry(), BackendHandle)
+        self.assertNotIsInstance(held.registry, BackendHandle)
+        handle = BackendHandle(
+            path=held.path,
+            registry=held.registry,
+            compiler=held.compiler,
+        )
+        self.assertEqual(held, handle)
+        self.assertEqual(handle, held)
+        self.assertEqual(hash(held), hash(handle))
+        self.assertIn(held, {handle})
+        self.assertIn(handle, {held})
+        other = BackendHandle(
+            path=held.path,
+            registry=TrustsRegistry(),
+            compiler=PlanQueryCompiler(),
+        )
+        self.assertNotEqual(held, other)
+        self.assertNotIn(other, {held})
+
     def test_configured_backend_returns_identical_held_object(self):
         config = _bind(_IsolatedConfig)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
@@ -61,6 +94,7 @@ class HeldIdentityTest(SimpleTestCase):
             self.assertIs(first, second)
             self.assertIsInstance(first, HeldBackend)
             self.assertIs(config._lowered_by_path[HOST], first)
+            self._assert_handle_gate(first)
             # Registration store and lowered held are distinct, linked:
             self.assertIs(first.registry, config.registries[HOST])
             self.assertIs(first.registry, config._ensure(HOST))
@@ -90,6 +124,9 @@ class HeldIdentityTest(SimpleTestCase):
             second = config.configured_backend(HOST)
             self.assertIsNot(second, first)
             self.assertIs(second.registry, first.registry)
+            # Donation equality follows the registration store, not identity.
+            self.assertEqual(second, first)
+            self.assertIn(second, {first})
             self.assertEqual(len(second.records), 1)
             self.assertIs(second.records[0].root, DocumentGrant)
             # The stale held object is an unchanged snapshot.

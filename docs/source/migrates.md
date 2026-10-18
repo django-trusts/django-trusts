@@ -8,6 +8,40 @@ development log. New features and changes that require no application action
 belong in [What's new](whats-new.md); development history belongs in
 [development history](../dev/development.md).
 
+## Raw registration and a held `configured_backend()` (#326)
+
+`1.0.0rc1` behavior is the old column. Application code keeps calling
+`configured_backend()` and `register()` / `add_named_filter()` on the
+object that call returns. Those are the supported calls. The class of
+that object is an unsettled internal name and is not application API.
+Registering on any other private object is not supported API.
+
+| | Old | New |
+| --- | --- | --- |
+| Return value of `register()` | Lowered registration record (`root`, paths, `via_group`, content model) | Stored registration. Path and condition builders have already run. `root`, `via_group`, and the other resolution fields are not on that return value |
+| Duplicate registration, conflicting registration, unknown field, and user-rule errors | Raised by `register()`, and that call stored nothing | Raised by the next build or read (`build_registry()`, `.records`, `.delegations`, or `configured_backend()`). Symbolic mistakes (both ordinary and delegated arguments, a non-model `trust`, a condition that is not a callable) still raise inside `register()` and store nothing |
+| A registration that fails when it is built | Not stored | Stays stored. Later builds, reads, and `configured_backend()` calls raise the same error |
+| `configured_backend()` | A new object on every call. A retained object still saw later registrations | The same lowered object until a registration changes the store. The next call returns a new lowered object. A retained object keeps the records it already had |
+
+```python
+backend = self.configured_backend()
+backend.register(
+    trust=DocumentPermission,
+    user=lambda t: t.user,
+    permission=lambda t: t.permission,
+    content=lambda t: t.document,
+)
+# Lowers the registration. A bad path, duplicate, or conflict raises here.
+backend = self.configured_backend()
+```
+
+Migration-bot checklist:
+
+- return value of `register(` (`.root`, `.via_group`, `.content_model`, `.user_path`, `.permission_path`, `.along`)
+- `except` around `register(` for duplicate, conflict, unknown field, or user-rule failures
+- explicit `build_registry()` or `.records` / `.delegations` read after registration
+- a variable that keeps the object returned by `configured_backend()` across a later `register(`
+
 ## `filter_authorized_scopes` renamed (#302)
 
 `filter_authorized_scopes` is deprecated. Call `filter_by_permitted_content`.

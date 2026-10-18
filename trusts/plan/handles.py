@@ -22,8 +22,23 @@ if TYPE_CHECKING:
 T = TypeVar('T', bound=Model)
 
 
+class _BackendHandleMeta(type):
+    """Accept the config-held lowered object at ``isinstance`` gates.
+
+    Companions still require a ``BackendHandle``. ``configured_backend()``
+    returns the held lowered object instead. That object sets
+    ``_backend_handle_compatible``; the check does not name its class.
+    A bare registry does not set the marker and stays rejected.
+    """
+
+    def __instancecheck__(cls, instance):
+        if type.__instancecheck__(cls, instance):
+            return True
+        return getattr(instance, '_backend_handle_compatible', False) is True
+
+
 @dataclass(frozen=True, slots=True)
-class BackendHandle:
+class BackendHandle(metaclass=_BackendHandleMeta):
     """Exact configured path, exact registry identity, and class compiler."""
 
     path: str

@@ -9,10 +9,12 @@ take the runtime user, content, and permission.
 
 __all__ = []
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+from typing import TypeVar
 
-from django.db.models import QuerySet
+from django.db.models import Model, QuerySet
 
 from trusts.commons import (
     _concrete_model, _content_model, _require_instance, _resolved_hop,
@@ -33,6 +35,7 @@ from trusts.plan.standards import (
 )
 
 
+_RegistrationModelT = TypeVar('_RegistrationModelT', bound=Model)
 _CONDITION_LOOKUP_UNSET = object()
 
 
@@ -674,7 +677,17 @@ class HeldBackend(Registry):
     fresh one. ``BackendHandle.register`` remains specifically not
     supported API; this forwarding exists only so the existing
     ``ready()``-style call sites keep reaching the same store.
+
+    Companion gates still ask ``isinstance(..., BackendHandle)`` and
+    de-duplicate donations with handle equality ``(path, registry,
+    compiler)``. This object satisfies both without being that class:
+    the marker below, and ``__eq__`` / ``__hash__`` on that triple.
+    Two snapshots of one store therefore compare equal, which is what
+    a repeated ``ready()`` donation needs. Identity stays distinct
+    (``is``); lowered records on a stale snapshot do not change.
     """
+
+    _backend_handle_compatible = True
 
     def __init__(
         self, *, path, compiler, registry, source_version=None,
@@ -697,16 +710,56 @@ class HeldBackend(Registry):
         return self._raw_registry
 
     def register(
-        self, *, trust, user=None, permission=None, content,
-        group=None, delegate=None, sponsor=None, condition=None,
+        self,
+        *,
+        trust: type[_RegistrationModelT],
+        user: str | Callable[[_RegistrationModelT], object] | None = None,
+        permission: str | Callable[[_RegistrationModelT], object] | None = None,
+        content: str | Callable[[_RegistrationModelT], object],
+        group: str | Callable[[_RegistrationModelT], object] | None = None,
+        delegate: str | Callable[[_RegistrationModelT], object] | None = None,
+        sponsor: str | Callable[[_RegistrationModelT], object] | None = None,
+        condition: (
+            Callable[[_RegistrationModelT], object]
+            | Callable[[_RegistrationModelT, object], object]
+            | None
+        ) = None,
         along=None,
     ):
-        """Forward one public registration to the held raw store."""
+        """Forward one public registration to the held raw store.
+
+        The parameter relationship matches the registration surface
+        ``configured_backend()`` used to expose: ``trust`` is
+        ``type[T]`` and each path or condition callable is ``T``.
+        Callers obtain that object from ``configured_backend()``; they
+        do not import this class.
+        """
         return self._raw_registry._register_public(
             trust=trust, user=user, permission=permission,
             content=content, group=group, delegate=delegate,
             sponsor=sponsor, condition=condition, along=along,
         )
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        # Donation sets store either this object or a BackendHandle
+        # for the same path. Equality is that triple, matching the
+        # frozen handle, not lowered-record identity.
+        if not isinstance(other, BackendHandle):
+            return NotImplemented
+        registry = getattr(other, 'registry', None)
+        compiler = getattr(other, 'compiler', None)
+        if registry is None or compiler is None:
+            return NotImplemented
+        return (
+            self.path == other.path
+            and self._raw_registry == registry
+            and self.compiler == compiler
+        )
+
+    def __hash__(self):
+        return hash((self.path, self._raw_registry, self.compiler))
 
     def add_named_filter(self, model, code, predicate):
         """Forward a named filter to the held raw store."""
