@@ -793,7 +793,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        record = handle.registry.plan_for(Folder).records[0]
+        record = handle.build_registry().plan_for(Folder).records[0]
         handles = (handle,)
         content = {
             'model': 'documents.Folder',
