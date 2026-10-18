@@ -1167,6 +1167,7 @@ class TrustsRegistry(object):
         """
         if lookup is None:
             self._condition_lookup = None
+            self._note_raw_mutation()
             return
         record_for = getattr(lookup, 'record_for', None)
         compile_q = getattr(lookup, 'compile_q', None)
@@ -1176,6 +1177,9 @@ class TrustsRegistry(object):
                 'no partial bind.'
             )
         self._condition_lookup = lookup
+        # A (re)bind changes what a built registry carries, so any
+        # config-held lowered object for this store is stale.
+        self._note_raw_mutation()
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
@@ -1279,6 +1283,7 @@ class TrustsRegistry(object):
         self._rule_fragments.clear()
         self._override_fragments.clear()
         self._lowered_cache = None
+        self._raw_version += 1
 
     def _note_raw_mutation(self):
         """Invalidate the lowering memo after storing a raw registration."""

@@ -198,9 +198,12 @@ def trusts_mixin_predicate(backend, content, perm, *,
     # Same call-time patch point as ``compile_permitted_users``.
     from trusts.apps import _relationship_implementation_handles
 
-    handle = backend._own_handle()
+    obtain = getattr(backend, '_obtain_held', None)
+    held = obtain() if callable(obtain) else backend._own_handle()
+    # Held object answers directly; a legacy handle unwraps to its registry.
+    registry = held if hasattr(held, 'plan_for') else held.registry
     return permitted_users_predicate_for_registry(
-        handle.registry, content, perm,
+        registry, content, perm,
         sponsor_handles=_relationship_implementation_handles(),
         skipped=skipped, backend=backend,
     )
@@ -650,10 +653,19 @@ def _trusts_eligibility_q(model):
     return predicate
 
 
+
+def _backend_plan(backend, content):
+    obtain = getattr(backend, '_obtain_held', None)
+    held = obtain() if callable(obtain) else backend._own_handle()
+    if hasattr(held, 'plan_for'):
+        return held.plan_for(content)
+    return held.registry.plan_for(content)
+
+
 def _assert_registration_user_model(backend, content, user_model):
     if not isinstance(backend, TrustModelBackendMixin):
         return
-    plan = backend._own_handle().registry.plan_for(content)
+    plan = _backend_plan(backend, content)
     expected = user_model._meta.concrete_model
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
@@ -684,7 +696,7 @@ def _assert_registration_user_model(backend, content, user_model):
 def _registration_models(backend, content):
     if not isinstance(backend, TrustModelBackendMixin):
         return []
-    plan = backend._own_handle().registry.plan_for(content)
+    plan = _backend_plan(backend, content)
     models = []
     for record in plan.records:
         models.extend((

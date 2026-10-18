@@ -45,6 +45,62 @@ def _perm_codes(permission_qs):
     )
 
 
+def _as_held(value):
+    """Normalize an obtained object to the held lowered object.
+
+    The production obtaining path (``configured_backend()``) already
+    returns a ``HeldBackend`` and it is returned unchanged -- the
+    identical held object, no rebuilding per question. A legacy
+    ``BackendHandle`` (compat/test injection only) is lowered once
+    for this call; a plain built ``Registry`` is wrapped carrying a
+    default compiler. ``None`` (the old factory signal) stays None.
+    """
+    if value is None:
+        return None
+    from trusts.plan.registry import HeldBackend, Registry
+
+    if isinstance(value, HeldBackend):
+        return value
+    if isinstance(value, Registry):
+        return HeldBackend(
+            path=getattr(value, 'path', '') or '',
+            compiler=getattr(value, 'compiler', None) or PlanQueryCompiler(),
+            registry=getattr(value, '_raw_registry', value),
+            source_version=getattr(
+                getattr(value, '_raw_registry', value), '_raw_version', None,
+            ),
+            records=value.records, delegations=value.delegations,
+            conditions=value.conditions,
+            user_conditions=value.user_conditions,
+            user_override=value.user_override,
+            condition_lookup=value.condition_lookup,
+        )
+    registry = getattr(value, 'registry', None)
+    if registry is None:
+        return None
+    build = getattr(registry, 'build_registry', None)
+    built = build() if callable(build) else registry
+    if built is None:
+        return None
+    from trusts.plan.registry import HeldBackend
+
+    kwargs = {}
+    if hasattr(built, 'condition_lookup'):
+        kwargs['condition_lookup'] = built.condition_lookup
+    return HeldBackend(
+        path=getattr(value, 'path', '') or '',
+        compiler=getattr(value, 'compiler', None) or PlanQueryCompiler(),
+        registry=registry,
+        source_version=getattr(registry, '_raw_version', None),
+        records=getattr(built, 'records', ()),
+        delegations=getattr(built, 'delegations', ()),
+        conditions=getattr(built, 'conditions', None),
+        user_conditions=getattr(built, 'user_conditions', None),
+        user_override=getattr(built, 'user_override', None),
+        **kwargs,
+    )
+
+
 class TrustModelBackendMixin(object):
     query_compiler = PlanQueryCompiler()
 
@@ -61,36 +117,64 @@ class TrustModelBackendMixin(object):
 
         return implementation_for_class(type(self), required=True)
 
+    def _held_backend(self):
+        """THE obtaining step: the config-held lowered object.
+
+        One line through ``trusts.apps.configured_backend`` (which
+        delegates to the owning config's ``configured_backend()``).
+        The backend instance holds nothing; every question re-derives
+        the same held object from the owning config until a new
+        registration invalidates it.
+        """
+        from trusts.apps import configured_backend
+
+        return configured_backend(self._trusts_config().path_for_backend(self))
+
+    def _obtain_held(self):
+        """Held object for one question, normalized for compat seams.
+
+        Production returns the identical ``HeldBackend`` from
+        ``configured_backend()``; a test/compat seam that still
+        supplies a ``BackendHandle`` is lowered by ``_as_held``.
+        """
+        return _as_held(self._held_backend())
+
     def _own_handle(self):
-        config = self._trusts_config()
-        return config.configured_backend(config.path_for_backend(self))
+        """Compat shim (internal, not API): return the held object.
+
+        Kept for Zero/gh-permissions/tests that still call this
+        name. It mints nothing: it delegates to ``_held_backend()``,
+        so the return value is the held lowered object (which also
+        carries ``path`` / ``compiler`` / ``registry``). Backend
+        inquiry methods below do NOT use this shim; they use
+        ``_obtain_held()``.
+        """
+        return self._held_backend()
 
     def _built_registry(self, handle=None):
-        """Built registry for ``handle``, or ``None`` (factory signal).
+        """Held/built registry for ``handle``, or ``None``.
 
-        ``None`` is translated by every caller to ``False`` / ``set()``
-        / ``None``-predicate and never returned as a Django result.
+        Compat name: with no argument it is the held object itself
+        (a ``Registry``), not a per-question build. ``None`` is
+        translated by every caller to ``False`` / ``set()`` /
+        ``None``-predicate and never returned as a Django result.
         """
-        handle = self._own_handle() if handle is None else handle
-        build = getattr(handle, 'build_registry', None)
-        if callable(build):
-            return build()
-        registry = getattr(handle, 'registry', None)
-        build = getattr(registry, 'build_registry', None)
-        return build() if callable(build) else registry
+        if handle is None:
+            return self._obtain_held()
+        return _as_held(handle)
 
-    def _sponsor_registries(self, own_handle):
-        """Built registries of other configured paths (sponsors)."""
+    def _sponsor_registries(self, own_held):
+        """Held objects of other configured paths (sponsors)."""
         from trusts.apps import _relationship_implementation_handles
 
-        own_path = getattr(own_handle, 'path', None)
+        own_path = getattr(own_held, 'path', None)
         sponsors = []
-        for handle in _relationship_implementation_handles():
-            if own_path is not None and getattr(handle, 'path', None) == own_path:
+        for item in _relationship_implementation_handles():
+            if own_path is not None and getattr(item, 'path', None) == own_path:
                 continue
-            built = self._built_registry(handle)
-            if built is not None:
-                sponsors.append(built)
+            held = _as_held(item)
+            if held is not None:
+                sponsors.append(held)
         return tuple(sponsors)
 
     def _own_plan_applies(self, obj, user_obj, *, handle=None, registry=None):
@@ -98,13 +182,15 @@ class TrustModelBackendMixin(object):
 
         Routes through ``QueryCompiler.applies``. Inapplicable is
         ``False`` at zero SQL, before ``:name`` overlay.
+        ``handle``/``registry`` are compat aliases for the held object.
         """
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
-        if registry is None:
+        held = registry if registry is not None else (
+            _as_held(handle) if handle is not None else self._obtain_held()
+        )
+        if held is None:
             return False
-        plan = registry.plan_for(obj, user=user_obj)
-        return _compiler_applies(handle.compiler, plan)
+        plan = held.plan_for(obj, user=user_obj)
+        return _compiler_applies(getattr(held, 'compiler', None) or PlanQueryCompiler(), plan)
 
     def _ensure_perm_cache(self, user_obj):
         """Documented ``_trust_perm_cache`` attribute; not an auth source."""
@@ -114,14 +200,15 @@ class TrustModelBackendMixin(object):
 
     def _path_permissions(self, user_obj, obj, *, kind,
                           skipped=(), handle=None, registry=None):
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
-        if registry is None:
+        held = registry if registry is not None else (
+            _as_held(handle) if handle is not None else self._obtain_held()
+        )
+        if held is None:
             return set()
-        qs = registry.permissions_for(
+        qs = held.permissions_for(
             user_obj, obj, kind=kind,
-            sponsors=self._sponsor_registries(handle),
-            compiler=handle.compiler,
+            sponsors=self._sponsor_registries(held),
+            compiler=getattr(held, 'compiler', None) or PlanQueryCompiler(),
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
         if qs is None or qs == ():
@@ -137,25 +224,24 @@ class TrustModelBackendMixin(object):
             )
         return bind_checked_user(
             user_obj, skip_flags=skip_flags,
-            registry=lambda: self._own_handle().registry,
+            registry=lambda: self._obtain_held(),
         )
 
     def _listed_permissions(self, user_obj, obj, skip_flags, *, kind,
                             cache=False):
-        # Inquiry first (lazy _own_handle inside it) so a denied or
+        # Inquiry first (lazy held lookup inside it) so a denied or
         # object-less inquiry returns set() without requiring a
-        # configured handle, exactly as before Pass 4.
+        # configured backend, exactly as before.
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return set()
-        handle = self._own_handle()
-        registry = self._built_registry(handle)
+        held = self._obtain_held()
         if cache:
             self._ensure_perm_cache(user_obj)
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
             return self._path_permissions(
                 user_obj, obj, kind=kind, skipped=inquiry.values,
-                handle=handle, registry=registry,
+                registry=held,
             )
         return set()
 
@@ -206,7 +292,7 @@ class TrustModelBackendMixin(object):
         raises.
         """
         if registry is None:
-            registry = self._built_registry()
+            registry = self._obtain_held()
         if registry is None:
             return None
         return getattr(registry, 'condition_lookup', None)
@@ -245,29 +331,31 @@ class TrustModelBackendMixin(object):
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None, *,
                              skipped=(), handle=None, registry=None):
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
-        if registry is None:
+        held = registry if registry is not None else (
+            _as_held(handle) if handle is not None else self._obtain_held()
+        )
+        if held is None:
             return False
         binding = _permission_binding(perm, obj.model)
-        return registry.has_permission(
+        return held.has_permission(
             user_obj, obj, binding, extra_q=extra_q,
-            sponsors=self._sponsor_registries(handle),
-            compiler=handle.compiler, permission_model=Permission,
+            sponsors=self._sponsor_registries(held),
+            compiler=getattr(held, 'compiler', None) or PlanQueryCompiler(), permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
 
     def _instance_has_perm(self, user_obj, perm, obj, extra_q=None, *,
                            skipped=(), handle=None, registry=None):
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
-        if registry is None:
+        held = registry if registry is not None else (
+            _as_held(handle) if handle is not None else self._obtain_held()
+        )
+        if held is None:
             return False
         binding = _permission_binding(perm, obj.__class__)
-        return registry.has_permission(
+        return held.has_permission(
             user_obj, obj, binding, extra_q=extra_q,
-            sponsors=self._sponsor_registries(handle),
-            compiler=handle.compiler, permission_model=Permission,
+            sponsors=self._sponsor_registries(held),
+            compiler=getattr(held, 'compiler', None) or PlanQueryCompiler(), permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
 
@@ -281,9 +369,9 @@ class TrustModelBackendMixin(object):
         parameter on that registered user condition.
         Django's ``user.has_perm`` does not forward these keywords.
         """
-        # Inquiry first (lazy _own_handle inside it) so a denied or
+        # Inquiry first (lazy held lookup inside it) so a denied or
         # object-less inquiry returns False without requiring a
-        # configured handle, exactly as before Pass 4.
+        # configured backend, exactly as before.
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return False
@@ -291,11 +379,11 @@ class TrustModelBackendMixin(object):
 
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
-        handle = self._own_handle()
-        registry = self._built_registry(handle)
+        held = self._obtain_held()
+        registry = held
 
         if not self._own_plan_applies(
-            obj, user_obj, handle=handle, registry=registry,
+            obj, user_obj, registry=registry,
         ):
             return False
 
@@ -311,12 +399,12 @@ class TrustModelBackendMixin(object):
         if isinstance(obj, QuerySet):
             positive = self._collection_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
-                skipped=skipped, handle=handle, registry=registry,
+                skipped=skipped, registry=registry,
             )
         else:
             positive = self._instance_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
-                skipped=skipped, handle=handle, registry=registry,
+                skipped=skipped, registry=registry,
             )
         if not positive:
             return False
@@ -344,12 +432,11 @@ class TrustModelBackendMixin(object):
         eligible grants outside that walk. ``skipped`` is the bound
         ``skip_<name>`` parameter map.
         """
-        handle = self._own_handle()
-        registry = self._built_registry(handle)
-        if registry is None:
+        held = self._obtain_held()
+        if held is None:
             return None
-        return registry.permitted_users_predicate(
+        return held.permitted_users_predicate(
             content, perm,
-            sponsors=self._sponsor_registries(handle),
+            sponsors=self._sponsor_registries(held),
             skipped=skipped, backend=self,
         )

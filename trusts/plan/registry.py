@@ -640,3 +640,110 @@ class Registry(object):
             )
             self._override_fragments[model] = compiled
             return compiled
+
+
+class HeldBackend(Registry):
+    """Held, lowered backend object for one configured path.
+
+    PROPOSED NAME -- UNSETTLED: ``HeldBackend`` is a neutral internal
+    name chosen for this pass only. Thomas has not settled the final
+    name (``Policy`` was proposed and left unsettled), it is not in
+    the user doc, and it is not public API. Do not bake it into docs
+    or downstream imports without his say-so.
+
+    One instance is built by lowering the raw registrations stored
+    on the owning config's ``TrustsRegistry`` and is then HELD by
+    that config (``TrustsImplementationConfig._lowered_by_path``);
+    ``configured_backend()`` returns this identical object until a
+    new registration bumps the raw version. It carries its own
+    ``compiler`` and answers the four permission questions itself
+    through the ``Registry`` methods above -- no per-question
+    ``build_registry()`` and no handle is minted by callers to reach
+    it. Honest delegation note: those ``Registry`` question methods
+    still, inside this pass, mint a synthetic ``BackendHandle``
+    (``Registry._handle``) to feed the free functions in
+    ``plan.aggregates`` / ``plan.contents`` / ``plan.users``; folding
+    those bodies onto this object is a later pass.
+
+    ``registry`` is the raw registration store (the config-held
+    ``TrustsRegistry``) this object was lowered from. ``register``
+    and ``add_named_filter`` forward to that same store, so
+    registration and inquiry are two views of the one config-held
+    store; registering invalidates the held object at the config,
+    and the next ``configured_backend()`` call lowers and holds a
+    fresh one. ``BackendHandle.register`` remains specifically not
+    supported API; this forwarding exists only so the existing
+    ``ready()``-style call sites keep reaching the same store.
+    """
+
+    def __init__(
+        self, *, path, compiler, registry, source_version=None,
+        records, delegations, conditions=None, user_conditions=None,
+        user_override=None, condition_lookup=_CONDITION_LOOKUP_UNSET,
+    ):
+        super(HeldBackend, self).__init__(
+            records=records, delegations=delegations,
+            conditions=conditions, user_conditions=user_conditions,
+            user_override=user_override, condition_lookup=condition_lookup,
+        )
+        self.path = path
+        self.compiler = compiler
+        self.source_version = source_version
+        self._raw_registry = registry
+
+    @property
+    def registry(self):
+        """The raw ``TrustsRegistry`` this held object was lowered from."""
+        return self._raw_registry
+
+    def register(
+        self, *, trust, user=None, permission=None, content,
+        group=None, delegate=None, sponsor=None, condition=None,
+        along=None,
+    ):
+        """Forward one public registration to the held raw store."""
+        return self._raw_registry._register_public(
+            trust=trust, user=user, permission=permission,
+            content=content, group=group, delegate=delegate,
+            sponsor=sponsor, condition=condition, along=along,
+        )
+
+    def add_named_filter(self, model, code, predicate):
+        """Forward a named filter to the held raw store."""
+        return self._raw_registry.register_permission_condition(
+            model, code, predicate,
+        )
+
+    @property
+    def historical_fallback(self):
+        return bool(getattr(self.compiler, 'historical_fallback', False))
+
+    # The held object carries its compiler: a question asked without
+    # an explicit compiler uses it instead of a fresh default.
+    def has_permission(self, user, content, permission, *args, **kwargs):
+        if kwargs.get('compiler') is None:
+            kwargs['compiler'] = self.compiler
+        return super(HeldBackend, self).has_permission(
+            user, content, permission, *args, **kwargs,
+        )
+
+    def filter_authorized(self, queryset, user, permission, *args, **kwargs):
+        if kwargs.get('compiler') is None:
+            kwargs['compiler'] = self.compiler
+        return super(HeldBackend, self).filter_authorized(
+            queryset, user, permission, *args, **kwargs,
+        )
+
+    def filter_by_permitted_content(self, queryset, user, permission, *args, **kwargs):
+        if kwargs.get('compiler') is None:
+            kwargs['compiler'] = self.compiler
+        return super(HeldBackend, self).filter_by_permitted_content(
+            queryset, user, permission, *args, **kwargs,
+        )
+
+    def permissions_for(self, user, content, *args, **kwargs):
+        if kwargs.get('compiler') is None:
+            kwargs['compiler'] = self.compiler
+        return super(HeldBackend, self).permissions_for(
+            user, content, *args, **kwargs,
+        )

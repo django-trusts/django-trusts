@@ -9,6 +9,7 @@ from trusts._meta_options import _ensure_permission_conditions_option
 
 if TYPE_CHECKING:
     from trusts.plan.handles import BackendHandle
+    from trusts.plan.registry import HeldBackend
 
 # Hosts load this module before Django constructs their models. Register
 # Meta.permission_conditions here so applications do not import _ir.
@@ -66,6 +67,13 @@ class _TrustsRegistryOwner(object):
         # Path-scoped store. Empty until ready() / _ensure. Never replace
         # this dict or an existing value on re-entry.
         self.registries = {}
+        # Held lowered objects, keyed by the same path as ``registries``.
+        # ``configured_backend()`` lowers the raw store once, holds the
+        # result here, and returns that identical object until a new
+        # registration (raw-version bump) invalidates it. This dict is
+        # deliberately NOT named ``registries``: it holds lowered
+        # answers, not registrations.
+        self._lowered_by_path = {}
 
     def _configured_trusts_paths(self):
         raise NotImplementedError
@@ -93,15 +101,81 @@ class _TrustsRegistryOwner(object):
 
         return TrustsRegistry()
 
-    def _create_handle(self, path, registry, compiler) -> BackendHandle:
-        """Construct the path-owned handle. Protected / provisional.
+    def _create_handle(self, path, registry, compiler):
+        """Construct the held lowered object for ``path``.
 
-        The default is Core ``BackendHandle``. An extension config may
-        return a family-owned handle. Not a public family API.
+        Protected / provisional. The default lowers ``registry``
+        (the config-held raw ``TrustsRegistry``) once and wraps the
+        result in a ``HeldBackend`` carrying ``path`` and
+        ``compiler``. An extension config may return a family-owned
+        held object, or a legacy ``BackendHandle``, which
+        ``configured_backend()`` promotes to a held object. Not a
+        public family API. A lowering failure raises and holds
+        nothing.
         """
-        from trusts.plan.handles import BackendHandle
+        from trusts.plan.registry import HeldBackend
 
-        return BackendHandle(path=path, registry=registry, compiler=compiler)
+        built = registry.build_registry() if hasattr(registry, 'build_registry') else registry
+        if built is None:
+            from trusts.errors import TrustsConfigurationError
+
+            raise TrustsConfigurationError(
+                'No registry for backend path %r.' % (path,)
+            )
+        kwargs = {}
+        if hasattr(built, 'condition_lookup'):
+            kwargs['condition_lookup'] = built.condition_lookup
+        return HeldBackend(
+            path=path, compiler=compiler, registry=registry,
+            source_version=getattr(registry, '_raw_version', None),
+            records=getattr(built, 'records', ()),
+            delegations=getattr(built, 'delegations', ()),
+            conditions=getattr(built, 'conditions', None),
+            user_conditions=getattr(built, 'user_conditions', None),
+            user_override=getattr(built, 'user_override', None),
+            **kwargs,
+        )
+
+    def _promote_to_held(self, candidate, path, registry, compiler):
+        """Hold ``candidate`` as the lowered object for ``path``.
+
+        A ``HeldBackend`` is held as-is. A legacy ``BackendHandle``
+        (from an extension ``_create_handle``) is promoted by
+        lowering its registry. Anything else is held as-is only
+        when it already answers as a registry (duck-typed in tests).
+        """
+        from trusts.plan.registry import HeldBackend
+
+        if isinstance(candidate, HeldBackend):
+            held = candidate
+        elif hasattr(candidate, 'registry') and hasattr(candidate, 'compiler'):
+            held = self._create_handle(
+                candidate.path or path,
+                candidate.registry,
+                candidate.compiler,
+            )
+            # _create_handle above is this same (possibly overridden)
+            # method only for the default class; for an overridden
+            # factory that returned a handle, build the held object
+            # directly to avoid recursing into the override again.
+            if not isinstance(held, HeldBackend):
+                held = TrustsImplementationConfig._create_handle(
+                    self, candidate.path or path, candidate.registry,
+                    candidate.compiler,
+                )
+        else:
+            held = candidate
+            # Duck-typed registry candidate: annotate it so the
+            # identity/staleness check in configured_backend() can
+            # recognise it as the held object for this raw store.
+            try:
+                held.path = path
+                held.compiler = compiler
+                held.source_version = getattr(registry, '_raw_version', None)
+                held._held_registry = registry
+            except Exception:
+                pass
+        return held
 
     def _ensure(self, path):
         if path not in self.registries:
@@ -118,13 +192,21 @@ class _TrustsRegistryOwner(object):
         """
         return self._ensure(path)
 
-    def configured_backend(self, path=None) -> BackendHandle:
-        """Return the configured backend for one exact Trusts path.
+    def configured_backend(self, path=None) -> HeldBackend:
+        """Return THE held lowered backend object for one Trusts path.
 
-        With one Trusts path, ``path`` may be omitted. With zero or
-        several, omission fails loud. An unconfigured path fails loud.
-        The stored builder is returned as-is; building a query-time
-        registry happens per question, on demand.
+        This is the one obtaining call (config method; also
+        ``trusts.apps.configured_backend``). Chain: resolve ``path``
+        -> this owning config -> ``self.registries[path]`` (the raw
+        ``TrustsRegistry`` holding every ``register()`` call) ->
+        lower it once -> HOLD the resulting object in
+        ``self._lowered_by_path[path]`` -> return it. Every later
+        call returns that identical object until a new registration
+        bumps the raw version, which invalidates the held object;
+        the next call then lowers, holds, and returns a fresh one.
+        A failed lowering caches nothing and raises. With one
+        Trusts path, ``path`` may be omitted; with zero or several,
+        omission fails loud. An unconfigured path fails loud.
         """
         from django.utils.module_loading import import_string
 
@@ -151,14 +233,44 @@ class _TrustsRegistryOwner(object):
                 '%r is not a configured Trusts backend' % (path,)
             )
         cls = import_string(path)
-        return self._create_handle(
-            path,
-            self._exposed_registry(path),
-            compiler_for_class(cls),
-        )
+        compiler = compiler_for_class(cls)
+        registry = self._exposed_registry(path)
+        if not hasattr(self, '_lowered_by_path'):
+            self._init_registries_lowered_only()
+        held = self._lowered_by_path.get(path)
+        held_registry = getattr(held, 'registry', None) if held is not None else None
+        if held_registry is None and held is not None:
+            held_registry = getattr(held, '_held_registry', None)
+        if (
+            held is not None
+            and held_registry is registry
+            and getattr(held, 'compiler', None) is compiler
+            and getattr(held, 'source_version', None)
+            == getattr(registry, '_raw_version', None)
+        ):
+            return held
+        try:
+            candidate = self._create_handle(path, registry, compiler)
+            held = self._promote_to_held(candidate, path, registry, compiler)
+        except Exception:
+            # Failed lowering holds nothing new.
+            self._lowered_by_path.pop(path, None)
+            raise
+        self._lowered_by_path[path] = held
+        return held
 
-    def configured_handles(self) -> tuple[BackendHandle, ...]:
-        """Handles for every configured Trusts path, in settings order."""
+    def _init_registries_lowered_only(self):
+        # Configs constructed before the held store existed (or by
+        # ``__new__`` in tests) get the dict lazily.
+        self._lowered_by_path = {}
+
+    def configured_handles(self):
+        """Held lowered objects for every Trusts path, in settings order.
+
+        Name kept for compatibility; each item is what
+        ``configured_backend(path)`` returns (a held object, not a
+        per-call handle).
+        """
         return tuple(
             self.configured_backend(path)
             for path in self._configured_trusts_paths()
@@ -218,6 +330,9 @@ class _TrustsRegistryOwner(object):
         # Registration on it (by a contributor, or through a
         # caller-held reference) takes effect on the next build.
         self.registries[paths[0]] = value
+        lowered = getattr(self, '_lowered_by_path', None)
+        if lowered is not None:
+            lowered.pop(paths[0], None)
 
 
 class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
@@ -313,8 +428,30 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
         from trusts.inspect import checks as _trusts_checks  # noqa: F401
 
 
+def configured_backend(path=None, apps_registry=None):
+    """Module-level form of the one obtaining call.
+
+    ``from trusts.apps import configured_backend`` -- delegates to
+    the owning config's ``configured_backend()``; there is no second
+    obtaining logic here. With no ``path``, exactly one configured
+    Trusts path across all implementations is required.
+    """
+    from trusts.errors import TrustsConfigurationError
+
+    if path is not None:
+        return implementation_for_path(path, apps_registry).configured_backend(path)
+    paths = []
+    for config in implementation_configs(apps_registry):
+        paths.extend(config._configured_trusts_paths())
+    if len(paths) != 1:
+        raise TrustsConfigurationError(
+            'configured_backend() needs an explicit path; got %r' % (tuple(paths),)
+        )
+    return implementation_for_path(paths[0], apps_registry).configured_backend(paths[0])
+
+
 def configured_implementation_handles(apps_registry=None):
-    """Handles from every installed implementation, in owner then path order.
+    """Held objects from every installed implementation, in owner then path order.
 
     Empty when no ``TrustsImplementationConfig`` is installed. This
     listing is not the Core list/guard aggregate: callers that authorize
