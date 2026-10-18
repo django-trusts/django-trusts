@@ -13,7 +13,7 @@ from trusts.conditions import (
     permission_condition_code,
     permission_has_condition,
 )
-from trusts.core import TrustsRegistry
+from trusts.compile.factory import TrustsRegistry
 
 
 PUBLIC_SURFACE_NAMES = (

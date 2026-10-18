@@ -41,7 +41,7 @@ def live_config(apps_registry=None):
     """
     from tests.kernel_host.apps import KernelHostConfig
     from trusts.apps import implementation_configs
-    from trusts.core import TrustsConfigurationError
+    from trusts.errors import TrustsConfigurationError
 
     configs = implementation_configs(apps_registry)
     if len(configs) == 1:
@@ -61,7 +61,7 @@ def junction_content_field(junction_model):
     Uses ``get_content_model()`` plus Django ``_meta``. Does not consult
     a static content map, hard-code ``content``, or guess reverse names.
     """
-    from trusts.core import TrustsConfigurationError
+    from trusts.errors import TrustsConfigurationError
 
     content_model = junction_model.get_content_model()._meta.concrete_model
     matches = [
@@ -100,7 +100,7 @@ class TestsConfig(AppConfig):
             return
 
         from trusts.apps import implementation_configs
-        from trusts.core import TrustsConfigurationError
+        from trusts.errors import TrustsConfigurationError
 
         owners = implementation_configs(self.apps)
         if len(owners) != 1:
@@ -110,7 +110,7 @@ class TestsConfig(AppConfig):
         try:
             TrustUserPermission = self.apps.get_model('trusts', 'TrustUserPermission')
             from tests.models import Category, TestGroupJunction, Ticket
-            from trusts.core import Ref
+            from trusts.compile.nodes import Ref
         except (LookupError, ImportError):
             return
 
@@ -204,7 +204,7 @@ def install_writable_registry(config, path, contribute=None):
     supported handle read after ``Apps.ready``. The live store is not a
     public contributor API.
     """
-    from trusts.core import TrustsRegistry
+    from trusts.compile.factory import TrustsRegistry
 
     registry = TrustsRegistry()
     if contribute is not None:
@@ -257,7 +257,7 @@ def apply_zero_trust_donation(config):
 
 def clone_writable_registry(registry):
     """Copy records onto a new unfrozen registry for test isolation."""
-    from trusts.core import TrustsRegistry
+    from trusts.compile.factory import TrustsRegistry
 
     cloned = TrustsRegistry()
     cloned._by_root = {

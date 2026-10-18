@@ -32,13 +32,11 @@ from trusts.compile.factory import (
     _validate_condition,
 )
 from trusts.compile.nodes import Along
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 ROOT = Path(__file__).resolve().parents[2]

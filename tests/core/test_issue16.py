@@ -18,7 +18,7 @@ from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import isolate_apps
 
 from tests.models import Ticket, ticket_meta_own
-from trusts.checks import (
+from trusts.inspect.checks import (
     CHECK_ID_INVALID_EXPR,
     CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     check_obsolete_legacy_callback_setting,
@@ -40,7 +40,9 @@ from trusts.plan.conditions import (
     condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
-from trusts.core import BackendHandle, TrustsConfigurationError, TrustsRegistry
+from trusts.plan.handles import BackendHandle
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 def _store_expr(registry, model, code, expr):

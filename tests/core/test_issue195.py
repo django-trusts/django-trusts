@@ -6,7 +6,7 @@ from pathlib import Path
 from django.test import SimpleTestCase
 
 import trusts
-import trusts.checks
+import trusts.inspect.checks as trusts_checks
 import trusts.core as core
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
@@ -101,8 +101,8 @@ class CoreOrderedFoldDeletedTest(SimpleTestCase):
                         )
 
     def test_e006_and_renderer_check_are_retired(self):
-        self.assertFalse(hasattr(trusts.checks, 'CHECK_ID_ORDERED_FOLD_RENDERER'))
-        self.assertFalse(hasattr(trusts.checks, 'check_ordered_fold_renderer'))
+        self.assertFalse(hasattr(trusts_checks, 'CHECK_ID_ORDERED_FOLD_RENDERER'))
+        self.assertFalse(hasattr(trusts_checks, 'check_ordered_fold_renderer'))
         source = (ROOT / 'trusts' / 'inspect' / 'checks.py').read_text()
         self.assertIn("``trusts.E006``", source)
         self.assertIn('trusts_ordered_fold.E001', source)

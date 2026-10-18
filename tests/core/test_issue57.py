@@ -16,11 +16,9 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
 from trusts.compile.factory import RegisteredRelation
-from trusts.core import (
-    Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 
 
 def _mock_models():
@@ -386,7 +384,7 @@ class TrustsRegistryTest(SimpleTestCase):
             if isinstance(value, types.ModuleType)
         }
         allowed_trusts_modules = {
-            'trusts.core', 'trusts._bind_once', 'trusts.errors',
+            'trusts.core', 'trusts.errors',
             'trusts.plan.rewrites', 'trusts.compile.factory',
             'trusts.compile.nodes',
             'trusts.compile.paths',             'trusts.compile.visitors',

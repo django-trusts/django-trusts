@@ -16,13 +16,11 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import implementation_for_path
 from trusts.plan.aggregates import common_permissions, compiler_for_class
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    TrustsCompilerError,
-    TrustsRegistry,
-    granted,
-)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsCompilerError
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.contents import granted
 from tests.backends import MissingCompilerBackend
 
 
@@ -41,7 +39,7 @@ def _change_document():
 
 
 def _contribute_document(registry):
-    from trusts.core import Ref
+    from trusts.compile.nodes import Ref
 
     j = Ref(DocumentGrant)
     registry.register(

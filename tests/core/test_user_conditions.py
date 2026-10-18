@@ -20,22 +20,20 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
-    granted,
-)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.contents import granted
 from trusts.plan.aggregates import common_permissions
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
 )
-from trusts.policy_lock import _load_policy_sql_document, render_policy_sql_bytes
+from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedQuerySet, PermittedUsersManagerMixin
 
 
@@ -1320,7 +1318,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(b'skip_is_active=False', raw)
         self.assertIn(b'skip_staff=False', raw)
         self.assertIn(b'skip_superuser=False', raw)
-        from trusts.reverse import lock_permitted_users_queryset
+        from trusts.plan.users import lock_permitted_users_queryset
 
         queryset = lock_permitted_users_queryset(
             handle, self.doc, self.change,
@@ -1920,7 +1918,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
 
     def test_non_boolean_is_active_is_not_the_default(self):
         """A non-boolean ``is_active`` column is not the built-in condition."""
-        from trusts.user_rules import builtin_user_conditions
+        from trusts.plan.standards import builtin_user_conditions
 
         def meta():
             return type('Meta', (), {'app_label': 'trusts_tests'})
@@ -2000,7 +1998,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
         The registry never sets an ``is_active`` condition, and this model
         has no such field, so the default condition is not added.
         """
-        from trusts.reverse import lock_permitted_users_queryset
+        from trusts.plan.users import lock_permitted_users_queryset
 
         user_model, note_model, grant_model, link_model = self._create('Open')
         try:

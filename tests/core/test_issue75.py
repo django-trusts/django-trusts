@@ -35,15 +35,15 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import implementation_for_path
 from trusts.plan.aggregates import compiler_for_class
 from trusts.backends import TrustModelBackendMixin
-from trusts.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
+from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import (
     TrustsCompilerError,
     TrustsConfigurationError,
-    TrustsRegistry,
-    granted,
 )
+from trusts.compile.factory import TrustsRegistry
+from trusts.plan.contents import granted
 import tests as tests_module
 
 
@@ -71,7 +71,7 @@ def _change_document():
 
 
 def _contribute_document(registry):
-    from trusts.core import Ref
+    from trusts.compile.nodes import Ref
 
     j = Ref(DocumentGrant)
     registry.register(

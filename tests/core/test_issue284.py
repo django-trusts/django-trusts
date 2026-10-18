@@ -24,13 +24,11 @@ from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 from trusts.query import (
     AuthorizedQuerySet,
     PermittedQuerySet,

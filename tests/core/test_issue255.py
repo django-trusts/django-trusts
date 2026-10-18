@@ -30,14 +30,17 @@ from tests.core.test_issue147.test_sql_export import (
     _handle as _export_handle,
 )
 from tests.myapp.backends import DocumentBackend
-from trusts.reverse import lock_permitted_users_queryset
+from trusts.plan.users import lock_permitted_users_queryset
 from tests.core.test_issue246 import _tables
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import implementation_for_path
-from trusts.core import BackendHandle, PlanQueryCompiler, TrustsConfigurationError, TrustsRegistry
-from trusts.policy_lock import (
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.inspect.snapshot import (
     _compile_queryset,
     _load_policy_sql_document,
     render_policy_sql_bytes,

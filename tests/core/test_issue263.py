@@ -23,14 +23,12 @@ from django.test.utils import isolate_apps
 
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
-from trusts.policy_lock import (
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.inspect.snapshot import (
     _load_policy_sql_document,
     render_policy_sql_bytes,
 )

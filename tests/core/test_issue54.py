@@ -21,13 +21,13 @@ from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsImplementationConfig
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.core import (
+from trusts.plan.relations import (
     ConditionLookup,
     PlanQueryCompiler,
-    Ref,
-    TrustsConfigurationError,
-    TrustsRegistry,
 )
+from trusts.compile.nodes import Ref
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
 from trusts.query import (
     AuthorizedManager,
     AuthorizedManagerMixin,
@@ -146,7 +146,7 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
     def test_old_name_delegates_to_filter_by_permitted_content(self):
         import inspect
 
-        from trusts.core import filter_authorized_scopes
+        from trusts.plan.contents import filter_authorized_scopes
 
         self.assertEqual(
             inspect.signature(filter_authorized_scopes),

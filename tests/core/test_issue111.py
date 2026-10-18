@@ -23,7 +23,7 @@ from trusts.apps import (
     implementation_for_path,
 )
 from trusts.backends import TrustModelBackendMixin
-from trusts.core import TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 
 
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -107,7 +107,7 @@ class HistoricalImportCutoverTest(SimpleTestCase):
         )
         with self.assertRaises(ModuleNotFoundError):
             importlib.import_module('trusts.core_backends')
-        from trusts.core import PlanQueryCompiler
+        from trusts.plan.relations import PlanQueryCompiler
 
         self.assertIsInstance(
             TrustModelBackendMixin.query_compiler, PlanQueryCompiler,

@@ -24,13 +24,11 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from trusts.plan.conditions import ModelIdentity
 from trusts.compile.nodes import _InquiryPermissionMatch
 from trusts.plan.recursions import _IdentInReach
-from trusts.core import (
-    BackendHandle,
-    PlanQueryCompiler,
-    TrustsConfigurationError,
-    TrustsRegistry,
-)
-from trusts.policy_lock import (
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.errors import TrustsConfigurationError
+from trusts.compile.factory import TrustsRegistry
+from trusts.inspect.snapshot import (
     CHECK_ID_POLICY_LOCK,
     CONVENTIONAL_LOCKFILE_NAME,
     _Symbol,
@@ -51,7 +49,7 @@ from trusts.policy_lock import (
     check_policy_sql_lockfile,
     render_policy_sql_bytes,
 )
-from trusts.policy_yaml import dump_policy_yaml
+from trusts.inspect.yaml import dump_policy_yaml
 
 GOLDEN_SQLITE = (
     Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
@@ -589,12 +587,12 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_condition_line_quotes_round_trip_through_safe_load(self):
         from trusts.compile.nodes import _InquiryPermissionMatch
-        from trusts.core import (
+        from trusts.compile.nodes import (
             All,
             Equal,
             PermissionIn,
         )
-        from trusts.policy_lock import _render_condition
+        from trusts.inspect.snapshot import _render_condition
 
         self.assertEqual(
             _render_condition(All(

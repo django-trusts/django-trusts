@@ -23,7 +23,9 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import configured_implementation_handles, implementation_for_path
-from trusts.core import BackendHandle, PlanQueryCompiler, TrustsRegistry
+from trusts.plan.handles import BackendHandle
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.compile.factory import TrustsRegistry
 from trusts.query import AuthorizedQuerySet
 
 
