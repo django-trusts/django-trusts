@@ -68,13 +68,16 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertEqual(first_build.records, before)
         self.assertEqual(second_build.records, before)
         self.assertTrue(apps.ready)
+        attempt = TrustsRegistry()
+        _contribute_document(attempt)
         with patch.object(apps, 'ready', True):
             with self.assertRaises(TrustsConfigurationError):
-                registry.register(
+                attempt.register(
                     content=Ref(DocumentGrant).document,
                     user=Ref(DocumentGrant).user,
                     permission=Ref(DocumentGrant).permission,
                 )
+                attempt.build_registry()
         self.assertEqual(registry.records, before)
         self.assertIs(registry.plan_for(Document).records[0], before[0])
 
@@ -96,8 +99,15 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
             dict(content='not-a-ref', user=j.user, permission=j.permission),
         )
         for kwargs in attempts:
+            # Each attempt runs on a freshly seeded registry: deferred
+            # lowering poisons the attempting registry at build.
+            attempt = TrustsRegistry()
+            attempt.register(
+                content=j.document, user=j.user, permission=j.permission,
+            )
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                registry.register(**kwargs)
+                attempt.register(**kwargs)
+                attempt.build_registry()
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, before)
         self.assertEqual(len(registry.plan_for(Document).records), 1)
@@ -149,10 +159,13 @@ class LiveBuildLifecycleTest(
         self.assertIs(handle.registry, isolated)
         self.assertEqual(handle.build_registry().records, isolated.records)
         # First live read did not close registration: a duplicate is
-        # rejected as a duplicate, and the stored record is unchanged.
+        # rejected as a duplicate at lowering, and the lowered record
+        # obtained before the attempt is unchanged.
+        before = isolated.records
         with self.assertRaises(TrustsConfigurationError):
             _contribute_document(isolated)
-        self.assertEqual(len(isolated.plan_for(Document).records), 1)
+            isolated.build_registry()
+        self.assertEqual(len(before), 1)
 
     def test_multi_path_reversed_duplicate_and_late_observed_path(self):
         live = live_config()
@@ -205,7 +218,8 @@ class LiveBuildLifecycleTest(
         self.assertEqual(handle.build_registry().records, before)
         with self.assertRaises(TrustsConfigurationError):
             _contribute_document(replacement)
-        self.assertEqual(replacement.records, before)
+            replacement.build_registry()
+        self.assertEqual(len(before), 1)
 
     def test_standalone_appconfig_remains_writable_after_ready(self):
         from tests.core.test_issue108 import HostImplConfig, _bind

@@ -548,6 +548,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            record = registry.records[-1]
             self.assertEqual(record.content_path[0], 'scope')
             self.assertNotEqual(record.content_target, 'slug')
 

@@ -74,11 +74,12 @@ def _mock_models():
 
 def _register(registry, grant, content_attr='document'):
     j = Ref(grant)
-    return registry.register(
+    registry.register(
         content=getattr(j, content_attr),
         user=j.user,
         permission=j.permission,
     )
+    return registry.records[-1]
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -94,6 +95,7 @@ class TrustsRegistryTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        record = registry.records[-1]
 
         self.assertIsInstance(record, RegisteredRelation)
         self.assertIs(record.root, DocumentGrant)
@@ -132,6 +134,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=k.user,
                 permission=j.permission,
             )
+            registry.build_registry()
         self.assertEqual(registry.records, ())
 
     def test_missing_field_rejected(self):
@@ -144,6 +147,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
 
     def test_scalar_intermediate_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
@@ -155,6 +159,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
 
     def test_multi_valued_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
@@ -168,6 +173,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
 
     def test_reverse_traversal_rejected(self):
         Document, DocumentGrant, _other = _mock_models()
@@ -179,6 +185,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.grants,
                 permission=j.grants,
             )
+            registry.build_registry()
         self.assertFalse(hasattr(DocumentGrant, 'trust'))
 
     def test_generic_foreign_key_rejected(self):
@@ -193,6 +200,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
 
     def test_root_and_path_field_names_build_refs(self):
         Document, _grant, _other = _mock_models()
@@ -226,6 +234,7 @@ class TrustsRegistryTest(SimpleTestCase):
             user=j.path,
             permission=j.permission,
         )
+        record = registry.records[-1]
         self.assertIs(record.root, CollisionGrant)
         self.assertEqual(record.content_path, ('root',))
         self.assertEqual(record.content_field, 'root')
@@ -240,6 +249,7 @@ class TrustsRegistryTest(SimpleTestCase):
             user=Ref(CollisionGrant).root,
             permission=Ref(CollisionGrant).permission,
         )
+        via_path_content = alt.records[-1]
         self.assertEqual(via_path_content.content_path, ('path',))
         self.assertIs(via_path_content.content_model, User)
         self.assertEqual(via_path_content.user_path, ('root',))
@@ -264,12 +274,14 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'non-empty'):
             registry.register(
                 content=j,
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
 
     def test_non_none_condition_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
@@ -282,25 +294,34 @@ class TrustsRegistryTest(SimpleTestCase):
                 permission=j.permission,
                 condition=object(),
             )
+            registry.build_registry()
         record = registry.register(
             content=j.document,
             user=j.user,
             permission=j.permission,
             condition=None,
         )
+        record = registry.records[-1]
         self.assertIsNone(record.condition)
 
     def test_duplicate_and_conflicting_registration_are_deterministic(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
         registry = TrustsRegistry()
         first = _register(registry, DocumentGrant)
+        # Deferred lowering poisons the attempting registry at build,
+        # so duplicate/conflict attempts use freshly seeded registries
+        # (_register lowers on read, raising inside the block).
+        dup = TrustsRegistry()
+        _register(dup, DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            _register(registry, DocumentGrant)
+            _register(dup, DocumentGrant)
         self.assertEqual(registry.records, (first,))
         self.assertEqual(registry.records_for_root(DocumentGrant), (first,))
 
+        conflict = TrustsRegistry()
+        _register(conflict, DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-            _register(registry, DocumentGrant, content_attr='alt_document')
+            _register(conflict, DocumentGrant, content_attr='alt_document')
         self.assertEqual(registry.records, (first,))
         self.assertEqual(first.content_path, ('document',))
 
@@ -339,6 +360,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
 
     def test_no_historical_model_is_required(self):
         Document, DocumentGrant, OtherGrant = _mock_models()

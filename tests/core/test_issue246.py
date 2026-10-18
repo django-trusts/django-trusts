@@ -192,6 +192,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group='group',
                 content='paper',
             )
+            handle.registry.build_registry()
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'not both',
         ):
@@ -202,6 +203,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group=boom,
                 content=boom,
             )
+            handle.registry.build_registry()
         registry = TrustsRegistry()
         ref = Ref(Grant)
         with self.assertRaisesRegex(
@@ -213,6 +215,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 permission=ref.paper,
                 group=ref.group,
             )
+            registry.build_registry()
         self.assertEqual(handle.build_registry().records, ())
         self.assertEqual(registry.records, ())
 
@@ -227,14 +230,17 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 user='group__user',
                 content='paper',
             )
+            handle.registry.build_registry()
         with self.assertRaises(TypeError):
             handle.register(trust=Grant, user='group__user')
+            handle.registry.build_registry()
         registry = TrustsRegistry()
         ref = Ref(Grant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'requires permission= or group=',
         ):
             registry.register(content=ref.paper, user=ref.group.user)
+            registry.build_registry()
         self.assertEqual(handle.build_registry().records, ())
         self.assertEqual(registry.records, ())
 
@@ -268,6 +274,8 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group='crew',
                 content='paper',
             )
+            handle.registry.build_registry()
+        handle = _handle()
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'do not append permissions',
         ):
@@ -277,6 +285,8 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group=lambda t: t.group.permissions,
                 content='paper',
             )
+            handle.registry.build_registry()
+        handle = _handle()
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'user_set',
         ):
@@ -286,7 +296,8 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group='group',
                 content='paper',
             )
-        self.assertEqual(handle.build_registry().records, ())
+            handle.registry.build_registry()
+        self.assertEqual(_handle().build_registry().records, ())
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()
@@ -297,18 +308,23 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             user=ref.group.user,
             group=ref.group,
         )
-        strings = _handle(path='tests.core.issue246-strings').register(
+        expected = via_ref.records[-1]
+        _h_strings = _handle(path='tests.core.issue246-strings')
+        strings = _h_strings.register(
             trust=Grant,
             user='group__user',
             group='group',
             content='paper',
         )
-        callables = _handle(path='tests.core.issue246-callables').register(
+        strings = _h_strings.registry.records[-1]
+        _h_callables = _handle(path='tests.core.issue246-callables')
+        callables = _h_callables.register(
             trust=Grant,
             user=lambda t: t.group.user,
             group=lambda t: t.group,
             content=lambda t: t.paper,
         )
+        callables = _h_callables.registry.records[-1]
         self.assertEqual(strings, expected)
         self.assertEqual(callables, expected)
         self.assertTrue(expected.via_group)
@@ -337,12 +353,14 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        multi = _handle().register(
+        _h_multi = _handle()
+        multi = _h_multi.register(
             trust=StationGrant,
             user='station__group__user',
             group='station__group',
             content='paper',
         )
+        multi = _h_multi.registry.records[-1]
         self.assertEqual(multi.group_path, ('station', 'group'))
         self.assertEqual(
             multi.permission_field, 'station__group__permissions',
@@ -364,12 +382,14 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        record = _handle().register(
+        _h_record = _handle()
+        record = _h_record.register(
             trust=Direct,
             user='user',
             permission='permission',
             content='paper',
         )
+        record = _h_record.registry.records[-1]
         self.assertFalse(record.via_group)
         self.assertEqual(record.permission_path, ('permission',))
         self.assertEqual(record.group_path, ())
@@ -1008,6 +1028,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             content=lambda t: t.paper,
             condition=lambda t: t.link.role.permissions.contains(t.permission),
         )
+        self.role_record = self.role.registry.records[-1]
 
     def _create_people(self):
         User = get_user_model()

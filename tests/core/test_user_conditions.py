@@ -822,9 +822,12 @@ class UserRuleOrderTest(TestCase):
             registry.register(
                 content=fit.other, user=fit.bare, permission=fit.other_permission,
             )
-        self.assertEqual(len(registry._order), 1)
+            registry.build_registry()
+        # Raw storage now holds both registrations; the failure is at
+        # lowering, so the private raw indexes reflect the attempt.
+        self.assertEqual(len(registry._order), 2)
         self.assertEqual(list(registry._by_root), [FitGrant])
-        self.assertEqual(len(registry._by_root[FitGrant]), 1)
+        self.assertEqual(len(registry._by_root[FitGrant]), 2)
         self.assertEqual(registry._delegation_order, [])
         self.assertEqual(registry._delegations_by_root, {})
 
@@ -835,8 +838,9 @@ class UserRuleOrderTest(TestCase):
             fresh.register(
                 content=bare.note, user=bare.user, permission=bare.permission,
             )
-        self.assertEqual(fresh._order, [])
-        self.assertEqual(fresh._by_root, {})
+            fresh.build_registry()
+        self.assertEqual(len(fresh._order), 1)
+        self.assertEqual(list(fresh._by_root), [BareGrant])
 
         override_only = TrustsRegistry()
         override_only.set_user_override(
@@ -846,8 +850,9 @@ class UserRuleOrderTest(TestCase):
             override_only.register(
                 content=bare.note, user=bare.user, permission=bare.permission,
             )
-        self.assertEqual(override_only._order, [])
-        self.assertEqual(override_only._by_root, {})
+            override_only.build_registry()
+        self.assertEqual(len(override_only._order), 1)
+        self.assertEqual(list(override_only._by_root), [BareGrant])
         self.assertEqual(override_only._user_override.name, 'superuser')
 
         delegated = TrustsRegistry()
@@ -867,9 +872,11 @@ class UserRuleOrderTest(TestCase):
                 delegate=bare_link.delegate,
                 sponsor=bare_link.sponsor,
             )
-        self.assertEqual(len(delegated._delegation_order), 1)
-        self.assertEqual(list(delegated._delegations_by_root), [FitLink])
-        self.assertNotIn(BareLink, delegated._delegations_by_root)
+            delegated.build_registry()
+        self.assertEqual(len(delegated._delegation_order), 2)
+        self.assertEqual(
+            list(delegated._delegations_by_root), [FitLink, BareLink],
+        )
         self.assertEqual(delegated._order, [])
 
         empty_delegation = TrustsRegistry()
@@ -882,8 +889,11 @@ class UserRuleOrderTest(TestCase):
                 delegate=bare_link.delegate,
                 sponsor=bare_link.sponsor,
             )
-        self.assertEqual(empty_delegation._delegation_order, [])
-        self.assertEqual(empty_delegation._delegations_by_root, {})
+            empty_delegation.build_registry()
+        self.assertEqual(len(empty_delegation._delegation_order), 1)
+        self.assertEqual(
+            list(empty_delegation._delegations_by_root), [BareLink],
+        )
 
 
 class SkipKeywordTest(TransactionTestCase):
@@ -1994,13 +2004,17 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
                         content=grant.note, user=grant.user,
                         permission=grant.permission,
                     )
+                    registry.build_registry()
                 with self.assertRaises(TrustsConfigurationError):
                     registry.register_delegation(
                         content=link.note, delegate=link.delegate,
                         sponsor=link.sponsor,
                     )
-            self.assertEqual(len(registry.records), 0)
-            self.assertEqual(len(registry.delegations), 0)
+                    registry.build_registry()
+            self.assertEqual(len(registry._order), 1)
+            self.assertEqual(len(registry._delegation_order), 1)
+            with self.assertRaises(TrustsConfigurationError):
+                registry.records
         finally:
             self._drop(user_model, note_model, grant_model, link_model)
 

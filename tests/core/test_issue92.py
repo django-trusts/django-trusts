@@ -205,12 +205,13 @@ def _register_along(registry, grant, content_attr='node', along_attr=None, bound
     j = Ref(grant)
     content = getattr(j, content_attr) if isinstance(content_attr, str) else content_attr(j)
     along_ref = j.node.parent if along_attr is None else along_attr(j)
-    return registry.register(
+    registry.register(
         content=content,
         user=j.user,
         permission=j.permission,
         along=Along(along_ref, bound=bound),
     )
+    return registry.records[-1]
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -226,6 +227,7 @@ class AlongRegistrationTest(SimpleTestCase):
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        rec_s = registry.records[-1]
         self.assertEqual(rec_s.along.shape, 'S')
         self.assertEqual(rec_s.along.path, ('node', 'parent'))
         self.assertEqual(rec_s.along.walk_path, ('node',))
@@ -241,49 +243,62 @@ class AlongRegistrationTest(SimpleTestCase):
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.children, bound=8),
         )
+        rec_c = other.records[-1]
         self.assertEqual(rec_c.along.shape, 'C')
         self.assertEqual(rec_c.along.parent_attname, 'parent_id')
 
-        rec_e = TrustsRegistry().register(
+        e_registry = TrustsRegistry()
+        e_registry.register(
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent_links.parent, bound=4),
         )
+        rec_e = e_registry.records[-1]
         self.assertEqual(rec_e.along.shape, 'E')
         self.assertIs(rec_e.along.edge_model, Link)
         self.assertEqual(rec_e.along.edge_parent_attname, 'parent_id')
         self.assertEqual(rec_e.along.edge_child_attname, 'child_id')
 
-        rec_d1 = TrustsRegistry().register(
+        _reg_rec_d1 = TrustsRegistry()
+        rec_d1 = _reg_rec_d1.register(
             content=j.node.items.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        rec_d1 = _reg_rec_d1.records[-1]
         self.assertEqual(rec_d1.along.suffix_path, ('items', 'image'))
         self.assertEqual(rec_d1.along.suffix_field, 'items__image')
         self.assertIs(rec_d1.content_model, Image)
         self.assertIsNone(rec_d1.along.rewrite_attname)
 
-        rec_d2 = TrustsRegistry().register(
+        _reg_rec_d2 = TrustsRegistry()
+        rec_d2 = _reg_rec_d2.register(
             content=j.node.items.image.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        rec_d2 = _reg_rec_d2.records[-1]
         self.assertEqual(rec_d2.along.suffix_path, ('items', 'image', 'image'))
 
-        rec_o2o = TrustsRegistry().register(
+        _reg_rec_o2o = TrustsRegistry()
+        rec_o2o = _reg_rec_o2o.register(
             content=j.node.items.portrait, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        rec_o2o = _reg_rec_o2o.records[-1]
         self.assertIs(rec_o2o.content_model, Portrait)
 
-        rec_j1 = TrustsRegistry().register(
+        _reg_rec_j1 = TrustsRegistry()
+        rec_j1 = _reg_rec_j1.register(
             content=j.node.rows.content, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        rec_j1 = _reg_rec_j1.records[-1]
         self.assertEqual(rec_j1.along.suffix_field, 'rows__content')
 
-        rec_rev = TrustsRegistry().register(
+        _reg_rec_rev = TrustsRegistry()
+        rec_rev = _reg_rec_rev.register(
             content=j.node.items, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        rec_rev = _reg_rec_rev.records[-1]
         self.assertEqual(rec_rev.along.rewrite_attname, 'node')
         self.assertIs(rec_rev.content_model, Item)
 
@@ -296,6 +311,7 @@ class AlongRegistrationTest(SimpleTestCase):
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
+        record = registry.records[-1]
         self.assertEqual(registry.records, (record,))
         self.assertEqual(registry.build_registry().records, (record,))
         for kwargs in (
@@ -305,6 +321,7 @@ class AlongRegistrationTest(SimpleTestCase):
         ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 registry.register(**kwargs)
+                registry.build_registry()
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, (record,))
 
@@ -316,6 +333,7 @@ class AlongRegistrationTest(SimpleTestCase):
         first = registry.register(
             content=j.node, user=j.user, permission=j.permission,
         )
+        first = registry.records[-1]
         stored = registry.records
         attempts = [
             dict(content=j.node, user=j.user, permission=j.permission,
@@ -335,8 +353,16 @@ class AlongRegistrationTest(SimpleTestCase):
                  along=Along(j.node.rows.content, bound=4)),
         ]
         for kwargs in attempts:
+            # Deferred lowering poisons the attempting registry, so
+            # each attempt runs on a freshly seeded registry; the
+            # original lowered records are asserted unchanged.
+            attempt = TrustsRegistry()
+            attempt.register(
+                content=j.node, user=j.user, permission=j.permission,
+            )
             with self.assertRaises(TrustsConfigurationError):
-                registry.register(**kwargs)
+                attempt.register(**kwargs)
+                attempt.build_registry()
             self.assertEqual(registry.records, stored)
             self.assertIs(registry.records[0], first)
 
@@ -356,6 +382,7 @@ class AlongRegistrationTest(SimpleTestCase):
                 content=j.node, user=j.user, permission=j.permission,
                 along=Along(j.node.parent, bound=0),
             )
+            registry.build_registry()
 
     def test_bound_64_is_accepted(self):
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
@@ -365,6 +392,7 @@ class AlongRegistrationTest(SimpleTestCase):
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent, 64),
         )
+        rec = registry.records[-1]
         self.assertEqual(rec.along.bound, 64)
 
 
@@ -397,7 +425,9 @@ class AlongIdentityRejectionTest(SimpleTestCase):
                     content=j.site, user=j.user, permission=j.permission,
                     along=Along(j.site.parent, bound=4),
                 )
-            self.assertEqual(registry.records, ())
+                registry.build_registry()
+            with self.assertRaises(TrustsConfigurationError):
+                registry.records
         finally:
             forget_models(Site, SiteGrant)
 
@@ -448,7 +478,9 @@ class AlongIdentityRejectionTest(SimpleTestCase):
                 content=j.site, user=j.user, permission=j.permission,
                 along=Along(j.site.parent, bound=4),
             )
-        self.assertEqual(registry.records, ())
+            registry.build_registry()
+        with self.assertRaises(TrustsConfigurationError):
+            registry.records
 
         class UuidSite(models.Model):
             ident = models.UUIDField(unique=True)
@@ -477,7 +509,9 @@ class AlongIdentityRejectionTest(SimpleTestCase):
                 content=j.site, user=j.user, permission=j.permission,
                 along=Along(j.site.parent, bound=4),
             )
-        self.assertEqual(registry.records, ())
+            registry.build_registry()
+        with self.assertRaises(TrustsConfigurationError):
+            registry.records
 
     def test_shape_c_mismatched_to_field_is_rejected(self):
         User = get_user_model()
@@ -509,7 +543,9 @@ class AlongIdentityRejectionTest(SimpleTestCase):
                 content=j.site, user=j.user, permission=j.permission,
                 along=Along(j.site.children, bound=4),
             )
-        self.assertEqual(registry.records, ())
+            registry.build_registry()
+        with self.assertRaises(TrustsConfigurationError):
+            registry.records
 
 
 class _AlongProjectionMixin(object):
@@ -1246,6 +1282,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 content=j.node, user=j.user, permission=j.permission,
                 along=Along(j.node.parent, bound=8),
             )
+            rec = registry.records[-1]
             self.assertEqual(rec.along.walk_ident, 'code')
             self.assertEqual(rec.along.ident_family, 'text')
             self.assertTrue(registry.has_permission(alice, a, read))
@@ -1256,6 +1293,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 content=j.node.items, user=j.user, permission=j.permission,
                 along=Along(j.node.parent, bound=8),
             )
+            suf_rec = suf.records[-1]
             self.assertEqual(suf_rec.content_target, CodedItem._meta.pk.attname)
             self.assertTrue(suf.has_permission(alice, item_a, read_item))
             self.assertFalse(suf.has_permission(alice, item_a, read))
@@ -1271,6 +1309,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 content=uj.node, user=uj.user, permission=uj.permission,
                 along=Along(uj.node.parent, bound=8),
             )
+            urec = ureg.records[-1]
             self.assertEqual(urec.along.ident_family, 'uuid')
             self.assertTrue(ureg.has_permission(alice, ua, read_uuid))
             self.assertTrue(ureg.has_permission(alice, ub, read_uuid))
@@ -1313,6 +1352,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 content=j.node, user=j.user, permission=j.permission,
                 along=Along(j.node.children, bound=8),
             )
+            rec = registry.records[-1]
             self.assertEqual(rec.along.shape, 'C')
             self.assertEqual(rec.along.walk_ident, 'code')
             self.assertEqual(rec.along.ident_family, 'text')
@@ -1359,6 +1399,7 @@ class AlongRuntimeGateTest(TransactionTestCase):
                 content=j.node, user=j.user, permission=j.permission,
                 along=Along(j.node.parent, bound=4),
             )
+            record = registry.records[-1]
             expr = GrantReach(record, alice, read)
             compiler = Node.objects.filter(pk=node.pk).query.get_compiler('default')
 

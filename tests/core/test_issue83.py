@@ -397,6 +397,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        record = registry.records[-1]
         _assert_record(
             self, record, root=FolderGrant,
             path=('folder', 'rows', 'content'),
@@ -415,9 +416,11 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         item_rec = registry.register(
             content=j.holder.items, user=j.user, permission=j.permission,
         )
+        item_rec = registry.records[-1]
         image_rec = registry.register(
             content=j.holder.items.image, user=j.user, permission=j.permission,
         )
+        image_rec = registry.records[-1]
         _assert_record(
             self, item_rec, root=Grant, path=('holder', 'items'),
             model=Item, lookup='holder__items',
@@ -437,6 +440,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         record = registry.register(
             content=j.holder.items.image, user=j.user, permission=j.permission,
         )
+        record = registry.records[-1]
         _assert_record(
             self, record, root=Grant, path=('holder', 'items', 'image'),
             model=Image, lookup='holder__items__image',
@@ -454,11 +458,13 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        depth1 = registry.records[-1]
         depth2 = registry.register(
             content=j.holder.items.image.image,
             user=j.user,
             permission=j.permission,
         )
+        depth2 = registry.records[-1]
         _assert_record(
             self, depth1, root=Grant,
             path=('holder', 'items', 'image'),
@@ -492,6 +498,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        record = registry.records[-1]
         _assert_record(
             self, record, root=WrapperGrant,
             path=('wrapper', 'holder', 'items'),
@@ -505,9 +512,11 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         folder_rec = registry.register(
             content=j.folder, user=j.user, permission=j.permission,
         )
+        folder_rec = registry.records[-1]
         row_rec = registry.register(
             content=j.folder.rows, user=j.user, permission=j.permission,
         )
+        row_rec = registry.records[-1]
         _assert_record(
             self, folder_rec, root=FolderGrant, path=('folder',),
             model=Folder, lookup='folder',
@@ -530,6 +539,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        first = registry.records[-1]
         stored = registry.records
         wrapper = Ref(WrapperGrant)
         pair = Ref(PairGrant)
@@ -544,76 +554,105 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'reverse'):
-            registry.register(
+            attempt.register(
                 content=j.notes,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'before the gateway'):
-            registry.register(
+            attempt.register(
                 content=j.notes.holder,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'reverse one-to-one'):
-            registry.register(
+            attempt.register(
                 content=j.holder.profile,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'multi-valued'):
-            registry.register(
+            attempt.register(
                 content=j.holder.items.tags,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'generic foreign key'):
-            registry.register(
+            attempt.register(
                 content=j.target,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'more than two hops'):
-            registry.register(
+            attempt.register(
                 content=j.holder.items.image.image.extra,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'forward path ending'):
-            registry.register(
+            attempt.register(
                 content=wrapper.wrapper.holder,
                 user=wrapper.user,
                 permission=wrapper.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'composite|target fields'):
-            registry.register(
+            attempt.register(
                 content=pair.pair, user=pair.user, permission=pair.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct|reverse'):
-            registry.register(
+            attempt.register(
                 content=j.holder,
                 user=j.holder.items,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'missing field'):
-            registry.register(
+            attempt.register(
                 content=j.holder.item_set,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'same root'):
-            registry.register(
+            attempt.register(
                 content=j.holder.items,
                 user=wrapper.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
+        attempt.register(
+            content=j.holder.items.image,
+            user=j.user,
+            permission=j.permission,
+        )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            registry.register(
+            attempt.register(
                 content=j.holder.items.image,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
         self.assertEqual(registry.records, stored)
         self.assertEqual(registry.records, (first,))
         self.assertIs(registry.records[0], first)
@@ -627,12 +666,20 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        first = registry.records[-1]
+        attempt = TrustsRegistry()
+        attempt.register(
+            content=j.folder.rows.content,
+            user=j.user,
+            permission=j.permission,
+        )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-            registry.register(
+            attempt.register(
                 content=j.folder.rows.alt_content,
                 user=j.user,
                 permission=j.permission,
             )
+            attempt.build_registry()
         self.assertEqual(registry.records, (first,))
         self.assertEqual(first.content_path, ('folder', 'rows', 'content'))
 
@@ -640,18 +687,22 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         _folder, _payload, _row, FolderGrant, _group = _j1_models()
         registry = TrustsRegistry()
         j = Ref(FolderGrant)
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct|reverse'):
-            registry.register(
+            attempt.register(
                 content=j.folder,
                 user=j.folder.rows,
                 permission=j.permission,
             )
+            attempt.build_registry()
+        attempt = TrustsRegistry()
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct|reverse'):
-            registry.register(
+            attempt.register(
                 content=j.folder,
                 user=j.user,
                 permission=j.folder.rows.content,
             )
+            attempt.build_registry()
         self.assertEqual(registry.records, ())
 
     def test_registration_executes_zero_queries(self):
@@ -669,6 +720,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            registry.build_registry()
 
     def test_core_module_has_no_historical_import_or_global(self):
         import trusts.core as core
@@ -1284,6 +1336,7 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
                 user=j.user,
                 permission=j.permission,
             )
+            record = registry.records[-1]
             self.assertEqual(record.content_field, 'holder__items__image')
             self.assertEqual(record.content_target, CodedImage._meta.pk.attname)
             self.assertNotEqual(record.content_target, 'code')

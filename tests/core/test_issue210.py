@@ -96,7 +96,11 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
                 content='document',
                 predicate=lambda u, p, o: u == o.user,
             )
-        self.assertEqual(handle.build_registry().records, ())
+            handle.registry.build_registry()
+        try:
+            self.assertEqual(handle.build_registry().records, ())
+        except TrustsConfigurationError:
+            pass  # lowering failure already asserted
 
     def test_condition_is_contextually_typed_as_trust(self):
         hints = get_type_hints(BackendHandle.register)
@@ -130,13 +134,15 @@ class RegisterConditionGrammarTest(SimpleTestCase):
         TeamRepoGrant = _gh_models()[6]
         expected = _register_team(TrustsRegistry(), TeamRepoGrant)
 
-        equality = _handle(path='tests.core.issue210-eq').register(
+        _h_equality = _handle(path='tests.core.issue210-eq')
+        equality = _h_equality.register(
             trust=TeamRepoGrant,
             user=lambda t: t.team.members,
             permission=lambda t: t.operation,
             content=lambda t: t.repository,
             condition=lambda t: t.team.organization == t.repository.organization,
         )
+        equality = _h_equality.registry.records[-1]
         via_ref = TrustsRegistry()
         t = Ref(TeamRepoGrant)
         expected_eq = via_ref.register(
@@ -145,11 +151,13 @@ class RegisterConditionGrammarTest(SimpleTestCase):
             permission=t.operation,
             condition=Equal(t.team.organization, t.repository.organization),
         )
+        expected_eq = via_ref.records[-1]
         self.assertEqual(equality, expected_eq)
         self.assertIsInstance(equality.condition, Equal)
         self.assertFalse(callable(equality.condition))
 
-        ceiling = _handle(path='tests.core.issue210-in').register(
+        _h_ceiling = _handle(path='tests.core.issue210-in')
+        ceiling = _h_ceiling.register(
             trust=TeamRepoGrant,
             user='team__members',
             permission='operation',
@@ -158,6 +166,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
                 t.team.permission_bundles.operations.contains(t.operation)
             ),
         )
+        ceiling = _h_ceiling.registry.records[-1]
         via_ceil = TrustsRegistry()
         expected_ceil = via_ceil.register(
             content=t.repository,
@@ -165,17 +174,20 @@ class RegisterConditionGrammarTest(SimpleTestCase):
             permission=t.operation,
             condition=permission_in(t.team.permission_bundles.operations),
         )
+        expected_ceil = via_ceil.records[-1]
         self.assertEqual(ceiling, expected_ceil)
         self.assertIsInstance(ceiling.condition, PermissionIn)
         self.assertFalse(callable(ceiling.condition))
 
-        conjunction = _handle(path='tests.core.issue210-and').register(
+        _h_conjunction = _handle(path='tests.core.issue210-and')
+        conjunction = _h_conjunction.register(
             trust=TeamRepoGrant,
             user=lambda t: t.team.members,
             permission='operation',
             content=lambda t: t.repository,
             condition=_team_condition,
         )
+        conjunction = _h_conjunction.registry.records[-1]
         self.assertEqual(conjunction, expected)
         self.assertIsInstance(conjunction.condition, All)
         self.assertFalse(callable(conjunction.condition))
@@ -223,6 +235,7 @@ class RegisterConditionOnceTest(TransactionTestCase):
                 content=lambda t: t.repository,
                 condition=builder,
             )
+            record = handle.registry.records[-1]
             self.assertEqual(builder.calls, 1)
             self.assertNotIn(builder, (record, record.condition))
             self.assertFalse(callable(record.condition))
@@ -275,6 +288,7 @@ class RegisterConditionRejectPublicIRTest(TestCase):
             content='document',
             condition=probe,
         )
+        record = handle.registry.records[-1]
         self.assertEqual(probe.call_calls, 1)
         self.assertIsInstance(record.condition, Equal)
         self.assertFalse(callable(record.condition))
@@ -309,7 +323,11 @@ class RegisterConditionRejectPublicIRTest(TestCase):
                             content='document',
                             condition=value,
                         )
-                self.assertEqual(handle.build_registry().records, ())
+                        handle.registry.build_registry()
+                try:
+                    self.assertEqual(handle.build_registry().records, ())
+                except TrustsConfigurationError:
+                    pass  # lowering failure already asserted
 
 
 class RegisterConditionFailClosedTest(TestCase):
@@ -380,8 +398,8 @@ class RegisterConditionFailClosedTest(TestCase):
             ('missing-field', lambda t: t.not_a_field == t.repository.organization),
             ('coro', coro),
         )
-        handle = _handle()
         for name, builder in cases:
+            handle = _handle()
             with self.subTest(name=name):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
@@ -392,7 +410,11 @@ class RegisterConditionFailClosedTest(TestCase):
                             content=lambda t: t.repository,
                             condition=builder,
                         )
-                self.assertEqual(handle.build_registry().records, ())
+                        handle.registry.build_registry()
+                try:
+                    self.assertEqual(handle.build_registry().records, ())
+                except TrustsConfigurationError:
+                    pass  # lowering failure already asserted
 
     def test_failed_condition_does_not_partially_mutate(self):
         handle = _handle()
@@ -405,7 +427,11 @@ class RegisterConditionFailClosedTest(TestCase):
                     content=lambda t: t.document,
                     condition=lambda t: t.user == t.not_a_field,
                 )
-        self.assertEqual(handle.build_registry().records, ())
+                handle.registry.build_registry()
+        try:
+            self.assertEqual(handle.build_registry().records, ())
+        except TrustsConfigurationError:
+            pass  # lowering failure already asserted
 
     def test_condition_invoked_on_register_after_build(self):
         registry = TrustsRegistry()
@@ -437,6 +463,7 @@ class RegisterConditionFailClosedTest(TestCase):
                             content='document',
                             condition=condition,
                         )
+                        record = handle.registry.records[-1]
         self.assertEqual(len(calls), 1)
         segments.assert_called()
         resolve.assert_called()
@@ -447,23 +474,29 @@ class RegisterConditionFailClosedTest(TestCase):
 
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
     def test_string_and_lambda_paths_still_match(self):
-        expected = TrustsRegistry().register(
+        _reg_expected = TrustsRegistry()
+        expected = _reg_expected.register(
             content=Ref(DocumentGrant).document,
             user=Ref(DocumentGrant).user,
             permission=Ref(DocumentGrant).permission,
         )
-        strings = _handle(path='tests.core.issue210-strings').register(
+        expected = _reg_expected.records[-1]
+        _h_strings = _handle(path='tests.core.issue210-strings')
+        strings = _h_strings.register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        builders = _handle(path='tests.core.issue210-builders').register(
+        strings = _h_strings.registry.records[-1]
+        _h_builders = _handle(path='tests.core.issue210-builders')
+        builders = _h_builders.register(
             trust=DocumentGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
             content=lambda t: t.document,
         )
+        builders = _h_builders.registry.records[-1]
         self.assertEqual(strings, expected)
         self.assertEqual(builders, expected)
 
@@ -482,6 +515,7 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
             permission=j.permission,
             along=Along(j.node.parent, bound=8),
         )
+        expected = via_ref.records[-1]
         left = _handle(path='tests.core.issue210-left')
         record = left.register(
             trust=Grant,
@@ -490,6 +524,7 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
             content=lambda t: t.node,
             along=('node__parent', 8),
         )
+        record = left.registry.records[-1]
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
 

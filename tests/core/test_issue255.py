@@ -1466,6 +1466,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                     content='node',
                     along=('node__parent', 1),
                 )
+                record = handle.registry.records[-1]
                 self.assertEqual(record.content_target, 'ident')
                 self.assertNotEqual(
                     record.content_target, UuidNode._meta.pk.attname,
@@ -1537,6 +1538,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                     content='desk',
                     along=('desk__parent', 1),
                 )
+                record = handle.registry.records[-1]
                 self.assertTrue(record.via_group)
                 self.assertIsNotNone(record.along)
                 locked = _assert_along_lock(self, handle, (
@@ -1627,6 +1629,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                     content='shelf',
                     along=('shelf__parent', 1),
                 )
+                record = handle.registry.records[-1]
                 self.assertFalse(record.via_group)
                 self.assertEqual(record.permission_path, ('permissions',))
                 self.assertIs(record.permission_model, Permission)
@@ -1724,6 +1727,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                     content='cabinet__sheets',
                     along=('cabinet__parent', 1),
                 )
+                record = handle.registry.records[-1]
                 self.assertTrue(record.along.suffix_path)
                 self.assertIs(record.content_model, Sheet)
                 self.assertIs(record.along.walk_model, Cabinet)
@@ -1787,6 +1791,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                     content='branch',
                     along=('branch__children', 1),
                 )
+                record = handle.registry.records[-1]
                 self.assertEqual(record.along.shape, 'C')
                 self.assertFalse(record.along.suffix_path)
                 alice = User.objects.create_user('branch-alice', password='x')

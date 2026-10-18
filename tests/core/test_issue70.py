@@ -67,10 +67,15 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
         self.contributor._document_grant_registry_id = None
         with override_apps_ready(False, self.contributor.apps):
+            # Deferred lowering: ready() now stores the conflicting
+            # contribution raw and completes; the conflict fails
+            # closed at build (first read), not at ready.
+            self.contributor.ready()
             with self.assertRaises(TrustsConfigurationError):
-                self.contributor.ready()
-        self.assertIsNone(self.contributor._document_grant_registry_id)
-        self.assertEqual(len(isolated.records), 1)
+                isolated.build_registry()
+        self.assertIs(self.contributor._document_grant_registry_id, isolated)
+        with self.assertRaises(TrustsConfigurationError):
+            isolated.records
 
 
 @isolate_apps(

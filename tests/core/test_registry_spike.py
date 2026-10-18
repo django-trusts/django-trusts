@@ -74,7 +74,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
     def test_direct_trusts_registry_still_registers(self):
         Document, DocumentGrant = _document_models()
         registry = TrustsRegistry()
-        record = _register_document(registry, DocumentGrant)
+        _register_document(registry, DocumentGrant)
+        record = registry.records[0]
         self.assertEqual(registry.records, (record,))
         self.assertIs(registry.plan_for(Document).records[0], record)
 
