@@ -123,6 +123,23 @@ class BackendHandle:
             model, code, predicate,
         )
 
+    def build_registry(self):
+        """Built query-time registry for this path, or ``None``.
+
+        ``None`` is only the factory->backend signal for "no registry
+        for this path" (``self.registry is None``); callers translate
+        it to ``False`` / ``set()`` / an empty queryset and never return
+        it as a Django backend result. A registry that is already built
+        (``FrozenRegistry.build_registry`` returns itself) or a
+        duck-typed registry without ``build_registry`` is returned
+        as-is. A configured-but-empty builder builds an empty registry.
+        """
+        registry = self.registry
+        if registry is None:
+            return None
+        build = getattr(registry, 'build_registry', None)
+        return build() if callable(build) else registry
+
     @property
     def historical_fallback(self):
         """True when this route uses ``HistoricalGroupQueryCompiler``.

@@ -1801,62 +1801,25 @@ class TrustsRegistry(object):
         )
 
     def permissions_for(self, user, content, **skip_flags):
-        """Distinct permission rows granted to ``user`` on ``content``."""
-        user = _require_instance(user, 'user')
-        content = _require_instance(content, 'content')
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags, registry=self)
-        plan = self.plan_for(content, user=user)
-        if inquiry.denied:
-            if not plan.records or plan.permission_model is None:
-                return ()
-            return plan.permission_model._default_manager.none()
-        skipped = inquiry.values
-        return plan.permissions(
-            user, content,
-            skipped=skipped,
+        """Distinct permission rows granted to ``user`` on ``content``.
+
+        Delegates to the built registry, so delegations/sponsors use
+        production semantics rather than the old plan-only trio.
+        """
+        return self.build_registry().permissions_for(
+            user, content, **skip_flags,
         )
 
     def has_permission(self, user, content, permission, **skip_flags):
-        """Whether ``permission`` exists in the common plan for this pair."""
-        user = _require_instance(user, 'user')
-        content = _require_instance(content, 'content')
-        permission = _require_instance(permission, 'permission')
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags, registry=self)
-        plan = self.plan_for(
-            content, user=user, permission=permission,
-        )
-        if inquiry.denied:
-            return False
-        skipped = inquiry.values
-        return plan.has_permission(
-            user, content, permission,
-            skipped=skipped,
+        """Whether ``permission`` is granted to ``user`` on ``content``."""
+        return self.build_registry().has_permission(
+            user, content, permission, **skip_flags,
         )
 
     def filter_authorized(self, queryset, user, permission, **skip_flags):
-        """Lazy queryset of rows ``user`` holds ``permission`` on.
-
-        Consumes ``RelationPlan.content_exists`` through ``filter_content``.
-        """
-        if not isinstance(queryset, QuerySet):
-            raise TrustsConfigurationError(
-                'filter_authorized requires a QuerySet, not %r.' % (queryset,)
-            )
-        user = _require_instance(user, 'user')
-        permission = _require_instance(permission, 'permission')
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags, registry=self)
-        plan = self.plan_for(
-            queryset, user=user, permission=permission,
-        )
-        if inquiry.denied:
-            return queryset.none()
-        skipped = inquiry.values
-        return plan.filter_content(
-            queryset, user, permission,
-            skipped=skipped,
+        """Lazy queryset of rows ``user`` holds ``permission`` on."""
+        return self.build_registry().filter_authorized(
+            queryset, user, permission, **skip_flags,
         )
 
 
