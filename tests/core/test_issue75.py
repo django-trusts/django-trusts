@@ -37,6 +37,7 @@ from trusts.plan.aggregates import compiler_for_class
 from trusts.backends import TrustModelBackendMixin
 from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.handles import BackendHandle
+from trusts.plan.registry import HeldBackend
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import (
     TrustsCompilerError,
@@ -95,7 +96,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertEqual(handle.path, HOST)
         self.assertIs(handle.registry, live.registry)
         self.assertIs(live.registry, live.registries[HOST])
-        self.assertIsInstance(handle, BackendHandle)
+        self.assertIsInstance(handle, HeldBackend)
         self.assertIs(handle.compiler, HostTrustModelBackend.query_compiler)
         self.assertIsInstance(handle.compiler, PlanQueryCompiler)
 
@@ -141,7 +142,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
                 live.configured_backend()
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, DOCUMENT)):
             # KernelHost owns only HOST, so the one-path alias still works.
-            self.assertIs(live.configured_backend().path, HOST)
+            self.assertEqual(live.configured_backend().path, HOST)
             handle_doc = live.configured_backend(DOCUMENT)
             self.assertEqual(handle_doc.path, DOCUMENT)
             self.assertIs(

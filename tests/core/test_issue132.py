@@ -123,7 +123,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         with self.assertNumQueries(0):
             self._assert_public_deny()
             with patch.object(
-                self.document_backend, '_own_handle', return_value=extra,
+                self.document_backend, '_held_backend', return_value=extra,
             ):
                 self.assertFalse(
                     self.document_backend.has_perm(

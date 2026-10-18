@@ -53,7 +53,7 @@ def _permission(model, codename):
 class _PairBackend(TrustModelBackendMixin, ModelBackend):
     handle = None
 
-    def _own_handle(self):
+    def _held_backend(self):
         handle = type(self).handle
         if handle is None:
             raise TrustsConfigurationError('issue 282 handle is unset')

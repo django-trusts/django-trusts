@@ -28,6 +28,7 @@ from trusts.apps import (
 from trusts.plan.contents import filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
 from trusts.plan.handles import BackendHandle
+from trusts.plan.registry import HeldBackend
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import TrustsRegistry
@@ -56,8 +57,21 @@ class RecordingRegistry(TrustsRegistry):
     created = True
 
 
-class RecordingHandle(BackendHandle):
+class RecordingHandle(HeldBackend):
+    # The factory now constructs the held lowered object.
     created = True
+
+    def __init__(self, path, registry, compiler):
+        built = registry.build_registry()
+        super().__init__(
+            path=path, registry=registry, compiler=compiler,
+            source_version=getattr(registry, '_raw_version', None),
+            records=built.records, delegations=built.delegations,
+            conditions=built.conditions,
+            user_conditions=built.user_conditions,
+            user_override=built.user_override,
+            condition_lookup=built.condition_lookup,
+        )
 
 
 class RecordingConfig(TrustsImplementationConfig):
@@ -363,7 +377,7 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
             registry=handle.registry,
             compiler=_NeverAppliesCompiler(),
         )
-        with patch.object(self.backend, '_own_handle', return_value=silent):
+        with patch.object(self.backend, '_held_backend', return_value=silent):
             with self.assertNumQueries(0):
                 self.assertFalse(
                     self.backend.has_perm(self.alice, PERM, self.doc),
@@ -392,19 +406,25 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
                 first_build = handle.build_registry()
             handle = live.configured_backend()
             self.assertIs(handle.registry, isolated)
-            self.assertIsInstance(handle, BackendHandle)
+            self.assertIsInstance(handle, HeldBackend)
             self.assertEqual(handle.path, HOST)
             second_build = handle.build_registry()
-            self.assertIsNot(first_build, second_build)
+            # Held semantics: build_registry() on the held object is
+            # itself, and configured_backend() returns the identical
+            # held object until invalidation (see test_held_backend).
+            self.assertIs(first_build, second_build)
             self.assertEqual(first_build.records, second_build.records)
-            # Late registration takes effect on the next build.
+            # Late registration takes effect on the next configured_backend().
             from tests.myapp.models import DocumentGrant
             from trusts.compile.nodes import Ref
             j = Ref(DocumentGrant)
             isolated.register(
                 content=j.document, user=j.user, permission=j.permission,
             )
-            self.assertEqual(handle.build_registry().records, isolated.records)
+            refreshed = live.configured_backend()
+            self.assertIsNot(refreshed, handle)
+            self.assertEqual(refreshed.records, isolated.records)
+            self.assertEqual(handle.build_registry().records, ())
             self.assertEqual(first_build.records, ())
         finally:
             live.registries.clear()

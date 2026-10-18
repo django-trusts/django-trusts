@@ -497,7 +497,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
 
     def _backend(self):
         return patch.object(
-            self.backend, '_own_handle', return_value=self.handle,
+            self.backend, '_held_backend', return_value=self.handle,
         )
 
     def test_explicit_group_feeds_group_and_ordinary_authorization(self):
@@ -789,7 +789,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
 
     def _backend(self):
         return patch.object(
-            self.backend, '_own_handle', return_value=self.handle,
+            self.backend, '_held_backend', return_value=self.handle,
         )
 
     def _handles(self):
@@ -1069,7 +1069,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         backend = _ProbeBackend()
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
-        with patch.object(backend, '_own_handle', return_value=handle):
+        with patch.object(backend, '_held_backend', return_value=handle):
             for perm in granted:
                 code = _code(perm)
                 for label, target in (('instance', paper), ('queryset', one)):

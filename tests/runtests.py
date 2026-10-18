@@ -71,6 +71,7 @@ KERNEL_SUITE = [
     'tests.core.test_build_shapes',
     'tests.core.test_raw_register',
     'tests.core.test_registry_questions',
+    'tests.core.test_held_backend',
 ]
 
 # Kernel modules that remain valid against an installed Zero owner.
@@ -130,6 +131,7 @@ PAIR_KERNEL_SUITE = [
     'tests.core.test_build_shapes',
     'tests.core.test_raw_register',
     'tests.core.test_registry_questions',
+    'tests.core.test_held_backend',
 ]
 
 

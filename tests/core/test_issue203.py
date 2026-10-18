@@ -47,7 +47,7 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         super().__init__()
         self._bound_handle = handle
 
-    def _own_handle(self):
+    def _held_backend(self):
         return self._bound_handle
 
 

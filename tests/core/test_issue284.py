@@ -641,7 +641,7 @@ class _AcceptanceBackend(TrustModelBackendMixin, ModelBackend):
 
     handle = None
 
-    def _own_handle(self):
+    def _held_backend(self):
         handle = type(self).handle
         if handle is None:
             raise TrustsConfigurationError('acceptance handle is unset')
