@@ -23,7 +23,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import router
 from django.db.models import F, Model, Q, QuerySet
 
-from trusts import utils
+from trusts.utils import parse_perm_code
 from trusts._bind_once import bind_once
 from trusts.backends import TrustModelBackendMixin, _permission_binding
 from trusts.errors import TrustsConfigurationError
@@ -353,7 +353,7 @@ def _permission_binding_for_plan(backend, content, perm, plan):
     """
     permission_model = plan.permission_model
     if isinstance(perm, str):
-        applabel, modelname, action, code = utils.parse_perm_code(perm)
+        applabel, modelname, action, code = parse_perm_code(perm)
         if (
             permission_model is not None
             and permission_model is not Permission
