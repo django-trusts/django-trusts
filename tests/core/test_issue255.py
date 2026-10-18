@@ -500,7 +500,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             content='node',
             along=('node__parent', 2),
         )
-        record = handle.registry.plan_for(UuidNode).records[0]
+        record = handle.build_registry().plan_for(UuidNode).records[0]
         self.assertEqual(record.content_target, 'ident')
         self.assertNotEqual(
             record.content_target, UuidNode._meta.pk.attname,
@@ -547,7 +547,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        record = handle.registry.plan_for(Folder).records[0]
+        record = handle.build_registry().plan_for(Folder).records[0]
         _sql, params = _compile_queryset(
             FolderGrant.objects.filter(folder__pk=5),
             'default',

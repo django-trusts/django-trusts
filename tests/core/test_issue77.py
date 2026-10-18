@@ -131,7 +131,7 @@ class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
         self.handle = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
 
     def test_plan_and_handle_common_permissions_are_one_sql(self):
-        plan = self.handle.registry.plan_for(self.doc, user=self.alice)
+        plan = self.handle.build_registry().plan_for(self.doc, user=self.alice)
         with self.assertNumQueries(1):
             codes = set(
                 plan.common_permissions(self.alice, self.doc).values_list(
