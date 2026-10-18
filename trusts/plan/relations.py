@@ -147,16 +147,14 @@ def user_skip_params(user, skip_flags, *, handles=None, registry=None,
     An unknown ``skip_*`` is not consulted for that denial.
     ``require_user=False`` is the reverse inquiry.
     """
-    from trusts.query import require_mode_flag, user_identity_denied
-
     selected = {}
     for key, value in skip_flags.items():
         if not key.startswith('skip_') or not key[5:].isidentifier():
             raise TypeError('Unexpected keyword argument %r.' % (key,))
-        require_mode_flag(value, key)
+        _require_mode_flag(value, key)
         selected[key[5:]] = value
     denied = require_user and (
-        user is None or user_identity_denied(user)
+        user is None or _user_identity_denied(user)
     )
     if denied:
         return SkipParams(True, {})
@@ -239,6 +237,28 @@ def _or_q(left, right):
     if right is None:
         return left
     return left | right
+
+
+def _require_mode_flag(value, name):
+    """A skip keyword must be a real boolean."""
+    if not isinstance(value, bool):
+        raise TypeError('%s must be a bool, not %r.' % (name, value))
+    return value
+
+
+def _user_identity_denied(user):
+    """Anonymous and unauthenticated users are denied even when
+    ``skip_is_active`` is true.
+
+    Missing attributes keep the identity defaults: not anonymous, and
+    authenticated. ``None`` is not this denial; callers that require an
+    instance still raise.
+    """
+    if getattr(user, 'is_anonymous', False):
+        return True
+    if not getattr(user, 'is_authenticated', True):
+        return True
+    return False
 
 
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,

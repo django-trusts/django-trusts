@@ -5,28 +5,6 @@ from django.db.models import Manager, Model, QuerySet
 from trusts.plan.rewrites import bind_once
 
 
-def require_mode_flag(value, name):
-    """A skip keyword must be a real boolean."""
-    if not isinstance(value, bool):
-        raise TypeError('%s must be a bool, not %r.' % (name, value))
-    return value
-
-
-def user_identity_denied(user):
-    """Anonymous and unauthenticated users are denied even when
-    ``skip_is_active`` is true.
-
-    Missing attributes keep the identity defaults: not anonymous, and
-    authenticated. ``None`` is not this denial; callers that require an
-    instance still raise.
-    """
-    if getattr(user, 'is_anonymous', False):
-        return True
-    if not getattr(user, 'is_authenticated', True):
-        return True
-    return False
-
-
 class AuthorizedQuerySet(QuerySet):
     """Instance-only authorized-row filter. No Django permission codec.
 
