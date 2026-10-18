@@ -12,7 +12,7 @@ from operator import or_
 from django.db.models import Exists, F, Model, OuterRef, Q
 from django.db.models.query import QuerySet
 
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 from trusts.commons import (
     _bind_record_qs,
     _bind_terminal,

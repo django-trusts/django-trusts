@@ -15,7 +15,7 @@ from operator import or_
 from django.contrib.auth.models import Permission
 from django.db.models import Subquery
 
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _ordinary_records, granted
 from trusts.plan.delegations import _sponsor_record_matches

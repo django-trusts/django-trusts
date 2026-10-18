@@ -1,9 +1,9 @@
 """Policy lockfile, SQL formatting, and Django system checks.
 
-This package is not a public import surface. The historical module
-paths (``trusts.policy_lock``, ``trusts.policy_yaml``,
-``trusts.policy_sql_format``, ``trusts.policy_commands``, and
-``trusts.checks``) re-export the names tests and callers already import.
+This package is not a public import surface. Callers import the
+implementation modules directly (``trusts.inspect.snapshot``,
+``trusts.inspect.yaml``, ``trusts.inspect.format``,
+``trusts.inspect.commands``, and ``trusts.inspect.checks``).
 """
 
 __all__ = []

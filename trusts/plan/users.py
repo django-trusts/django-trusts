@@ -1,7 +1,5 @@
 """Object-to-users compiler: one content object and one permission to users.
 
-``trusts.reverse`` re-exports the names callers already import.
-
 Private compiler for ``content.get_permitted_users(perm)`` and
 ``User.objects.permitted(content, perm)``. Both adapters call
 ``compile_permitted_users``. The permission row is canonical. A string is
@@ -24,7 +22,7 @@ from django.db import router
 from django.db.models import F, Model, Q, QuerySet
 
 from trusts.utils import parse_perm_code
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 from trusts.backends import TrustModelBackendMixin, _permission_binding
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records

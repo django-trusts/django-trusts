@@ -2,7 +2,7 @@
 
 from django.db.models import Manager, Model, QuerySet
 
-from trusts._bind_once import bind_once
+from trusts.plan.rewrites import bind_once
 
 
 def require_mode_flag(value, name):
@@ -148,7 +148,7 @@ class PermittedUsersMixin:
     """
 
     def get_permitted_users(self, perm, **skip_flags):
-        from trusts.reverse import compile_permitted_users
+        from trusts.plan.users import compile_permitted_users
 
         return compile_permitted_users(self, perm, **skip_flags)
 
@@ -166,7 +166,7 @@ class PermittedUsersManagerMixin:
     """
 
     def permitted(self, content, perm, **skip_flags):
-        from trusts.reverse import compile_permitted_users
+        from trusts.plan.users import compile_permitted_users
 
         return compile_permitted_users(
             content, perm, user_queryset=self.get_queryset(), **skip_flags,

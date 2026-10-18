@@ -668,7 +668,7 @@ def _role_sentinel(record, role, alias):
 def _compile_permitted(handle, alias, records, model, handles):
     from trusts.plan.contents import _compile_granted
 
-    from trusts._bind_once import bind_once
+    from trusts.plan.rewrites import bind_once
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -690,7 +690,7 @@ def _compile_permitted(handle, alias, records, model, handles):
 def _compile_has_perm(handle, alias, records, model, handles):
     from trusts.plan.contents import _compile_granted
 
-    from trusts._bind_once import bound_exists_query
+    from trusts.plan.rewrites import bound_exists_query
 
     user = _role_sentinel(records[0], 'user', alias)
     permission = _role_sentinel(records[0], 'permission', alias)
@@ -737,7 +737,7 @@ def _compile_get_all_permissions(handle, alias, records, model, handles):
 
 
 def _compile_get_permitted_users(handle, alias, records, model, handles):
-    from trusts.reverse import lock_permitted_users_queryset
+    from trusts.plan.users import lock_permitted_users_queryset
 
     content = _content_sentinel(model, alias)
     _populate_reverse_along_identity(content, records, alias)
@@ -1413,7 +1413,7 @@ def _classify_compiled(node, sql, params, query=None):
 
 
 def _symbol_for_new_param(node, query=None):
-    from trusts._bind_once import BindTable
+    from trusts.plan.rewrites import BindTable
     from trusts.plan.recursions import (
         GrantReach, _AnchorInInverseReach, _IdentInReach, _KeyedReach,
         _PrefixInForwardWalk,
@@ -1452,8 +1452,8 @@ def _symbol_for_new_param(node, query=None):
         return _with_hint(
             {'const': _json_const(node.bound)}, 'along bound',
         )
-    from trusts._bind_once import BoundBool
-    from trusts.user_rules import SkipFlag
+    from trusts.plan.rewrites import BoundBool
+    from trusts.plan.standards import SkipFlag
     if isinstance(node, SkipFlag):
         return _with_hint(
             {'const': _json_const(node.value)}, 'skip_%s' % node.name,
@@ -1546,7 +1546,7 @@ def _const_hint(node, value):
         return 'literal'
     if isinstance(node, Lookup):
         lhs = getattr(node, 'lhs', None)
-        from trusts._bind_once import _AlongOnce
+        from trusts.plan.rewrites import _AlongOnce
         if isinstance(lhs, _AlongOnce):
             lhs = lhs.inner
         if isinstance(lhs, (
