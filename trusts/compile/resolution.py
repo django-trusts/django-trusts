@@ -732,30 +732,3 @@ def _resolve_permission_in_path(root, path, role, permission_model,
         '%s path %r must terminate on a multi-valued membership hop.'
         % (role, _path_text(path))
     )
-
-def _permitted_content_prefix_models(handle, model):
-    """Concrete models that are a proper prefix of this backend's content path.
-
-    Order is registration order, then path order. A model is listed once.
-    The protected model is included only when an earlier hop on the same
-    path also uses it.
-    """
-    plan = handle.registry.plan_for(model)
-    legs = tuple(plan.records) + tuple(getattr(plan, 'delegations', ()) or ())
-    found = []
-    seen = set()
-    for record in legs:
-        path = record.content_path
-        if not path:
-            continue
-        current = record.root
-        last = len(path) - 1
-        for index, name in enumerate(path):
-            field = current._meta.get_field(name)
-            related, _target = _resolved_hop(field, 'content', path)
-            concrete = related._meta.concrete_model
-            if index != last and concrete not in seen:
-                seen.add(concrete)
-                found.append(concrete)
-            current = related
-    return tuple(found)
