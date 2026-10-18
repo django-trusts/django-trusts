@@ -1,11 +1,17 @@
 """Registration marshaling and the builder-half registry.
 
 ``TrustsRegistry`` collects ``register`` and ``set_*`` calls and stores
-lowered rows. Its ``build_*`` methods return the lowered shapes without
-storing them; the ``register*`` methods own duplicate and
-rule checks and append those shapes. ``build_registry`` builds the
-query-time ``Registry`` from stored values. ``trusts.core`` re-exports
-``TrustsRegistry``. This module does not import ``trusts.core``.
+RAW registrations: refs (path, models tree), the already-lowered
+condition IR (builders are invoked once at register and discarded),
+and the bound ``along``. ``register*`` validates only the symbolic
+form and appends the raw shape; it does not resolve paths against
+``_meta``, build lowered records, check duplicates/conflicts, assert
+user-rule concreteness, or warm rule fragments. All of that lowering
+happens in ``_lowered()``, run by ``build_registry()`` and by the
+``records`` / ``delegations`` properties. Its ``build_*`` methods
+return lowered shapes without storing them. ``trusts.core``
+re-exports ``TrustsRegistry``. This module does not import
+``trusts.core``.
 """
 
 __all__ = []
@@ -624,6 +630,136 @@ class PublicRegistration:
     along: object | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RawRelation:
+    """RAW stored form for the direct (Ref-based) ordinary API.
+
+    Exactly the un-lowered inputs ``build_relation`` needs later:
+    root-relative refs for content/user and exactly one of
+    permission/group, the already-lowered ``condition`` IR, and the
+    bound ``along``. No callables are stored: path builders and
+    condition builders were invoked once by the public API (or, for
+    this direct API, refs were supplied directly) and discarded.
+    Resolution to ``_meta`` happens at lowering, not here.
+    """
+
+    content: object
+    user: object
+    permission: object | None = None
+    group: object | None = None
+    condition: object | None = None
+    along: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RawDelegation:
+    """RAW stored form for the direct (Ref-based) delegated API.
+
+    Root-relative refs for content/delegate/sponsor, the
+    already-lowered ``condition`` IR, and the bound ``along``;
+    lowered by ``build_delegation`` at build time.
+    """
+
+    content: object
+    delegate: object
+    sponsor: object
+    condition: object | None = None
+    along: object | None = None
+
+
+def _validate_condition_symbolic(condition, root):
+    """Symbolic grammar check for an ordinary condition (no ``_meta``).
+
+    Node types, ``All``/``permission_in`` arity, and same-root refs
+    only. Field resolution (``_validate_condition``) is lowering.
+    """
+    if condition is None:
+        return None
+    if isinstance(condition, All):
+        if not condition.predicates:
+            raise TrustsConfigurationError(
+                'All requires one or more predicates.'
+            )
+        for predicate in condition.predicates:
+            _validate_condition_symbolic(predicate, root)
+        return condition
+    if isinstance(condition, Equal):
+        _require_same_root(condition.left, root, 'Equal left')
+        _require_same_root(condition.right, root, 'Equal right')
+        return condition
+    if isinstance(condition, PermissionIn):
+        if not condition.refs:
+            raise TrustsConfigurationError(
+                'permission_in requires one or more refs.'
+            )
+        for ref in condition.refs:
+            _require_same_root(ref, root, 'permission_in')
+        return condition
+    raise TrustsConfigurationError(
+        'condition is not supported; omit it or pass None.'
+    )
+
+
+def _validate_delegated_condition_symbolic(condition, root):
+    """Symbolic grammar check for a delegated condition (no ``_meta``)."""
+    if condition is None:
+        return condition
+
+    def visit(node):
+        if isinstance(node, All):
+            if not node.predicates:
+                raise TrustsConfigurationError(
+                    'All requires one or more predicates.'
+                )
+            for predicate in node.predicates:
+                visit(predicate)
+            return
+        if isinstance(node, Equal):
+            _require_same_root(node.left, root, 'Equal left')
+            _require_same_root(node.right, root, 'Equal right')
+            return
+        if isinstance(node, _InquiryPermissionMatch):
+            _require_same_root(
+                node.ref, root, 'delegated inquiry permission',
+            )
+            return
+        raise TrustsConfigurationError(
+            'delegated condition is not supported; omit it or use '
+            'row equality and inquiry-permission matches.'
+        )
+
+    visit(condition)
+    return condition
+
+
+def _validate_along_symbolic(along, root):
+    """Symbolic ``along`` check: type, ref root, and bound range."""
+    if along is None:
+        return None
+    if not isinstance(along, Along):
+        raise TrustsConfigurationError(
+            'along must be an Along instance or None, not %r.' % (along,)
+        )
+    along_ref = _require_ref(along.ref, 'along')
+    if along_ref._root is not root:
+        raise TrustsConfigurationError(
+            'along ref must share the registration root %s; got %s.'
+            % (root._meta.label, along_ref._root._meta.label)
+        )
+    bound = along.bound
+    if isinstance(bound, bool) or not isinstance(bound, int):
+        raise TrustsConfigurationError(
+            'Along bound must be an integer in %s..%s.'
+            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
+        )
+    if bound < _ALONG_BOUND_MIN or bound > _ALONG_BOUND_MAX:
+        raise TrustsConfigurationError(
+            'Along bound must be an integer in %s..%s.'
+            % (_ALONG_BOUND_MIN, _ALONG_BOUND_MAX)
+        )
+    return along
+
+
 def _same_terminal_bindings(existing, record):
     """True when two records share content/user/permission/along bindings."""
     return (
@@ -981,10 +1117,12 @@ class TrustsRegistry(object):
     models, or when the same bindings use a different closed condition.
 
         Registration stays open for the life of the instance:
-        ``build_registry()`` builds a fresh ``Registry`` from the
-        current records on each call, so registering after a build
-        takes effect on the next build. A standalone
-        ``TrustsRegistry()`` never inspects Django readiness.
+        ``register*`` stores raw registrations, and
+        ``build_registry()`` lowers them into a fresh ``Registry``
+        on each call, so registering after a build invalidates the
+        internal lowering memo and takes effect on the next build
+        (invalidate, never seal). A standalone ``TrustsRegistry()``
+        never inspects Django readiness.
     """
 
     def __init__(self):
@@ -1003,6 +1141,13 @@ class TrustsRegistry(object):
         self._user_override = None
         self._rule_fragments = {}
         self._override_fragments = {}
+        # Raw-registration version + internal lowering memo. The memo
+        # is NOT a seal: any new raw registration bumps the version,
+        # the memo is dropped, and the next read re-lowers. It only
+        # preserves lowered-object identity across repeated reads
+        # (``records`` / ``build_registry()``) at one raw version.
+        self._raw_version = 0
+        self._lowered_cache = None
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
 
@@ -1133,6 +1278,122 @@ class TrustsRegistry(object):
         """Drop registration-time fragments after a successful rule edit."""
         self._rule_fragments.clear()
         self._override_fragments.clear()
+        self._lowered_cache = None
+
+    def _note_raw_mutation(self):
+        """Invalidate the lowering memo after storing a raw registration."""
+        self._raw_version += 1
+        self._lowered_cache = None
+
+    def _lowered(self):
+        """Lower all raw registrations, in registration order.
+
+        Runs ``build_relation`` / ``build_delegation`` over the stored
+        raw forms (``RawRelation`` / ``RawDelegation`` /
+        ``PublicRegistration``), then the duplicate/conflict checks,
+        user-rule concreteness assertions, and rule-fragment warming
+        that ``register*`` used to do eagerly. The first duplicate or
+        conflict encountered in registration order raises the same
+        ``TrustsConfigurationError`` text register used to raise.
+        Memoized per raw version (see ``__init__``); a failed lowering
+        is not cached.
+        """
+        cache = self._lowered_cache
+        if cache is not None and cache[0] == self._raw_version:
+            return cache[1], cache[2], cache[3], cache[4]
+        records = []
+        by_root = {}
+        for raw in self._order:
+            # RawRelation and PublicRegistration carry the same fields.
+            record = self.build_relation(
+                content=raw.content, user=raw.user,
+                permission=raw.permission, group=raw.group,
+                condition=raw.condition, along=raw.along,
+            )
+            root = record.root
+            existing_rows = by_root.get(root)
+            if existing_rows:
+                for existing in existing_rows:
+                    if existing == record:
+                        raise TrustsConfigurationError(
+                            'Duplicate registration for %s.'
+                            % root._meta.label
+                        )
+                    if existing.content_model is record.content_model:
+                        if (
+                            _same_terminal_bindings(existing, record)
+                            and existing.condition != record.condition
+                        ):
+                            continue
+                        raise TrustsConfigurationError(
+                            'Conflicting registration for %s content '
+                            'terminal %s: existing %r, new %r.'
+                            % (
+                                root._meta.label,
+                                record.content_model._meta.label,
+                                existing,
+                                record,
+                            )
+                        )
+            self._assert_rules_for_registration(
+                user_model=record.user_model,
+            )
+            self._rule_fragment(record.user_model, role='user')
+            self._override_fragment(record.user_model)
+            if existing_rows:
+                existing_rows.append(record)
+            else:
+                by_root[root] = [record]
+            records.append(record)
+        delegations = []
+        delegations_by_root = {}
+        for raw in self._delegation_order:
+            # RawDelegation and PublicRegistration carry the same fields.
+            record = self.build_delegation(
+                content=raw.content, delegate=raw.delegate,
+                sponsor=raw.sponsor, condition=raw.condition,
+                along=raw.along,
+            )
+            root = record.root
+            existing_rows = delegations_by_root.get(root)
+            if existing_rows:
+                if record in existing_rows:
+                    raise TrustsConfigurationError(
+                        'Duplicate delegated registration for %s.'
+                        % root._meta.label
+                    )
+                for existing in existing_rows:
+                    if existing.content_model is record.content_model:
+                        raise TrustsConfigurationError(
+                            'Conflicting delegated registration for %s '
+                            'content terminal %s: existing %r, new %r.'
+                            % (
+                                root._meta.label,
+                                record.content_model._meta.label,
+                                existing,
+                                record,
+                            )
+                        )
+            self._assert_rules_for_registration(
+                user_model=record.delegate_model,
+                sponsor_model=record.sponsor_model,
+            )
+            self._rule_fragment(record.delegate_model, role='user')
+            self._override_fragment(record.delegate_model)
+            record = replace(record, sponsor_rules=self._rule_fragment(
+                record.sponsor_model, role='sponsor',
+                path=record.sponsor_field,
+            ))
+            if existing_rows:
+                existing_rows.append(record)
+            else:
+                delegations_by_root[root] = [record]
+            delegations.append(record)
+        result = (
+            tuple(records), tuple(delegations), by_root, delegations_by_root,
+        )
+        self._lowered_cache = (self._raw_version,) + result
+        return result
 
     def _compiled_subject(self, records, delegations, user_model):
         if user_model is not None:
@@ -1197,6 +1458,7 @@ class TrustsRegistry(object):
             raise
         self._user_conditions[name] = rule
         self._clear_compiled_rules()
+        self._note_raw_mutation()
         return rule
 
     def _assert_rules_for_registration(self, *, user_model=None, sponsor_model=None):
@@ -1252,11 +1514,13 @@ class TrustsRegistry(object):
 
     @property
     def records(self):
-        return tuple(self._order)
+        """Lowered records, lowering the stored raw registrations on read."""
+        return self._lowered()[0]
 
     @property
     def delegations(self):
-        return tuple(self._delegation_order)
+        """Lowered delegations, lowering the stored raw registrations on read."""
+        return self._lowered()[1]
 
     def records_for_root(self, root):
         """Insertion-ordered records registered for ``root``.
@@ -1264,7 +1528,7 @@ class TrustsRegistry(object):
         Raises ``TrustsConfigurationError`` when the root is absent.
         """
         try:
-            return tuple(self._by_root[root])
+            return tuple(self._lowered()[2][root])
         except KeyError:
             raise TrustsConfigurationError(
                 'No registration for %r.' % (getattr(root, '__name__', root),)
@@ -1273,7 +1537,7 @@ class TrustsRegistry(object):
     def delegations_for_root(self, root):
         """Insertion-ordered delegated records registered for ``root``."""
         try:
-            return tuple(self._delegations_by_root[root])
+            return tuple(self._lowered()[3][root])
         except KeyError:
             raise TrustsConfigurationError(
                 'No delegated registration for %r.'
@@ -1357,56 +1621,59 @@ class TrustsRegistry(object):
             along=along_walk,
         )
 
+    def _raw_delegation(self, *, content, delegate, sponsor, condition=None,
+                        along=None):
+        """Validate the symbolic form and return the RAW delegation.
+
+        Ref/shape, same-root, symbolic condition grammar, and symbolic
+        ``along`` checks only; no ``_meta`` resolution, no lowering.
+        """
+        content_ref = _require_ref(content, 'content')
+        delegate_ref = _require_ref(delegate, 'delegate')
+        sponsor_ref = _require_ref(sponsor, 'sponsor')
+        roots = (
+            content_ref._root, delegate_ref._root, sponsor_ref._root,
+        )
+        if len(set(roots)) != 1:
+            raise TrustsConfigurationError(
+                'All refs in one delegated registration must share the same '
+                'root model; got %s.'
+                % ', '.join(root._meta.label for root in roots)
+            )
+        root = roots[0]
+        _validate_delegated_condition_symbolic(condition, root)
+        _validate_along_symbolic(along, root)
+        return RawDelegation(
+            content=content_ref, delegate=delegate_ref,
+            sponsor=sponsor_ref, condition=condition, along=along,
+        )
+
     def register_delegation(self, *, content, delegate, sponsor, condition=None,
                             along=None):
-        """Register one non-granting delegation relationship.
+        """Register one non-granting delegation relationship (RAW).
 
-        The three paths share one root. Delegate and sponsor are
-        single-valued forward paths to the same persisted principal model.
-        The condition is row-only or may contain a private symbolic match to
-        the requested permission. Optional ``along`` is the same bounded
-        walk as an ordinary registration: the delegation anchor reaches
-        objects within that walk. Registration validates metadata only.
+        Stores the raw refs/condition/along after symbolic validation
+        only. Path resolution, delegate/sponsor terminal checks,
+        duplicate/conflict detection, user-rule concreteness, and
+        sponsor fragment computation happen at lowering
+        (``build_registry()`` / ``records`` / ``delegations``), which
+        raises the errors this method used to raise at register time.
+        Returns the stored ``RawDelegation``.
         """
-        record = self.build_delegation(
+        raw = self._raw_delegation(
             content=content, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
         )
-        root = record.root
-        existing_rows = self._delegations_by_root.get(root)
-        if existing_rows:
-            if record in existing_rows:
-                raise TrustsConfigurationError(
-                    'Duplicate delegated registration for %s.'
-                    % root._meta.label
-                )
-            for existing in existing_rows:
-                if existing.content_model is record.content_model:
-                    raise TrustsConfigurationError(
-                        'Conflicting delegated registration for %s content '
-                        'terminal %s: existing %r, new %r.'
-                        % (
-                            root._meta.label,
-                            record.content_model._meta.label,
-                            existing,
-                            record,
-                        )
-                    )
-        self._assert_rules_for_registration(
-            user_model=record.delegate_model,
-            sponsor_model=record.sponsor_model,
-        )
-        self._rule_fragment(record.delegate_model, role='user')
-        self._override_fragment(record.delegate_model)
-        record = replace(record, sponsor_rules=self._rule_fragment(
-            record.sponsor_model, role='sponsor', path=record.sponsor_field,
-        ))
-        if existing_rows:
-            existing_rows.append(record)
+        root = raw.content._root
+        existing = self._delegations_by_root.get(root)
+        if existing is not None:
+            existing.append(raw)
         else:
-            self._delegations_by_root[root] = [record]
-        self._delegation_order.append(record)
-        return record
+            self._delegations_by_root[root] = [raw]
+        self._delegation_order.append(raw)
+        self._note_raw_mutation()
+        return raw
+
 
     def build_relation(self, *, content, user, permission=None, group=None,
                        condition=None, along=None):
@@ -1495,75 +1762,71 @@ class TrustsRegistry(object):
             group_target=group_target,
         )
 
+    def _raw_relation(self, *, content, user, permission=None, group=None,
+                      condition=None, along=None):
+        """Validate the symbolic form and return the RAW relation.
+
+        Permission-source, ref/shape, same-root, symbolic condition
+        grammar, and symbolic ``along`` checks only; no ``_meta``
+        resolution, no lowering.
+        """
+        _require_one_permission_source(permission, group)
+        content_ref = _require_ref(content, 'content')
+        user_ref = _require_ref(user, 'user')
+        group_ref = None
+        permission_ref = None
+        if group is not None:
+            group_ref = _require_ref(group, 'group')
+            roots = (content_ref._root, user_ref._root, group_ref._root)
+        else:
+            permission_ref = _require_ref(permission, 'permission')
+            roots = (content_ref._root, user_ref._root, permission_ref._root)
+        if len(set(roots)) != 1:
+            raise TrustsConfigurationError(
+                'All refs in one registration must share the same root '
+                'model; got %s.'
+                % ', '.join(root._meta.label for root in roots)
+            )
+        root = roots[0]
+        _validate_condition_symbolic(condition, root)
+        _validate_along_symbolic(along, root)
+        return RawRelation(
+            content=content_ref, user=user_ref,
+            permission=permission_ref, group=group_ref,
+            condition=condition, along=along,
+        )
+
     def register(self, *, content, user, permission=None, group=None,
                  condition=None, along=None):
-        """Register one permission-bearing relation from root-relative refs.
+        """Register one permission-bearing relation from root-relative refs (RAW).
 
-        ``permission`` and ``group`` are mutually exclusive. ``permission``
-        is one direct single-valued hop, or zero or more forward
-        single-valued hops followed by exactly one terminal many-to-many
-        to ``auth.Permission``. ``group`` is a forward single-valued
-        path that must end at ``auth.Group``; this method appends
-        ``Group.permissions`` and stores that as the permission terminal.
-        A ``permission=`` record stays ``via_group`` false.
-        Supplying both, or neither, raises ``TrustsConfigurationError``.
-
-        Exact duplicate normalized registration raises
-        ``TrustsConfigurationError``. The same root plus the same content
-        terminal with different content/user/permission/along bindings is
-        a conflict and also raises. The same bindings with a *different*
-        closed condition is an allowed alternative (the plan ORs complete
-        records). The same root may register different content terminals.
-        Both error outcomes leave stored records unchanged.
-
-        Optional ``along`` is an ``Along`` that replaces equality at the
-        walk-site with bounded reachability. Along validation uses
-        ``_meta`` only (zero SQL).
-
-        Optional ``condition`` is a closed predicate tree (``All``,
-        ``Equal``, ``permission_in``) compiled as an AND overlay on the
-        same root row. Validation uses ``_meta`` only (zero SQL).
+        Stores the raw refs, the (already IR) ``condition``, and the
+        bound ``along`` after symbolic validation only: permission
+        source, ref shapes, same root, condition grammar, and the
+        ``along`` bound. It does NOT resolve paths against ``_meta``,
+        construct a ``RegisteredRelation``, check duplicates or
+        conflicts, assert user-rule concreteness, or warm rule
+        fragments. Those happen at lowering (``build_registry()`` /
+        ``records``), which raises the errors this method used to
+        raise at register time, in registration order, with the same
+        text. Returns the stored ``RawRelation``.
 
         This method does not inspect Django's global ``apps.ready``.
         """
-        record = self.build_relation(
-            content=content, user=user, permission=permission, group=group,
-            condition=condition, along=along,
+        raw = self._raw_relation(
+            content=content, user=user, permission=permission,
+            group=group, condition=condition, along=along,
         )
-        root = record.root
-
-        existing_rows = self._by_root.get(root)
-        if existing_rows:
-            for existing in existing_rows:
-                if existing == record:
-                    raise TrustsConfigurationError(
-                        'Duplicate registration for %s.' % root._meta.label
-                    )
-                if existing.content_model is record.content_model:
-                    if (
-                        _same_terminal_bindings(existing, record)
-                        and existing.condition != record.condition
-                    ):
-                        continue
-                    raise TrustsConfigurationError(
-                        'Conflicting registration for %s content terminal '
-                        '%s: existing %r, new %r.'
-                        % (
-                            root._meta.label,
-                            record.content_model._meta.label,
-                            existing,
-                            record,
-                        )
-                    )
-        self._assert_rules_for_registration(user_model=record.user_model)
-        self._rule_fragment(record.user_model, role='user')
-        self._override_fragment(record.user_model)
-        if existing_rows:
-            existing_rows.append(record)
+        root = raw.content._root
+        existing = self._by_root.get(root)
+        if existing is not None:
+            existing.append(raw)
         else:
-            self._by_root[root] = [record]
-        self._order.append(record)
-        return record
+            self._by_root[root] = [raw]
+        self._order.append(raw)
+        self._note_raw_mutation()
+        return raw
+
 
     def build_public_registration(
         self, *, trust, user=None, permission=None, content, group=None,
@@ -1572,12 +1835,13 @@ class TrustsRegistry(object):
         """Build a normalized ``PublicRegistration`` without storing it.
 
         Shape-building half of ``_register_public``: same mode, trust,
-        path-builder, condition, and ``along`` validation and errors, in
-        the same order, but no append. Path and
-        condition builders are invoked exactly once, here; the returned
-        shape carries only refs, lowered condition IR, and ``Along``.
-        ``_register_public`` stores the shape
-        via ``register`` or ``register_delegation``.
+        path-builder, condition, and ``along`` symbolic validation
+        and errors, but no append and no ``_meta`` resolution (group
+        paths in particular are resolved only at lowering). Path and
+        condition builders are invoked exactly once, here; the
+        returned shape carries only refs, lowered condition IR, and
+        ``Along``. ``_register_public`` stores the shape as the raw
+        registration for the public API.
         """
         ordinary = user is not None or permission is not None or group is not None
         delegated = delegate is not None or sponsor is not None
@@ -1637,13 +1901,13 @@ class TrustsRegistry(object):
             group_text = _normalize_public_role(
                 trust, group, 'group', token=token,
             )
-            group_segments = _public_path_segments(group_text, 'group')
-            _group_path, _group_model, group_field, _group_target = (
-                _resolve_group_path(trust, group_segments)
-            )
-            _perm_path, _perm_model, permission_text, _perm_target = (
-                _append_group_permissions(group_segments, group_field)
-            )
+            _public_path_segments(group_text, 'group')
+            # Symbolic compiler-owned hop: ``Group.permissions`` is
+            # appended at lowering (``build_relation`` resolves and
+            # verifies it against ``_meta`` then). The symbolic text
+            # is only the member the condition ``.contains`` check
+            # compares against, so no resolution is needed here.
+            permission_text = '%s__permissions' % (group_text,)
             return PublicRegistration(
                 trust=trust,
                 content=_public_ref(trust, content_path, 'content'),
@@ -1682,33 +1946,29 @@ class TrustsRegistry(object):
             group=group, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
         )
+        # Promoted stored form: the PublicRegistration itself is the
+        # raw registration for the public API. Lowering dispatches it
+        # through build_relation / build_delegation at build time.
         if shape.delegate is not None:
-            return self.register_delegation(
-                content=shape.content,
-                delegate=shape.delegate,
-                sponsor=shape.sponsor,
-                condition=shape.condition,
-                along=shape.along,
-            )
-        if shape.group is not None:
-            return self.register(
-                content=shape.content,
-                user=shape.user,
-                group=shape.group,
-                condition=shape.condition,
-                along=shape.along,
-            )
-        return self.register(
-            content=shape.content,
-            user=shape.user,
-            permission=shape.permission,
-            condition=shape.condition,
-            along=shape.along,
-        )
+            existing = self._delegations_by_root.get(shape.trust)
+            if existing is not None:
+                existing.append(shape)
+            else:
+                self._delegations_by_root[shape.trust] = [shape]
+            self._delegation_order.append(shape)
+        else:
+            existing = self._by_root.get(shape.trust)
+            if existing is not None:
+                existing.append(shape)
+            else:
+                self._by_root[shape.trust] = [shape]
+            self._order.append(shape)
+        self._note_raw_mutation()
+        return shape
 
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
-        for record in self._order:
+        for record in self.records:
             if record.content_model is not content_model:
                 continue
             if user_model is not None and record.user_model is not user_model:
@@ -1723,7 +1983,7 @@ class TrustsRegistry(object):
 
     def _delegations_for(self, content_model, delegate_model=None):
         chosen = []
-        for record in self._delegation_order:
+        for record in self.delegations:
             if record.content_model is not content_model:
                 continue
             if (
@@ -1737,6 +1997,12 @@ class TrustsRegistry(object):
     def build_registry(self):
         """Build a query-time ``Registry`` from stored values.
 
+        This is a lowering step: it lowers every stored raw
+        registration in registration order (see ``_lowered``), so
+        resolution, duplicate/conflict, and user-rule errors surface
+        here, not at ``register()``. Pass 1 re-lowers per raw version
+        via the internal memo only; no freeze/holding yet, so the
+        cost is one lowering per distinct raw version, not per call.
         Records, delegations, the shared condition store, stored user
         conditions, the user override, and the bound condition lookup
         are passed as data, all at once. No builders are injected.
