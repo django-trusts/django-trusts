@@ -229,8 +229,9 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
                 )
 
             added = TrustsRegistry()
-            added.plan_for(Note, user=plain)
-            self.assertTrue(added._rule_fragments)
+            built = added.build_registry()
+            built.plan_for(Note, user=plain)
+            self.assertTrue(built._rule_fragments)
             added.set_user_condition('staff', lambda u: u.is_staff)
             self.assertFalse(added._rule_fragments)
             self.assertFalse(added._override_fragments)

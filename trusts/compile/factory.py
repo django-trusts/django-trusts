@@ -3,8 +3,8 @@
 ``TrustsRegistry`` collects ``register`` and ``set_*`` calls and stores
 lowered rows. Its ``build_*`` methods return the lowered shapes without
 storing them; the ``register*`` methods own frozen, duplicate, and
-rule checks and append those shapes. ``assemble_frozen`` builds the
-query-time ``FrozenRegistry``. ``trusts.core`` re-exports
+rule checks and append those shapes. ``build_registry`` builds the
+query-time ``FrozenRegistry`` from stored values. ``trusts.core`` re-exports
 ``TrustsRegistry``. This module does not import ``trusts.core``.
 """
 
@@ -20,7 +20,8 @@ from django.db.models.query import QuerySet
 
 from trusts.commons import (
     _auth_group_and_permission,
-    _bind_record_qs,
+    _concrete_model,
+    _content_model,
     _lookup_text,
     _path_text,
     _require_instance,
@@ -61,13 +62,8 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.recursions import GrantReach
 from trusts.plan.registry import FrozenRegistry
-from trusts.plan.relations import (
-    RelationPlan,
-    _candidate_model,
-    bind_checked_user,
-)
+from trusts.plan.relations import bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
@@ -81,31 +77,6 @@ from trusts.plan.standards import (
     rule_applies,
     validate_user_rule_name,
 )
-
-
-def assemble_frozen(
-    registry, *, compiler, handles, relation_plan, bind_record_qs,
-    grant_reach, content_model, concrete_model, require_instance,
-    candidate_model,
-):
-    """Build the query-time registry from already-lowered rows."""
-    return FrozenRegistry(
-        records=registry.records,
-        delegations=registry.delegations,
-        compiler=compiler,
-        handles=tuple(handles),
-        relation_plan=relation_plan,
-        bind_record_qs=bind_record_qs,
-        grant_reach=grant_reach,
-        content_model=content_model,
-        concrete_model=concrete_model,
-        require_instance=require_instance,
-        candidate_model=candidate_model,
-        rule_fragment=registry._rule_fragment,
-        override_fragment=registry._override_fragment,
-    )
-
-
 
 
 def _validate_equal(predicate, root):
@@ -668,28 +639,6 @@ def _same_terminal_bindings(existing, record):
         and existing.along == record.along
         and existing.via_group == record.via_group
         and existing.group_path == record.group_path
-    )
-
-
-def _concrete_model(value):
-    opts = getattr(value, '_meta', None)
-    if opts is None:
-        raise TrustsConfigurationError(
-            'Expected a model class or instance, not %r.' % (value,)
-        )
-    return opts.concrete_model
-
-
-def _content_model(content):
-    if isinstance(content, QuerySet):
-        return content.model._meta.concrete_model
-    if _is_model_class(content):
-        return content._meta.concrete_model
-    if isinstance(content, Model):
-        return content._meta.concrete_model
-    raise TrustsConfigurationError(
-        'content must be a model class, instance, or QuerySet, not %r.'
-        % (content,)
     )
 
 
@@ -1824,6 +1773,22 @@ class TrustsRegistry(object):
             chosen.append(record)
         return tuple(chosen)
 
+    def build_registry(self):
+        """Build a query-time ``FrozenRegistry`` from stored values.
+
+        Records, delegations, the shared condition store, stored user
+        conditions, the user override, and the bound condition lookup
+        are passed as data, all at once. No builders are injected.
+        """
+        return FrozenRegistry(
+            records=self.records,
+            delegations=self.delegations,
+            conditions=self.conditions,
+            user_conditions=self._stored_user_conditions(),
+            user_override=self._user_override,
+            condition_lookup=self._condition_lookup,
+        )
+
     def plan_for(self, content, *, user=None, permission=None):
         """Build the common relation plan for these terminals.
 
@@ -1831,18 +1796,9 @@ class TrustsRegistry(object):
         Optional ``user`` / ``permission`` instances keep only registrations
         whose inferred terminals match those models. Construction is lazy.
         """
-        return assemble_frozen(
-            self,
-            compiler=None,
-            handles=(),
-            relation_plan=RelationPlan,
-            bind_record_qs=_bind_record_qs,
-            grant_reach=GrantReach,
-            content_model=_content_model,
-            concrete_model=_concrete_model,
-            require_instance=_require_instance,
-            candidate_model=_candidate_model,
-        ).plan_for(content, user=user, permission=permission)
+        return self.build_registry().plan_for(
+            content, user=user, permission=permission,
+        )
 
     def permissions_for(self, user, content, **skip_flags):
         """Distinct permission rows granted to ``user`` on ``content``."""
