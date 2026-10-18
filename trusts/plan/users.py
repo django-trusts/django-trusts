@@ -131,7 +131,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
     This is the single implementation behind both
     ``trusts_mixin_predicate`` (backend adapter, which supplies its
     own sponsor handles and ``:condition`` overlay) and
-    ``FrozenRegistry.permitted_users_predicate`` (standalone, where
+    ``Registry.permitted_users_predicate`` (standalone, where
     sponsors are other built registries and the overlay comes from
     this registry's condition lookup). ``backend=None`` uses the
     mixin default singular-permission acceptance (auth.Permission).

@@ -21,7 +21,7 @@ from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import TrustsRegistry
-from trusts.plan.registry import FrozenRegistry
+from trusts.plan.registry import Registry
 
 
 def _projection_models():
@@ -408,11 +408,11 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             document=self.doc_a, user=self.alice, permission=self.read,
         )
         # Pass 4: the builder trio delegates to the built registry, so
-        # the shared plan builder is FrozenRegistry.plan_for. Each of
+        # the shared plan builder is Registry.plan_for. Each of
         # the three projections builds exactly one plan through it.
         with patch.object(
-            FrozenRegistry, 'plan_for', autospec=True,
-            wraps=FrozenRegistry.plan_for,
+            Registry, 'plan_for', autospec=True,
+            wraps=Registry.plan_for,
         ) as plan_for:
             list(registry.permissions_for(self.alice, self.doc_a))
             registry.has_permission(self.alice, self.doc_a, self.read)

@@ -321,7 +321,7 @@ class _PolicyVisitor(object):
     not re-derived: ``handle`` / ``handles`` are render handles whose
     registry is the registry built once for this render, and
     ``registry`` is that built registry. ``visit(question)`` is the
-    single visitor method :meth:`FrozenRegistry.walk_questions`
+    single visitor method :meth:`Registry.walk_questions`
     calls; it accumulates the same document structure (and key order)
     the hard-coded projection produced. The six ``_compile_*``
     methods below are its per-question bodies; the module-level

@@ -49,7 +49,7 @@ from trusts.plan.aggregates import (
 )
 from trusts.plan.contents import filter_authorized_scopes, granted
 from trusts.plan.handles import BackendHandle
-from trusts.plan.registry import FrozenRegistry as _FrozenRegistry
+from trusts.plan.registry import Registry as _FrozenRegistry
 from trusts.plan.relations import (
     ConditionLookup,
     PlanQueryCompiler,
