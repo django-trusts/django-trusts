@@ -250,22 +250,24 @@ def _tables(*model_classes):
 
 def _direct_ceiling(registry, placement):
     p = Ref(placement)
-    return registry.register(
+    registry.register(
         content=p.artifact,
         user=p.actor,
         permission=p.token,
         condition=permission_in(p.wing.floor.building.hall.badges),
     )
+    return registry.records[-1]
 
 
 def _cluster_ceiling(registry, placement):
     p = Ref(placement)
-    return registry.register(
+    registry.register(
         content=p.artifact,
         user=p.actor,
         permission=p.token,
         condition=permission_in(p.wing.floor.building.hall.clusters.tokens),
     )
+    return registry.records[-1]
 
 
 def _pks(rows):
@@ -370,6 +372,7 @@ class LongPathRegistrationTest(TestCase):
                     t.wing.floor.building.hall.badges.contains(t.token)
                 ),
             )
+            handle_direct = handle.registry.records[-1]
             handle_cluster = handle.register(
                 trust=Placement,
                 user='actor',
@@ -381,6 +384,7 @@ class LongPathRegistrationTest(TestCase):
                     )
                 ),
             )
+            handle_cluster = handle.registry.records[-1]
         self.assertEqual(handle_direct, ref_direct)
         self.assertEqual(handle_cluster, ref_cluster)
         self.assertGreaterEqual(len(handle_cluster.condition.refs[0]._path), 6)
@@ -390,9 +394,11 @@ class LongPathRegistrationTest(TestCase):
         Placement = models_[-1]
         registry = TrustsRegistry()
         first = _cluster_ceiling(registry, Placement)
+        attempt = TrustsRegistry()
+        _cluster_ceiling(attempt, Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-                _cluster_ceiling(registry, Placement)
+                _cluster_ceiling(attempt, Placement)
         self.assertEqual(registry.records, (first,))
 
     def test_different_bindings_still_conflict(self):
@@ -400,10 +406,12 @@ class LongPathRegistrationTest(TestCase):
         Placement = models_[-1]
         registry = TrustsRegistry()
         first = _cluster_ceiling(registry, Placement)
+        attempt = TrustsRegistry()
+        _cluster_ceiling(attempt, Placement)
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-                registry.register(
+                attempt.register(
                     content=p.artifact,
                     user=p.alt_actor,
                     permission=p.token,
@@ -411,6 +419,7 @@ class LongPathRegistrationTest(TestCase):
                         p.wing.floor.building.hall.clusters.tokens,
                     ),
                 )
+                attempt.build_registry()
         self.assertEqual(registry.records, (first,))
 
     def test_wrong_terminal_malformed_and_gfk_fail_closed(self):
@@ -419,19 +428,22 @@ class LongPathRegistrationTest(TestCase):
         registry = TrustsRegistry()
         p = Ref(Placement)
         with self.assertNumQueries(0):
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'permission model',
             ):
-                registry.register(
+                attempt.register(
                     content=p.artifact,
                     user=p.actor,
                     permission=p.token,
                     condition=permission_in(p.wing.floor.building.hall.clusters),
                 )
+                attempt.build_registry()
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'extra or intermediate multi-valued',
             ):
-                registry.register(
+                attempt.register(
                     content=p.artifact,
                     user=p.actor,
                     permission=p.token,
@@ -439,10 +451,12 @@ class LongPathRegistrationTest(TestCase):
                         p.wing.floor.building.hall.clusters.tokens.clustered,
                     ),
                 )
+                attempt.build_registry()
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'scalar field|single-valued hops',
             ):
-                registry.register(
+                attempt.register(
                     content=p.artifact,
                     user=p.actor,
                     permission=p.token,
@@ -450,6 +464,7 @@ class LongPathRegistrationTest(TestCase):
                         p.wing.floor.building.hall.clusters.title,
                     ),
                 )
+                attempt.build_registry()
         self.assertEqual(registry.records, ())
 
         class Tagged(models.Model):
@@ -474,15 +489,17 @@ class LongPathRegistrationTest(TestCase):
 
         g = Ref(TaggedGrant)
         with self.assertNumQueries(0):
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'generic foreign key',
             ):
-                registry.register(
+                attempt.register(
                     content=g.artifact,
                     user=g.actor,
                     permission=g.token,
                     condition=permission_in(g.tagged.target),
                 )
+                attempt.build_registry()
         self.assertEqual(registry.records, ())
 
     def test_colliding_to_field_membership_fails_closed(self):
@@ -504,7 +521,9 @@ class LongPathRegistrationTest(TestCase):
                         p.wing.floor.building.hall.clusters.tokens,
                     ),
                 )
-        self.assertEqual(registry.records, ())
+                registry.build_registry()
+        with self.assertRaises(TrustsConfigurationError):
+            registry.records
         self.assertIs(Cluster._meta.concrete_model, Cluster)
         self.assertIs(Artifact._meta.concrete_model, Artifact)
 

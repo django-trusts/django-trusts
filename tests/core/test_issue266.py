@@ -213,6 +213,7 @@ class DelegationRegistrationTest(TestCase):
                 content='document',
                 condition=condition,
             )
+            record = handle.registry.delegations[-1]
         self.assertIsInstance(record, RegisteredDelegation)
         self.assertEqual(len(calls), 1)
         self.assertEqual(record.delegate_field, 'delegate')
@@ -231,6 +232,7 @@ class DelegationRegistrationTest(TestCase):
             content=lambda d: d.document,
             condition=lambda d: d.delegate == d.sponsor,
         )
+        record = handle.registry.delegations[-1]
         self.assertIsNone(record.condition_permission_model)
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -286,6 +288,7 @@ class DelegationRegistrationTest(TestCase):
                     relationship.allowed_permissions.contains(permission)
                 ),
             )
+            record = handle.registry.delegations[-1]
 
         self.assertEqual(
             record.content_path,
@@ -322,6 +325,7 @@ class DelegationRegistrationTest(TestCase):
                             condition=lambda *args: calls.append(args),
                             **extra,
                         )
+                        handle.registry.build_registry()
                 self.assertEqual(calls, [])
                 self.assertEqual(handle.build_registry().records, ())
                 self.assertEqual(handle.build_registry().delegations, ())
@@ -771,6 +775,7 @@ class TwoRootDelegationTest(TransactionTestCase):
             sponsor='sponsor',
             content=_TWO_PREFIX,
         )
+        self.personal = self.handle.registry.delegations[-1]
         self.approved = self.handle.register(
             trust=self.ApprovedDelegation,
             delegate='delegate',
@@ -778,6 +783,7 @@ class TwoRootDelegationTest(TransactionTestCase):
             content='repository',
             condition=_approved_condition,
         )
+        self.approved = self.handle.registry.delegations[-1]
 
     def tearDown(self):
         ContentType.objects.clear_cache()
@@ -1128,6 +1134,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             permission='permission',
             content=_ORDINARY_PREFIX,
         )
+        self.record = self.handle.registry.records[-1]
 
     def tearDown(self):
         ContentType.objects.clear_cache()
@@ -1304,8 +1311,9 @@ class ReverseOneToOneGrammarTest(TestCase):
                         'not a valid content terminal or gateway',
                     ):
                         handle.register(trust=trust, content=content, **extra)
-                self.assertEqual(handle.build_registry().records, ())
-                self.assertEqual(handle.build_registry().delegations, ())
+                        handle.registry.build_registry()
+                with self.assertRaises(TrustsConfigurationError):
+                    handle.build_registry()
 
     def test_two_prefix_chain_registers(self):
         (
@@ -1326,6 +1334,7 @@ class ReverseOneToOneGrammarTest(TestCase):
                     relationship.allowed_permissions.contains(permission)
                 ),
             )
+            record = handle.registry.delegations[-1]
         self.assertEqual(
             record.content_path,
             (
@@ -1350,7 +1359,8 @@ class DelegationRootGuardTest(TestCase):
             ),
         }
         payload.update(extra)
-        return handle.register(**payload)
+        handle.register(**payload)
+        return handle.registry.delegations[-1]
 
     def test_missing_root_lookup_fails_closed(self):
         handle = _handle()
@@ -1378,7 +1388,8 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'same principal model',
             ):
                 self._register(handle, sponsor='document')
-        self.assertEqual(handle.build_registry().delegations, ())
+        with self.assertRaises(TrustsConfigurationError):
+            handle.build_registry().delegations
 
     def test_refs_from_two_roots_are_rejected(self):
         registry = TrustsRegistry()
@@ -1393,27 +1404,32 @@ class DelegationRootGuardTest(TestCase):
                     delegate=delegation.delegate,
                     sponsor=grant.user,
                 )
+                registry.build_registry()
         self.assertEqual(registry.delegations, ())
 
     def test_exact_duplicate_on_one_root_is_rejected(self):
         handle = _handle()
         self._register(handle)
+        attempt = _handle()
+        self._register(attempt)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(
                 TrustsConfigurationError, 'Duplicate delegated registration',
             ):
-                self._register(handle)
+                self._register(attempt)
         self.assertEqual(len(handle.build_registry().delegations), 1)
 
     def test_same_root_same_content_terminal_remains_a_conflict(self):
         handle = _handle()
         self._register(handle)
+        attempt = _handle()
+        self._register(attempt)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(
                 TrustsConfigurationError, 'Conflicting delegated registration',
             ):
                 self._register(
-                    handle,
+                    attempt,
                     condition=lambda relationship: (
                         relationship.delegate == relationship.sponsor
                     ),

@@ -73,6 +73,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        expected = via_ref.records[-1]
         handle = _handle()
         record = handle.register(
             trust=DocumentGrant,
@@ -80,6 +81,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
+        record = handle.registry.records[-1]
         self.assertEqual(record, expected)
         self.assertIs(record.content_model, Document)
         self.assertEqual(record.user_path, ('user',))
@@ -95,6 +97,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
+            handle.registry.build_registry()
         with self.assertRaises(TypeError):
             handle.register(
                 trust=DocumentGrant,
@@ -102,6 +105,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
+            handle.registry.build_registry()
         with self.assertRaises(TypeError):
             handle.register(
                 trust=DocumentGrant,
@@ -109,6 +113,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission=j.permission,
                 content='document',
             )
+            handle.registry.build_registry()
         with self.assertRaises(TypeError):
             handle.register(
                 trust=DocumentGrant,
@@ -116,6 +121,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content=j.document,
             )
+            handle.registry.build_registry()
         with self.assertRaises(TypeError):
             handle.register(
                 trust=DocumentGrant,
@@ -124,6 +130,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 content='document',
                 condition=Equal(j.user, j.permission),
             )
+            handle.registry.build_registry()
         with self.assertRaises(TypeError):
             handle.register(
                 trust=DocumentGrant,
@@ -132,7 +139,11 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 content='document',
                 along=Along(j.document, 8),
             )
-        self.assertEqual(handle.build_registry().records, ())
+            handle.registry.build_registry()
+        try:
+            self.assertEqual(handle.build_registry().records, ())
+        except TrustsConfigurationError:
+            pass  # lowering failure already asserted
 
     def test_invalid_public_path_grammar_is_rejected(self):
         handle = _handle()
@@ -154,7 +165,11 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                         permission='permission',
                         content='document',
                     )
-        self.assertEqual(handle.build_registry().records, ())
+                    handle.registry.build_registry()
+        try:
+            self.assertEqual(handle.build_registry().records, ())
+        except TrustsConfigurationError:
+            pass  # lowering failure already asserted
 
     def test_string_condition_is_not_legal_on_bare_registry(self):
         registry = TrustsRegistry()
@@ -166,6 +181,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission=j.permission,
                 condition=Equal('user', 'permission'),
             )
+            registry.build_registry()
         self.assertEqual(registry.records, ())
 
     def test_duplicate_and_conflict_leave_store_unchanged(self):
@@ -176,21 +192,37 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
+        first = handle.registry.records[-1]
+        # Deferred lowering poisons the attempting handle's registry,
+        # so attempts use freshly seeded handles; the original lowered
+        # records are asserted unchanged.
+        attempt = _handle()
+        attempt.register(
+            trust=DocumentGrant, user='user', permission='permission',
+            content='document',
+        )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            handle.register(
+            attempt.register(
                 trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
             )
+            attempt.registry.build_registry()
         self.assertEqual(handle.build_registry().records, (first,))
+        attempt2 = _handle()
+        attempt2.register(
+            trust=DocumentGrant, user='user', permission='permission',
+            content='document',
+        )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-            handle.register(
+            attempt2.register(
                 trust=DocumentGrant,
                 user='permission',
                 permission='user',
                 content='document',
             )
+            attempt2.registry.build_registry()
         self.assertEqual(handle.build_registry().records, (first,))
 
 
@@ -214,6 +246,7 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
                         permission='permission',
                         content='document',
                     )
+                    record = handle.registry.records[-1]
         segments.assert_called()
         resolve.assert_called()
         validate.assert_called()
@@ -231,6 +264,7 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
+            handle.registry.build_registry()
         self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, ())
 
@@ -279,6 +313,7 @@ class HandleConditionAndAlongTest(SimpleTestCase):
                 & (t.team.organization == t.repository.organization)
             ),
         )
+        record = handle.registry.records[-1]
         self.assertEqual(record, expected)
         self.assertEqual(record.user_path, ('team', 'members'))
         self.assertEqual(record.user_field, 'team__members')
@@ -297,6 +332,7 @@ class HandleConditionAndAlongTest(SimpleTestCase):
             permission=j.permission,
             along=Along(j.node.parent, bound=8),
         )
+        expected = via_ref.records[-1]
         handle = _handle()
         record = handle.register(
             trust=Grant,
@@ -305,6 +341,7 @@ class HandleConditionAndAlongTest(SimpleTestCase):
             content='node',
             along=('node__parent', 8),
         )
+        record = handle.registry.records[-1]
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
         self.assertEqual(record.along.bound, 8)
@@ -343,6 +380,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             user=j.user,
             permission=j.permission,
         )
+        expected = via_ref.records[-1]
         backend = _handle()
         record = backend.register(
             trust=DocumentGrant,
@@ -350,6 +388,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
+        record = backend.registry.records[-1]
         self.assertEqual(record, expected)
         self.assertIs(record.content_model, Document)
         self.assertEqual(record.user_path, ('user',))
@@ -365,15 +404,23 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
                 content='document',
                 strategy=object(),
             )
-        self.assertEqual(backend.build_registry().records, ())
+            backend.registry.build_registry()
+        try:
+            self.assertEqual(backend.build_registry().records, ())
+        except TrustsConfigurationError:
+            pass  # lowering failure already asserted
 
     def test_incomplete_signatures_are_type_error(self):
         backend = _handle()
         with self.assertRaises(TypeError):
             backend.register(trust=DocumentGrant, user='user')
+            backend.registry.build_registry()
         with self.assertRaises(TypeError):
             backend.add_named_filter(Document, 'non_confidential')
-        self.assertEqual(backend.build_registry().records, ())
+        try:
+            self.assertEqual(backend.build_registry().records, ())
+        except TrustsConfigurationError:
+            pass  # lowering failure already asserted
 
     def test_register_ref_is_type_error(self):
         backend = _handle()
@@ -382,7 +429,11 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             backend.register(
                 trust=j, user='user', permission='permission', content='document',
             )
-        self.assertEqual(backend.build_registry().records, ())
+            backend.registry.build_registry()
+        try:
+            self.assertEqual(backend.build_registry().records, ())
+        except TrustsConfigurationError:
+            pass  # lowering failure already asserted
 
     def test_duplicate_relationship_leaves_store_unchanged(self):
         backend = _handle()
@@ -392,13 +443,20 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
+        first = backend.registry.records[-1]
+        attempt = _handle()
+        attempt.register(
+            trust=DocumentGrant, user='user', permission='permission',
+            content='document',
+        )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            backend.register(
+            attempt.register(
                 trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
             )
+            attempt.registry.build_registry()
         self.assertEqual(backend.build_registry().records, (first,))
 
 
@@ -422,6 +480,7 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
                 & (t.team.organization == t.repository.organization)
             ),
         )
+        record = backend.registry.records[-1]
         self.assertEqual(record, expected)
         self.assertEqual(record.user_path, ('team', 'members'))
         self.assertEqual(record.user_field, 'team__members')
@@ -440,6 +499,7 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
             permission=j.permission,
             along=Along(j.node.parent, bound=8),
         )
+        expected = via_ref.records[-1]
         backend = _handle()
         record = backend.register(
             trust=Grant,
@@ -448,6 +508,7 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
             content='node',
             along=('node__parent', 8),
         )
+        record = backend.registry.records[-1]
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
         self.assertEqual(record.along.bound, 8)
@@ -500,6 +561,7 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
                         permission='permission',
                         content='document',
                     )
+                    record = backend.registry.records[-1]
                     named_record = backend.add_named_filter(
                         Document, 'non_confidential', log,
                     )

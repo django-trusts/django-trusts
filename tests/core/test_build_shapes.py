@@ -17,6 +17,8 @@ from django.test.utils import isolate_apps
 
 from trusts.compile.factory import (
     PublicRegistration,
+    RawDelegation,
+    RawRelation,
     RegisteredDelegation,
     RegisteredRelation,
 )
@@ -66,8 +68,9 @@ class BuildRelationTest(SimpleTestCase):
         self.assertEqual(built, registry.build_relation(**kwargs))
 
         stored = registry.register(**kwargs)
-        self.assertEqual(stored, built)
-        self.assertEqual(registry.records, (stored,))
+        self.assertIsInstance(stored, RawRelation)
+        self.assertEqual(registry.records, (built,))
+        self.assertEqual(registry.records[0], built)
 
     def test_build_relation_group_shape(self):
         Document, GroupGrant = _group_models()
@@ -120,10 +123,12 @@ class BuildRelationTest(SimpleTestCase):
         )
         self.assertIsInstance(built, RegisteredRelation)
         self.assertEqual(registry.records, ())
-        record = registry.register(
+        raw = registry.register(
             content=root.document, user=root.user,
             permission=root.permission,
         )
+        self.assertIsInstance(raw, RawRelation)
+        record = registry.records[0]
         self.assertEqual(record, built)
         self.assertEqual(registry.records, (record,))
         self.assertEqual(registry.build_registry().records, (record,))
@@ -165,10 +170,12 @@ class BuildDelegationTest(SimpleTestCase):
         built = registry.build_delegation(**kwargs)
         stored = registry.register_delegation(**kwargs)
 
-        # sponsor_rules is compare=False: stored still equals the shape.
-        self.assertEqual(stored, built)
-        self.assertIsNotNone(stored.sponsor_rules)
-        self.assertEqual(registry.delegations, (stored,))
+        self.assertIsInstance(stored, RawDelegation)
+        lowered = registry.delegations[0]
+        # sponsor_rules is compare=False: lowered still equals the shape.
+        self.assertEqual(lowered, built)
+        self.assertIsNotNone(lowered.sponsor_rules)
+        self.assertEqual(registry.delegations, (lowered,))
 
     def test_build_delegation_rejects_mismatched_principals(self):
         _Document, Share = _share_models()
@@ -211,12 +218,13 @@ class BuildPublicRegistrationTest(SimpleTestCase):
             trust=DocumentGrant, content='document', user='user',
             permission='permission',
         )
+        self.assertIsInstance(stored, PublicRegistration)
+        self.assertEqual(stored, shape)
         root = Ref(DocumentGrant)
-        self.assertEqual(stored, registry.build_relation(
+        self.assertEqual(registry.records, (registry.build_relation(
             content=root.document, user=root.user,
             permission=root.permission,
-        ))
-        self.assertEqual(registry.records, (stored,))
+        ),))
 
     def test_build_public_registration_invokes_builder_once(self):
         _Document, DocumentGrant = _document_models()

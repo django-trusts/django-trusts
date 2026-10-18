@@ -146,7 +146,7 @@ def _register_team(registry, grant):
     )
 
     t = Ref(grant)
-    return registry.register(
+    registry.register(
         content=t.repository,
         user=t.team.members,
         permission=t.operation,
@@ -155,15 +155,17 @@ def _register_team(registry, grant):
             Equal(t.team.organization, t.repository.organization),
         ),
     )
+    return registry.records[-1]
 
 
 def _register_direct(registry, grant):
     d = Ref(grant)
-    return registry.register(
+    registry.register(
         content=d.repository,
         user=d.account,
         permission=d.operation,
     )
+    return registry.records[-1]
 
 
 def _pks(rows):
@@ -228,12 +230,13 @@ def _to_field_models(*, match):
 
 def _register_site_grant(registry, grant):
     g = Ref(grant)
-    return registry.register(
+    registry.register(
         content=g.document,
         user=g.holder,
         permission=g.action,
         condition=Equal(g.left, g.right),
     )
+    return registry.records[-1]
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -277,6 +280,7 @@ class ClosedPredicateRegistrationTest(TestCase):
                     permission=t.operation,
                     condition=object(),
                 )
+                registry.build_registry()
         self.assertEqual(registry.records, ())
 
     def test_empty_all_and_permission_in_rejected_with_zero_sql(self):
@@ -310,6 +314,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         registry = TrustsRegistry()
         t = Ref(TeamRepoGrant)
         with self.assertNumQueries(0):
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'same model',
             ):
@@ -319,6 +324,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                     permission=t.operation,
                     condition=Equal(t.team.organization, t.repository),
                 )
+                registry.build_registry()
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'permission model',
             ):
@@ -328,7 +335,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                     permission=t.operation,
                     condition=permission_in(t.team.members),
                 )
-        self.assertEqual(registry.records, ())
+                registry.build_registry()
+        self.assertEqual(TrustsRegistry().records, ())
         self.assertIs(Account._meta.concrete_model, Account)
 
     def test_equal_rejects_mismatched_to_field_targets_with_zero_sql(self):
@@ -357,7 +365,7 @@ class ClosedPredicateRegistrationTest(TestCase):
                 TrustsConfigurationError, r'resolved comparison field',
             ):
                 _register_site_grant(registry, SiteGrant)
-        self.assertEqual(registry.records, ())
+        self.assertEqual(TrustsRegistry().records, ())
         self.assertIs(Holder._meta.concrete_model, Holder)
         self.assertIs(Site._meta.concrete_model, Site)
         self.assertIs(Document._meta.concrete_model, Document)
@@ -382,6 +390,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         t = Ref(TeamRepoGrant)
         d = Ref(AccountRepoGrant)
         with self.assertNumQueries(0):
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'multi-valued',
             ):
@@ -390,6 +399,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                     user=t.team.members,
                     permission=t.operation,
                 )
+                registry.build_registry()
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'multi-valued',
             ):
@@ -398,6 +409,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                     user=t.team.members.organizations,
                     permission=t.operation,
                 )
+                registry.build_registry()
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'extra or intermediate multi-valued',
             ):
@@ -409,6 +422,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                         t.team.members, t.repository.organization,
                     ),
                 )
+                registry.build_registry()
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'extra or intermediate multi-valued',
             ):
@@ -420,6 +435,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                         t.team.permission_bundles.operations.bundles,
                     ),
                 )
+                registry.build_registry()
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'direct single-valued',
             ):
@@ -428,6 +445,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                     user=d.repository.organization,
                     permission=d.operation,
                 )
+                registry.build_registry()
+            registry = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'multi-valued|reverse',
             ):
@@ -436,7 +455,8 @@ class ClosedPredicateRegistrationTest(TestCase):
                     user=d.account.repo_grants.repository,
                     permission=d.operation,
                 )
-        self.assertEqual(registry.records, ())
+                registry.build_registry()
+        self.assertEqual(TrustsRegistry().records, ())
 
     def test_mixed_root_predicate_refs_rejected(self):
         _models = _gh_models()
@@ -455,6 +475,7 @@ class ClosedPredicateRegistrationTest(TestCase):
                         t.team.organization, d.repository.organization,
                     ),
                 )
+                registry.build_registry()
         self.assertEqual(registry.records, ())
 
     def test_direct_user_hop_still_registers(self):
@@ -477,6 +498,7 @@ class ClosedPredicateRegistrationTest(TestCase):
             permission=d.operation,
             condition=None,
         )
+        record = registry.records[-1]
         self.assertIsNone(record.condition)
 
     def test_predicates_are_immutable(self):

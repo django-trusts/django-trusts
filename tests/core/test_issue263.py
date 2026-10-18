@@ -213,23 +213,29 @@ class PermissionCollectionRegistrationTest(TestCase):
                 user=team.members,
                 permission=team.permissions,
             )
+            direct = registry.records[-1]
             prefixed = registry.register(
                 content=access.repository,
                 user=access.team.members,
                 permission=access.team.permissions,
             )
-            strings = _handle().register(
+            prefixed = registry.records[-1]
+            _h_strings = _handle()
+            strings = _h_strings.register(
                 trust=Team,
                 user='members',
                 permission='permissions',
                 content='organization__repositories',
             )
-            calls = _handle(path='tests.core.issue263-call').register(
+            strings = _h_strings.registry.records[-1]
+            _h_calls = _handle(path='tests.core.issue263-call')
+            calls = _h_calls.register(
                 trust=Access,
                 user=lambda row: row.team.members,
                 permission=lambda row: row.team.permissions,
                 content=lambda row: row.repository,
             )
+            calls = _h_calls.registry.records[-1]
 
         self.assertFalse(direct.via_group)
         self.assertEqual(direct.group_path, ())
@@ -271,11 +277,13 @@ class PermissionCollectionRegistrationTest(TestCase):
 
         link = Ref(DeskLink)
         with self.assertNumQueries(0):
-            two_hops = TrustsRegistry().register(
+            _reg_two_hops = TrustsRegistry()
+            two_hops = _reg_two_hops.register(
                 content=link.repository,
                 user=link.desk.team.members,
                 permission=link.desk.team.permissions,
             )
+            two_hops = _reg_two_hops.records[-1]
         self.assertEqual(
             two_hops.permission_path, ('desk', 'team', 'permissions'),
         )
@@ -292,16 +300,20 @@ class PermissionCollectionRegistrationTest(TestCase):
         direct_ref = Ref(DirectGrant)
         group_ref = Ref(GroupGrant)
         with self.assertNumQueries(0):
-            direct = TrustsRegistry().register(
+            _reg_direct = TrustsRegistry()
+            direct = _reg_direct.register(
                 content=direct_ref.repository,
                 user=direct_ref.user,
                 permission=direct_ref.permission,
             )
-            grouped = TrustsRegistry().register(
+            direct = _reg_direct.records[-1]
+            _reg_grouped = TrustsRegistry()
+            grouped = _reg_grouped.register(
                 content=group_ref.repository,
                 user=group_ref.group.user,
                 group=group_ref.group,
             )
+            grouped = _reg_grouped.records[-1]
         self.assertFalse(direct.via_group)
         self.assertEqual(direct.permission_path, ('permission',))
         self.assertEqual(direct.permission_field, 'permission')
@@ -330,6 +342,7 @@ class PermissionCollectionRegistrationTest(TestCase):
                 user=team.members,
                 permission=team.permissions,
             )
+            existing = kept.records[-1]
 
         class Bundle(models.Model):
             permissions = models.ManyToManyField(
@@ -409,54 +422,66 @@ class PermissionCollectionRegistrationTest(TestCase):
         access = Ref(Access)
         grant = Ref(models_['GroupGrant'])
         with self.assertNumQueries(0):
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'intermediate multi-valued',
             ):
-                kept.register(
+                attempt.register(
                     content=holder.repository,
                     user=holder.user,
                     permission=holder.bundles.permissions,
                 )
+                attempt.build_registry()
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'intermediate multi-valued',
             ):
-                kept.register(
+                attempt.register(
                     content=holder.repository,
                     user=holder.user,
                     permission=holder.permissions.content_type,
                 )
+                attempt.build_registry()
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'not auth\.Permission',
             ):
-                kept.register(
+                attempt.register(
                     content=tagged.repository,
                     user=tagged.user,
                     permission=tagged.tags,
                 )
+                attempt.build_registry()
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'reverse',
             ):
-                kept.register(
+                attempt.register(
                     content=grant.repository,
                     user=grant.group.user,
                     permission=grant.group.user,
                 )
+                attempt.build_registry()
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'resolved comparison field',
             ):
-                kept.register(
+                attempt.register(
                     content=crew.repository,
                     user=crew.user,
                     permission=crew.slips,
                 )
+                attempt.build_registry()
+            attempt = TrustsRegistry()
             with self.assertRaisesRegex(
                 TrustsConfigurationError, r'direct single-valued',
             ):
-                kept.register(
+                attempt.register(
                     content=access.repository,
                     user=access.team.members,
                     permission=access.team.organization,
                 )
+                attempt.build_registry()
         self.assertEqual(kept.records, (existing,))
 
     def test_duplicate_collection_registration_does_not_mutate(self):
@@ -469,12 +494,20 @@ class PermissionCollectionRegistrationTest(TestCase):
                 user=team.members,
                 permission=team.permissions,
             )
+            first = registry.records[-1]
+            attempt = TrustsRegistry()
+            attempt.register(
+                content=team.organization.repositories,
+                user=team.members,
+                permission=team.permissions,
+            )
             with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-                registry.register(
+                attempt.register(
                     content=team.organization.repositories,
                     user=team.members,
                     permission=team.permissions,
                 )
+                attempt.build_registry()
         self.assertEqual(registry.records, (first,))
 
 

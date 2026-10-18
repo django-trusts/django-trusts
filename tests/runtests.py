@@ -69,6 +69,7 @@ KERNEL_SUITE = [
     'tests.core.test_issue282_permitted_content',
     'tests.core.test_registry_spike',
     'tests.core.test_build_shapes',
+    'tests.core.test_raw_register',
     'tests.core.test_registry_questions',
 ]
 
@@ -127,6 +128,7 @@ PAIR_KERNEL_SUITE = [
     'tests.core.test_issue282_permitted_content',
     'tests.core.test_registry_spike',
     'tests.core.test_build_shapes',
+    'tests.core.test_raw_register',
     'tests.core.test_registry_questions',
 ]
 
