@@ -27,6 +27,7 @@ from trusts.core import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
 from trusts.plan.contents import _compile_granted
 from trusts.plan.handles import BackendHandle
+from trusts.plan.registry import Question
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.rewrites import bind_once
 
@@ -301,6 +302,116 @@ class RegistryQuestionsTest(TransactionTestCase):
         )
         built = registry.build_registry()
         self.assertFalse(built.has_permission(self.bob, self.doc_b, self.read))
+
+    def test_walk_questions_order_descriptors_and_bound_answers(self):
+        registry = self._registry(group=True)
+        group = Group.objects.create(name='rq-walkers')
+        group.permissions.add(self.read)
+        self.Grant.objects.create(
+            user=self.alice, document=self.doc_a, permission=self.read,
+        )
+        self.GroupGrant.objects.create(
+            user=self.alice, document=self.doc_a, group=group,
+        )
+        built = registry.build_registry()
+        seen = []
+
+        class _RecordingVisitor(object):
+            def visit(self, question):
+                seen.append(question)
+                return question.name
+
+        names = built.walk_questions(_RecordingVisitor())
+        self.assertEqual(names, (
+            'permitted', 'has_perm', 'get_all_permissions',
+            'get_group_permissions', 'get_permitted_users',
+        ))
+        self.assertTrue(all(isinstance(q, Question) for q in seen))
+        self.assertTrue(all(q.content_model is self.Document for q in seen))
+        self.assertEqual(len(seen[0].records), 2)
+        self.assertEqual(seen[0].delegations, ())
+        with self.assertRaises(Exception):
+            seen[0].name = 'other'
+        by_name = {q.name: q for q in seen}
+        self.assertEqual(
+            _pks(by_name['permitted'].question(self.alice, self.read)),
+            {self.doc_a.pk},
+        )
+        self.assertTrue(
+            by_name['has_perm'].question(self.alice, self.doc_a, self.read))
+        self.assertFalse(
+            by_name['has_perm'].question(self.bob, self.doc_a, self.read))
+        self.assertEqual(
+            _pks(by_name['get_all_permissions'].question(
+                self.alice, self.doc_a)),
+            {self.read.pk},
+        )
+        self.assertEqual(
+            _pks(by_name['get_group_permissions'].question(
+                self.alice, self.doc_a)),
+            {self.read.pk},
+        )
+        self.assertEqual(
+            _pks(by_name['get_permitted_users'].question(
+                self.doc_a, self.read)),
+            {self.alice.pk},
+        )
+        with self.assertRaises(TypeError):
+            built.walk_questions(object())
+
+    def test_walk_questions_prefix_and_delegation_descriptors(self):
+        prefix_registry = TrustsRegistry()
+        grant = Ref(self.Grant)
+        prefix_registry.register(
+            content=grant.folder.documents, user=grant.user,
+            permission=grant.permission,
+        )
+        self.Grant.objects.create(
+            user=self.alice, document=self.doc_a,
+            folder=self.folder_a, permission=self.read,
+        )
+        built = prefix_registry.build_registry()
+        seen = []
+
+        class _Visitor(object):
+            def visit(self, question):
+                seen.append(question)
+                return question
+
+        built.walk_questions(_Visitor())
+        self.assertEqual(
+            [q.name for q in seen],
+            ['permitted', 'has_perm', 'get_all_permissions',
+             'get_permitted_users', 'filter_by_permitted_content'],
+        )
+        prefix_q = seen[-1]
+        self.assertIs(prefix_q.content_model, self.Document)
+        self.assertEqual(
+            _pks(prefix_q.question(
+                self.Folder.objects.all(), self.alice, self.read)),
+            {self.folder_a.pk},
+        )
+        delegated = self._registry(delegated=True)
+        self.Grant.objects.create(
+            user=self.alice, document=self.doc_b, permission=self.read,
+        )
+        self.Share.objects.create(
+            delegate=self.bob, sponsor=self.alice, document=self.doc_b,
+        )
+        built_delegated = delegated.build_registry()
+        seen2 = []
+
+        class _Visitor2(object):
+            def visit(self, question):
+                seen2.append(question)
+                return question.name
+
+        built_delegated.walk_questions(
+            _Visitor2(), sponsors=(built_delegated,))
+        by_name = {q.name: q for q in seen2}
+        self.assertEqual(len(by_name['permitted'].delegations), 1)
+        self.assertTrue(by_name['has_perm'].question(
+            self.bob, self.doc_b, self.read))
 
     def test_group_kind_and_empty_registry(self):
         registry = self._registry(group=True)

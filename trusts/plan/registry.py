@@ -9,9 +9,14 @@ take the runtime user, content, and permission.
 
 __all__ = []
 
+from dataclasses import dataclass
+from functools import partial
+
 from django.db.models import QuerySet
 
-from trusts.commons import _concrete_model, _content_model, _require_instance
+from trusts.commons import (
+    _concrete_model, _content_model, _require_instance, _resolved_hop,
+)
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import (
@@ -29,6 +34,37 @@ from trusts.plan.standards import (
 
 
 _CONDITION_LOOKUP_UNSET = object()
+
+
+@dataclass(frozen=True)
+class Question(object):
+    """One possible permission question for one content group.
+
+    ``name`` is the document/API name (``permitted``, ``has_perm``,
+    ``get_all_permissions``, ``get_group_permissions``,
+    ``get_permitted_users``, or ``filter_by_permitted_content``).
+    ``content_model`` is the concrete content model for the group.
+    ``records`` / ``delegations`` are that group's lowered rows, split
+    by kind, in registration order. ``question`` is one of the four
+    registry question families pre-bound with the walk's ``sponsors``;
+    its call signature depends on ``name``:
+
+    - ``permitted``: ``question(user, permission) -> QuerySet``
+    - ``has_perm``: ``question(user, content, permission) -> bool``
+    - ``get_all_permissions`` / ``get_group_permissions``:
+      ``question(user, content) -> QuerySet | ()``
+    - ``get_permitted_users``: ``question(content, permission)``
+      ``-> QuerySet``
+    - ``filter_by_permitted_content``:
+      ``question(queryset, user, permission) -> QuerySet`` where
+      ``queryset`` is over a proper-prefix model of ``content_model``.
+    """
+
+    name: str
+    content_model: type
+    records: tuple
+    delegations: tuple
+    question: object
 
 
 class FrozenRegistry(object):
@@ -395,6 +431,144 @@ class FrozenRegistry(object):
         return bind_once(
             user_model._default_manager.filter(predicate).distinct()
         )
+
+    # -- walking every possible question ------------------------------
+    # Thomas's phrasing: ``registry.walk_questions(visitor)``. The
+    # visitor is duck-typed: it supplies one ``visit(question)``
+    # method, called once per :class:`Question` descriptor in
+    # document order (content groups in first-registration order,
+    # questions in policy-document order within a group). The return
+    # value of each ``visit`` call is collected and returned as a
+    # tuple in the same order; a visitor may return ``None`` for a
+    # question it omits (for example an empty prefix statement).
+    # ``sponsors`` are other registries (or buildable builders /
+    # handles) whose ordinary records may satisfy this registry's
+    # delegations; they are pre-bound into each descriptor's question
+    # callable, never passed to the visitor separately.
+
+    def _content_groups(self):
+        """``(content_model, records, delegations)`` in document order."""
+        order = []
+        by_model = {}
+        for kind, rows in (('records', self.records),
+                           ('delegations', self.delegations)):
+            for record in rows:
+                model = record.content_model
+                slot = by_model.get(model)
+                if slot is None:
+                    by_model[model] = slot = {'records': [], 'delegations': []}
+                    order.append(model)
+                slot[kind].append(record)
+        return tuple(
+            (model, tuple(by_model[model]['records']),
+             tuple(by_model[model]['delegations']))
+            for model in order
+        )
+
+    def _permitted_content_prefix_models(self, model):
+        """Concrete models that are a proper prefix of ``model``'s path.
+
+        Order is registration order, then path order; a model is
+        listed once. This is the registry-side copy of the logic the
+        policy snapshot uses to decide whether the
+        ``filter_by_permitted_content`` question exists at all.
+        """
+        plan = self.plan_for(model)
+        legs = tuple(plan.records) + tuple(plan.delegations or ())
+        found = []
+        seen = set()
+        for record in legs:
+            path = record.content_path
+            if not path:
+                continue
+            current = record.root
+            last = len(path) - 1
+            for index, name in enumerate(path):
+                field = current._meta.get_field(name)
+                related, _target = _resolved_hop(field, 'content', path)
+                concrete = related._meta.concrete_model
+                if index != last and concrete not in seen:
+                    seen.add(concrete)
+                    found.append(concrete)
+                current = related
+        return tuple(found)
+
+    def _question_permitted(self, content_model, user, permission, *,
+                            sponsors=()):
+        return self.filter_authorized(
+            content_model._meta.concrete_model._default_manager.all(),
+            user, permission, sponsors=sponsors,
+        )
+
+    def _question_filter_by_permitted_content(
+        self, content_model, queryset, user, permission, *, sponsors=(),
+    ):
+        return self.filter_by_permitted_content(
+            queryset, user, permission, content=content_model,
+            sponsors=sponsors,
+        )
+
+    def _descriptors_for(self, content_model, records, delegations, sponsors):
+        descriptors = [
+            Question(
+                'permitted', content_model, records, delegations,
+                partial(
+                    self._question_permitted, content_model,
+                    sponsors=sponsors,
+                ),
+            ),
+            Question(
+                'has_perm', content_model, records, delegations,
+                partial(self.has_permission, sponsors=sponsors),
+            ),
+            Question(
+                'get_all_permissions', content_model, records, delegations,
+                partial(self.permissions_for, sponsors=sponsors),
+            ),
+        ]
+        if any(getattr(record, 'via_group', False) for record in records):
+            descriptors.append(Question(
+                'get_group_permissions', content_model, records, delegations,
+                partial(self.permissions_for, kind='group', sponsors=sponsors),
+            ))
+        descriptors.append(Question(
+            'get_permitted_users', content_model, records, delegations,
+            partial(self.permitted_users, sponsors=sponsors),
+        ))
+        if self._permitted_content_prefix_models(content_model):
+            descriptors.append(Question(
+                'filter_by_permitted_content', content_model, records,
+                delegations,
+                partial(
+                    self._question_filter_by_permitted_content, content_model,
+                    sponsors=sponsors,
+                ),
+            ))
+        return tuple(descriptors)
+
+    def walk_questions(self, visitor, *, sponsors=()):
+        """Walk every possible question, per content group, in order.
+
+        See the section comment above for the visitor protocol.
+        Conditional questions are included only when they can arise:
+        ``get_group_permissions`` only for a group with a ``group=``
+        (``via_group``) record, and ``filter_by_permitted_content``
+        only for a group whose content path has a proper prefix.
+        """
+        visit = getattr(visitor, 'visit', None)
+        if not callable(visit):
+            raise TypeError(
+                'walk_questions visitor must supply a callable '
+                'visit(question), not %r.' % (visitor,)
+            )
+        sponsors = tuple(sponsors or ())
+        results = []
+        for model, records, delegations in self._content_groups():
+            for descriptor in self._descriptors_for(
+                model, records, delegations, sponsors,
+            ):
+                results.append(visit(descriptor))
+        return tuple(results)
 
     def _records_for(self, content_model, user_model, permission_model):
         chosen = []
