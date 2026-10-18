@@ -3,7 +3,7 @@
 ``TrustsRegistry.build_relation``, ``build_delegation``, and
 ``build_public_registration`` are the pure shape-building halves of
 ``register``, ``register_delegation``, and ``_register_public``. The
-register methods own frozen/duplicate/rule checks and append the shapes.
+register methods own duplicate/rule checks and append the shapes.
 """
 
 import dataclasses
@@ -108,22 +108,25 @@ class BuildRelationTest(SimpleTestCase):
             )
         self.assertEqual(registry.records, ())
 
-    def test_build_relation_on_frozen_registry_still_builds(self):
+    def test_build_relation_after_build_still_builds_and_registers(self):
         _Document, DocumentGrant = _document_models()
         registry = TrustsRegistry()
         root = Ref(DocumentGrant)
-        registry.freeze()
+        registry.build_registry()
 
         built = registry.build_relation(
             content=root.document, user=root.user,
             permission=root.permission,
         )
         self.assertIsInstance(built, RegisteredRelation)
-        with self.assertRaises(TrustsConfigurationError):
-            registry.register(
-                content=root.document, user=root.user,
-                permission=root.permission,
-            )
+        self.assertEqual(registry.records, ())
+        record = registry.register(
+            content=root.document, user=root.user,
+            permission=root.permission,
+        )
+        self.assertEqual(record, built)
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(registry.build_registry().records, (record,))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

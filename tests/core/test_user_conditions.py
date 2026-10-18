@@ -168,7 +168,6 @@ class UserConditionRegistrationTest(TransactionTestCase):
 
             with self.assertRaises(TypeError):
                 registry.permissions_for(alice, note, allow_inactive=True)
-            registry.freeze()
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_condition(
                     'again', lambda u: u.is_active,
@@ -449,7 +448,6 @@ class UserOverrideTest(TransactionTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_override('superuser', None)
             self.assertEqual(registry._user_override.name, 'superuser')
-            registry.freeze()
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_override(
                     'superuser', lambda u: u.is_superuser,

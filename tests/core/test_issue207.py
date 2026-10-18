@@ -463,10 +463,10 @@ class RegisterFailClosedTest(TestCase):
                 )
         self.assertEqual(handle.registry.records, ())
 
-    def test_freeze_wins_before_builder_invocation(self):
+    def test_register_after_build_invokes_builder(self):
         registry = TrustsRegistry()
         handle = _handle(registry)
-        registry.freeze()
+        registry.build_registry()
         calls = []
 
         def user(trust):
@@ -482,16 +482,15 @@ class RegisterFailClosedTest(TestCase):
                     'trusts.compile.factory._validate_condition',
                     wraps=_validate_condition,
                 ) as validate:
-                    with self.assertRaises(TrustsConfigurationError) as ctx:
-                        handle.register(
-                            trust=DocumentGrant,
-                            user=user,
-                            permission=lambda t: t.permission,
-                            content=lambda t: t.document,
-                        )
-        self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(calls, [])
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        self.assertEqual(registry.records, ())
+                    record = handle.register(
+                        trust=DocumentGrant,
+                        user=user,
+                        permission=lambda t: t.permission,
+                        content=lambda t: t.document,
+                    )
+        self.assertEqual(len(calls), 1)
+        segments.assert_called()
+        resolve.assert_called()
+        validate.assert_called()
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(registry.build_registry().records, (record,))

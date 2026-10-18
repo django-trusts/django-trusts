@@ -183,12 +183,11 @@ def override_apps_ready(ready, apps_registry=None):
 
 
 def isolate_live_registry(config, registry, path=None):
-    """Swap a standalone registry into the live store without freezing.
+    """Swap a standalone registry into the live store directly.
 
-    Test isolation only. Not a host contributor route. The public
-    ``registry`` setter freezes after ``Apps.ready``; this writes the
-    path-scoped dict directly. The first supported handle read after
-    ready still freezes the stored object.
+    Test isolation only. Not a host contributor route. This writes
+    the path-scoped dict directly, bypassing the one-path check in
+    the public ``registry`` setter.
     """
     if path is None:
         paths = config._configured_trusts_paths()
@@ -256,7 +255,7 @@ def apply_zero_trust_donation(config):
 
 
 def clone_writable_registry(registry):
-    """Copy records onto a new unfrozen registry for test isolation."""
+    """Copy records onto a new writable registry for test isolation."""
     from trusts.compile.factory import TrustsRegistry
 
     cloned = TrustsRegistry()

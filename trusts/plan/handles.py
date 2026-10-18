@@ -16,8 +16,6 @@ from typing import TYPE_CHECKING, TypeVar
 
 from django.db.models import Model
 
-from trusts.errors import TrustsConfigurationError
-
 if TYPE_CHECKING:
     from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 
@@ -78,14 +76,12 @@ class BackendHandle:
         symbolic callable. In delegated mode it accepts either the
         relationship alone or ``(relationship, requested_permission)``.
         Conditions use path ``==``, collection-rooted
-        ``.contains(member)``, and ``&``. They are invoked once after the
-        freeze check; the stored overlay contains no callable. For
+        ``.contains(member)``, and ``&``. They are invoked once at
+        registration; the stored overlay contains no callable. For
         ``group=``, ``.contains`` member is the compiler-owned permission
         path. Prebuilt predicate nodes are ``TypeError``. ``predicate`` is
         reserved and unsupported. ``along`` is ``(path, bound)``. Passing
-        a ``Ref`` is ``TypeError``. A frozen backend raises
-        ``TrustsConfigurationError`` before path parsing or builder
-        invocation.
+        a ``Ref`` is ``TypeError``.
 
         Only an explicit ``group=`` record contributes to
         ``get_group_permissions``. That same record also participates in
@@ -109,16 +105,10 @@ class BackendHandle:
         """Bind a named restricting predicate on this backend.
 
         Forwards the current registration-time permission-condition
-        builder. A frozen/finalized backend raises
-        ``TrustsConfigurationError`` before ``predicate`` is invoked.
-        A prebuilt ``Expr`` is not accepted. The filter grants nothing
+        builder; ``predicate`` is invoked once, here. A prebuilt
+        ``Expr`` is not accepted. The filter grants nothing
         independently.
         """
-        if getattr(self.registry, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register a permission condition on a frozen '
-                'TrustsRegistry.'
-            )
         return self.registry.register_permission_condition(
             model, code, predicate,
         )
