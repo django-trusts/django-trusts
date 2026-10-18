@@ -68,6 +68,7 @@ KERNEL_SUITE = [
     'tests.core.test_issue282',
     'tests.core.test_issue282_permitted_content',
     'tests.core.test_registry_spike',
+    'tests.core.test_build_shapes',
 ]
 
 # Kernel modules that remain valid against an installed Zero owner.
@@ -124,6 +125,7 @@ PAIR_KERNEL_SUITE = [
     'tests.core.test_issue282',
     'tests.core.test_issue282_permitted_content',
     'tests.core.test_registry_spike',
+    'tests.core.test_build_shapes',
 ]
 
 
