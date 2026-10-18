@@ -684,7 +684,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        along_ids = _assign_ids(tuple(along.registry.records))
+        along_ids = _assign_ids(tuple(along.build_registry().records))
         self.assertEqual(along_ids, [
             'documents__FolderGrant__folder__along_folder__parent_S_2',
         ])

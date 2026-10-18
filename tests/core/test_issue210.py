@@ -96,7 +96,7 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
                 content='document',
                 predicate=lambda u, p, o: u == o.user,
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_condition_is_contextually_typed_as_trust(self):
         hints = get_type_hints(BackendHandle.register)
@@ -309,7 +309,7 @@ class RegisterConditionRejectPublicIRTest(TestCase):
                             content='document',
                             condition=value,
                         )
-                self.assertEqual(handle.registry.records, ())
+                self.assertEqual(handle.build_registry().records, ())
 
 
 class RegisterConditionFailClosedTest(TestCase):
@@ -392,7 +392,7 @@ class RegisterConditionFailClosedTest(TestCase):
                             content=lambda t: t.repository,
                             condition=builder,
                         )
-                self.assertEqual(handle.registry.records, ())
+                self.assertEqual(handle.build_registry().records, ())
 
     def test_failed_condition_does_not_partially_mutate(self):
         handle = _handle()
@@ -405,7 +405,7 @@ class RegisterConditionFailClosedTest(TestCase):
                     content=lambda t: t.document,
                     condition=lambda t: t.user == t.not_a_field,
                 )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_condition_invoked_on_register_after_build(self):
         registry = TrustsRegistry()
@@ -494,18 +494,18 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         self.assertEqual(record.along.shape, 'S')
 
         right = _handle(path='tests.core.issue210-right')
-        self.assertEqual(right.registry.records, ())
+        self.assertEqual(right.build_registry().records, ())
         left.add_named_filter(
             Document, 'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
         self.assertIsNotNone(
-            left.registry.get_permission_condition_record(
+            left.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )
         self.assertIsNone(
-            right.registry.get_permission_condition_record(
+            right.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )

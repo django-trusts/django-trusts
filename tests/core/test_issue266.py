@@ -219,8 +219,8 @@ class DelegationRegistrationTest(TestCase):
         self.assertEqual(record.sponsor_field, 'sponsor')
         self.assertEqual(record.content_field, 'document')
         self.assertIs(record.condition_permission_model, Permission)
-        self.assertEqual(handle.registry.records, ())
-        self.assertEqual(handle.registry.delegations, (record,))
+        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.build_registry().delegations, (record,))
 
     def test_one_argument_condition_is_row_only(self):
         handle = _handle()
@@ -323,8 +323,8 @@ class DelegationRegistrationTest(TestCase):
                             **extra,
                         )
                 self.assertEqual(calls, [])
-                self.assertEqual(handle.registry.records, ())
-                self.assertEqual(handle.registry.delegations, ())
+                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.build_registry().delegations, ())
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -804,7 +804,7 @@ class TwoRootDelegationTest(TransactionTestCase):
         self.assertIs(self.personal.content_model, self.Repository)
         self.assertIsNone(self.personal.condition)
         roots = [
-            record.root for record in self.handle.registry.delegations
+            record.root for record in self.handle.build_registry().delegations
         ]
         self.assertEqual(
             roots, [self.PersonalDelegation, self.ApprovedDelegation],
@@ -1139,7 +1139,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             ('profile', 'personal_organization_ord', 'repositories'),
         )
         self.assertIs(self.record.content_model, self.Repository)
-        self.assertEqual(self.handle.registry.delegations, ())
+        self.assertEqual(self.handle.build_registry().delegations, ())
         with _listed(self.handle):
             self.assertTrue(self.user.has_perm(self.code, self.own))
             self.assertEqual(
@@ -1304,8 +1304,8 @@ class ReverseOneToOneGrammarTest(TestCase):
                         'not a valid content terminal or gateway',
                     ):
                         handle.register(trust=trust, content=content, **extra)
-                self.assertEqual(handle.registry.records, ())
-                self.assertEqual(handle.registry.delegations, ())
+                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.build_registry().delegations, ())
 
     def test_two_prefix_chain_registers(self):
         (
@@ -1359,7 +1359,7 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'No delegated registration',
             ):
                 handle.registry.delegations_for_root(DocumentDelegation)
-        self.assertEqual(handle.registry.delegations, ())
+        self.assertEqual(handle.build_registry().delegations, ())
 
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
@@ -1378,7 +1378,7 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'same principal model',
             ):
                 self._register(handle, sponsor='document')
-        self.assertEqual(handle.registry.delegations, ())
+        self.assertEqual(handle.build_registry().delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
         registry = TrustsRegistry()
@@ -1403,7 +1403,7 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'Duplicate delegated registration',
             ):
                 self._register(handle)
-        self.assertEqual(len(handle.registry.delegations), 1)
+        self.assertEqual(len(handle.build_registry().delegations), 1)
 
     def test_same_root_same_content_terminal_remains_a_conflict(self):
         handle = _handle()
@@ -1418,14 +1418,14 @@ class DelegationRootGuardTest(TestCase):
                         relationship.delegate == relationship.sponsor
                     ),
                 )
-        self.assertEqual(len(handle.registry.delegations), 1)
+        self.assertEqual(len(handle.build_registry().delegations), 1)
 
     def test_same_root_different_content_terminal_is_stored(self):
         handle = _handle()
         self._register(handle)
         second = self._register(handle, content='delegate')
         rows = handle.registry.delegations_for_root(DocumentDelegation)
-        self.assertEqual(rows, handle.registry.delegations)
+        self.assertEqual(rows, handle.build_registry().delegations)
         self.assertEqual(len(rows), 2)
         self.assertIs(second.content_model, get_user_model())
         self.assertEqual(second.content_path, ('delegate',))
