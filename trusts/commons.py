@@ -13,6 +13,7 @@ from django.apps import apps as django_apps
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import F, Model, Q
 from django.db.models.base import ModelBase
+from django.db.models.query import QuerySet
 
 from trusts.errors import TrustsConfigurationError
 
@@ -193,6 +194,28 @@ _BINDING_FIELDS = {
     'content': 'content_field',
     'permission': 'permission_field',
 }
+
+
+def _concrete_model(value):
+    opts = getattr(value, '_meta', None)
+    if opts is None:
+        raise TrustsConfigurationError(
+            'Expected a model class or instance, not %r.' % (value,)
+        )
+    return opts.concrete_model
+
+
+def _content_model(content):
+    if isinstance(content, QuerySet):
+        return content.model._meta.concrete_model
+    if isinstance(content, ModelBase):
+        return content._meta.concrete_model
+    if isinstance(content, Model):
+        return content._meta.concrete_model
+    raise TrustsConfigurationError(
+        'content must be a model class, instance, or QuerySet, not %r.'
+        % (content,)
+    )
 
 
 def _require_instance(value, role):

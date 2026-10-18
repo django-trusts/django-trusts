@@ -1,42 +1,107 @@
-"""Frozen registry constructed from already-lowered state.
+"""Frozen registry constructed from already-lowered values.
 
-The factory passes records, the compiler, the sibling handle list, and
-the plan builders. This module does not import ``trusts.core`` or
-``trusts.compile``. Object methods take the runtime user, content, and
-permission and call the injected builders.
+Records, delegations, the named-filter condition store, stored user
+conditions, and the user override are passed in as data, all at once.
+Builders and model helpers are imported directly here; this module
+does not import ``trusts.core`` or ``trusts.compile``. Object methods
+take the runtime user, content, and permission.
 """
 
 __all__ = []
 
-from functools import reduce
-from operator import or_
-
-from django.db.models import Exists, OuterRef, Q
-
+from trusts.commons import _concrete_model, _content_model, _require_instance
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.relations import RelationPlan, _candidate_model
+from trusts.plan.standards import (
+    builtin_user_conditions,
+    compile_override_q,
+    compile_user_rules,
+)
 
 
 class FrozenRegistry(object):
-    """Query-time registry. Registration has already been lowered."""
+    """Query-time registry built whole from lowered values.
+
+    ``records`` and ``delegations`` are the lowered rows.
+    ``conditions`` is the named-filter store (shared, not copied);
+    a new empty store is created when omitted. ``user_conditions``
+    is the stored user-condition tuple, or ``None`` for the built-in
+    per-model rule. ``user_override`` is the stored override or
+    ``None``. ``condition_lookup`` is derived from ``conditions``
+    when ``None``.
+    """
 
     def __init__(
-        self, *, records, delegations, compiler, handles, relation_plan,
-        bind_record_qs, grant_reach, content_model, concrete_model,
-        require_instance, candidate_model, rule_fragment, override_fragment,
+        self, *, records, delegations, conditions=None,
+        user_conditions=None, user_override=None, condition_lookup=None,
     ):
         self.records = tuple(records)
         self.delegations = tuple(delegations)
-        self.compiler = compiler
-        self.handles = tuple(handles)
-        self.relation_plan = relation_plan
-        self.bind_record_qs = bind_record_qs
-        self.grant_reach = grant_reach
-        self.content_model = content_model
-        self.concrete_model = concrete_model
-        self.require_instance = require_instance
-        self.candidate_model = candidate_model
-        self.rule_fragment = rule_fragment
-        self.override_fragment = override_fragment
+        if conditions is None:
+            # Stay lazy: importing this module must not load the
+            # condition IR unless a store or lookup must be created.
+            from trusts.plan.conditions import ConditionRegistry
+
+            conditions = ConditionRegistry()
+        self.conditions = conditions
+        self.user_conditions = (
+            None if user_conditions is None else tuple(user_conditions)
+        )
+        self.user_override = user_override
+        if condition_lookup is None:
+            from trusts.plan.conditions import RegistryConditionLookup
+
+            condition_lookup = RegistryConditionLookup(self.conditions)
+        self.condition_lookup = condition_lookup
+        self._rule_fragments = {}
+        self._override_fragments = {}
+
+    def plan_for(self, content, *, user=None, permission=None):
+        """Same terminal selection as ``TrustsRegistry.plan_for``.
+
+        Lowered rows and rule data come from construction. ``content``,
+        ``user``, and ``permission`` are the runtime parameters.
+        """
+        content_model = _content_model(content)
+        user_model = None
+        if user is not None:
+            user_model = _concrete_model(
+                _require_instance(user, 'user'),
+            )
+        permission_model = None
+        if permission is not None:
+            permission_model = _concrete_model(
+                _require_instance(permission, 'permission'),
+            )
+        records = self._records_for(
+            content_model, user_model, permission_model,
+        )
+        delegations = self._delegations_for(content_model, user_model)
+        plan_permission = permission_model
+        if records:
+            models = {record.permission_model for record in records}
+            if len(models) != 1:
+                raise TrustsConfigurationError(
+                    'Applicable registrations must share one permission '
+                    'model; got %s.'
+                    % ', '.join(sorted(model._meta.label for model in models))
+                )
+            plan_permission = models.pop()
+        subject = self._compiled_subject(records, delegations, user_model)
+        rules = closed = override = None
+        if subject is not None:
+            rules = self._rule_fragment(subject, role='user')
+            closed = rules
+            override = self._override_fragment(subject)
+        return RelationPlan(
+            records=records,
+            delegations=delegations,
+            permission_model=plan_permission,
+            content_identity=_candidate_model(content),
+            user_rules=rules,
+            user_rules_closed=closed,
+            user_override_q=override,
+        )
 
     def _records_for(self, content_model, user_model, permission_model):
         chosen = []
@@ -80,77 +145,31 @@ class FrozenRegistry(object):
             return models.pop()
         return None
 
-    def plan_for(self, content, *, user=None, permission=None):
-        """Same terminal selection as ``TrustsRegistry.plan_for``.
+    def _conditions_for_model(self, model):
+        if self.user_conditions is not None:
+            return self.user_conditions
+        return builtin_user_conditions(model)
 
-        Builders and lowered rows come from construction. ``content``,
-        ``user``, and ``permission`` are the runtime parameters.
-        """
-        content_model = self.content_model(content)
-        user_model = None
-        if user is not None:
-            user_model = self.concrete_model(
-                self.require_instance(user, 'user'),
+    def _rule_fragment(self, model, *, role, path=''):
+        model = model._meta.concrete_model
+        key = (model, role, path)
+        try:
+            return self._rule_fragments[key]
+        except KeyError:
+            compiled = compile_user_rules(
+                model, path, self._conditions_for_model(model),
+                role=role, values={},
             )
-        permission_model = None
-        if permission is not None:
-            permission_model = self.concrete_model(
-                self.require_instance(permission, 'permission'),
-            )
-        records = self._records_for(
-            content_model, user_model, permission_model,
-        )
-        delegations = self._delegations_for(content_model, user_model)
-        plan_permission = permission_model
-        if records:
-            models = {record.permission_model for record in records}
-            if len(models) != 1:
-                raise TrustsConfigurationError(
-                    'Applicable registrations must share one permission '
-                    'model; got %s.'
-                    % ', '.join(sorted(model._meta.label for model in models))
-                )
-            plan_permission = models.pop()
-        subject = self._compiled_subject(records, delegations, user_model)
-        rules = closed = override = None
-        if subject is not None:
-            rules = self.rule_fragment(subject, role='user')
-            closed = rules
-            override = self.override_fragment(subject)
-        return self.relation_plan(
-            records=records,
-            delegations=delegations,
-            permission_model=plan_permission,
-            content_identity=self.candidate_model(content),
-            user_rules=rules,
-            user_rules_closed=closed,
-            user_override_q=override,
-        )
+            self._rule_fragments[key] = compiled
+            return compiled
 
-    def compile_content_exists(self, plan, user, permission):
-        """Content correlation for one plan, via the injected builders."""
-        user = self.require_instance(user, 'user')
-        permission = self.require_instance(permission, 'permission')
-        if not plan.records:
-            return None
-        parts = []
-        for record in plan.records:
-            if record.along is not None:
-                parts.append(self.grant_reach(
-                    record, user, permission,
-                    content_identity=plan.content_identity,
-                ))
-                continue
-            inner = self.bind_record_qs(
-                record,
-                correlation=Q(**{
-                    record.content_field: OuterRef(record.content_target),
-                }),
-                content_identity=plan.content_identity,
-                user=user,
-                permission=permission,
+    def _override_fragment(self, model):
+        model = model._meta.concrete_model
+        try:
+            return self._override_fragments[model]
+        except KeyError:
+            compiled = compile_override_q(
+                model, '', self.user_override, {},
             )
-            parts.append(Exists(inner))
-        if len(parts) == 1:
-            return parts[0]
-        return reduce(or_, parts)
+            self._override_fragments[model] = compiled
+            return compiled
