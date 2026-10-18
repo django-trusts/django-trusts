@@ -289,9 +289,9 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
     def test_ready_still_owns_the_document_plan(self):
         owner = implementation_for_path(DOCUMENT_BACKEND)
         handle = owner.configured_backend()
-        self.assertTrue(handle.registry.records)
+        self.assertTrue(handle.build_registry().records)
         self.assertIsNotNone(
-            handle.registry.get_permission_condition_record(
+            handle.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             ),
         )

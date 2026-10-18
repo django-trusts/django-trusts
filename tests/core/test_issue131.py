@@ -132,7 +132,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 content='document',
                 along=Along(j.document, 8),
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_invalid_public_path_grammar_is_rejected(self):
         handle = _handle()
@@ -154,7 +154,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                         permission='permission',
                         content='document',
                     )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_string_condition_is_not_legal_on_bare_registry(self):
         registry = TrustsRegistry()
@@ -183,7 +183,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
-        self.assertEqual(handle.registry.records, (first,))
+        self.assertEqual(handle.build_registry().records, (first,))
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
             handle.register(
                 trust=DocumentGrant,
@@ -191,7 +191,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                 permission='user',
                 content='document',
             )
-        self.assertEqual(handle.registry.records, (first,))
+        self.assertEqual(handle.build_registry().records, (first,))
 
 
 class HandleAfterBuildOrderTest(SimpleTestCase):
@@ -245,18 +245,18 @@ class HandleIsolationTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(right.registry.records, ())
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(right.build_registry().records, ())
         right.register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(len(right.registry.records), 1)
-        self.assertIsNot(left.registry.records[0], right.registry.records[0])
-        self.assertEqual(left.registry.records[0], right.registry.records[0])
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(len(right.build_registry().records), 1)
+        self.assertIsNot(left.build_registry().records[0], right.build_registry().records[0])
+        self.assertEqual(left.build_registry().records[0], right.build_registry().records[0])
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -365,7 +365,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
                 content='document',
                 strategy=object(),
             )
-        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_incomplete_signatures_are_type_error(self):
         backend = _handle()
@@ -373,7 +373,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             backend.register(trust=DocumentGrant, user='user')
         with self.assertRaises(TypeError):
             backend.add_named_filter(Document, 'non_confidential')
-        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_register_ref_is_type_error(self):
         backend = _handle()
@@ -382,7 +382,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
             backend.register(
                 trust=j, user='user', permission='permission', content='document',
             )
-        self.assertEqual(backend.registry.records, ())
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_duplicate_relationship_leaves_store_unchanged(self):
         backend = _handle()
@@ -399,7 +399,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
-        self.assertEqual(backend.registry.records, (first,))
+        self.assertEqual(backend.build_registry().records, (first,))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -459,7 +459,7 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
         record = backend.add_named_filter(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(
-            backend.registry.get_permission_condition_record(
+            backend.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             ),
             record,
@@ -473,7 +473,7 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
                 Document, 'non_confidential', 'not-a-predicate',
             )
         self.assertIsNone(
-            backend.registry.get_permission_condition_record(
+            backend.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             ),
         )
@@ -525,13 +525,13 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(right.registry.records, ())
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(right.build_registry().records, ())
         right.register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        self.assertEqual(len(left.registry.records), 1)
-        self.assertEqual(len(right.registry.records), 1)
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(len(right.build_registry().records), 1)

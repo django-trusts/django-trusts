@@ -84,7 +84,7 @@ class RegisterPublicSurfaceTest(SimpleTestCase):
                 permission='permission',
                 content='document',
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_honest_contextual_typing_does_not_prove_attributes(self):
         hints = get_type_hints(BackendHandle.register)
@@ -365,7 +365,7 @@ class RegisterNormalizeTest(SimpleTestCase):
                 permission=lambda t: t.operation,
                 content=lambda t: t.repository,
             )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
 
 class RegisterOnceAtRegistrationTest(TestCase):
@@ -449,7 +449,7 @@ class RegisterFailClosedTest(TestCase):
                             permission=lambda t: t.permission,
                             content=lambda t: t.document,
                         )
-                self.assertEqual(handle.registry.records, ())
+                self.assertEqual(handle.build_registry().records, ())
 
     def test_failed_third_role_does_not_partially_mutate(self):
         handle = _handle()
@@ -461,7 +461,7 @@ class RegisterFailClosedTest(TestCase):
                     permission=lambda t: t.permission,
                     content=lambda t: t.not_a_field,
                 )
-        self.assertEqual(handle.registry.records, ())
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_register_after_build_invokes_builder(self):
         registry = TrustsRegistry()

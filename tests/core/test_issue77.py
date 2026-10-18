@@ -78,8 +78,8 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
     def test_document_grant_is_not_inherited_by_host(self):
         host = live_config().configured_backend()
         document = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
-        self.assertFalse(host.registry.plan_for(Document).records)
-        self.assertTrue(document.registry.plan_for(Document).records)
+        self.assertFalse(host.build_registry().plan_for(Document).records)
+        self.assertTrue(document.build_registry().plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
         mixin = BackendHandle(
@@ -87,7 +87,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
             registry=TrustsRegistry(),
             compiler=PlanQueryCompiler(),
         )
-        self.assertFalse(mixin.registry.plan_for(Document).records)
+        self.assertFalse(mixin.build_registry().plan_for(Document).records)
 
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
