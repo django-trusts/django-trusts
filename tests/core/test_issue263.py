@@ -651,20 +651,20 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
                 self.assertFalse(user.has_perm(self.read_code, self.secret))
 
             self.assertTrue(
-                handle.registry.has_permission(self.alice, self.spec, self.read),
+                handle.build_registry().has_permission(self.alice, self.spec, self.read),
             )
             self.assertTrue(
-                handle.registry.has_permission(
+                handle.build_registry().has_permission(
                     self.alice, self.notes, self.change,
                 ),
             )
             self.assertFalse(
-                handle.registry.has_permission(
+                handle.build_registry().has_permission(
                     self.alice, self.spec, self.delete,
                 ),
             )
             self.assertFalse(
-                handle.registry.has_permission(self.bob, self.spec, self.read),
+                handle.build_registry().has_permission(self.bob, self.spec, self.read),
             )
 
             read_users = self.spec.get_permitted_users(self.read)
@@ -785,7 +785,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self._authorized(handle, self.bob, self.delete),
             [],
         )
-        enumerated = list(handle.registry.permissions_for(self.alice, self.spec))
+        enumerated = list(handle.build_registry().permissions_for(self.alice, self.spec))
         self.assertEqual(
             {_code(row) for row in enumerated},
             {self.read_code, self.change_code},
@@ -834,7 +834,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self.assertTrue(self.alice.has_perm(self.add_code, self.spec))
             self.assertFalse(self.bob.has_perm(self.add_code, self.spec))
             self.assertTrue(
-                handle.registry.has_permission(
+                handle.build_registry().has_permission(
                     self.alice, self.secret, self.read,
                 ),
             )

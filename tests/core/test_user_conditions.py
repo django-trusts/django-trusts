@@ -602,8 +602,21 @@ class UserConditionTargetTest(TransactionTestCase):
             )
             self.assertTrue(holds(sponsor_handle, actor))
             self.assertTrue(holds(sponsor_handle, superuser))
-            checked = str(sponsor_registry.permissions_for(superuser, note).query)
-            self.assertNotIn('is_superuser', checked)
+            checked_qs = sponsor_registry.permissions_for(superuser, note)
+            # Pass 4: the builder trio delegates to the built registry,
+            # whose Q4 is the production common-permissions compile.
+            # The sponsor rule therefore appears in the delegated
+            # branch of that SQL (as it always did in production);
+            # it still does not gate the checked user's ordinary
+            # grant, which the result/SQL equivalence below pins.
+            production_qs = common_permissions(
+                (sponsor_handle,), note, superuser,
+            )
+            self.assertEqual(
+                set(checked_qs.values_list('pk', flat=True)),
+                set(production_qs.values_list('pk', flat=True)),
+            )
+            self.assertEqual(str(checked_qs.query), str(production_qs.query))
 
             user_active = open_registry(
                 lambda registry: registry.set_user_condition(
@@ -1448,7 +1461,7 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
     """
     permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
     held = common_permissions((handle,), doc, user, **flags)
-    listed = handle.registry.permissions_for(user, doc, **flags)
+    listed = handle.build_registry().permissions_for(user, doc, **flags)
     return {
         'has_perm': backend.has_perm(user, perm, doc, **flags),
         'authorized': Document.objects.authorized(
@@ -1463,7 +1476,7 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
         ).values_list('pk', flat=True)),
         'enumerated': perm in backend.get_all_permissions(user, doc, **flags),
         'permissions_for': change.pk in set(listed.values_list('pk', flat=True)),
-        'has_permission': handle.registry.has_permission(
+        'has_permission': handle.build_registry().has_permission(
             user, doc, change, **flags,
         ),
     }
