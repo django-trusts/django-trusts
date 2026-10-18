@@ -34,8 +34,8 @@ Zero and gh-permissions tests also import ``TrustsRegistry``, ``Ref``,
 ``ConditionLookup``, and ``TrustsCompilerError``. Those stay until
 those tests move. Deleting this module waits on that downstream set.
 
-``_FrozenRegistry`` stays because ``test_registry_spike`` asserts this
-alias. ``permission_in`` stays because ``test_issue98`` asserts that
+``_FrozenRegistry`` is the compat alias for ``Registry``;
+``test_registry_spike`` asserts the identity. ``permission_in`` stays because ``test_issue98`` asserts that
 export. ``plan.registry`` does not import ``compile``.
 """
 

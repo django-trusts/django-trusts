@@ -2,7 +2,7 @@
 
 ``TrustsRegistry`` collects ``register`` and ``set_*`` calls and stores
 lowered rows. Its ``build_*`` methods return the lowered shapes without
-storing them; the ``register*`` methods own frozen, duplicate, and
+storing them; the ``register*`` methods own duplicate and
 rule checks and append those shapes. ``build_registry`` builds the
 query-time ``Registry`` from stored values. ``trusts.core`` re-exports
 ``TrustsRegistry``. This module does not import ``trusts.core``.
@@ -980,13 +980,11 @@ class TrustsRegistry(object):
     store several records when they terminate on different content
     models, or when the same bindings use a different closed condition.
 
-        Frozen state is instance-owned. ``freeze()`` is idempotent.
-        ``register`` and ``register_permission_condition`` on that exact
-        frozen instance raise ``TrustsConfigurationError`` before
-        validation, builder invoke, or mutation. Existing records,
-        plans, compilers, and authorization reads stay usable.
-    A standalone ``TrustsRegistry()`` never inspects Django readiness
-    and never auto-freezes.
+        Registration stays open for the life of the instance:
+        ``build_registry()`` builds a fresh ``Registry`` from the
+        current records on each call, so registering after a build
+        takes effect on the next build. A standalone
+        ``TrustsRegistry()`` never inspects Django readiness.
     """
 
     def __init__(self):
@@ -1000,7 +998,6 @@ class TrustsRegistry(object):
         self._order = []
         self._delegations_by_root = {}
         self._delegation_order = []
-        self._frozen = False
         self._condition_lookup = None
         self._user_conditions = None
         self._user_override = None
@@ -1008,10 +1005,6 @@ class TrustsRegistry(object):
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
-
-    @property
-    def frozen(self):
-        return self._frozen
 
     @property
     def condition_lookup(self):
@@ -1042,16 +1035,10 @@ class TrustsRegistry(object):
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
 
-        A callable is a registration-time builder. A frozen instance
-        raises ``TrustsConfigurationError`` before the builder is
-        invoked. A prebuilt ``Expr`` is rejected by the condition
+        A callable is a registration-time builder, invoked once
+        here. A prebuilt ``Expr`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register a permission condition on a frozen '
-                'TrustsRegistry.'
-            )
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
         )
@@ -1162,14 +1149,6 @@ class TrustsRegistry(object):
         return None
 
     def _open_for_rules(self, kind):
-        if self._frozen:
-            verb = (
-                'set a user condition' if kind == 'condition'
-                else 'set a user override'
-            )
-            raise TrustsConfigurationError(
-                'Cannot %s on a frozen TrustsRegistry.' % verb
-            )
         if self._order or self._delegation_order:
             raise TrustsConfigurationError(
                 'Set user conditions and the user override before '
@@ -1271,10 +1250,6 @@ class TrustsRegistry(object):
         self._clear_compiled_rules()
         return self._user_override
 
-    def freeze(self):
-        """Seal relation and condition registration on this instance."""
-        self._frozen = True
-
     @property
     def records(self):
         return tuple(self._order)
@@ -1311,7 +1286,7 @@ class TrustsRegistry(object):
 
         Pure shape-building half of ``register_delegation``: same ref,
         path, condition, and ``along`` validation and errors, but no
-        frozen or duplicate check, no user-rule assertion or sponsor
+        duplicate check, no user-rule assertion or sponsor
         fragment (``sponsor_rules`` stays ``None``), and no append.
         ``register_delegation`` owns those steps and appends the shape.
         """
@@ -1393,10 +1368,6 @@ class TrustsRegistry(object):
         walk as an ordinary registration: the delegation anchor reaches
         objects within that walk. Registration validates metadata only.
         """
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
         record = self.build_delegation(
             content=content, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
@@ -1443,7 +1414,7 @@ class TrustsRegistry(object):
 
         Pure shape-building half of ``register``: same permission-source,
         ref, path, condition, and ``along`` validation and errors, but no
-        frozen or duplicate/conflict check, no user-rule assertion or
+        duplicate/conflict check, no user-rule assertion or
         fragment compilation, and no append. ``register`` owns those
         steps and appends the returned shape.
         """
@@ -1547,20 +1518,14 @@ class TrustsRegistry(object):
 
         Optional ``along`` is an ``Along`` that replaces equality at the
         walk-site with bounded reachability. Along validation uses
-        ``_meta`` only (zero SQL) and runs after the frozen check.
+        ``_meta`` only (zero SQL).
 
         Optional ``condition`` is a closed predicate tree (``All``,
         ``Equal``, ``permission_in``) compiled as an AND overlay on the
         same root row. Validation uses ``_meta`` only (zero SQL).
 
-        A frozen instance raises ``TrustsConfigurationError`` before
-        validation or mutation. This method does not inspect Django's
-        global ``apps.ready``.
+        This method does not inspect Django's global ``apps.ready``.
         """
-        if self._frozen:
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
         record = self.build_relation(
             content=content, user=user, permission=permission, group=group,
             condition=condition, along=along,
@@ -1608,10 +1573,10 @@ class TrustsRegistry(object):
 
         Shape-building half of ``_register_public``: same mode, trust,
         path-builder, condition, and ``along`` validation and errors, in
-        the same order, but no frozen check and no append. Path and
+        the same order, but no append. Path and
         condition builders are invoked exactly once, here; the returned
         shape carries only refs, lowered condition IR, and ``Along``.
-        ``_register_public`` owns the frozen check and stores the shape
+        ``_register_public`` stores the shape
         via ``register`` or ``register_delegation``.
         """
         ordinary = user is not None or permission is not None or group is not None
@@ -1712,10 +1677,6 @@ class TrustsRegistry(object):
         The handle forwards here so ``trusts.plan.handles`` does not import
         this module. Callers keep using ``BackendHandle.register``.
         """
-        if getattr(self, 'frozen', False):
-            raise TrustsConfigurationError(
-                'Cannot register on a frozen TrustsRegistry.'
-            )
         shape = self.build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,

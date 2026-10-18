@@ -223,14 +223,14 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             )
         self.assertTrue(any("'typo'" in m.msg for m in errors))
 
-    def test_frozen_handle_does_not_invoke_builder(self):
+    def test_handle_after_build_invokes_builder(self):
         Note = _note_model()
         registry = TrustsRegistry()
-        registry.freeze()
+        registry.build_registry()
         log = _BuilderLog()
-        with self.assertRaises(TrustsConfigurationError):
-            registry.register_permission_condition(Note, 'own', log)
-        self.assertEqual(log.calls, [])
+        record = registry.register_permission_condition(Note, 'own', log)
+        self.assertEqual(len(log.calls), 1)
+        self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
 
 
 class ManagePyCheckLifecycleTest(SimpleTestCase):

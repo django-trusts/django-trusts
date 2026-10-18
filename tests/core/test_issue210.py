@@ -1,6 +1,6 @@
 """#210: one symbolic ``condition=`` language on public ``register``.
 
-Trust-rooted callable, invoked once after freeze. 1.0 grammar is path
+Trust-rooted callable, invoked once at registration. 1.0 grammar is path
 ``==``, collection-rooted ``.contains(member)``, and ``&``. Literal
 Python ``in`` is unsupported. Lower only to private ``Equal`` /
 ``PermissionIn`` / ``All``. Public handle rejects prebuilt IR.
@@ -407,15 +407,15 @@ class RegisterConditionFailClosedTest(TestCase):
                 )
         self.assertEqual(handle.registry.records, ())
 
-    def test_freeze_wins_before_condition_invocation(self):
+    def test_condition_invoked_on_register_after_build(self):
         registry = TrustsRegistry()
         handle = _handle(registry)
-        registry.freeze()
+        registry.build_registry()
         calls = []
 
         def condition(trust):
             calls.append(trust)
-            return trust.user == trust.permission
+            return trust.user == trust.user
 
         with patch(
             'trusts.compile.factory._public_path_segments',
@@ -430,21 +430,19 @@ class RegisterConditionFailClosedTest(TestCase):
                         'trusts.compile.factory._normalize_public_condition',
                         wraps=_normalize_public_condition,
                     ) as normalize:
-                        with self.assertRaises(TrustsConfigurationError) as ctx:
-                            handle.register(
-                                trust=DocumentGrant,
-                                user='user',
-                                permission='permission',
-                                content='document',
-                                condition=condition,
-                            )
-        self.assertIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(calls, [])
-        segments.assert_not_called()
-        resolve.assert_not_called()
-        validate.assert_not_called()
-        normalize.assert_not_called()
-        self.assertEqual(registry.records, ())
+                        record = handle.register(
+                            trust=DocumentGrant,
+                            user='user',
+                            permission='permission',
+                            content='document',
+                            condition=condition,
+                        )
+        self.assertEqual(len(calls), 1)
+        segments.assert_called()
+        resolve.assert_called()
+        validate.assert_called()
+        normalize.assert_called()
+        self.assertEqual(registry.records, (record,))
 
 
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):

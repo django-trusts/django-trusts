@@ -164,12 +164,11 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
             self.assertTrue(handle.created)
             self.assertIs(handle.registry, first)
             self.assertEqual(config.handle_paths, (HOST,))
-            self.assertFalse(first.frozen)
             config.apps.ready = True
             live = config.configured_backend(HOST)
             self.assertIs(live.registry, first)
-            self.assertTrue(first.frozen)
             self.assertIsInstance(live, RecordingHandle)
+            self.assertEqual(live.build_registry().records, first.records)
 
     def test_unowned_handle_defaults_to_relationship_family(self):
         handle = BackendHandle(
@@ -379,24 +378,34 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
             self.assertTrue(self.backend.has_perm(self.alice, PERM, self.doc))
 
 
-class FactoryFreezeOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
-    def test_live_configured_backend_still_freezes_factory_registry(self):
+class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
+    def test_live_configured_backend_builds_factory_registry_on_demand(self):
         live = live_config()
         isolated = live._create_registry(HOST)
         self.assertIsInstance(isolated, TrustsRegistry)
-        self.assertFalse(isolated.frozen)
         saved = dict(live.registries)
         live.registries[HOST] = isolated
         try:
             with override_apps_ready(False):
                 handle = live.configured_backend()
                 self.assertIs(handle.registry, isolated)
-                self.assertFalse(isolated.frozen)
+                first_build = handle.build_registry()
             handle = live.configured_backend()
             self.assertIs(handle.registry, isolated)
-            self.assertTrue(isolated.frozen)
             self.assertIsInstance(handle, BackendHandle)
             self.assertEqual(handle.path, HOST)
+            second_build = handle.build_registry()
+            self.assertIsNot(first_build, second_build)
+            self.assertEqual(first_build.records, second_build.records)
+            # Late registration takes effect on the next build.
+            from tests.myapp.models import DocumentGrant
+            from trusts.compile.nodes import Ref
+            j = Ref(DocumentGrant)
+            isolated.register(
+                content=j.document, user=j.user, permission=j.permission,
+            )
+            self.assertEqual(handle.build_registry().records, isolated.records)
+            self.assertEqual(first_build.records, ())
         finally:
             live.registries.clear()
             live.registries.update(saved)

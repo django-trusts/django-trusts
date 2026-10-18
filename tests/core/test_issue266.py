@@ -1361,24 +1361,15 @@ class DelegationRootGuardTest(TestCase):
                 handle.registry.delegations_for_root(DocumentDelegation)
         self.assertEqual(handle.registry.delegations, ())
 
-    def test_frozen_registry_rejects_delegation(self):
+    def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
-        handle.registry.freeze()
+        self.assertEqual(handle.registry.build_registry().delegations, ())
         with self.assertNumQueries(0):
-            with self.assertRaisesRegex(
-                TrustsConfigurationError, 'frozen TrustsRegistry',
-            ):
-                self._register(handle)
-            delegation = Ref(DocumentDelegation)
-            with self.assertRaisesRegex(
-                TrustsConfigurationError, 'frozen TrustsRegistry',
-            ):
-                handle.registry.register_delegation(
-                    content=delegation.document,
-                    delegate=delegation.delegate,
-                    sponsor=delegation.sponsor,
-                )
-        self.assertEqual(handle.registry.delegations, ())
+            record = self._register(handle)
+        self.assertEqual(handle.registry.delegations, (record,))
+        self.assertEqual(
+            handle.registry.build_registry().delegations, (record,),
+        )
 
     def test_delegate_and_sponsor_must_share_a_principal_model(self):
         handle = _handle()

@@ -76,7 +76,6 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         lookup = registry.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)
-        self.assertFalse(registry.frozen)
 
     def test_handles_do_not_share_lookup_or_store(self):
         left = TrustsRegistry()
@@ -86,22 +85,22 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertIs(left.condition_lookup.conditions, left.conditions)
         self.assertIs(right.condition_lookup.conditions, right.conditions)
 
-    def test_freeze_and_ready_do_not_bind_or_rebind(self):
+    def test_build_and_ready_do_not_bind_or_rebind(self):
         import inspect
 
         registry = TrustsRegistry()
         lookup = registry.condition_lookup
-        registry.freeze()
-        self.assertTrue(registry.frozen)
+        built = registry.build_registry()
+        self.assertIs(built.condition_lookup, lookup)
         self.assertIs(registry.condition_lookup, lookup)
         self.assertIs(lookup.conditions, registry.conditions)
         self.assertNotIn(
             'set_condition_lookup',
-            inspect.getsource(TrustsRegistry.freeze),
+            inspect.getsource(TrustsRegistry.build_registry),
         )
         self.assertNotIn(
             'RegistryConditionLookup',
-            inspect.getsource(TrustsRegistry.freeze),
+            inspect.getsource(TrustsRegistry.build_registry),
         )
         self.assertNotIn(
             'set_condition_lookup',
@@ -248,7 +247,6 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
         owner = implementation_for_path(DOCUMENT_BACKEND)
         registry = owner.configured_backend().registry
-        self.assertTrue(registry.frozen)
         lookup = registry.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)
@@ -313,8 +311,8 @@ class NamedConditionCompilationTest(TransactionTestCase):
             registry.register_permission_condition(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
-            registry.freeze()
-        self.assertTrue(registry.frozen)
+            built = registry.build_registry()
+        self.assertIs(built.condition_lookup, lookup)
         self.assertIs(registry.condition_lookup, lookup)
         self.assertIsNotNone(
             registry.get_permission_condition_record(Note, 'owned'),
