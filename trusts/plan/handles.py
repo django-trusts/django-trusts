@@ -130,7 +130,7 @@ class BackendHandle:
         for this path" (``self.registry is None``); callers translate
         it to ``False`` / ``set()`` / an empty queryset and never return
         it as a Django backend result. A registry that is already built
-        (``FrozenRegistry.build_registry`` returns itself) or a
+        (``Registry.build_registry`` returns itself) or a
         duck-typed registry without ``build_registry`` is returned
         as-is. A configured-but-empty builder builds an empty registry.
         """

@@ -1,9 +1,9 @@
-"""Spike: a frozen registry built whole from lowered values.
+"""Spike: a registry built whole from lowered values.
 
-``TrustsRegistry`` stays the registration front end. ``FrozenRegistry``
+``TrustsRegistry`` stays the registration front end. ``Registry``
 takes records, delegations, the shared condition store, stored user
 conditions, and the user override as data. It does not import
-``trusts.core``. Core imports the frozen class.
+``trusts.core``. Core re-exports it as ``_FrozenRegistry``.
 """
 
 import ast
@@ -22,7 +22,7 @@ from trusts.core import (
     Ref,
     TrustsRegistry,
 )
-from trusts.plan.registry import FrozenRegistry
+from trusts.plan.registry import Registry
 
 
 def _sql(expr, model):
@@ -31,8 +31,8 @@ def _sql(expr, model):
     return compiler.as_sql()
 
 
-def _frozen_from(registry):
-    return FrozenRegistry(
+def _built_from(registry):
+    return Registry(
         records=registry.records,
         delegations=registry.delegations,
         conditions=registry.conditions,
@@ -43,7 +43,7 @@ def _frozen_from(registry):
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
+class RegistryInjectionSpikeTest(SimpleTestCase):
     def test_module_does_not_import_core_or_compile(self):
         import trusts.compile.factory as factory_module
         import trusts.core as core
@@ -68,7 +68,7 @@ class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
                         or name.startswith('trusts.compile.'),
                         name,
                     )
-        self.assertIs(core._FrozenRegistry, FrozenRegistry)
+        self.assertIs(core._FrozenRegistry, Registry)
         self.assertTrue(registry_module.__file__.endswith('registry.py'))
 
     def test_direct_trusts_registry_still_registers(self):
@@ -82,14 +82,14 @@ class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
         Document, DocumentGrant = _document_models()
         registry = TrustsRegistry()
         _register_document(registry, DocumentGrant)
-        frozen = _frozen_from(registry)
-        self.assertIs(frozen.conditions, registry.conditions)
-        self.assertIs(frozen.condition_lookup, registry.condition_lookup)
-        self.assertEqual(frozen.records, registry.records)
-        self.assertEqual(frozen.delegations, registry.delegations)
+        built_registry = _built_from(registry)
+        self.assertIs(built_registry.conditions, registry.conditions)
+        self.assertIs(built_registry.condition_lookup, registry.condition_lookup)
+        self.assertEqual(built_registry.records, registry.records)
+        self.assertEqual(built_registry.delegations, registry.delegations)
 
         live = registry.plan_for(Document)
-        built = frozen.plan_for(Document)
+        built = built_registry.plan_for(Document)
         self.assertEqual(built.records, live.records)
         self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
@@ -121,9 +121,9 @@ class FrozenRegistryInjectionSpikeTest(SimpleTestCase):
             permission=root.permission,
             along=Along(root.folder.parent, 2),
         )
-        frozen = _frozen_from(registry)
+        built_registry = _built_from(registry)
         live = registry.plan_for(Folder)
-        built = frozen.plan_for(Folder)
+        built = built_registry.plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)

@@ -1,6 +1,6 @@
 """Pass 4: the four canonical questions live on the built registry.
 
-``FrozenRegistry`` answers Q1 has_permission, Q2 filter_authorized
+``Registry`` answers Q1 has_permission, Q2 filter_authorized
 (plus the scope-prefix variant filter_by_permitted_content), Q3
 permitted_users, and Q4 permissions_for (complete and group kinds),
 with production delegation semantics. The builder trio on

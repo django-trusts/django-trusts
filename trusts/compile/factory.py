@@ -4,7 +4,7 @@
 lowered rows. Its ``build_*`` methods return the lowered shapes without
 storing them; the ``register*`` methods own frozen, duplicate, and
 rule checks and append those shapes. ``build_registry`` builds the
-query-time ``FrozenRegistry`` from stored values. ``trusts.core`` re-exports
+query-time ``Registry`` from stored values. ``trusts.core`` re-exports
 ``TrustsRegistry``. This module does not import ``trusts.core``.
 """
 
@@ -62,7 +62,7 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.registry import FrozenRegistry
+from trusts.plan.registry import Registry
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
@@ -1774,13 +1774,13 @@ class TrustsRegistry(object):
         return tuple(chosen)
 
     def build_registry(self):
-        """Build a query-time ``FrozenRegistry`` from stored values.
+        """Build a query-time ``Registry`` from stored values.
 
         Records, delegations, the shared condition store, stored user
         conditions, the user override, and the bound condition lookup
         are passed as data, all at once. No builders are injected.
         """
-        return FrozenRegistry(
+        return Registry(
             records=self.records,
             delegations=self.delegations,
             conditions=self.conditions,

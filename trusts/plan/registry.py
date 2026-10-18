@@ -1,4 +1,4 @@
-"""Frozen registry constructed from already-lowered values.
+"""Registry constructed from already-lowered values.
 
 Records, delegations, the named-filter condition store, stored user
 conditions, and the user override are passed in as data, all at once.
@@ -67,7 +67,7 @@ class Question(object):
     question: object
 
 
-class FrozenRegistry(object):
+class Registry(object):
     """Query-time registry built whole from lowered values.
 
     ``records`` and ``delegations`` are the lowered rows.
@@ -196,7 +196,7 @@ class FrozenRegistry(object):
 
     @staticmethod
     def _as_registry(value):
-        if value is None or isinstance(value, FrozenRegistry):
+        if value is None or isinstance(value, Registry):
             return value
         build = getattr(value, 'build_registry', None)
         return build() if callable(build) else value
@@ -209,7 +209,7 @@ class FrozenRegistry(object):
             if registry is None or id(registry) in seen:
                 continue
             seen.add(id(registry))
-            if isinstance(registry, FrozenRegistry):
+            if isinstance(registry, Registry):
                 handles.append(registry._handle(compiler=compiler))
             else:
                 # Duck-typed registry (fake in tests): keep it as the
