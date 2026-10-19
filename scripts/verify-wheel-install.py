@@ -195,7 +195,7 @@ def main() -> int:
     ConditionLookup,
     Ref,
     RelationPlan,
-    TrustsRegistry,
+    RegistryFactory,
     filter_authorized_scopes,
 )
     from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
@@ -313,15 +313,15 @@ def main() -> int:
     print('filter_by_permitted_content', filter_by_permitted_content)
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
-    standalone = TrustsRegistry()
+    standalone = RegistryFactory()
     bound = standalone.condition_lookup
     if bound is None:
-        raise SystemExit('TrustsRegistry did not self-bind condition lookup')
+        raise SystemExit('RegistryFactory did not self-bind condition lookup')
     if bound.conditions is not standalone.conditions:
         raise SystemExit('self-bound lookup does not wrap registry.conditions')
     print('condition lookup self-bound')
     print(
-        'trusts.core', TrustsRegistry, Ref, RegisteredRelation,
+        'trusts.core', RegistryFactory, Ref, RegisteredRelation,
         RegisteredDelegation, RelationPlan,
     )
     print('permission_has_condition', permission_has_condition)

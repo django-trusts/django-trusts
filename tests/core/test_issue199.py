@@ -177,7 +177,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
         previous = registry.condition_lookup
         qs = Document.objects.filter(pk=self.document.pk)
         try:
-            registry.set_condition_lookup(None)
+            registry.condition_lookup = None
             with self.assertNumQueries(0):
                 with self.assertRaises(AttributeError) as ctx:
                     self.document_backend.has_perm(
@@ -194,7 +194,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                     self.document_backend.has_perm(self.alice, FILTERED, qs),
                 )
         finally:
-            registry.set_condition_lookup(previous)
+            registry.condition_lookup = previous
         self.assertIs(registry.condition_lookup, previous)
 
         with self.assertNumQueries(1):

@@ -33,7 +33,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 PERM = 'trusts_tests.change_note'
@@ -41,14 +41,19 @@ OPEN = '%s:open' % PERM
 
 
 class _BoundBackend(TrustModelBackendMixin, ModelBackend):
-    """Mixin backend bound to one isolated handle for public has_perm."""
+    """Mixin backend bound to one isolated registry for public has_perm."""
+
+    def __new__(cls, handle):
+        bound = type('BoundBackend', (cls,), {
+            'query_compiler': handle.compiler,
+        })
+        return object.__new__(bound)
 
     def __init__(self, handle):
         super().__init__()
-        self._bound_handle = handle
+        from trusts.backends import registries
 
-    def _own_handle(self):
-        return self._bound_handle
+        registries[type(self)] = handle.registry
 
 
 class _BuilderLog(object):
@@ -115,7 +120,7 @@ def _note_models():
 def _handle(note_grant):
     handle = BackendHandle(
         path='tests.core.issue203',
-        registry=TrustsRegistry(),
+        registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
     handle.register(

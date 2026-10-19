@@ -36,7 +36,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,7 +44,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _handle(registry=None, path='tests.core.issue207'):
     if registry is None:
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
     return BackendHandle(
         path=path,
         registry=registry,
@@ -268,7 +268,7 @@ class RegisterWheelSignatureTest(SimpleTestCase):
 
 class RegisterNormalizeTest(SimpleTestCase):
     def test_strings_callables_and_mixed_normalize_equivalently(self):
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         expected = via_ref.register(
             content=Ref(DocumentGrant).document,
             user=Ref(DocumentGrant).user,
@@ -302,7 +302,7 @@ class RegisterNormalizeTest(SimpleTestCase):
 
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        expected = _register_team(TrustsRegistry(), TeamRepoGrant)
+        expected = _register_team(RegistryFactory(), TeamRepoGrant)
         record = _handle().register(
             trust=TeamRepoGrant,
             user=lambda t: t.team.members,
@@ -334,7 +334,7 @@ class RegisterNormalizeTest(SimpleTestCase):
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
             _node_graph_models()
         )
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         j = Ref(Grant)
         expected = via_ref.register(
             content=j.node,
@@ -372,7 +372,7 @@ class RegisterOnceAtRegistrationTest(TestCase):
     def test_builders_run_once_and_never_during_projections(self):
         if 'myapp_document' not in connection.introspection.table_names():
             self.skipTest('myapp tables exist only on the kernel host')
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         handle = _handle(registry)
         user = _Count('user')
         permission = _Count('permission')
@@ -464,7 +464,7 @@ class RegisterFailClosedTest(TestCase):
         self.assertEqual(handle.build_registry().records, ())
 
     def test_register_after_build_invokes_builder(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         handle = _handle(registry)
         registry.build_registry()
         calls = []

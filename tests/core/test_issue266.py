@@ -24,7 +24,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts._permitted import permitted_queryset
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
@@ -34,7 +34,7 @@ from trusts.plan.users import lock_permitted_users_queryset
 def _handle(path='tests.core.issue266'):
     return BackendHandle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -51,14 +51,6 @@ def _permission(model, codename):
 
 class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
     """Stand-in for ``DocumentBackend`` when pair settings omit myapp."""
-
-    handle = None
-
-    def _own_handle(self):
-        handle = type(self).handle
-        if handle is None:
-            raise TrustsConfigurationError('pair document handle is unset')
-        return handle
 
 
 def _document_host_handle():
@@ -89,7 +81,9 @@ def _document_host_handle():
 
 @contextmanager
 def _listed(handle):
-    _PairDocumentBackend.handle = handle
+    from tests.apps import install_class_handle
+
+    install_class_handle(_PairDocumentBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue266._PairDocumentBackend',
     )), patch(
@@ -99,7 +93,7 @@ def _listed(handle):
         try:
             yield
         finally:
-            _PairDocumentBackend.handle = None
+            install_class_handle(_PairDocumentBackend, None)
 
 
 @contextmanager
@@ -1381,7 +1375,7 @@ class DelegationRootGuardTest(TestCase):
         self.assertEqual(handle.build_registry().delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         delegation = Ref(DocumentDelegation)
         grant = Ref(DocumentGrant)
         with self.assertNumQueries(0):
@@ -1456,9 +1450,11 @@ class DelegatedAuthorityLiveTest(TestCase):
         ContentType.objects.clear_cache()
         if not kernel_host_listed():
             handle = _document_host_handle()
-            _PairDocumentBackend.handle = handle
+            from tests.apps import install_class_handle
+
+            install_class_handle(_PairDocumentBackend, handle)
             self.addCleanup(
-                lambda: setattr(_PairDocumentBackend, 'handle', None),
+                lambda: install_class_handle(_PairDocumentBackend, None),
             )
             settings_override = override_settings(AUTHENTICATION_BACKENDS=(
                 'tests.core.test_issue266._PairDocumentBackend',
@@ -1656,8 +1652,12 @@ class DelegatedAuthorityLiveTest(TestCase):
                 relationship.allowed_permissions.contains(permission)
             ),
         )
-        _PairDocumentBackend.handle = delegation_handle
-        self.addCleanup(lambda: setattr(_PairDocumentBackend, 'handle', None))
+        from tests.apps import install_class_handle
+
+        install_class_handle(_PairDocumentBackend, delegation_handle)
+        self.addCleanup(
+            lambda: install_class_handle(_PairDocumentBackend, None),
+        )
         with override_settings(AUTHENTICATION_BACKENDS=(
             'tests.core.test_issue266._PairDocumentBackend',
         )), patch(

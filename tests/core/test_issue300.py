@@ -35,7 +35,7 @@ from trusts.plan.walk import _render_reach_sql
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
@@ -498,7 +498,7 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             )
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             handle = BackendHandle(
                 path='tests.annotation.a',
                 registry=registry,
@@ -576,7 +576,7 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             RetargetGrant.objects.create(
                 node=node, user=user, permission=permission,
             )
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             handle = BackendHandle(
                 path='tests.along.retarget',
                 registry=registry,
@@ -688,7 +688,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=enabled):
                     handle = BackendHandle(
                         path='documents.backends.ReviewBackend',
-                        registry=TrustsRegistry(),
+                        registry=RegistryFactory(),
                         compiler=PlanQueryCompiler(),
                     )
                     handle.register(

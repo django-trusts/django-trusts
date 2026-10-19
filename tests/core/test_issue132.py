@@ -25,7 +25,7 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import configured_implementation_handles, implementation_for_path
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.query import AuthorizedQuerySet
 
 
@@ -46,7 +46,7 @@ def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
     handle = BackendHandle(
         path='tests.core.issue132-extra',
-        registry=TrustsRegistry(),
+        registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
     handle.register(
@@ -122,9 +122,9 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
 
         with self.assertNumQueries(0):
             self._assert_public_deny()
-            with patch.object(
-                self.document_backend, '_own_handle', return_value=extra,
-            ):
+            from tests.apps import bound_handle
+
+            with bound_handle(self.document_backend, extra):
                 self.assertFalse(
                     self.document_backend.has_perm(
                         self.alice, '%s:always' % PERM, self.report,

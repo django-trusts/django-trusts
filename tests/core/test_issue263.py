@@ -27,7 +27,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import (
     _load_policy_sql_document,
     render_policy_sql_bytes,
@@ -40,27 +40,21 @@ from trusts.query import (
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
-    """Settings-listed probe. The test installs ``handle`` for one block."""
-
-    handle = None
-
-    def _own_handle(self):
-        handle = type(self).handle
-        if handle is None:
-            raise TrustsConfigurationError('probe handle is unset')
-        return handle
+    """Settings-listed probe. The test installs a registry for one block."""
 
 
 @contextmanager
 def _listed(handle):
-    _ListedBackend.handle = handle
+    from tests.apps import install_class_handle
+
+    install_class_handle(_ListedBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue263._ListedBackend',
     )):
         try:
             yield
         finally:
-            _ListedBackend.handle = None
+            install_class_handle(_ListedBackend, None)
 
 
 @contextmanager
@@ -100,7 +94,7 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue263'):
     if registry is None:
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
     return BackendHandle(
         path=path,
         registry=registry,
@@ -203,7 +197,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
         User = get_user_model()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         team = Ref(Team)
         access = Ref(Access)
 
@@ -271,7 +265,7 @@ class PermissionCollectionRegistrationTest(TestCase):
 
         link = Ref(DeskLink)
         with self.assertNumQueries(0):
-            two_hops = TrustsRegistry().register(
+            two_hops = RegistryFactory().register(
                 content=link.repository,
                 user=link.desk.team.members,
                 permission=link.desk.team.permissions,
@@ -292,12 +286,12 @@ class PermissionCollectionRegistrationTest(TestCase):
         direct_ref = Ref(DirectGrant)
         group_ref = Ref(GroupGrant)
         with self.assertNumQueries(0):
-            direct = TrustsRegistry().register(
+            direct = RegistryFactory().register(
                 content=direct_ref.repository,
                 user=direct_ref.user,
                 permission=direct_ref.permission,
             )
-            grouped = TrustsRegistry().register(
+            grouped = RegistryFactory().register(
                 content=group_ref.repository,
                 user=group_ref.group.user,
                 group=group_ref.group,
@@ -322,7 +316,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Team = models_['Team']
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
-        kept = TrustsRegistry()
+        kept = RegistryFactory()
         team = Ref(Team)
         with self.assertNumQueries(0):
             existing = kept.register(
@@ -461,7 +455,7 @@ class PermissionCollectionRegistrationTest(TestCase):
 
     def test_duplicate_collection_registration_does_not_mutate(self):
         Team = _collection_models()['Team']
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         team = Ref(Team)
         with self.assertNumQueries(0):
             first = registry.register(
@@ -550,7 +544,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         )
         self.Access.objects.create(team=self.writers, repository=self.spec)
         self.org_handle = _handle(
-            TrustsRegistry(), path='tests.core.issue263-org',
+            RegistryFactory(), path='tests.core.issue263-org',
         )
         self.org_handle.register(
             trust=self.Team,
@@ -559,7 +553,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             content='organization__repositories',
         )
         self.access_handle = _handle(
-            TrustsRegistry(), path='tests.core.issue263-access',
+            RegistryFactory(), path='tests.core.issue263-access',
         )
         self.access_handle.register(
             trust=self.Access,
@@ -568,7 +562,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             content='repository',
         )
         self.classic = _handle(
-            TrustsRegistry(), path='tests.core.issue263-classic',
+            RegistryFactory(), path='tests.core.issue263-classic',
         )
         self.classic.register(
             trust=self.DirectGrant,

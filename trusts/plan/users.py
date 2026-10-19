@@ -195,14 +195,8 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
 def trusts_mixin_predicate(backend, content, perm, *,
                            skipped=()):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
-    # Same call-time patch point as ``compile_permitted_users``.
-    from trusts.apps import _relationship_implementation_handles
-
-    handle = backend._own_handle()
-    return permitted_users_predicate_for_registry(
-        handle.registry, content, perm,
-        sponsor_handles=_relationship_implementation_handles(),
-        skipped=skipped, backend=backend,
+    return backend.permitted_users_predicate(
+        content, perm, skipped=skipped,
     )
 
 
@@ -653,7 +647,7 @@ def _trusts_eligibility_q(model):
 def _assert_registration_user_model(backend, content, user_model):
     if not isinstance(backend, TrustModelBackendMixin):
         return
-    plan = backend._own_handle().registry.plan_for(content)
+    plan = backend.registry.plan_for(content)
     expected = user_model._meta.concrete_model
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
@@ -684,7 +678,7 @@ def _assert_registration_user_model(backend, content, user_model):
 def _registration_models(backend, content):
     if not isinstance(backend, TrustModelBackendMixin):
         return []
-    plan = backend._own_handle().registry.plan_for(content)
+    plan = backend.registry.plan_for(content)
     models = []
     for record in plan.records:
         models.extend((

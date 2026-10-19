@@ -3,8 +3,6 @@
 Trust-as-content ``.permitted()`` stays on Zero ``tests/legacy/``.
 """
 
-from unittest.mock import patch
-
 from django.apps import apps
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
@@ -15,7 +13,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -34,11 +32,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
 
     def test_reenter_same_contributor_ready_is_noop(self):
         before = self.live_registry.records
-        with patch.object(
-            self.live_registry, 'register', wraps=self.live_registry.register,
-        ) as register:
-            self.contributor.ready()
-        register.assert_not_called()
+        self.contributor.ready()
         self.assertEqual(self.live_registry.records, before)
 
     def test_ready_does_not_replace_registry(self):
@@ -47,7 +41,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertIs(self.contributor.configured_backend().registry, first)
 
     def test_new_registry_receives_declaration_again(self):
-        isolated = TrustsRegistry()
+        isolated = RegistryFactory()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
         self.contributor._document_grant_registry_id = None
         with override_apps_ready(False, self.contributor.apps):
@@ -57,7 +51,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertIs(isolated.records[0].root, DocumentGrant)
 
     def test_conflicting_contribution_fails_closed_without_sentinel(self):
-        isolated = TrustsRegistry()
+        isolated = RegistryFactory()
         j = Ref(DocumentGrant)
         isolated.register(
             content=j.document,

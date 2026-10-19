@@ -4,7 +4,7 @@
 (plus the scope-prefix variant filter_by_permitted_content), Q3
 permitted_users, and Q4 permissions_for (complete and group kinds),
 with production delegation semantics. The builder trio on
-``TrustsRegistry`` delegates to the built registry, so both surfaces
+``RegistryFactory`` delegates to the built registry, so both surfaces
 agree. Where a production handle-based aggregate is the comparison
 (the handle is the subject there), SQL is compared literally;
 otherwise results are compared.
@@ -22,7 +22,7 @@ from django.test.utils import isolate_apps
 
 from tests.core.test_issue282 import _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.core import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
 from trusts.plan.contents import _compile_granted
@@ -137,7 +137,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         return Folder, Document, Grant, Share, GroupGrant
 
     def _registry(self, *, delegated=False, group=False):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         grant = Ref(self.Grant)
         registry.register(
             content=grant.document, user=grant.user,
@@ -232,7 +232,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         )
         # Q2 variant: folders that are a proper prefix of a granted
         # document (content path folder -> documents).
-        prefix_registry = TrustsRegistry()
+        prefix_registry = RegistryFactory()
         grant = Ref(self.Grant)
         prefix_registry.register(
             content=grant.folder.documents, user=grant.user,
@@ -360,7 +360,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):
-        prefix_registry = TrustsRegistry()
+        prefix_registry = RegistryFactory()
         grant = Ref(self.Grant)
         prefix_registry.register(
             content=grant.folder.documents, user=grant.user,
@@ -432,7 +432,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             list(built.permissions_for(self.bob, self.doc_a, kind='group')), [],
         )
 
-        empty = TrustsRegistry().build_registry()
+        empty = RegistryFactory().build_registry()
         self.assertFalse(empty.has_permission(self.alice, self.doc_a, self.read))
         self.assertEqual(list(empty.permissions_for(self.alice, self.doc_a)), [])
         self.assertEqual(

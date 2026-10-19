@@ -22,7 +22,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 
@@ -30,7 +30,7 @@ from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUs
 def _handle(path='tests.core.issue282'):
     return BackendHandle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -51,18 +51,14 @@ def _permission(model, codename):
 
 
 class _PairBackend(TrustModelBackendMixin, ModelBackend):
-    handle = None
-
-    def _own_handle(self):
-        handle = type(self).handle
-        if handle is None:
-            raise TrustsConfigurationError('issue 282 handle is unset')
-        return handle
+    pass
 
 
 @contextmanager
 def _listed(handle):
-    _PairBackend.handle = handle
+    from tests.apps import install_class_handle
+
+    install_class_handle(_PairBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue282._PairBackend',
     )), patch(
@@ -72,7 +68,7 @@ def _listed(handle):
         try:
             yield
         finally:
-            _PairBackend.handle = None
+            install_class_handle(_PairBackend, None)
 
 
 @contextmanager

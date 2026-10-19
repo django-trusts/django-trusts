@@ -83,9 +83,13 @@ class Registry(object):
         self, *, records, delegations, conditions=None,
         user_conditions=None, user_override=None,
         condition_lookup=_CONDITION_LOOKUP_UNSET,
+        compiler=None, path='', family='relationship',
     ):
         self.records = tuple(records)
         self.delegations = tuple(delegations)
+        self.compiler = compiler
+        self.path = path
+        self.family = family
         if conditions is None:
             # Stay lazy: importing this module must not load the
             # condition IR unless a store or lookup must be created.

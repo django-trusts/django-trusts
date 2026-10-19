@@ -83,7 +83,9 @@ class ReadmeExampleAuthorizationTest(TestCase):
         self.assertIsInstance(owner, TrustsImplementationConfig)
         handle = owner.configured_backend()
         self.assertEqual(handle.path, DOCUMENT_BACKEND)
-        self.assertIs(handle.registry, owner.registries[DOCUMENT_BACKEND])
+        from trusts.backends import registries
+
+        self.assertIs(handle.registry, registries[DocumentBackend])
         self.assertTrue(handle.build_registry().records)
         self.assertIs(
             handle.build_registry().records[0].content_model,
@@ -260,7 +262,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertNotIn('register_ordered_fold()', rst)
         self.assertIn('django-trusts-ordered-fold', rst)
         self.assertIn('django-trusts-windows-acl', rst)
-        self.assertIn('backend.add_named_filter(', rst)
+        self.assertIn('registry.add_named_filter(', rst)
         self.assertIn('Document.objects.permitted(', rst)
         self.assertIn('class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet)', rst)
         self.assertIn('objects = DocumentQuerySet.as_manager()', rst)

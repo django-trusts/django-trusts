@@ -34,7 +34,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import implementation_for_path
 from trusts.plan.aggregates import compiler_for_class
-from trusts.backends import TrustModelBackendMixin
+from trusts.backends import TrustModelBackendMixin, registries
 from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
@@ -42,7 +42,7 @@ from trusts.errors import (
     TrustsCompilerError,
     TrustsConfigurationError,
 )
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 import tests as tests_module
 
@@ -94,7 +94,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         handle = live.configured_backend()
         self.assertEqual(handle.path, HOST)
         self.assertIs(handle.registry, live.registry)
-        self.assertIs(live.registry, live.registries[HOST])
+        self.assertIs(live.registry, registries[HostTrustModelBackend])
         self.assertIsInstance(handle, BackendHandle)
         self.assertIs(handle.compiler, HostTrustModelBackend.query_compiler)
         self.assertIsInstance(handle.compiler, PlanQueryCompiler)
@@ -104,7 +104,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
             paths = live._configured_trusts_paths()
             self.assertEqual(paths, (HOST,))
-            self.assertIs(live.registry, live.registries[HOST])
+            self.assertIs(live.registry, registries[HostTrustModelBackend])
             handle = live.configured_backend()
             self.assertEqual(handle.path, HOST)
 
@@ -144,9 +144,11 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             self.assertIs(live.configured_backend().path, HOST)
             handle_doc = live.configured_backend(DOCUMENT)
             self.assertEqual(handle_doc.path, DOCUMENT)
+            from tests.myapp.backends import DocumentBackend
+
             self.assertIs(
                 handle_doc.registry,
-                implementation_for_path(DOCUMENT).registries[DOCUMENT],
+                registries[DocumentBackend],
             )
 
     def test_ready_does_not_replace_store_or_registry(self):
@@ -156,7 +158,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         live.ready()
         self.assertIs(live.registries, store)
         self.assertIs(live.registry, first)
-        self.assertIs(live.registries[HOST], first)
+        self.assertIs(registries[HostTrustModelBackend], first)
 
     def test_compiler_is_class_owned_not_instance_state(self):
         first = HostTrustModelBackend()
@@ -279,7 +281,7 @@ class CompilerProtocolTest(
         User = get_user_model()
         handle = BackendHandle(
             path=RAISING,
-            registry=TrustsRegistry(),
+            registry=RegistryFactory(),
             compiler=RaisingCompilerBackend.query_compiler,
         )
         _contribute_document(handle.registry)
@@ -334,7 +336,7 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         )
 
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
-        isolated = TrustsRegistry()
+        isolated = RegistryFactory()
         _contribute_document(isolated)
         extra = BackendHandle(
             path=MIXIN,
@@ -378,7 +380,7 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
         live = live_config()
         handle = BackendHandle(
             path=RAISING,
-            registry=TrustsRegistry(),
+            registry=RegistryFactory(),
             compiler=RaisingCompilerBackend.query_compiler,
         )
         _contribute_document(handle.registry)

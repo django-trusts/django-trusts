@@ -15,7 +15,7 @@ from trusts.core import (
     BackendHandle,
     PlanQueryCompiler,
     RelationPlan,
-    TrustsRegistry,
+    RegistryFactory,
 )
 from trusts.plan.aggregates import _compiler_applies, any_plan_records
 
@@ -73,8 +73,8 @@ class CoreOrderedFoldDeletedTest(SimpleTestCase):
             self.assertFalse(hasattr(core, name))
             self.assertNotIn(name, dir(core))
         self.assertFalse(hasattr(BackendHandle, 'register_ordered_fold'))
-        self.assertFalse(hasattr(TrustsRegistry, 'register_strategy'))
-        self.assertFalse(hasattr(TrustsRegistry, 'strategies'))
+        self.assertFalse(hasattr(RegistryFactory, 'register_strategy'))
+        self.assertFalse(hasattr(RegistryFactory, 'strategies'))
         fields = getattr(RelationPlan, '__dataclass_fields__', {})
         self.assertNotIn('strategy', fields)
 
@@ -124,7 +124,7 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
 
         empty_handle = BackendHandle(
             path='tests.core.195-empty',
-            registry=TrustsRegistry(),
+            registry=RegistryFactory(),
             compiler=compiler,
         )
         self.assertFalse(any_plan_records((empty_handle,), Document))
