@@ -568,26 +568,26 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
         handle_a = _handle('tests.core.issue270-split-a')
         handle_b = _handle('tests.core.issue270-split-b')
         for handle in (handle_a, handle_b):
-            handle.register(
+            handle.registry.register_public(
                 trust=self.ExtraDocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
             )
-        handle_a.add_named_filter(
+        handle_a.registry.register_permission_condition(
             Document, 'split_a_270', lambda u, p, o: o.confidential != True,
         )
-        handle_b.add_named_filter(
+        handle_b.registry.register_permission_condition(
             Document, 'split_b_270', lambda u, p, o: o.confidential != True,
         )
         foreign = _handle('tests.core.issue270-other-name')
-        foreign.register(
+        foreign.registry.register_public(
             trust=self.OtherPermissionGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        foreign.add_named_filter(
+        foreign.registry.register_permission_condition(
             Document, 'only_other_270', lambda u, p, o: o.confidential != True,
         )
         primary = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
@@ -621,23 +621,23 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
     def test_non_owner_grant_is_omitted_and_two_names_are_anded(self):
         primary = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
         extra = _handle('tests.core.issue270-extra-grant')
-        extra.register(
+        extra.registry.register_public(
             trust=self.ExtraDocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
         owned = _handle('tests.core.issue270-both-names')
-        owned.register(
+        owned.registry.register_public(
             trust=self.ExtraDocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        owned.add_named_filter(
+        owned.registry.register_permission_condition(
             Document, 'open_title_270', lambda u, p, o: o.title == 'open',
         )
-        owned.add_named_filter(
+        owned.registry.register_permission_condition(
             Document, 'not_secret_270', lambda u, p, o: o.confidential != True,
         )
         with _tables(self.ExtraDocumentGrant):
@@ -678,7 +678,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
     def test_custom_terminal_pk_collision_does_not_grant(self):
         primary = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
         extra = _handle('tests.core.issue270-other-perm')
-        extra.register(
+        extra.registry.register_public(
             trust=self.OtherPermissionGrant,
             user='user',
             permission='permission',

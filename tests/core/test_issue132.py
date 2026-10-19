@@ -49,13 +49,13 @@ def _extra_handle():
         registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
-    handle.register(
+    handle.registry.register_public(
         trust=DocumentGrant,
         user='user',
         permission='permission',
         content='document',
     )
-    handle.add_named_filter(
+    handle.registry.register_permission_condition(
         Repository,
         'always',
         lambda u, p, o: o.name != '',

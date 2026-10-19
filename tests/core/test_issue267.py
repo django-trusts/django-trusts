@@ -245,13 +245,13 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         )
         self.handle = _handle('tests.core.issue267-owner')
         with self.assertNumQueries(0):
-            self.handle.register(
+            self.handle.registry.register_public(
                 trust=self.Ownership,
                 user='user',
                 permission='organization__owner_group__permissions',
                 content='organization',
             )
-            self.handle.register(
+            self.handle.registry.register_public(
                 trust=self.Ownership,
                 user='user',
                 permission='organization__owner_group__permissions',
@@ -279,7 +279,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                     with self.assertNumQueries(queries):
                         self.assertIs(self.owner.has_perm(code, obj), expected)
                     self.assertIs(
-                        self.handle.build_registry().has_permission(
+                        self.handle.registry.build_registry().has_permission(
                             self.owner, obj, permission,
                         ),
                         expected,
@@ -333,13 +333,13 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 [],
             )
             self.assertEqual(
-                list(self.handle.build_registry().filter_authorized(
+                list(self.handle.registry.build_registry().filter_authorized(
                     self.Team.objects.all(), self.owner, self.manage,
                 )),
                 [],
             )
             self.assertEqual(
-                list(self.handle.build_registry().filter_authorized(
+                list(self.handle.registry.build_registry().filter_authorized(
                     self.Widget.objects.all(), self.owner, self.read,
                 )),
                 [],
@@ -384,12 +384,12 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
     def test_custom_codename_stays_a_same_model_instance_grant(self):
         with _installed(self.handle):
             self.assertTrue(
-                self.handle.build_registry().has_permission(
+                self.handle.registry.build_registry().has_permission(
                     self.owner, self.specs, self.publish,
                 ),
             )
             self.assertFalse(
-                self.handle.build_registry().has_permission(
+                self.handle.registry.build_registry().has_permission(
                     self.owner, self.acme, self.publish,
                 ),
             )
@@ -441,17 +441,17 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         proxy = self.OrganizationProxy.objects.get(pk=self.acme.pk)
         with _installed(self.handle):
             self.assertTrue(
-                self.handle.build_registry().has_permission(
+                self.handle.registry.build_registry().has_permission(
                     self.owner, proxy, self.operate,
                 ),
             )
             self.assertFalse(
-                self.handle.build_registry().has_permission(
+                self.handle.registry.build_registry().has_permission(
                     self.owner, proxy, self.manage,
                 ),
             )
             self.assertFalse(
-                self.handle.build_registry().has_permission(
+                self.handle.registry.build_registry().has_permission(
                     self.owner, self.acme, self.operate,
                 ),
             )

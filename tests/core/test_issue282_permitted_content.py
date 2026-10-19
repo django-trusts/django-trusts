@@ -65,7 +65,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     ]
     test.assertEqual(len(rows), 1)
     row = rows[0]
-    record = handle.build_registry().plan_for(content_model).records[0]
+    record = handle.registry.build_registry().plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
         _role_sentinel(record, 'user', 'default'),
@@ -197,7 +197,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
 
     def _handle(self):
         handle = _handle('tests.core.issue282-permitted-content')
-        handle.register(
+        handle.registry.register_public(
             trust=self.Grant,
             user='user',
             permission='permission',
@@ -210,7 +210,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                skip_is_active=False):
         sheets = list(self.Sheet.objects.all())
         with _listed(handle):
-            authorized = set(handle.build_registry().filter_authorized(
+            authorized = set(handle.registry.build_registry().filter_authorized(
                 self.Sheet.objects.all(), user, permission,
                 skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
@@ -293,7 +293,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
 
         with _tables(Folder, Payload, Row, FolderGrant):
             handle = _handle('tests.core.issue282-permitted-content-suffix')
-            handle.register(
+            handle.registry.register_public(
                 trust=FolderGrant,
                 user='user',
                 permission='permission',
@@ -315,7 +315,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, folder=root, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.build_registry().filter_authorized(
+                authorized = set(handle.registry.build_registry().filter_authorized(
                     Payload.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -387,7 +387,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
 
         with _tables(Office, AncCabinet, AncSheet, OfficeGrant):
             handle = _handle('tests.core.issue282-permitted-content-ancestor')
-            handle.register(
+            handle.registry.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
@@ -414,7 +414,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, office=office, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.build_registry().filter_authorized(
+                authorized = set(handle.registry.build_registry().filter_authorized(
                     AncSheet.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -530,14 +530,14 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
     def _register(self, *, sponsor_along=None, delegation_along=None):
         handle = _handle('tests.core.issue282-delegated-permitted-content')
-        handle.register(
+        handle.registry.register_public(
             trust=self.Grant,
             user='user',
             permission='permission',
             content='cabinet__sheets',
             along=sponsor_along,
         )
-        handle.register(
+        handle.registry.register_public(
             trust=self.Delegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -711,13 +711,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
                 delegate=self.delegate, sponsor=self.sponsor, cabinet=self.child,
             )
             handle = _handle('tests.core.issue282-suffix')
-            handle.register(
+            handle.registry.register_public(
                 trust=AttachmentGrant,
                 user='user',
                 permission='permission',
                 content='attachment',
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=SuffixDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -739,7 +739,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
     def test_delegation_without_an_ordinary_grant_lists_nothing(self):
         handle = _handle('tests.core.issue282-deleg-no-grant')
-        handle.register(
+        handle.registry.register_public(
             trust=self.Delegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -818,13 +818,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             Office, AncCabinet, AncSheet, OfficeGrant, OfficeDelegation,
         ):
             handle = _handle('tests.core.issue282-deleg-ancestor')
-            handle.register(
+            handle.registry.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
                 content='office__cabinets__sheets',
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=OfficeDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -937,14 +937,14 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             Office, WalkCabinet, WalkSheet, OfficeGrant, OfficeDelegation,
         ):
             handle = _handle('tests.core.issue282-sponsor-ancestor')
-            handle.register(
+            handle.registry.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
                 content='office__cabinets__sheets',
                 along=('office__cabinets__parent', 1),
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=OfficeDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -991,14 +991,14 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk})
             both = _handle('tests.core.issue282-sponsor-ancestor-both')
-            both.register(
+            both.registry.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
                 content='office__cabinets__sheets',
                 along=('office__cabinets__parent', 1),
             )
-            both.register(
+            both.registry.register_public(
                 trust=OfficeDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -1083,14 +1083,14 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
         with _tables(Folder, Payload, Row, FolderGrant, FolderDelegation):
             handle = _handle('tests.core.issue282-sponsor-later')
-            handle.register(
+            handle.registry.register_public(
                 trust=FolderGrant,
                 user='user',
                 permission='permission',
                 content='folder__rows__content',
                 along=('folder__parent', 1),
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=FolderDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -1187,7 +1187,7 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
             user=self.alice, trust=self.root, permission=self.change,
         )
         self.handle = _handle('tests.core.issue282-trust-content')
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=TrustGrant,
             user='user',
             permission='permission',
@@ -1227,7 +1227,7 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
                 view(_request(self.alice), pk=self.past.pk)
 
     def test_trust_content_follows_along(self):
-        found = set(self.handle.build_registry().filter_authorized(
+        found = set(self.handle.registry.build_registry().filter_authorized(
             self.Trust.objects.all(), self.alice, self.change,
         ).values_list('pk', flat=True))
         self.assertEqual(found, {self.root.pk, self.child.pk})

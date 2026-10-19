@@ -11,6 +11,8 @@ query-time ``Registry`` from stored values. ``trusts.core`` re-exports
 __all__ = []
 
 import inspect
+from collections.abc import Callable
+from typing import TypeVar
 
 from dataclasses import dataclass, field, replace
 
@@ -62,6 +64,8 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import TrustsConfigurationError
+
+T = TypeVar('T', bound=Model)
 from trusts.plan.registry import Registry
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.standards import (
@@ -1697,15 +1701,20 @@ class RegistryFactory(object):
             along=_bind_public_along(trust, along),
         )
 
-    def _register_public(
-        self, *, trust, user=None, permission=None, content, group=None,
-        delegate=None, sponsor=None, condition=None, along=None,
-    ):
-        """Public ``BackendHandle.register`` body, on the registry it stores.
-
-        The handle forwards here so ``trusts.plan.handles`` does not import
-        this module. Callers keep using ``BackendHandle.register``.
-        """
+    def register_public(
+        self, *,
+        trust: type[T],
+        user: str | Callable[[T], object] | None = None,
+        permission: str | Callable[[T], object] | None = None,
+        content: str | Callable[[T], object],
+        group: str | Callable[[T], object] | None = None,
+        delegate: str | Callable[[T], object] | None = None,
+        sponsor: str | Callable[[T], object] | None = None,
+        condition: (
+            Callable[[T], object] | Callable[[T, object], object] | None
+        ) = None,
+        along=None,
+    ) -> RegisteredRelation | RegisteredDelegation:
         shape = self.build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,
@@ -1734,6 +1743,8 @@ class RegistryFactory(object):
             condition=shape.condition,
             along=shape.along,
         )
+
+    _register_public = register_public
 
     def _records_for(self, content_model, user_model=None, permission_model=None):
         chosen = []
@@ -1814,12 +1825,3 @@ class RegistryFactory(object):
         return self.build_registry().filter_authorized(
             queryset, user, permission, **skip_flags,
         )
-
-
-# ``BackendHandle.register`` annotates these names. ``plan.handles`` does
-# not import this module, so ``get_type_hints`` resolves them from the
-# function globals. Compile may import plan; plan does not import compile.
-from trusts.plan.handles import BackendHandle as _BackendHandle
-
-_BackendHandle.register.__globals__['RegisteredRelation'] = RegisteredRelation
-_BackendHandle.register.__globals__['RegisteredDelegation'] = RegisteredDelegation

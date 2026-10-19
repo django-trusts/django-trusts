@@ -1473,7 +1473,7 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
     """
     permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
     held = common_permissions((handle,), doc, user, **flags)
-    listed = handle.build_registry().permissions_for(user, doc, **flags)
+    listed = handle.registry.build_registry().permissions_for(user, doc, **flags)
     return {
         'has_perm': backend.has_perm(user, perm, doc, **flags),
         'authorized': Document.objects.authorized(
@@ -1488,7 +1488,7 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
         ).values_list('pk', flat=True)),
         'enumerated': perm in backend.get_all_permissions(user, doc, **flags),
         'permissions_for': change.pk in set(listed.values_list('pk', flat=True)),
-        'has_permission': handle.build_registry().has_permission(
+        'has_permission': handle.registry.build_registry().has_permission(
             user, doc, change, **flags,
         ),
     }
@@ -1836,7 +1836,7 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             handle = BackendHandle(
                 DOCUMENT_BACKEND, registry, PlanQueryCompiler(),
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=PlainNoteGrant,
                 user='user',
                 permission='permission',

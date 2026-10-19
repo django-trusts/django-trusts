@@ -22,6 +22,7 @@ from django.core import checks as django_checks
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.errors import PermissionConditionError
+from trusts.plan.handles import pair
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
@@ -182,9 +183,10 @@ def _covered_content_models(config):
             handle = config.configured_backend(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
-        for record in handle.registry.records:
+        registry, _compiler = pair(handle)
+        for record in registry.records:
             covered.add(record.content_model)
-        for record in handle.registry.delegations:
+        for record in registry.delegations:
             covered.add(record.content_model)
     return covered
 
@@ -305,11 +307,12 @@ def _iter_handle_permission_conditions(config):
             handle = config.configured_backend(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
-        iter_fn = getattr(handle.registry, 'iter_permission_conditions', None)
+        registry, _compiler = pair(handle)
+        iter_fn = getattr(registry, 'iter_permission_conditions', None)
         if callable(iter_fn):
             yield from iter_fn()
             continue
-        conditions = getattr(handle.registry, 'conditions', None)
+        conditions = getattr(registry, 'conditions', None)
         if conditions is not None:
             yield from conditions.iter_permission_conditions()
 
@@ -509,7 +512,8 @@ def _live_along_records(config):
             handle = config.configured_backend(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
-        for record in handle.registry.records:
+        registry, _compiler = pair(handle)
+        for record in registry.records:
             if record.along is not None:
                 found.append(record)
     return found

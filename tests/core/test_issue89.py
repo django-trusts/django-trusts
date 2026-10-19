@@ -147,7 +147,7 @@ class LiveBuildLifecycleTest(
             self.assertIs(alias, isolated)
         handle = live.configured_backend()
         self.assertIs(handle.registry, isolated)
-        self.assertEqual(handle.build_registry().records, isolated.records)
+        self.assertEqual(handle.registry.build_registry().records, isolated.records)
         # First live read did not close registration: a duplicate is
         # rejected as a duplicate, and the stored record is unchanged.
         with self.assertRaises(TrustsConfigurationError):
@@ -165,14 +165,14 @@ class LiveBuildLifecycleTest(
             self.assertEqual(
                 [handle.path for handle in handles], [DOCUMENT, HOST],
             )
-            self.assertEqual(handles[0].build_registry().records,
+            self.assertEqual(handles[0].registry.build_registry().records,
                              handles[0].registry.records)
-            self.assertEqual(handles[1].build_registry().records,
+            self.assertEqual(handles[1].registry.build_registry().records,
                              handles[1].registry.records)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
             handle = live.configured_backend()
             self.assertEqual(handle.path, HOST)
-            self.assertIsNotNone(handle.build_registry())
+            self.assertIsNotNone(handle.registry.build_registry())
 
     def test_ready_does_not_replace_stored_objects(self):
         from tests.backends import HostTrustModelBackend
@@ -195,7 +195,7 @@ class LiveBuildLifecycleTest(
         _contribute_document(replacement)
         self.assertEqual(len(replacement.records), 1)
         handle = live.configured_backend()
-        self.assertEqual(handle.build_registry().records, replacement.records)
+        self.assertEqual(handle.registry.build_registry().records, replacement.records)
 
     def test_assignment_before_ready_stays_writable_on_read(self):
         live = live_config()
@@ -207,7 +207,7 @@ class LiveBuildLifecycleTest(
         handle = live.configured_backend()
         self.assertIs(handle.registry, replacement)
         before = replacement.records
-        self.assertEqual(handle.build_registry().records, before)
+        self.assertEqual(handle.registry.build_registry().records, before)
         with self.assertRaises(TrustsConfigurationError):
             _contribute_document(replacement)
         self.assertEqual(replacement.records, before)
@@ -293,31 +293,33 @@ class BackendQuestionAfterLateRegistrationTest(
 
 
 class HandleBuildRegistrySignalTest(SimpleTestCase):
-    """``BackendHandle.build_registry``: fresh build, or ``None``."""
+    """A configured path holds a registry. The registry builds itself."""
 
     def test_none_duck_and_fresh_builds(self):
         none_handle = BackendHandle(
             path='tests.core.no-registry', registry=None,
             compiler=PlanQueryCompiler(),
         )
-        self.assertIsNone(none_handle.build_registry())
+        self.assertIsNone(none_handle.registry)
 
         duck = object()
         duck_handle = BackendHandle(
             path='tests.core.duck', registry=duck, compiler=object(),
         )
-        self.assertIs(duck_handle.build_registry(), duck)
-        self.assertFalse(duck_handle.historical_fallback)
+        self.assertIs(duck_handle.registry, duck)
+        self.assertFalse(
+            getattr(duck_handle.compiler, 'historical_fallback', False),
+        )
 
         registry = RegistryFactory()
         handle = BackendHandle(
             path='tests.core.builder', registry=registry,
             compiler=PlanQueryCompiler(),
         )
-        first = handle.build_registry()
-        second = handle.build_registry()
+        first = handle.registry.build_registry()
+        second = handle.registry.build_registry()
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
         _contribute_document(registry)
-        self.assertEqual(handle.build_registry().records, registry.records)
+        self.assertEqual(handle.registry.build_registry().records, registry.records)
         self.assertEqual(first.records, ())

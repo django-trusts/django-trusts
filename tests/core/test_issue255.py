@@ -289,14 +289,14 @@ class Issue255PolicySqlTest(SimpleTestCase):
                 app_label = 'documents'
 
         handle = _export_handle('documents.backends.FolderBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=FolderGrant,
             user='user',
             permission='permission',
             content='folder',
             along=('folder__parent', 2),
         )
-        handle.register(
+        handle.registry.register_public(
             trust=FolderPermit,
             user='user',
             permission='permission',
@@ -435,14 +435,14 @@ class Issue255PolicySqlTest(SimpleTestCase):
                 app_label = 'documents'
 
         handle = _export_handle('documents.backends.WalkNodeBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=ParentGrant,
             user='user',
             permission='permission',
             content='node',
             along=('node__parent', 8),
         )
-        handle.register(
+        handle.registry.register_public(
             trust=MentorGrant,
             user='user',
             permission='permission',
@@ -493,14 +493,14 @@ class Issue255PolicySqlTest(SimpleTestCase):
                 app_label = 'documents'
 
         handle = _export_handle('documents.backends.UuidNodeBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=UuidNodeGrant,
             user='user',
             permission='permission',
             content='node',
             along=('node__parent', 2),
         )
-        record = handle.build_registry().plan_for(UuidNode).records[0]
+        record = handle.registry.build_registry().plan_for(UuidNode).records[0]
         self.assertEqual(record.content_target, 'ident')
         self.assertNotEqual(
             record.content_target, UuidNode._meta.pk.attname,
@@ -540,14 +540,14 @@ class Issue255PolicySqlTest(SimpleTestCase):
 
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
         handle = _export_handle('documents.backends.LiteralFolderBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=FolderGrant,
             user='user',
             permission='permission',
             content='folder',
             along=('folder__parent', 2),
         )
-        record = handle.build_registry().plan_for(Folder).records[0]
+        record = handle.registry.build_registry().plan_for(Folder).records[0]
         _sql, params = _compile_queryset(
             FolderGrant.objects.filter(folder__pk=5),
             'default',
@@ -1124,13 +1124,13 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         )
 
     def _register(self):
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.DirectGrant,
             user='user',
             permission='permission',
             content='paper',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.TeamGrant,
             user='team__members',
             permission='permission',
@@ -1140,13 +1140,13 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
                 & (trust.team.org == trust.paper.org)
             ),
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.GroupGrant,
             user=lambda trust: trust.group.user,
             group=lambda trust: trust.group,
             content='paper',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.FolderGrant,
             user='user',
             permission='permission',
@@ -1154,20 +1154,20 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
             condition=lambda trust: trust.user == trust.approved_user,
             along=('folder__parent', 2),
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.FolderPermit,
             user='user',
             permission='permission',
             content='folder',
             along=('folder__parent', 1),
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.UuidGrant,
             user='user',
             permission='permission',
             content='paper',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.UuidGrantUser,
             user='user',
             permission='permission',
@@ -1459,7 +1459,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(UuidNode, UuidNodeGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register(
+                record = handle.registry.register_public(
                     trust=UuidNodeGrant,
                     user='user',
                     permission='permission',
@@ -1530,7 +1530,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Desk, DeskGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register(
+                record = handle.registry.register_public(
                     trust=DeskGrant,
                     user=lambda trust: trust.group.user,
                     group=lambda trust: trust.group,
@@ -1620,7 +1620,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             )
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register(
+                record = handle.registry.register_public(
                     trust=ShelfStamp,
                     user='user',
                     permission='permissions',
@@ -1717,7 +1717,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Cabinet, Sheet, SheetGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register(
+                record = handle.registry.register_public(
                     trust=SheetGrant,
                     user='user',
                     permission='permission',
@@ -1780,7 +1780,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Branch, BranchGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register(
+                record = handle.registry.register_public(
                     trust=BranchGrant,
                     user='user',
                     permission='permission',
@@ -1849,14 +1849,14 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Place, North, South):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                handle.register(
+                handle.registry.register_public(
                     trust=North,
                     user='user',
                     permission='permission',
                     content='place',
                     along=('place__parent', 1),
                 )
-                handle.register(
+                handle.registry.register_public(
                     trust=South,
                     user='user',
                     permission='permission',

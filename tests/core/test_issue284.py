@@ -740,13 +740,13 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                 registry=RegistryFactory(),
                 compiler=PlanQueryCompiler(),
             )
-            self.handle.register(
+            self.handle.registry.register_public(
                 trust=Grant,
                 user='user',
                 permission='permission',
                 content='cabinet__sheets',
             )
-            self.handle.register(
+            self.handle.registry.register_public(
                 trust=Relationship,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -755,12 +755,12 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                     relationship.allowed_permissions.contains(permission)
                 ),
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 Sheet,
                 'active_only',
                 lambda user, permission, content: user.is_active == True,
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 Sheet,
                 'unexpired',
                 lambda user, permission, content: (

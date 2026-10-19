@@ -305,13 +305,13 @@ class PolicyCompositionTest(SimpleTestCase):
 
     def _handles(self):
         or_handle = _handle('documents.backends.OrBackend')
-        or_handle.register(
+        or_handle.registry.register_public(
             trust=DocumentPermission,
             user='user',
             permission='permission',
             content='document',
         )
-        or_handle.register(
+        or_handle.registry.register_public(
             trust=TeamDocumentPermission,
             user='team__members',
             permission='permission',
@@ -393,7 +393,7 @@ class PolicyCompositionTest(SimpleTestCase):
             HiddenDocument._default_manager,
         )
         handle = _handle('documents.backends.HiddenBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=HiddenGrant,
             user='user',
             permission='permission',
@@ -411,13 +411,13 @@ class PolicyCompositionTest(SimpleTestCase):
 
     def test_mixed_user_models_fail_closed(self):
         handle = _handle('documents.backends.MixedBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=DocumentPermission,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register(
+        handle.registry.register_public(
             trust=PolicyActorGrant,
             user='user',
             permission='permission',

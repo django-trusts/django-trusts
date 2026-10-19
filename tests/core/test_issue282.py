@@ -206,7 +206,7 @@ class DelegatedAlongTest(TransactionTestCase):
                   sponsor='permission'):
         handle = _handle()
         if sponsor == 'permission':
-            handle.register(
+            handle.registry.register_public(
                 trust=self.Grant,
                 user='user',
                 permission='permission',
@@ -214,7 +214,7 @@ class DelegatedAlongTest(TransactionTestCase):
                 along=sponsor_along,
             )
         elif sponsor == 'group':
-            handle.register(
+            handle.registry.register_public(
                 trust=self.GroupGrant,
                 user='group__user',
                 group='group',
@@ -222,7 +222,7 @@ class DelegatedAlongTest(TransactionTestCase):
                 along=sponsor_along,
             )
         elif sponsor == 'collection':
-            handle.register(
+            handle.registry.register_public(
                 trust=self.CollectionGrant,
                 user='user',
                 permission='permissions',
@@ -231,7 +231,7 @@ class DelegatedAlongTest(TransactionTestCase):
             )
         else:
             raise AssertionError(sponsor)
-        handle.register(
+        handle.registry.register_public(
             trust=self.Delegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -787,14 +787,14 @@ class DelegatedAlongTest(TransactionTestCase):
 
     def _register_linked(self, delegation):
         handle = _handle()
-        handle.register(
+        handle.registry.register_public(
             trust=self.Grant,
             user='user',
             permission='permission',
             content='issue',
             along=('issue__parent', 1),
         )
-        handle.register(
+        handle.registry.register_public(
             trust=delegation,
             delegate='delegate',
             sponsor='sponsor_link__user',
@@ -962,13 +962,13 @@ class DelegatedAlongTest(TransactionTestCase):
                 delegate=self.delegate, sponsor=self.sponsor, issue=self.child,
             )
             handle = _handle()
-            handle.register(
+            handle.registry.register_public(
                 trust=AttachmentGrant,
                 user='user',
                 permission='permission',
                 content='attachment',
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=SuffixDelegation,
                 delegate='delegate',
                 sponsor='sponsor',

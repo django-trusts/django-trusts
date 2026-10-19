@@ -185,7 +185,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'not both',
         ):
-            handle.register(
+            handle.registry.register_public(
                 trust=Grant,
                 user='group__user',
                 permission='paper',
@@ -195,7 +195,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'not both',
         ):
-            handle.register(
+            handle.registry.register_public(
                 trust=Grant,
                 user=boom,
                 permission=boom,
@@ -213,7 +213,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 permission=ref.paper,
                 group=ref.group,
             )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.registry.build_registry().records, ())
         self.assertEqual(registry.records, ())
 
     def test_one_of_permission_or_group_is_required(self):
@@ -222,20 +222,20 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'requires permission= or group=',
         ):
-            handle.register(
+            handle.registry.register_public(
                 trust=Grant,
                 user='group__user',
                 content='paper',
             )
         with self.assertRaises(TypeError):
-            handle.register(trust=Grant, user='group__user')
+            handle.registry.register_public(trust=Grant, user='group__user')
         registry = RegistryFactory()
         ref = Ref(Grant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'requires permission= or group=',
         ):
             registry.register(content=ref.paper, user=ref.group.user)
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.registry.build_registry().records, ())
         self.assertEqual(registry.records, ())
 
     def test_group_path_must_end_at_auth_group(self):
@@ -262,7 +262,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'must end at auth.Group',
         ):
-            handle.register(
+            handle.registry.register_public(
                 trust=CrewPaper,
                 user='user',
                 group='crew',
@@ -271,7 +271,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'do not append permissions',
         ):
-            handle.register(
+            handle.registry.register_public(
                 trust=Grant,
                 user='group__user',
                 group=lambda t: t.group.permissions,
@@ -280,13 +280,13 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'user_set',
         ):
-            handle.register(
+            handle.registry.register_public(
                 trust=Grant,
                 user=lambda t: t.group.user_set,
                 group='group',
                 content='paper',
             )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.registry.build_registry().records, ())
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()
@@ -297,13 +297,13 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             user=ref.group.user,
             group=ref.group,
         )
-        strings = _handle(path='tests.core.issue246-strings').register(
+        strings = _handle(path='tests.core.issue246-strings').registry.register_public(
             trust=Grant,
             user='group__user',
             group='group',
             content='paper',
         )
-        callables = _handle(path='tests.core.issue246-callables').register(
+        callables = _handle(path='tests.core.issue246-callables').registry.register_public(
             trust=Grant,
             user=lambda t: t.group.user,
             group=lambda t: t.group,
@@ -337,7 +337,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        multi = _handle().register(
+        multi = _handle().registry.register_public(
             trust=StationGrant,
             user='station__group__user',
             group='station__group',
@@ -364,7 +364,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        record = _handle().register(
+        record = _handle().registry.register_public(
             trust=Direct,
             user='user',
             permission='permission',
@@ -437,31 +437,31 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         )
         self.registry = RegistryFactory()
         self.handle = _handle(self.registry)
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.GroupPaperGrant,
             user=lambda t: t.group.user,
             group=lambda t: t.group,
             content=lambda t: t.paper,
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.GroupFolderGrant,
             user='group__user',
             group='group',
             content='folder__papers',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.DeskPaperGrant,
             user='desk__holders',
             permission='permission',
             content='paper',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.DirectPaperGrant,
             user='user',
             permission='permission',
             content='paper',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.StationPaperGrant,
             user='station__group__user',
             group='station__group',
@@ -624,14 +624,14 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
 
     def test_policy_sql_records_the_compiler_owned_group_hop(self):
         group_only = _handle(path='tests.core.issue246-policy-group')
-        group_only.register(
+        group_only.registry.register_public(
             trust=self.GroupPaperGrant,
             user='group__user',
             group='group',
             content='paper',
         )
         direct_only = _handle(path='tests.core.issue246-policy-direct')
-        direct_only.register(
+        direct_only.registry.register_public(
             trust=self.DirectPaperGrant,
             user='user',
             permission='permission',
@@ -754,7 +754,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         grant.grants.add(self.read)
         self.registry = RegistryFactory()
         self.handle = _handle(self.registry, path='tests.core.issue246-ceiling')
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.Grant,
             user=lambda t: t.group.user,
             group=lambda t: t.group,
@@ -974,7 +974,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         self.local = _handle(
             RegistryFactory(), path='tests.core.issue246-matrix-local',
         )
-        self.local.register(
+        self.local.registry.register_public(
             trust=self.LocalGrant,
             user=lambda t: t.group.user,
             group=lambda t: t.group,
@@ -984,14 +984,14 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         self.roots = _handle(
             RegistryFactory(), path='tests.core.issue246-matrix-roots',
         )
-        self.roots.register(
+        self.roots.registry.register_public(
             trust=self.LocalGrant,
             user=lambda t: t.group.user,
             group=lambda t: t.group,
             content=lambda t: t.paper,
             condition=lambda t: t.grants.contains(t.group.permissions),
         )
-        self.roots.register(
+        self.roots.registry.register_public(
             trust=self.OtherGrant,
             user=lambda t: t.group.user,
             group=lambda t: t.group,
@@ -1001,7 +1001,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         self.role = _handle(
             RegistryFactory(), path='tests.core.issue246-matrix-role',
         )
-        self.role_record = self.role.register(
+        self.role_record = self.role.registry.register_public(
             trust=self.TrustGroupPermission,
             user=lambda t: t.link.group.user,
             permission=lambda t: t.permission,

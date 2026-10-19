@@ -56,13 +56,13 @@ class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
 def _document_host_handle():
     """Same registration ``DocumentConfig.ready`` installs on the kernel host."""
     handle = _handle('tests.myapp.backends.DocumentBackend')
-    handle.register(
+    handle.registry.register_public(
         trust=DocumentGrant,
         user='user',
         permission='permission',
         content='document',
     )
-    handle.register(
+    handle.registry.register_public(
         trust=DocumentDelegation,
         delegate='delegate',
         sponsor='sponsor',
@@ -71,7 +71,7 @@ def _document_host_handle():
             relationship.allowed_permissions.contains(permission)
         ),
     )
-    handle.add_named_filter(
+    handle.registry.register_permission_condition(
         Document,
         'non_confidential',
         lambda user, permission, obj: obj.confidential != True,
@@ -200,7 +200,7 @@ class DelegationRegistrationTest(TestCase):
 
         handle = _handle()
         with self.assertNumQueries(0):
-            record = handle.register(
+            record = handle.registry.register_public(
                 trust=DocumentDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -213,12 +213,12 @@ class DelegationRegistrationTest(TestCase):
         self.assertEqual(record.sponsor_field, 'sponsor')
         self.assertEqual(record.content_field, 'document')
         self.assertIs(record.condition_permission_model, Permission)
-        self.assertEqual(handle.build_registry().records, ())
-        self.assertEqual(handle.build_registry().delegations, (record,))
+        self.assertEqual(handle.registry.build_registry().records, ())
+        self.assertEqual(handle.registry.build_registry().delegations, (record,))
 
     def test_one_argument_condition_is_row_only(self):
         handle = _handle()
-        record = handle.register(
+        record = handle.registry.register_public(
             trust=DocumentDelegation,
             delegate=lambda d: d.delegate,
             sponsor=lambda d: d.sponsor,
@@ -269,7 +269,7 @@ class DelegationRegistrationTest(TestCase):
 
         handle = _handle()
         with self.assertNumQueries(0):
-            record = handle.register(
+            record = handle.registry.register_public(
                 trust=PersonalDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -310,15 +310,15 @@ class DelegationRegistrationTest(TestCase):
                 handle = _handle()
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
-                        handle.register(
+                        handle.registry.register_public(
                             trust=DocumentDelegation,
                             content='document',
                             condition=lambda *args: calls.append(args),
                             **extra,
                         )
                 self.assertEqual(calls, [])
-                self.assertEqual(handle.build_registry().records, ())
-                self.assertEqual(handle.build_registry().delegations, ())
+                self.assertEqual(handle.registry.build_registry().records, ())
+                self.assertEqual(handle.registry.build_registry().delegations, ())
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -390,13 +390,13 @@ class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
             relationship.allowed_permissions.add(self.read)
 
         self.handle = _handle('tests.core.issue266.indirect')
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.DirectGrant,
             user='user',
             permission='permission',
             content='repository',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.AllPersonalDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -747,25 +747,25 @@ class TwoRootDelegationTest(TransactionTestCase):
             delegate=self.delegate, sponsor=self.sponsor,
         )
         self.handle = _handle('tests.core.issue266.two-roots')
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.NoteGrant,
             user='user',
             permission='permission',
             content='note',
         )
-        self.handle.register(
+        self.handle.registry.register_public(
             trust=self.DirectGrant,
             user='user',
             permission='permission',
             content='repository',
         )
-        self.personal = self.handle.register(
+        self.personal = self.handle.registry.register_public(
             trust=self.PersonalDelegation,
             delegate='delegate',
             sponsor='sponsor',
             content=_TWO_PREFIX,
         )
-        self.approved = self.handle.register(
+        self.approved = self.handle.registry.register_public(
             trust=self.ApprovedDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -798,7 +798,7 @@ class TwoRootDelegationTest(TransactionTestCase):
         self.assertIs(self.personal.content_model, self.Repository)
         self.assertIsNone(self.personal.condition)
         roots = [
-            record.root for record in self.handle.build_registry().delegations
+            record.root for record in self.handle.registry.build_registry().delegations
         ]
         self.assertEqual(
             roots, [self.PersonalDelegation, self.ApprovedDelegation],
@@ -922,13 +922,13 @@ class TwoRootDelegationTest(TransactionTestCase):
 
     def test_unrelated_ordinary_root_does_not_grant(self):
         lone = _handle('tests.core.issue266.unrelated')
-        lone.register(
+        lone.registry.register_public(
             trust=self.NoteGrant,
             user='user',
             permission='permission',
             content='note',
         )
-        lone.register(
+        lone.registry.register_public(
             trust=self.PersonalDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -1116,7 +1116,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             user=self.user, profile=self.profile, permission=self.read,
         )
         self.handle = _handle('tests.core.issue266.ordinary-prefix')
-        self.record = self.handle.register(
+        self.record = self.handle.registry.register_public(
             trust=self.ProfileGrant,
             user='user',
             permission='permission',
@@ -1133,7 +1133,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             ('profile', 'personal_organization_ord', 'repositories'),
         )
         self.assertIs(self.record.content_model, self.Repository)
-        self.assertEqual(self.handle.build_registry().delegations, ())
+        self.assertEqual(self.handle.registry.build_registry().delegations, ())
         with _listed(self.handle):
             self.assertTrue(self.user.has_perm(self.code, self.own))
             self.assertEqual(
@@ -1297,9 +1297,9 @@ class ReverseOneToOneGrammarTest(TestCase):
                         TrustsConfigurationError,
                         'not a valid content terminal or gateway',
                     ):
-                        handle.register(trust=trust, content=content, **extra)
-                self.assertEqual(handle.build_registry().records, ())
-                self.assertEqual(handle.build_registry().delegations, ())
+                        handle.registry.register_public(trust=trust, content=content, **extra)
+                self.assertEqual(handle.registry.build_registry().records, ())
+                self.assertEqual(handle.registry.build_registry().delegations, ())
 
     def test_two_prefix_chain_registers(self):
         (
@@ -1308,7 +1308,7 @@ class ReverseOneToOneGrammarTest(TestCase):
         ) = self._models()
         handle = _handle()
         with self.assertNumQueries(0):
-            record = handle.register(
+            record = handle.registry.register_public(
                 trust=delegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -1344,7 +1344,7 @@ class DelegationRootGuardTest(TestCase):
             ),
         }
         payload.update(extra)
-        return handle.register(**payload)
+        return handle.registry.register_public(**payload)
 
     def test_missing_root_lookup_fails_closed(self):
         handle = _handle()
@@ -1353,7 +1353,7 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'No delegated registration',
             ):
                 handle.registry.delegations_for_root(DocumentDelegation)
-        self.assertEqual(handle.build_registry().delegations, ())
+        self.assertEqual(handle.registry.build_registry().delegations, ())
 
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
@@ -1372,7 +1372,7 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'same principal model',
             ):
                 self._register(handle, sponsor='document')
-        self.assertEqual(handle.build_registry().delegations, ())
+        self.assertEqual(handle.registry.build_registry().delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
         registry = RegistryFactory()
@@ -1397,7 +1397,7 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'Duplicate delegated registration',
             ):
                 self._register(handle)
-        self.assertEqual(len(handle.build_registry().delegations), 1)
+        self.assertEqual(len(handle.registry.build_registry().delegations), 1)
 
     def test_same_root_same_content_terminal_remains_a_conflict(self):
         handle = _handle()
@@ -1412,14 +1412,14 @@ class DelegationRootGuardTest(TestCase):
                         relationship.delegate == relationship.sponsor
                     ),
                 )
-        self.assertEqual(len(handle.build_registry().delegations), 1)
+        self.assertEqual(len(handle.registry.build_registry().delegations), 1)
 
     def test_same_root_different_content_terminal_is_stored(self):
         handle = _handle()
         self._register(handle)
         second = self._register(handle, content='delegate')
         rows = handle.registry.delegations_for_root(DocumentDelegation)
-        self.assertEqual(rows, handle.build_registry().delegations)
+        self.assertEqual(rows, handle.registry.build_registry().delegations)
         self.assertEqual(len(rows), 2)
         self.assertIs(second.content_model, get_user_model())
         self.assertEqual(second.content_path, ('delegate',))
@@ -1558,14 +1558,14 @@ class DelegatedAuthorityLiveTest(TestCase):
 
     def test_sponsor_grant_may_come_from_another_relationship_handle(self):
         grant_handle = _handle('tests.core.issue266.grants')
-        grant_handle.register(
+        grant_handle.registry.register_public(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
         delegation_handle = _handle('tests.core.issue266.delegations')
-        delegation_handle.register(
+        delegation_handle.registry.register_public(
             trust=DocumentDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -1602,13 +1602,13 @@ class DelegatedAuthorityLiveTest(TestCase):
 
     def test_policy_lock_exports_delegation_and_correlated_sql(self):
         handle = _handle('tests.core.issue266.policy')
-        handle.register(
+        handle.registry.register_public(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register(
+        handle.registry.register_public(
             trust=DocumentDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -1636,14 +1636,14 @@ class DelegatedAuthorityLiveTest(TestCase):
 
     def test_policy_lock_uses_a_sponsor_grant_from_another_handle(self):
         grant_handle = _handle('tests.core.issue266.split-grants')
-        grant_handle.register(
+        grant_handle.registry.register_public(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
         delegation_handle = _handle('tests.core.issue266.split-delegations')
-        delegation_handle.register(
+        delegation_handle.registry.register_public(
             trust=DocumentDelegation,
             delegate='delegate',
             sponsor='sponsor',

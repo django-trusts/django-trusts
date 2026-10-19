@@ -274,13 +274,13 @@ def _non_confidential(user, permission, obj):
 
 def _document_handle(path='documents.backends.DocumentBackend'):
     handle = _handle(path)
-    handle.register(
+    handle.registry.register_public(
         trust=DocumentPermission,
         user='user',
         permission='permission',
         content='document',
     )
-    handle.add_named_filter(Document, 'non_confidential', _non_confidential)
+    handle.registry.register_permission_condition(Document, 'non_confidential', _non_confidential)
     return handle
 
 
@@ -367,7 +367,7 @@ def _constant_family_handle():
         ('label', label),
     )
     for code, builder in filters:
-        handle.add_named_filter(ConstantDocument, code, builder)
+        handle.registry.register_permission_condition(ConstantDocument, code, builder)
     return handle
 
 
@@ -430,14 +430,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
         def render(trusts, filters):
             handle = _handle('documents.backends.DocumentBackend')
             for trust, content_field in trusts:
-                handle.register(
+                handle.registry.register_public(
                     trust=trust,
                     user='user',
                     permission='permission',
                     content=content_field,
                 )
             for model, code in filters:
-                handle.add_named_filter(model, code, _non_confidential)
+                handle.registry.register_permission_condition(model, code, _non_confidential)
             return render_policy_sql_bytes(handles=[handle])
 
         forward_trusts = (
@@ -471,14 +471,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_named_filter_code_outside_id_alphabet_is_rejected(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.add_named_filter(Document, 'needs-review', _non_confidential)
+        handle.registry.register_permission_condition(Document, 'needs-review', _non_confidential)
         with self.assertRaises(TrustsConfigurationError) as ctx:
             render_policy_sql_bytes(handles=[handle])
         self.assertIn('needs-review', str(ctx.exception))
         self.assertIn('non-portable', str(ctx.exception))
 
         portable = _handle('documents.backends.DocumentBackend')
-        portable.add_named_filter(Document, 'needs_review', _non_confidential)
+        portable.registry.register_permission_condition(Document, 'needs_review', _non_confidential)
         document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[portable]),
         )
@@ -489,13 +489,13 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_cond_entries_show_conditions_and_delegations_use_flow_maps(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=DocumentPermission,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register(
+        handle.registry.register_public(
             trust=CappedDocumentPermission,
             user='user',
             permission='permission',
@@ -505,7 +505,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
                 & (trust.user == trust.user)
             ),
         )
-        handle.register(
+        handle.registry.register_public(
             trust=PolicyDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -648,14 +648,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_condition_along_and_duplicate_suffixes_are_in_the_trust_id(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=DocumentPermission,
             user='user',
             permission='permission',
             content='document',
             condition=lambda trust: trust.user == trust.user,
         )
-        handle.register(
+        handle.registry.register_public(
             trust=DocumentPermission,
             user='user',
             permission='permission',
@@ -677,14 +677,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
         # Along SQL uses GrantReach, which this export does not classify.
         # The id is still minted from the registered walk before compile.
         along = _handle('documents.backends.FolderBackend')
-        along.register(
+        along.registry.register_public(
             trust=FolderGrant,
             user='user',
             permission='permission',
             content='folder',
             along=('folder__parent', 2),
         )
-        along_ids = _assign_ids(tuple(along.build_registry().records))
+        along_ids = _assign_ids(tuple(along.registry.build_registry().records))
         self.assertEqual(along_ids, [
             'documents__FolderGrant__folder__along_folder__parent_S_2',
         ])
@@ -694,13 +694,13 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_or_siblings_share_or_group_and_keep_separate_sql(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=DocumentPermission,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register(
+        handle.registry.register_public(
             trust=TeamDocumentPermission,
             user='team__members',
             permission='permission',
@@ -786,14 +786,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_along_forward_lockfile_is_portable_recursive_sql(self):
         handle = _handle('documents.backends.FolderAlongBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=FolderGrant,
             user='user',
             permission='permission',
             content='folder',
             along=('folder__parent', 2),
         )
-        record = handle.build_registry().plan_for(Folder).records[0]
+        record = handle.registry.build_registry().plan_for(Folder).records[0]
         handles = (handle,)
         content = {
             'model': 'documents.Folder',
@@ -851,7 +851,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_along_failure_does_not_return_a_partial_document(self):
         handle = _handle('documents.backends.FolderBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=FolderGrant,
             user='user',
             permission='permission',
@@ -1053,7 +1053,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertEqual(account.code, '1')
 
         actor_handle = _handle('documents.backends.ActorBackend')
-        actor_handle.register(
+        actor_handle.registry.register_public(
             trust=PolicyActorGrant,
             user='user',
             permission='permission',
@@ -1076,7 +1076,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
         ])
 
         account_handle = _handle('documents.backends.AccountBackend')
-        account_handle.register(
+        account_handle.registry.register_public(
             trust=PolicyAccountGrant,
             user='user',
             permission='permission',
@@ -1104,7 +1104,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
 
     def test_custom_permission_pk_renders_the_resolved_target(self):
         handle = _handle('documents.backends.OperationBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=OperationGrant,
             user='user',
             permission='permission',

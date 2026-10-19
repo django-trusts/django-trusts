@@ -1,24 +1,28 @@
 """Django hook for Trusts implementations.
 
-Importable before the app registry is ready. ``trusts.backends``
-imports ``Permission`` at module level, and that class body calls
-``apps.check_apps_ready()``, so a top-level import of backends from
-here raises ``AppRegistryNotReady`` during populate and loads the
-condition IR. ``import trusts.apps`` must not do either.
-``ready()`` is where this module reaches ``trusts.backends``.
-The recorder and the built registry live on the backend class.
+Importable before the app registry is ready. Does not import
+``trusts.backends`` (``Permission`` calls ``apps.check_apps_ready()``)
+or ``trusts.inspect.checks``. ``ready()`` validates ownership.
+The backend class seals on first inquiry.
 """
 
 import sys
 
 from django.apps import AppConfig as DjangoAppConfig
+from django.conf import settings
+from django.contrib.auth import get_backends
 from django.core.exceptions import ImproperlyConfigured
 
 from trusts._meta_options import _ensure_permission_conditions_option
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.commands import install_policy_commands
+from trusts.plan.aggregates import compiler_for_class
+from trusts.plan.handles import BackendHandle
 
 _ensure_permission_conditions_option()
+
+recorders = {}
+registries = {}
 
 
 def listed_backend_class(path):
@@ -41,20 +45,14 @@ class _PathRegistries(dict):
     def __setitem__(self, path, value):
         dict.__setitem__(self, path, value)
         cls = listed_backend_class(path)
-        if not isinstance(cls, type):
-            return
-        from trusts.backends import registries
-
-        registries[cls] = value
+        if isinstance(cls, type):
+            registries[cls] = value
 
     def __delitem__(self, path):
         dict.__delitem__(self, path)
         cls = listed_backend_class(path)
-        if not isinstance(cls, type):
-            return
-        from trusts.backends import registries
-
-        registries.pop(cls, None)
+        if isinstance(cls, type):
+            registries.pop(cls, None)
 
     def clear(self):
         for path in list(self):
@@ -75,8 +73,7 @@ class TrustsImplementationConfig(DjangoAppConfig):
     """Implementation owner. Declares ``trusts_backend_paths``.
 
     Does not construct registries. Subclasses register on
-    ``Backend().get_registry()``. The tests app calls ``ready()`` after
-    donations; a host without that app seals from its own ``ready``.
+    ``Backend().get_registry()`` before the first inquiry seals it.
     """
 
     default = False
@@ -116,9 +113,7 @@ class TrustsImplementationConfig(DjangoAppConfig):
         return self.path_for_class(type(backend))
 
     def configured_backend(self, path=None):
-        """Handle view of the class registry for ``path``. Not a registration door."""
-        from trusts.backends import handle_for_path
-
+        """Configured path for ``path``. Not a registration door."""
         paths = self._configured_trusts_paths()
         if path is None:
             if len(paths) != 1:
@@ -141,18 +136,14 @@ class TrustsImplementationConfig(DjangoAppConfig):
             raise TrustsConfigurationError(
                 '%r is not a configured Trusts backend' % (path,)
             )
+        cls = listed_backend_class(path)
         if path in self.registries:
-            from trusts.plan.aggregates import compiler_for_class
-            from trusts.plan.handles import BackendHandle
-
-            cls = listed_backend_class(path)
             compiler = compiler_for_class(cls) if isinstance(cls, type) else None
-            return BackendHandle(
-                path=path,
-                registry=self.registries[path],
-                compiler=compiler,
-            )
-        return handle_for_path(path)
+            registry = self.registries[path]
+        else:
+            registry = _sealed_registry(path, cls)
+            compiler = compiler_for_class(cls)
+        return BackendHandle(path=path, registry=registry, compiler=compiler)
 
     def configured_handles(self):
         return tuple(
@@ -185,14 +176,7 @@ class TrustsImplementationConfig(DjangoAppConfig):
 
     def ready(self):
         install_policy_commands()
-        # Reachable only after Django has set apps_ready. Importing
-        # trusts.backends earlier raises AppRegistryNotReady (see module
-        # docstring). checks imports the condition IR; that import is
-        # also deferred so `import trusts.apps` stays light.
-        import trusts.inspect.checks  # noqa: F401
-        from trusts.backends import assert_listed_backend_classes
-
-        assert_listed_backend_classes(self)
+        _assert_owned(self)
 
 
 def implementation_configs(apps_registry=None):
@@ -246,13 +230,80 @@ def implementation_for_class(cls, apps_registry=None, required=True):
     return None
 
 
+def _is_mixin(cls):
+    return any(
+        base.__name__ == 'TrustModelBackendMixin' for base in cls.__mro__
+    )
+
+
+def _sealed_registry(path, cls):
+    if not isinstance(cls, type) or not _is_mixin(cls):
+        raise TrustsConfigurationError(
+            '%r is not a configured Trusts backend' % (path,)
+        )
+    backend = None
+    for candidate in get_backends():
+        if type(candidate) is cls:
+            backend = candidate
+            break
+    if backend is None:
+        raise TrustsConfigurationError(
+            '%r is not a configured Trusts backend' % (path,)
+        )
+    if cls not in registries:
+        backend.ready()
+    return registries[cls]
+
+
+def _assert_owned(config):
+    owned = config.owned_backend_paths()
+    if not owned:
+        raise ImproperlyConfigured(
+            '%s.trusts_backend_paths must be a non-empty tuple of '
+            'exact AUTHENTICATION_BACKENDS paths.' % type(config).__name__
+        )
+    if len(set(owned)) != len(owned):
+        raise ImproperlyConfigured(
+            '%s.trusts_backend_paths must not repeat a path: %r'
+            % (type(config).__name__, owned)
+        )
+    get_backends()
+    listed = tuple(getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ())
+    listed_set = set(listed)
+    for path in owned:
+        cls = listed_backend_class(path)
+        if not isinstance(cls, type) or not _is_mixin(cls):
+            if path not in listed_set:
+                raise ImproperlyConfigured(
+                    '%s owns %r but that path is not listed in '
+                    'AUTHENTICATION_BACKENDS.'
+                    % (type(config).__name__, path)
+                )
+            raise TrustsConfigurationError(
+                '%s owns %r which is not a TrustModelBackendMixin.'
+                % (type(config).__name__, path)
+            )
+        if path not in listed_set:
+            raise ImproperlyConfigured(
+                '%s owns %r but that path is not listed in '
+                'AUTHENTICATION_BACKENDS.'
+                % (type(config).__name__, path)
+            )
+    apps_registry = getattr(config, 'apps', None)
+    for path in owned:
+        others = [
+            other for other in implementation_configs(apps_registry)
+            if other is not config and path in other.owned_backend_paths()
+        ]
+        if others:
+            raise TrustsConfigurationError(
+                'Backend path %r has multiple implementation owners: %r'
+                % (path, [config] + others)
+            )
+
+
 def _listed_mixin_paths():
     """Mixin paths in settings order. Two strings for one class is an error."""
-    from django.conf import settings
-    from django.contrib.auth import get_backends
-
-    from trusts.backends import TrustModelBackendMixin
-
     get_backends()
     listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
     paths = []
@@ -261,7 +312,7 @@ def _listed_mixin_paths():
         if path in paths:
             continue
         cls = listed_backend_class(path)
-        if not isinstance(cls, type) or not issubclass(cls, TrustModelBackendMixin):
+        if not isinstance(cls, type) or not _is_mixin(cls):
             continue
         paths.append(path)
         class_to_paths.setdefault(cls, []).append(path)

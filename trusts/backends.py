@@ -16,6 +16,8 @@ from trusts.apps import (
     implementation_configs,
     implementation_for_class,
     listed_backend_class,
+    recorders,
+    registries,
 )
 from trusts.compile.factory import RegistryFactory
 from trusts.errors import (
@@ -23,17 +25,14 @@ from trusts.errors import (
     TrustsCompilerError,
     TrustsConfigurationError,
 )
-from trusts.plan.aggregates import compiler_for_class
 from trusts.plan.conditions import (
     evaluate_registered_expression,
     permission_has_condition,
 )
-from trusts.plan.handles import BackendHandle
+import trusts.inspect.checks  # noqa: F401
+from trusts.plan.handles import pair
 from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
 from trusts import utils
-
-recorders = {}
-registries = {}
 
 
 def _permission_binding(perm, model):
@@ -265,7 +264,7 @@ class TrustModelBackendMixin(object):
         for handle in trusts_apps._relationship_implementation_handles():
             if getattr(handle, 'path', None) == own_path:
                 continue
-            registry = getattr(handle, 'registry', None)
+            registry, _compiler = pair(handle)
             if registry is None or registry is stored:
                 continue
             build = getattr(registry, 'build_registry', None)
@@ -394,13 +393,7 @@ class _Once(object):
 
 
 class Recorder(object):
-    """Raw registrations for one backend class.
-
-    Path builders run once, via ``build_public_registration``. Stored
-    values are those refs, in ``_rows`` (replay order) and in
-    ``principals`` / ``delegates`` per content model. ``play`` hands
-    the refs to the visitor. This object does not answer questions.
-    """
+    """Registrations for one backend class. Does not answer questions."""
 
     def __init__(self):
         self.principals = {}
@@ -504,85 +497,3 @@ def seal_configured_backends(apps_registry=None):
         if type(backend) in classes and isinstance(backend, TrustModelBackendMixin):
             backend.ready()
 
-
-def handle_for_path(path):
-    """Plan handle for one configured path.
-
-    The registry is the class's built object. This is the boundary the
-    plan still consumes; registration does not go through it.
-    """
-    cls = listed_backend_class(path)
-    if not isinstance(cls, type) or not issubclass(cls, TrustModelBackendMixin):
-        raise TrustsConfigurationError(
-            '%r is not a configured Trusts backend' % (path,)
-        )
-    backend = None
-    for candidate in get_backends():
-        if type(candidate) is cls:
-            backend = candidate
-            break
-    if backend is None:
-        raise TrustsConfigurationError(
-            '%r is not a configured Trusts backend' % (path,)
-        )
-    if cls not in registries:
-        backend.ready()
-    return BackendHandle(
-        path=path,
-        registry=registries[cls],
-        compiler=compiler_for_class(cls),
-    )
-
-
-def assert_listed_backend_classes(config):
-    """Ownership checks for one implementation config.
-
-    Called from ``TrustsImplementationConfig.ready``. Does not seal.
-    """
-    from django.conf import settings
-    from django.core.exceptions import ImproperlyConfigured
-
-    owned = config.owned_backend_paths()
-    if not owned:
-        raise ImproperlyConfigured(
-            '%s.trusts_backend_paths must be a non-empty tuple of '
-            'exact AUTHENTICATION_BACKENDS paths.' % type(config).__name__
-        )
-    if len(set(owned)) != len(owned):
-        raise ImproperlyConfigured(
-            '%s.trusts_backend_paths must not repeat a path: %r'
-            % (type(config).__name__, owned)
-        )
-    get_backends()
-    listed = tuple(getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ())
-    listed_set = set(listed)
-    for path in owned:
-        cls = listed_backend_class(path)
-        if not isinstance(cls, type) or not issubclass(cls, TrustModelBackendMixin):
-            if path not in listed_set:
-                raise ImproperlyConfigured(
-                    '%s owns %r but that path is not listed in '
-                    'AUTHENTICATION_BACKENDS.'
-                    % (type(config).__name__, path)
-                )
-            raise TrustsConfigurationError(
-                '%s owns %r which is not a TrustModelBackendMixin.'
-                % (type(config).__name__, path)
-            )
-        if path not in listed_set:
-            raise ImproperlyConfigured(
-                '%s owns %r but that path is not listed in '
-                'AUTHENTICATION_BACKENDS.'
-                % (type(config).__name__, path)
-            )
-    apps_registry = getattr(config, 'apps', None)
-    for path in owned:
-        others = [
-            other for other in implementation_configs(apps_registry)
-            if other is not config and path in other.owned_backend_paths()
-        ]
-        if others:
-            raise TrustsConfigurationError(
-                'Backend path %r has multiple implementation owners: %r'
-                % (path, [config] + others)
-            )
