@@ -52,6 +52,7 @@ def _as_q(predicate):
 
 
 def _plan_for_permission(registry, candidates, user, permission):
+    registry = registry_of(registry)
     if isinstance(permission, Model):
         return registry.plan_for(
             candidates, user=user, permission=permission,
