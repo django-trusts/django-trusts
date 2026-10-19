@@ -185,7 +185,13 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             permission='permission',
             content='document',
         )
+        from tests.apps import publish_catalog
+        from trusts.apps import catalogs
+
         owner.registries[MIXIN] = alt_registry
+        had_catalog = MixinOnlyBackend in catalogs
+        saved_catalog = catalogs.get(MixinOnlyBackend)
+        publish_catalog(MIXIN, alt_registry, backend_cls=MixinOnlyBackend)
         mixin = MixinOnlyBackend()
         try:
             owner.trusts_backend_paths = (DOCUMENT_BACKEND, MIXIN)
@@ -230,6 +236,10 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         finally:
             owner.trusts_backend_paths = saved
             owner.registries.pop(MIXIN, None)
+            if had_catalog:
+                catalogs[MixinOnlyBackend] = saved_catalog
+            else:
+                catalogs.pop(MixinOnlyBackend, None)
 
     def test_duplicate_path_is_two_evaluations(self):
         qs = self._granted_qs(self.open_one)

@@ -237,15 +237,27 @@ def _assert_agrees(test, content, perm, candidates):
 
 @contextmanager
 def _document_registry():
+    from tests.apps import publish_catalog
+    from trusts.apps import catalogs, listed_backend_class
+
     config = implementation_for_path(DOCUMENT_BACKEND)
     saved = dict(config.registries)
+    cls = listed_backend_class(DOCUMENT_BACKEND)
+    had_catalog = isinstance(cls, type) and cls in catalogs
+    saved_catalog = catalogs.get(cls)
     registry = RegistryFactory()
     config.registries[DOCUMENT_BACKEND] = registry
+    publish_catalog(DOCUMENT_BACKEND, registry, backend_cls=cls)
     try:
         yield registry
     finally:
         config.registries.clear()
         config.registries.update(saved)
+        if isinstance(cls, type):
+            if had_catalog:
+                catalogs[cls] = saved_catalog
+            else:
+                catalogs.pop(cls, None)
 
 
 def _handle(registry):
