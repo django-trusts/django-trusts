@@ -282,7 +282,6 @@ class PolicyLockConfigurationTest(SimpleTestCase):
         class _View(object):
             path = populated.path
             registry = _NoFilterRegistry(populated.registry)
-            compiler = populated.compiler
 
         bare = _View()
         omitted = _load_policy_sql_document(
