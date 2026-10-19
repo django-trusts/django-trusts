@@ -39,7 +39,7 @@ from trusts.apps import implementation_for_path
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import (
     _compile_queryset,
     _load_policy_sql_document,
@@ -239,7 +239,7 @@ def _assert_agrees(test, content, perm, candidates):
 def _document_registry():
     config = implementation_for_path(DOCUMENT_BACKEND)
     saved = dict(config.registries)
-    registry = TrustsRegistry()
+    registry = RegistryFactory()
     config.registries[DOCUMENT_BACKEND] = registry
     try:
         yield registry

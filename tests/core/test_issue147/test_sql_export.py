@@ -27,7 +27,7 @@ from trusts.plan.recursions import _IdentInReach
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import (
     CHECK_ID_POLICY_LOCK,
     CONVENTIONAL_LOCKFILE_NAME,
@@ -259,7 +259,7 @@ class FolderGrant(models.Model):
 
 def _handle(path, registry=None):
     if registry is None:
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
     return BackendHandle(
         path=path,
         registry=registry,

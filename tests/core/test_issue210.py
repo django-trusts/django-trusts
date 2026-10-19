@@ -50,12 +50,12 @@ from trusts.compile.nodes import (
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 def _handle(registry=None, path='tests.core.issue210'):
     if registry is None:
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
     return BackendHandle(
         path=path,
         registry=registry,
@@ -128,7 +128,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_org_equality_permission_ceiling_and_conjunction(self):
         TeamRepoGrant = _gh_models()[6]
-        expected = _register_team(TrustsRegistry(), TeamRepoGrant)
+        expected = _register_team(RegistryFactory(), TeamRepoGrant)
 
         equality = _handle(path='tests.core.issue210-eq').register(
             trust=TeamRepoGrant,
@@ -137,7 +137,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
             content=lambda t: t.repository,
             condition=lambda t: t.team.organization == t.repository.organization,
         )
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         t = Ref(TeamRepoGrant)
         expected_eq = via_ref.register(
             content=t.repository,
@@ -158,7 +158,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
                 t.team.permission_bundles.operations.contains(t.operation)
             ),
         )
-        via_ceil = TrustsRegistry()
+        via_ceil = RegistryFactory()
         expected_ceil = via_ceil.register(
             content=t.repository,
             user=t.team.members,
@@ -184,7 +184,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_internal_registry_still_accepts_private_ir(self):
         TeamRepoGrant = _gh_models()[6]
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         record = _register_team(registry, TeamRepoGrant)
         self.assertIsInstance(record.condition, All)
         self.assertEqual(registry.records, (record,))
@@ -213,7 +213,7 @@ class RegisterConditionOnceTest(TransactionTestCase):
             TeamRepoGrant.objects.create(
                 team=team, repository=repo, operation=read,
             )
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             handle = _handle(registry)
             builder = _CountCondition()
             record = handle.register(
@@ -408,7 +408,7 @@ class RegisterConditionFailClosedTest(TestCase):
         self.assertEqual(handle.build_registry().records, ())
 
     def test_condition_invoked_on_register_after_build(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         handle = _handle(registry)
         registry.build_registry()
         calls = []
@@ -447,7 +447,7 @@ class RegisterConditionFailClosedTest(TestCase):
 
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
     def test_string_and_lambda_paths_still_match(self):
-        expected = TrustsRegistry().register(
+        expected = RegistryFactory().register(
             content=Ref(DocumentGrant).document,
             user=Ref(DocumentGrant).user,
             permission=Ref(DocumentGrant).permission,
@@ -474,7 +474,7 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
             _node_graph_models()
         )
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         j = Ref(Grant)
         expected = via_ref.register(
             content=j.node,
@@ -557,7 +557,7 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
         self.TeamRepoGrant.objects.create(
             team=self.writers, repository=self.repo_a, operation=self.read,
         )
-        self.registry = TrustsRegistry()
+        self.registry = RegistryFactory()
         _register_direct(self.registry, self.AccountRepoGrant)
         handle = _handle(self.registry)
         handle.register(

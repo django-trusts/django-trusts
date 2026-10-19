@@ -24,7 +24,7 @@ from trusts.apps import (
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 HOST = 'tests.backends.HostTrustModelBackend'
@@ -111,14 +111,14 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         import trusts.apps as apps_mod
         from trusts.plan.contents import filter_by_permitted_content
         from trusts.compile.nodes import Ref
-        from trusts.compile.factory import TrustsRegistry
+        from trusts.compile.factory import RegistryFactory
         from trusts.query import AuthorizedManager, AuthorizedQuerySet
 
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertTrue(callable(filter_by_permitted_content))
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(issubclass(AuthorizedManager, object))
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         self.assertEqual(registry.records, ())
         self.assertIsNotNone(Ref)
 
@@ -206,61 +206,67 @@ class ImplementationReadyTest(SimpleTestCase):
         self.assertIn('multiple implementation owners', str(ctx.exception))
 
     def test_ready_is_idempotent_and_does_not_replace_registries(self):
+        from trusts.backends import registries
+
         config = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
             config.ready()
-            first = config.registries[HOST]
             holder = config.registries
+            built = registries[HostTrustModelBackend]
             config.ready()
             self.assertIs(config.registries, holder)
-            self.assertIs(config.registries[HOST], first)
+            self.assertIs(registries[HostTrustModelBackend], built)
 
     def test_donation_uses_implementation_for_path(self):
+        from trusts.backends import registries
+
         config = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
             config.ready()
             owner = implementation_for_path(HOST, config.apps)
             self.assertIs(owner, config)
             handle = owner.configured_backend(HOST)
-            before = handle.registry.records
-            handle.registry.register  # surface exists
-            self.assertIs(handle.registry, config.registries[HOST])
-            self.assertEqual(handle.registry.records, before)
+            self.assertIs(handle.registry, registries[HostTrustModelBackend])
+            self.assertEqual(
+                handle.registry.records,
+                registries[HostTrustModelBackend].records,
+            )
 
 
 class MixinOwnerResolveTest(SimpleTestCase):
     def test_owner_absent_is_configuration_error(self):
-        backend = MixinOnlyBackend()
         with patch('trusts.apps.implementation_configs', return_value=()):
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                backend._trusts_config()
+                implementation_for_class(MixinOnlyBackend)
             self.assertIn('no implementation owner', str(ctx.exception))
 
     def test_owner_present_resolves(self):
+        from trusts.backends import registries
+
         owner = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
             owner.ready()
-            backend = HostTrustModelBackend()
             with patch(
                 'trusts.apps.implementation_configs',
                 return_value=(owner,),
             ):
-                config = backend._trusts_config()
+                config = implementation_for_class(HostTrustModelBackend)
                 self.assertIs(config, owner)
-                handle = backend._own_handle()
+                handle = owner.configured_backend(HOST)
                 self.assertEqual(handle.path, HOST)
-                self.assertIs(handle.registry, owner.registries[HOST])
+                self.assertIs(
+                    handle.registry, registries[HostTrustModelBackend],
+                )
 
     def test_duplicate_owner_fails_without_fallback(self):
         first = _bind(HostImplConfig)
         second = _bind(HostImplConfig)
-        backend = HostTrustModelBackend()
         with patch(
             'trusts.apps.implementation_configs',
             return_value=(first, second),
         ):
             with self.assertRaises(TrustsConfigurationError):
-                backend._trusts_config()
+                implementation_for_class(HostTrustModelBackend)
 
     def test_live_host_is_the_kernel_suite_owner(self):
         from django.conf import settings
@@ -296,8 +302,7 @@ class IsolatedImplementationStoreTest(SimpleTestCase):
             view = _AppsView([impl], ready=False)
             impl.apps = view
             impl.ready()
-            isolated = impl.registries[HOST]
-            self.assertIsInstance(isolated, TrustsRegistry)
+            self.assertNotIn(HOST, impl.registries)
         self.assertEqual(
             {path: registry.records for path, registry in live.registries.items()},
             before_records,

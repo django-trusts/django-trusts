@@ -20,7 +20,7 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.plan.registry import Registry
 
 
@@ -157,7 +157,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _registry(self, *grants):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         for grant in grants or (self.DocumentGrant,):
             _register(registry, grant)
         return registry
@@ -466,7 +466,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         )
 
     def test_custom_user_terminal_works_through_registered_metadata(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         _register(
             registry,
             self.AccountGrant,
@@ -569,7 +569,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
 
     def test_instances_are_isolated(self):
         left = self._registry()
-        right = TrustsRegistry()
+        right = RegistryFactory()
         self.assertEqual(len(left.records), 1)
         self.assertEqual(right.records, ())
         self.DocumentGrant.objects.create(
@@ -632,7 +632,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(SlugDocument, ActionCode, SlugGrant):
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             _register(registry, SlugGrant)
             doc_alpha = SlugDocument.objects.create(slug='alpha', title='A')
             doc_beta = SlugDocument.objects.create(slug='beta', title='B')
@@ -701,7 +701,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(OptionalGrant):
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             _register(registry, OptionalGrant)
             OptionalGrant.objects.create(
                 document=self.doc_a, user=self.alice, permission=self.read,

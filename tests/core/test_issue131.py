@@ -7,7 +7,7 @@ builders, ``along=(path, bound)``, ``register(*, trust=...)``, and
 ``register_permission_condition`` remain removed. ``Ref`` input and
 prebuilt ``All`` / ``Equal`` / ``permission_in`` on the public handle
 are TypeError. Registration stays open after a build. Dual backends stay
-isolated. Internal ``TrustsRegistry.register(Ref)`` remains for
+isolated. Internal ``RegistryFactory.register(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
 """
 
@@ -34,12 +34,12 @@ from trusts.compile.nodes import (
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 def _handle(registry=None, path='tests.core.handle-a'):
     if registry is None:
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
     return BackendHandle(
         path=path,
         registry=registry,
@@ -66,7 +66,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(handle.registry, 'strategies'))
 
     def test_string_register_matches_internal_ref_record(self):
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         j = Ref(DocumentGrant)
         expected = via_ref.register(
             content=j.document,
@@ -157,7 +157,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         self.assertEqual(handle.build_registry().records, ())
 
     def test_string_condition_is_not_legal_on_bare_registry(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
             registry.register(
@@ -196,7 +196,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
 
 class HandleAfterBuildOrderTest(SimpleTestCase):
     def test_register_after_build_resolves_paths(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         handle = _handle(registry)
         self.assertEqual(registry.build_registry().records, ())
         with patch(
@@ -221,7 +221,7 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
         self.assertEqual(registry.build_registry().records, (record,))
 
     def test_invalid_grammar_after_build_raises_its_own_error(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         handle = _handle(registry)
         registry.build_registry()
         with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -266,7 +266,7 @@ class HandleConditionAndAlongTest(SimpleTestCase):
 
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         expected = _register_team(via_ref, TeamRepoGrant)
         handle = _handle()
         record = handle.register(
@@ -289,7 +289,7 @@ class HandleConditionAndAlongTest(SimpleTestCase):
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
             _node_graph_models()
         )
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         j = Ref(Grant)
         expected = via_ref.register(
             content=j.node,
@@ -336,7 +336,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
 
     def test_register_matches_internal_ref_record(self):
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         j = Ref(DocumentGrant)
         expected = via_ref.register(
             content=j.document,
@@ -409,7 +409,7 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
 
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         expected = _register_team(via_ref, TeamRepoGrant)
         backend = _handle()
         record = backend.register(
@@ -432,7 +432,7 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
             _node_graph_models()
         )
-        via_ref = TrustsRegistry()
+        via_ref = RegistryFactory()
         j = Ref(Grant)
         expected = via_ref.register(
             content=j.node,
@@ -481,7 +481,7 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
 
 class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
     def test_relationship_and_filter_register_after_build(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         backend = _handle(registry)
         registry.build_registry()
         log = _PredicateLog()

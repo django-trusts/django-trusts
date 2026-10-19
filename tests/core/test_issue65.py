@@ -22,7 +22,7 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 def _folder_models():
@@ -116,7 +116,7 @@ def _pks(rows):
 class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
     def test_same_root_different_content_terminals_are_stored_in_order(self):
         Folder, Document, FolderGrant, _permit = _folder_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         folder_rec, document_rec = _register_folder_paths(registry, FolderGrant)
 
         self.assertEqual(folder_rec.content_path, ('folder',))
@@ -141,7 +141,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_records_for_root_raises_when_absent(self):
         Folder, _document, FolderGrant, DocumentPermit = _folder_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertRaisesRegex(TrustsConfigurationError, r'No registration'):
             registry.records_for_root(FolderGrant)
         j = Ref(FolderGrant)
@@ -152,7 +152,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_global_insertion_order_with_interleaved_roots(self):
         Folder, Document, FolderGrant, DocumentPermit = _folder_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(FolderGrant)
         k = Ref(DocumentPermit)
         first = registry.register(
@@ -171,7 +171,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_exact_duplicate_raises_without_mutating_records(self):
         _folder, _document, FolderGrant, _permit = _folder_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         first, second = _register_folder_paths(registry, FolderGrant)
         stored = registry.records
         j = Ref(FolderGrant)
@@ -188,7 +188,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_same_root_same_content_terminal_is_conflict(self):
         _folder, _document, FolderGrant, _permit = _folder_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         first, second = _register_folder_paths(registry, FolderGrant)
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
@@ -282,7 +282,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(FolderGrant)
         extra = Ref(ExtraGrant)
         pair = Ref(PairGrant)
@@ -353,7 +353,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_user_and_permission_remain_direct_single_valued(self):
         _folder, _document, FolderGrant, _permit = _folder_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct|reverse'):
             registry.register(
@@ -467,7 +467,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         self.doc_b1 = self.Document.objects.create(
             folder=self.folder_b, alt_folder=self.folder_a, title='B1',
         )
-        self.registry = TrustsRegistry()
+        self.registry = RegistryFactory()
         self.folder_rec, self.document_rec = _register_folder_paths(
             self.registry, self.FolderGrant,
         )
@@ -766,7 +766,7 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(CodedFolder, CodedDocument, CodedGrant):
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             j = Ref(CodedGrant)
             folder_rec = registry.register(
                 content=j.folder, user=j.user, permission=j.permission,

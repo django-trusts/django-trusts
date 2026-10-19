@@ -20,7 +20,7 @@ from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -317,7 +317,7 @@ def _document_backend():
 def _extra_handle(path='tests.core.issue138-extra'):
     return BackendHandle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
 

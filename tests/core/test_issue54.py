@@ -27,7 +27,7 @@ from trusts.plan.relations import (
 )
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.query import (
     AuthorizedManager,
     AuthorizedManagerMixin,
@@ -179,7 +179,7 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
 class ConditionLookupBindTest(TestCase):
     def test_construct_self_binds_and_unbind_is_zero_sql(self):
         with self.assertNumQueries(0):
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             lookup = registry.condition_lookup
         self.assertIsNotNone(lookup)
         self.assertIs(lookup.conditions, registry.conditions)
@@ -200,7 +200,7 @@ class ConditionLookupBindTest(TestCase):
         self.assertIsNone(registry.condition_lookup)
 
     def test_missing_methods_raise_and_do_not_partial_bind(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         default = registry.condition_lookup
         self.assertIs(default.conditions, registry.conditions)
 
@@ -415,7 +415,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.add,
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         _register_payload(registry, self.FolderGrant)
         self.handle = _Handle(registry)
 
@@ -541,7 +541,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(Scope, Payload, Row, Grant):
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             j = Ref(Grant)
             record = registry.register(
                 content=j.scope.rows.content,

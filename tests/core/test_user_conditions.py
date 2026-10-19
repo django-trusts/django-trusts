@@ -26,7 +26,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import common_permissions
 from trusts.decorators import (
@@ -61,7 +61,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
         for expr in (lambda u: u.username, lambda u: u.is_authenticated,
                      lambda u: u.does_not_exist):
             with self.subTest(expr=expr):
-                registry = TrustsRegistry()
+                registry = RegistryFactory()
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         registry.set_user_condition('is_active', expr)
@@ -70,7 +70,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
     def test_tuple_targets_are_rejected_without_mutation(self):
         for target in ((), ('user',), ('sponsor',), ('user', 'sponsor')):
             with self.subTest(target=target):
-                registry = TrustsRegistry()
+                registry = RegistryFactory()
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         registry.set_user_condition(
@@ -108,7 +108,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
             Grant.objects.create(note=note, user=alice, permission=read)
             Grant.objects.create(note=note, user=inactive, permission=read)
 
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             registry.set_user_condition(
                 'staff', lambda u: u.is_active & u.is_superuser,
             )
@@ -155,7 +155,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
             self.assertIn('is_superuser', str(skipped.query))
             self.assertIn('is_active', str(skipped.query))
 
-            open_registry = TrustsRegistry()
+            open_registry = RegistryFactory()
             open_registry.set_user_condition('is_active', None)
             open_registry.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
@@ -227,7 +227,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
                     permission=grant.permission,
                 )
 
-            added = TrustsRegistry()
+            added = RegistryFactory()
             built = added.build_registry()
             built.plan_for(Note, user=plain)
             self.assertTrue(built._rule_fragments)
@@ -238,7 +238,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             self.assertFalse(added.has_permission(plain, note, read))
             self.assertIn('is_staff', str(added.permissions_for(plain, note).query))
 
-            replaced = TrustsRegistry()
+            replaced = RegistryFactory()
             replaced.set_user_condition('staff', lambda u: u.is_staff)
             replaced.plan_for(Note, user=staff)
             replaced.set_user_condition(
@@ -251,7 +251,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             self.assertIn('is_superuser', replaced_sql)
             self.assertNotIn('is_staff', replaced_sql)
 
-            removed = TrustsRegistry()
+            removed = RegistryFactory()
             removed.plan_for(Note, user=inactive)
             removed.set_user_condition('is_active', None)
             self.assertFalse(removed._rule_fragments)
@@ -261,14 +261,14 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
                 'is_active', str(removed.permissions_for(inactive, note).query),
             )
 
-            override = TrustsRegistry()
+            override = RegistryFactory()
             override.plan_for(Note, user=plain)
             override.set_user_override('superuser', lambda u: u.is_superuser)
             self.assertFalse(override._override_fragments)
             register(override)
             self.assertTrue(override.has_permission(superuser, note, read))
 
-            replaced_override = TrustsRegistry()
+            replaced_override = RegistryFactory()
             replaced_override.set_user_override('staff', lambda u: u.is_staff)
             replaced_override.plan_for(Note, user=staff_only)
             replaced_override.set_user_override(
@@ -283,7 +283,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
                 replaced_override.has_permission(superuser, note, read),
             )
 
-            cleared = TrustsRegistry()
+            cleared = RegistryFactory()
             cleared.set_user_override('superuser', lambda u: u.is_superuser)
             cleared.plan_for(Note, user=superuser)
             cleared.set_user_override('superuser', None)
@@ -346,7 +346,7 @@ class UserOverrideTest(TransactionTestCase):
             Grant.objects.create(note=note, user=holder, permission=read)
             Link.objects.create(note=note, delegate=delegate, sponsor=superuser)
 
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_override(
                     'superuser', lambda u: u.is_superuser, on='sponsor',
@@ -436,7 +436,7 @@ class UserOverrideTest(TransactionTestCase):
             self.assertTrue(holds(delegate))
             Grant.objects.filter(user=superuser).delete()
 
-            plain = TrustsRegistry()
+            plain = RegistryFactory()
             plain.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
             )
@@ -513,7 +513,7 @@ class UserConditionTargetTest(TransactionTestCase):
             link = Ref(TargetLink)
 
             def open_registry(configure):
-                registry = TrustsRegistry()
+                registry = RegistryFactory()
                 configure(registry)
                 registry.register(
                     content=grant.note,
@@ -699,7 +699,7 @@ class UserRuleOrderTest(TestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         registry.set_user_condition('staff', lambda u: u.is_staff)
         grant = Ref(OrderGrant)
         registry.register(
@@ -723,7 +723,7 @@ class UserRuleOrderTest(TestCase):
         self.assertIsNone(registry._user_override)
         self.assertEqual(len(registry.records), 1)
 
-        delegation_only = TrustsRegistry()
+        delegation_only = RegistryFactory()
         link = Ref(OrderLink)
         delegation_only.register_delegation(
             content=link.note, delegate=link.delegate, sponsor=link.sponsor,
@@ -810,7 +810,7 @@ class UserRuleOrderTest(TestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         registry.set_user_condition(
             'superuser', lambda u: u.is_superuser,
         )
@@ -828,7 +828,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(registry._delegation_order, [])
         self.assertEqual(registry._delegations_by_root, {})
 
-        fresh = TrustsRegistry()
+        fresh = RegistryFactory()
         fresh.set_user_condition('superuser', lambda u: u.is_superuser)
         bare = Ref(BareGrant)
         with self.assertRaises(TrustsConfigurationError):
@@ -838,7 +838,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(fresh._order, [])
         self.assertEqual(fresh._by_root, {})
 
-        override_only = TrustsRegistry()
+        override_only = RegistryFactory()
         override_only.set_user_override(
             'superuser', lambda u: u.is_superuser,
         )
@@ -850,7 +850,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(override_only._by_root, {})
         self.assertEqual(override_only._user_override.name, 'superuser')
 
-        delegated = TrustsRegistry()
+        delegated = RegistryFactory()
         delegated.set_user_condition(
             'staff', lambda u: u.is_staff, on='sponsor',
         )
@@ -872,7 +872,7 @@ class UserRuleOrderTest(TestCase):
         self.assertNotIn(BareLink, delegated._delegations_by_root)
         self.assertEqual(delegated._order, [])
 
-        empty_delegation = TrustsRegistry()
+        empty_delegation = RegistryFactory()
         empty_delegation.set_user_condition(
             'staff', lambda u: u.is_staff, on='sponsor',
         )
@@ -911,7 +911,7 @@ class SkipKeywordTest(TransactionTestCase):
             note = SkipNote.objects.create(title='n')
             read = _permission(SkipNote, 'read_note_skip_keyword')
             SkipGrant.objects.create(note=note, user=alice, permission=read)
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             registry.set_user_condition(
                 'staff', lambda u: u.is_superuser,
             )
@@ -968,7 +968,7 @@ class SkipKeywordTest(TransactionTestCase):
             note = UnknownNote.objects.create(title='n')
             read = _permission(UnknownNote, 'read_note_unknown_skip')
             UnknownGrant.objects.create(note=note, user=alice, permission=read)
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             grant = Ref(UnknownGrant)
             registry.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
@@ -981,7 +981,7 @@ class SkipKeywordTest(TransactionTestCase):
                 registry.permissions_for(inactive, note, skip_nope=True)
             self.assertIn('skip_nope', str(ctx.exception))
 
-            removed = TrustsRegistry()
+            removed = RegistryFactory()
             removed.set_user_condition('is_active', None)
             removed.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
@@ -1032,7 +1032,7 @@ class SkipKeywordTest(TransactionTestCase):
             superuser.save(update_fields=['is_superuser', 'is_staff'])
             note = OverrideNote.objects.create(title='n')
             read = _permission(OverrideNote, 'read_note_override_skip')
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             registry.set_user_override(
                 'superuser', lambda u: u.is_superuser,
             )
@@ -1065,7 +1065,7 @@ class SkipKeywordTest(TransactionTestCase):
 
 class SkipKeywordNameTest(TestCase):
     def test_condition_name_must_be_an_identifier(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertRaises(TrustsConfigurationError) as ctx:
             registry.set_user_condition(
                 'not-a-name', lambda u: u.is_active,
@@ -1087,7 +1087,7 @@ class SkipKeywordNameTest(TestCase):
         )
 
     def test_condition_and_override_cannot_share_a_name(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertRaises(TrustsConfigurationError) as ctx:
             registry.set_user_override('is_active', lambda u: u.is_superuser)
         self.assertIn('collides', str(ctx.exception))
@@ -1111,7 +1111,7 @@ class SkipKeywordNameTest(TestCase):
         with self.assertRaises(TrustsConfigurationError):
             registry.set_user_override('staff', lambda u: u.is_staff)
         self.assertEqual(registry._user_override.name, 'superuser')
-        opened = TrustsRegistry()
+        opened = RegistryFactory()
         opened.set_user_condition('is_active', None)
         opened.set_user_override('is_active', lambda u: u.is_superuser)
         self.assertEqual(opened._user_override.name, 'is_active')
@@ -1156,12 +1156,14 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
     def setUp(self):
         from django.apps import apps
 
+        from trusts.backends import registries
+
         self.config = apps.get_app_config('myapp')
-        self.original = self.config.registries[DOCUMENT_BACKEND]
+        self.original = registries.get(DocumentBackend)
         self.original_sentinel = getattr(
             self.config, '_document_grant_registry_id', None,
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         registry.set_user_condition('staff', lambda u: u.is_staff)
         registry.set_user_override('superuser', lambda u: u.is_superuser)
         isolate_live_registry(self.config, registry, DOCUMENT_BACKEND)
@@ -1190,8 +1192,9 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.perm = 'myapp.change_document'
 
     def tearDown(self):
-        self.config.registries[DOCUMENT_BACKEND] = self.original
-        self.config._document_grant_registry_id = self.original_sentinel
+        _restore_document_registry(
+            self.config, self.original, self.original_sentinel,
+        )
 
     def test_staff_is_enforced_and_skippable(self):
         with self.assertNumQueries(1):
@@ -1388,7 +1391,7 @@ class StaffPrefixFilterTest(TransactionTestCase):
             read = _permission(Payload, 'read_payload_staff')
             Grant.objects.create(scope=scope, user=plain, permission=read)
             Grant.objects.create(scope=scope, user=staff, permission=read)
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             registry.set_user_condition(
                 'staff', lambda u: u.is_staff, on='user',
             )
@@ -1430,17 +1433,28 @@ class StaffPrefixFilterTest(TransactionTestCase):
 
 
 def _restore_document_registry(config, original, sentinel):
-    config.registries[DOCUMENT_BACKEND] = original
+    # Drop the swapped path key. ``__delitem__`` also pops the class
+    # entry; put the built registry back so the next inquiry does not
+    # rebuild, and so a later ``ready()`` does not see a built object
+    # in the path dict and try to register on it.
+    if DOCUMENT_BACKEND in config.registries:
+        del config.registries[DOCUMENT_BACKEND]
+    if original is not None:
+        from trusts.backends import registries
+
+        registries[DocumentBackend] = original
     config._document_grant_registry_id = sentinel
 
 
 def _install_document_registry(*, override):
     from django.apps import apps
 
+    from trusts.backends import registries
+
     config = apps.get_app_config('myapp')
-    original = config.registries[DOCUMENT_BACKEND]
+    original = registries.get(DocumentBackend)
     sentinel = getattr(config, '_document_grant_registry_id', None)
-    registry = TrustsRegistry()
+    registry = RegistryFactory()
     if override:
         registry.set_user_override(
             'superuser', lambda u: u.is_active & u.is_superuser,
@@ -1733,7 +1747,7 @@ class SuperuserPrefixFilterTest(TransactionTestCase):
             PrefixGrant.objects.create(scope=scope, user=peer, permission=read)
 
             def allows(user, *, override, **flags):
-                registry = TrustsRegistry()
+                registry = RegistryFactory()
                 if override:
                     registry.set_user_override(
                         'superuser', lambda u: u.is_active & u.is_superuser,
@@ -1807,15 +1821,17 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
         ))
         from django.apps import apps
 
+        from trusts.backends import registries
+
         config = apps.get_app_config('myapp')
-        original = config.registries[DOCUMENT_BACKEND]
+        original = registries.get(DocumentBackend)
         sentinel = getattr(config, '_document_grant_registry_id', None)
         with connection.schema_editor() as editor:
             editor.create_model(PlainPrincipal)
             editor.create_model(PlainNote)
             editor.create_model(PlainNoteGrant)
         try:
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             isolate_live_registry(config, registry, DOCUMENT_BACKEND)
             handle = BackendHandle(
                 DOCUMENT_BACKEND, registry, PlanQueryCompiler(),
@@ -1861,8 +1877,7 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             self.assertNotIn('is_superuser', sql)
             self.assertIn('is_active', sql)
         finally:
-            config.registries[DOCUMENT_BACKEND] = original
-            config._document_grant_registry_id = sentinel
+            _restore_document_registry(config, original, sentinel)
             with connection.schema_editor() as editor:
                 editor.delete_model(PlainNoteGrant)
                 editor.delete_model(PlainNote)
@@ -1957,7 +1972,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             'Meta': meta(),
         })
         self.assertEqual(builtin_user_conditions(user_model), ())
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         grant = Ref(grant_model)
         with self.assertNumQueries(0):
             registry.register(
@@ -1973,7 +1988,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
 
         user_model, note_model, grant_model, link_model = self._create('Replaced')
         try:
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             with patch(
                 'trusts.plan.standards.get_user_model',
                 return_value=user_model,
@@ -2038,7 +2053,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
                 note=note, delegate=delegate, sponsor=sponsor,
             )
 
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             self.assertIsNone(registry._user_conditions)
             grant = Ref(grant_model)
             link = Ref(link_model)

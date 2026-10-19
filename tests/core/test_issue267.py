@@ -29,7 +29,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -46,18 +46,14 @@ from trusts.query import (
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
-    handle = None
-
-    def _own_handle(self):
-        handle = type(self).handle
-        if handle is None:
-            raise TrustsConfigurationError('probe handle is unset')
-        return handle
+    pass
 
 
 @contextmanager
 def _installed(handle):
-    _ListedBackend.handle = handle
+    from tests.apps import install_class_handle
+
+    install_class_handle(_ListedBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue267._ListedBackend',
     )), patch(
@@ -67,7 +63,7 @@ def _installed(handle):
         try:
             yield
         finally:
-            _ListedBackend.handle = None
+            install_class_handle(_ListedBackend, None)
 
 
 @contextmanager
@@ -103,7 +99,7 @@ def _code(permission):
 def _handle(path):
     return BackendHandle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -692,7 +688,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
             repository=self.repo,
             operation=operation,
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertNumQueries(0):
             registry.register(
                 content=self._ref(self.OperationGrant).organization,
@@ -742,7 +738,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
             repository=self.repo,
             permit=org_permit,
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         grant = self._ref(self.TypedGrant)
         registry.register(
             content=grant.organization,
@@ -782,7 +778,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.DirectGrant.objects.create(
             user=self.owner, organization=self.org, permission=read,
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         grant = self._ref(self.DirectGrant)
         registry.register(
             content=grant.organization,

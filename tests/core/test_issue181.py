@@ -24,7 +24,7 @@ from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import implementation_for_path
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 PERM = 'myapp.change_document'
@@ -175,7 +175,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         both = self._granted_qs(self.open_one, self.open_two)
         owner = implementation_for_path(DOCUMENT_BACKEND)
         saved = owner.trusts_backend_paths
-        alt_registry = TrustsRegistry()
+        alt_registry = RegistryFactory()
         BackendHandle(
             path=MIXIN,
             registry=alt_registry,

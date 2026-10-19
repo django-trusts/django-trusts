@@ -28,7 +28,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.query import (
     AuthorizedQuerySet,
     PermittedQuerySet,
@@ -354,7 +354,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 folder=folder, user=inactive, permission=read,
             )
 
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             grant = Ref(NoteGrant)
             registry.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
@@ -394,7 +394,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 {note.pk},
             )
 
-            account_registry = TrustsRegistry()
+            account_registry = RegistryFactory()
             account_grant = Ref(AccountGrant)
             account_registry.register(
                 content=account_grant.note,
@@ -422,7 +422,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             )
             self.assertIn('is_active', str(skipped.query))
 
-            scope_registry = TrustsRegistry()
+            scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
             scope_registry.register(
                 content=scope_grant.folder.rows.note,
@@ -553,7 +553,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
 
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             grant = Ref(LocalUserGrant)
             registry.register(
                 content=grant.note,
@@ -564,7 +564,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 _pks(registry.permissions_for(visible, note)), {read.pk},
             )
             self.assertTrue(registry.has_permission(visible, note, read))
-            scope_registry = TrustsRegistry()
+            scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
             scope_registry.register(
                 content=scope_grant.folder.identity_rows.note,
@@ -638,14 +638,6 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
 
 class _AcceptanceBackend(TrustModelBackendMixin, ModelBackend):
     """Installed only for the acceptance class below."""
-
-    handle = None
-
-    def _own_handle(self):
-        handle = type(self).handle
-        if handle is None:
-            raise TrustsConfigurationError('acceptance handle is unset')
-        return handle
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -745,7 +737,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.relationship.allowed_permissions.add(self.read)
             self.handle = BackendHandle(
                 path='tests.core.test_issue284._AcceptanceBackend',
-                registry=TrustsRegistry(),
+                registry=RegistryFactory(),
                 compiler=PlanQueryCompiler(),
             )
             self.handle.register(
@@ -775,7 +767,9 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                     content.expires_on == content.as_of
                 ),
             )
-            _AcceptanceBackend.handle = self.handle
+            from tests.apps import install_class_handle
+
+            install_class_handle(_AcceptanceBackend, self.handle)
             self.backend = _AcceptanceBackend()
             self._settings = override_settings(AUTHENTICATION_BACKENDS=(
                 'tests.core.test_issue284._AcceptanceBackend',
@@ -791,7 +785,9 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             raise
 
     def tearDown(self):
-        _AcceptanceBackend.handle = None
+        from tests.apps import install_class_handle
+
+        install_class_handle(_AcceptanceBackend, None)
         if getattr(self, '_handles', None) is not None:
             self._handles.stop()
         if getattr(self, '_settings', None) is not None:

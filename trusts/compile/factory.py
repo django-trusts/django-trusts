@@ -971,6 +971,28 @@ def _bind_public_along(root, along):
     path, bound = along
     return Along(_public_ref(root, path, 'along'), bound)
 
+class _RecordAdapter(object):
+    """Visitor ``Recorder.play`` drives. Forwards to this factory's public API."""
+
+    def __init__(self, factory):
+        self.factory = factory
+
+    def register_principal(self, **kwargs):
+        return self.factory.register(**kwargs)
+
+    def register_delegate(self, **kwargs):
+        return self.factory.register_delegation(**kwargs)
+
+    def add_named_filter(self, model, code, predicate):
+        return self.factory.register_permission_condition(model, code, predicate)
+
+    def set_user_condition(self, name, expr, on='*'):
+        return self.factory.set_user_condition(name, expr, on=on)
+
+    def set_user_override(self, name, expr, on='user'):
+        return self.factory.set_user_override(name, expr, on=on)
+
+
 class RegistryFactory(object):
     """Instantiable registry of permission-bearing relation declarations.
 
@@ -1005,6 +1027,9 @@ class RegistryFactory(object):
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
+        self.compiler = None
+        self.path = ''
+        self.family = 'relationship'
 
     @property
     def condition_lookup(self):
@@ -1032,17 +1057,9 @@ class RegistryFactory(object):
             )
         self._condition_lookup = lookup
 
-    def get_record_adapter():
-        class RecorderAdapter(factory):
-            def __init__():
-                self.factory = factory
-            def register_delegate(**kwargs):
-                # @TODO: implement me
-                # self.factory.register_delegate()
-                pass
-
-            # @TODO: implement other recorder call
-        return RecorderAdapter(self)
+    def get_record_adapter(self):
+        """Adapter ``Recorder.play`` calls. Methods forward to this factory."""
+        return _RecordAdapter(self)
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
@@ -1760,6 +1777,9 @@ class RegistryFactory(object):
             user_conditions=self._stored_user_conditions(),
             user_override=self._user_override,
             condition_lookup=self._condition_lookup,
+            compiler=getattr(self, 'compiler', None),
+            path=getattr(self, 'path', '') or '',
+            family=getattr(self, 'family', 'relationship'),
         )
 
     def plan_for(self, content, *, user=None, permission=None):

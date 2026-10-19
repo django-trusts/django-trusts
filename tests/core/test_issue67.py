@@ -4,7 +4,6 @@ Category ``.permitted()`` runtime stays on Zero ``tests/legacy/``.
 """
 
 import types
-from unittest.mock import patch
 
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
@@ -15,30 +14,43 @@ from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.compile.factory import TrustsRegistry
+from trusts.backends import registries
+from trusts.compile.factory import RegistryFactory
 
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_package_registry_is_created_in_init_not_replaced_by_ready(self):
+        # The built object is sealed onto the backend class, not
+        # constructed in AppConfig.__init__. A second ready() must not
+        # replace it. The path dict stays empty unless a test writes it.
+        from tests.backends import HostTrustModelBackend
+        from trusts.plan.registry import Registry
+
         live = live_config()
         self.assertIsInstance(live, KernelHostConfig)
-        self.assertIsInstance(live.registry, TrustsRegistry)
+        self.assertIsInstance(live.registry, Registry)
+        self.assertIs(live.registry, registries[HostTrustModelBackend])
         first = live.registry
         live.ready()
         self.assertIs(live.registry, first)
+        self.assertNotIn(HOST_BACKEND, live.registries)
 
     def test_reader_obtains_registry_via_app_config_not_package_root(self):
         import trusts
 
+        from tests.backends import HostTrustModelBackend
+        from trusts.plan.registry import Registry
+
         live = live_config().registry
-        self.assertIsInstance(live, TrustsRegistry)
+        self.assertIsInstance(live, Registry)
+        self.assertIs(live, registries[HostTrustModelBackend])
         self.assertIsNone(getattr(trusts, 'registry', None))
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
         self.assertIsNone(getattr(trusts, 'RelationPlan', None))
 
     def test_isolated_core_registries_stay_independent(self):
         live = live_config().registry
-        isolated = TrustsRegistry()
+        isolated = RegistryFactory()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
 
@@ -83,16 +95,18 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_reenter_same_document_contributor_ready_is_noop(self):
         from django.apps import apps
 
+        from tests.myapp.backends import DocumentBackend
+
         contributor = apps.get_app_config('myapp')
         self.assertIsInstance(contributor, DocumentConfig)
-        registry = contributor.configured_backend().registry
-        self.assertIs(contributor._document_grant_registry_id, registry)
-        before = registry.records
-        with patch.object(registry, 'register', wraps=registry.register) as register:
-            contributor.ready()
-        register.assert_not_called()
-        self.assertEqual(registry.records, before)
-        self.assertTrue(registry.plan_for(Document).records)
+        recorder = DocumentBackend().get_registry()
+        built = contributor.configured_backend().registry
+        self.assertIs(contributor._document_grant_registry_id, recorder)
+        self.assertTrue(recorder.frozen)
+        before = built.records
+        contributor.ready()
+        self.assertEqual(built.records, before)
+        self.assertTrue(built.plan_for(Document).records)
 
     def test_host_ready_does_not_replace_or_donate_document(self):
         host = live_config()

@@ -92,73 +92,89 @@ class TestsConfig(AppConfig):
     def ready(self):
         # Contribute TUP→Trust←Category, TUP→Trust←Ticket, and the
         # Junction-backed Group terminal to the implementation-owned
-        # registry that belongs to *this* Apps instance. isolate_apps()
-        # constructs a second TestsConfig whose apps registry has no
-        # implementation owner; that instance must not donate onto the
-        # live registry.
+        # recorder when this Apps instance has exactly one owner.
+        # isolate_apps() constructs a second TestsConfig whose apps
+        # registry has no implementation owner; that instance must not
+        # donate or seal the live recorders.
         if getattr(self, 'apps', None) is None:
             return
 
+        from django.apps import apps as django_apps
+
         from trusts.apps import implementation_configs
+        from trusts.backends import seal_configured_backends
         from trusts.errors import TrustsConfigurationError
 
         owners = implementation_configs(self.apps)
-        if len(owners) != 1:
-            return
-        config = owners[0]
+        if len(owners) == 1:
+            try:
+                TrustUserPermission = self.apps.get_model(
+                    'trusts', 'TrustUserPermission',
+                )
+                from tests.models import Category, TestGroupJunction, Ticket
+            except (LookupError, ImportError):
+                TrustUserPermission = None
+            if TrustUserPermission is not None:
+                self._donate_tup(
+                    owners[0], TrustUserPermission, Category, Ticket,
+                    TestGroupJunction,
+                )
+        if self.apps is django_apps:
+            seal_configured_backends(self.apps)
 
-        try:
-            TrustUserPermission = self.apps.get_model('trusts', 'TrustUserPermission')
-            from tests.models import Category, TestGroupJunction, Ticket
-            from trusts.compile.nodes import Ref
-        except (LookupError, ImportError):
-            return
+    def _donate_tup(self, owner, TrustUserPermission, Category, Ticket,
+                    TestGroupJunction):
+        from django.contrib.auth import get_backends
 
-        # Exact handle. With one Trusts path this is the unique registry
-        # (``config.registry is handle.registry``). With several, omission
-        # fails before writing.
-        try:
-            backend = config.configured_backend()
-        except TrustsConfigurationError:
-            return
-        registry = backend.registry
+        from trusts.apps import listed_backend_class
+        from trusts.errors import TrustsConfigurationError
 
-        # Instance-local sentinels: one per contribution, identity
-        # comparison only, set only after register() succeeds. Never
-        # inspect registry.records for content_model is Category/Ticket/
-        # Group. Do not infer Ticket or Group completion from another
-        # contribution's sentinel.
-        donated_category = getattr(self, '_trusts_tup_category_registry_id', None)
-        if donated_category is not registry:
-            j = Ref(TrustUserPermission)
+        paths = owner._configured_trusts_paths()
+        if len(paths) != 1:
+            raise TrustsConfigurationError(
+                'configured_backend() needs an explicit path; got %r'
+                % (paths,)
+            )
+        get_backends()
+        cls = listed_backend_class(paths[0])
+        backend = next(b for b in get_backends() if type(b) is cls)
+        recorder = backend.get_registry()
+        if not getattr(self, '_trusts_tup_category_done', False):
             rev = Category._meta.get_field('trust').remote_field.get_accessor_name()
-            registry.register(
-                content=getattr(j.trust, rev),
-                user=j.entity,
-                permission=j.permission,
+            recorder.register(
+                trust=TrustUserPermission,
+                user='entity',
+                permission='permission',
+                content=lambda relationship, _rev=rev: (
+                    getattr(relationship.trust, _rev)
+                ),
             )
-            self._trusts_tup_category_registry_id = registry
-
-        donated_ticket = getattr(self, '_trusts_tup_ticket_registry_id', None)
-        if donated_ticket is not registry:
-            j = Ref(TrustUserPermission)
+            self._trusts_tup_category_done = True
+        if not getattr(self, '_trusts_tup_ticket_done', False):
             rev = Ticket._meta.get_field('trust').remote_field.get_accessor_name()
-            registry.register(
-                content=getattr(j.trust, rev),
-                user=j.entity,
-                permission=j.permission,
+            recorder.register(
+                trust=TrustUserPermission,
+                user='entity',
+                permission='permission',
+                content=lambda relationship, _rev=rev: (
+                    getattr(relationship.trust, _rev)
+                ),
             )
-            self._trusts_tup_ticket_registry_id = registry
-
-        donated_group = getattr(self, '_trusts_tup_group_registry_id', None)
-        if donated_group is not registry:
-            j = Ref(TrustUserPermission)
-            registry.register(
-                content=junction_group_content_ref(j, TestGroupJunction),
-                user=j.entity,
-                permission=j.permission,
+            self._trusts_tup_ticket_done = True
+        if not getattr(self, '_trusts_tup_group_done', False):
+            content_name = junction_content_field(TestGroupJunction).name
+            rev = TestGroupJunction._meta.get_field(
+                'trust',
+            ).remote_field.get_accessor_name()
+            recorder.register(
+                trust=TrustUserPermission,
+                user='entity',
+                permission='permission',
+                content=lambda relationship, _rev=rev, _name=content_name: (
+                    getattr(getattr(relationship.trust, _rev), _name)
+                ),
             )
-            self._trusts_tup_group_registry_id = registry
+            self._trusts_tup_group_done = True
 
 
 @contextmanager
@@ -182,6 +198,50 @@ def override_apps_ready(ready, apps_registry=None):
         target.ready = was
 
 
+_MISSING = object()
+
+
+@contextmanager
+def bound_handle(backend, handle):
+    """Point ``backend``'s class at ``handle.registry`` for one block.
+
+    Inquiries read ``registries[cls]``. Tests that used to patch
+    ``_own_handle`` install the same object here, then put it back.
+    """
+    from trusts.backends import registries
+
+    cls = type(backend)
+    previous = registries.get(cls, _MISSING)
+    previous_compiler = cls.__dict__.get('query_compiler', _MISSING)
+    registries[cls] = handle.registry
+    cls.query_compiler = handle.compiler
+    try:
+        yield
+    finally:
+        if previous is _MISSING:
+            registries.pop(cls, None)
+        else:
+            registries[cls] = previous
+        if previous_compiler is _MISSING:
+            if 'query_compiler' in cls.__dict__:
+                delattr(cls, 'query_compiler')
+        else:
+            cls.query_compiler = previous_compiler
+
+
+def install_class_handle(backend_cls, handle):
+    """Class-level form of ``bound_handle`` for backends Django constructs."""
+    from trusts.backends import registries
+
+    if handle is None:
+        registries.pop(backend_cls, None)
+        if 'query_compiler' in backend_cls.__dict__:
+            delattr(backend_cls, 'query_compiler')
+        return
+    registries[backend_cls] = handle.registry
+    backend_cls.query_compiler = handle.compiler
+
+
 def isolate_live_registry(config, registry, path=None):
     """Swap a standalone registry into the live store directly.
 
@@ -203,9 +263,9 @@ def install_writable_registry(config, path, contribute=None):
     supported handle read after ``Apps.ready``. The live store is not a
     public contributor API.
     """
-    from trusts.compile.factory import TrustsRegistry
+    from trusts.compile.factory import RegistryFactory
 
-    registry = TrustsRegistry()
+    registry = RegistryFactory()
     if contribute is not None:
         contribute(registry)
     config.registries[path] = registry
@@ -256,9 +316,9 @@ def apply_zero_trust_donation(config):
 
 def clone_writable_registry(registry):
     """Copy records onto a new writable registry for test isolation."""
-    from trusts.compile.factory import TrustsRegistry
+    from trusts.compile.factory import RegistryFactory
 
-    cloned = TrustsRegistry()
+    cloned = RegistryFactory()
     cloned._by_root = {
         root: list(rows) for root, rows in registry._by_root.items()
     }

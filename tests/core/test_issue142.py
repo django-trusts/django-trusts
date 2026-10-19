@@ -13,7 +13,7 @@ from trusts.conditions import (
     permission_condition_code,
     permission_has_condition,
 )
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 PUBLIC_SURFACE_NAMES = (
@@ -107,7 +107,7 @@ class StageBRegisterCallableOnlyTest(SimpleTestCase):
                 app_label = 'trusts_tests'
 
         u, _p, o = condition_refs()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'own', u == o.owner)
         self.assertIsNone(registry.get_permission_condition_record(Note, 'own'))

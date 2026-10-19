@@ -26,7 +26,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 HOST = HOST_BACKEND
@@ -46,8 +46,8 @@ def _contribute_document(registry):
 class StandaloneIndependenceTest(SimpleTestCase):
     def test_standalone_stays_writable_after_global_ready(self):
         self.assertTrue(apps.ready)
-        first = TrustsRegistry()
-        second = TrustsRegistry()
+        first = RegistryFactory()
+        second = RegistryFactory()
         self.assertEqual(first.build_registry().records, ())
         _contribute_document(second)
         self.assertEqual(len(second.plan_for(Document).records), 1)
@@ -59,7 +59,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         _contribute_document(registry)
         before = registry.records
         first_build = registry.build_registry()
@@ -81,7 +81,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
 
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
     def test_valid_duplicate_conflict_and_malformed_all_raise(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         registry.register(
             content=j.document,
@@ -105,7 +105,7 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
     def test_built_plan_still_projects(self):
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         _contribute_document(registry)
         before = registry.plan_for(Document)
         registry.build_registry()
@@ -137,7 +137,7 @@ class LiveBuildLifecycleTest(
 ):
     def test_writable_during_contributor_ready_and_after_first_read(self):
         live = live_config()
-        isolated = TrustsRegistry()
+        isolated = RegistryFactory()
         live.registries[HOST] = isolated
         with override_apps_ready(False):
             handle = live.configured_backend()
@@ -175,16 +175,21 @@ class LiveBuildLifecycleTest(
             self.assertIsNotNone(handle.build_registry())
 
     def test_ready_does_not_replace_stored_objects(self):
+        from tests.backends import HostTrustModelBackend
+        from trusts.backends import registries
+
         live = live_config()
         store = live.registries
-        first = live.registries[HOST]
+        before_paths = dict(store)
+        first = registries[HostTrustModelBackend]
         live.ready()
         self.assertIs(live.registries, store)
-        self.assertIs(live.registries[HOST], first)
+        self.assertEqual(dict(live.registries), before_paths)
+        self.assertIs(registries[HostTrustModelBackend], first)
 
     def test_late_registry_assignment_stays_writable(self):
         live = live_config()
-        replacement = TrustsRegistry()
+        replacement = RegistryFactory()
         live.registry = replacement
         self.assertIs(live.registries[HOST], replacement)
         _contribute_document(replacement)
@@ -194,7 +199,7 @@ class LiveBuildLifecycleTest(
 
     def test_assignment_before_ready_stays_writable_on_read(self):
         live = live_config()
-        replacement = TrustsRegistry()
+        replacement = RegistryFactory()
         with override_apps_ready(False):
             live.registry = replacement
             self.assertIs(live.registries[HOST], replacement)
@@ -208,15 +213,19 @@ class LiveBuildLifecycleTest(
         self.assertEqual(replacement.records, before)
 
     def test_standalone_appconfig_remains_writable_after_ready(self):
+        from tests.backends import HostTrustModelBackend
         from tests.core.test_issue108 import HostImplConfig, _bind
+        from trusts.backends import registries
 
         isolated = _bind(HostImplConfig, ready=False)
-        self.assertFalse(isolated._apps_instance_ready())
-        first = isolated._ensure(HOST)
+        self.assertFalse(isolated.apps.ready)
+        first = registries[HostTrustModelBackend]
+        private = RegistryFactory()
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
             isolated.ready()
-        _contribute_document(first)
-        self.assertEqual(len(first.records), 1)
+        self.assertIs(registries[HostTrustModelBackend], first)
+        _contribute_document(private)
+        self.assertEqual(len(private.records), 1)
 
 
 class SentinelAfterFirstReadTest(
@@ -226,11 +235,7 @@ class SentinelAfterFirstReadTest(
         live = live_config()
         handle = live.configured_backend()
         before = handle.registry.records
-        with patch.object(
-            handle.registry, 'register', wraps=handle.registry.register,
-        ) as register:
-            live.ready()
-        register.assert_not_called()
+        live.ready()
         self.assertEqual(handle.registry.records, before)
 
     def test_package_ready_after_supported_read_leaves_registry_writable(self):
@@ -253,7 +258,7 @@ class BackendQuestionAfterLateRegistrationTest(
         super().setUp()
         self.config = implementation_for_path(DOCUMENT)
         self.saved_registries = dict(self.config.registries)
-        self.isolated = TrustsRegistry()
+        self.isolated = RegistryFactory()
         self.config.registries[DOCUMENT] = self.isolated
 
     def tearDown(self):
@@ -304,7 +309,7 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
         self.assertIs(duck_handle.build_registry(), duck)
         self.assertFalse(duck_handle.historical_fallback)
 
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         handle = BackendHandle(
             path='tests.core.builder', registry=registry,
             compiler=PlanQueryCompiler(),

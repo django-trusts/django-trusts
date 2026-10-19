@@ -19,7 +19,7 @@ from trusts.plan.aggregates import common_permissions, compiler_for_class
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsCompilerError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from tests.backends import MissingCompilerBackend
 
@@ -54,7 +54,7 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
         User = get_user_model()
         handle = BackendHandle(
             path='tests.backends.RaisingCompilerBackend',
-            registry=TrustsRegistry(),
+            registry=RegistryFactory(),
             compiler=RaisingCompilerBackend.query_compiler,
         )
         _contribute_document(handle.registry)
@@ -84,7 +84,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
     def test_mixin_only_alone_does_not_see_document_plan(self):
         mixin = BackendHandle(
             path='tests.backends.MixinOnlyBackend',
-            registry=TrustsRegistry(),
+            registry=RegistryFactory(),
             compiler=PlanQueryCompiler(),
         )
         self.assertFalse(mixin.build_registry().plan_for(Document).records)

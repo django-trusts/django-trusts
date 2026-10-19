@@ -36,7 +36,7 @@ from trusts.errors import (
     TrustsCompilerError,
     TrustsConfigurationError,
 )
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 
 
@@ -220,7 +220,7 @@ class AlongRegistrationTest(SimpleTestCase):
             _node_graph_models()
         )
         _assert_no_historical_names(Node, Item, Image, ImageMeta, Portrait, Link, Grant)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(Grant)
         rec_s = registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -236,7 +236,7 @@ class AlongRegistrationTest(SimpleTestCase):
         self.assertEqual(rec_s.along.ident_family, 'integer')
         self.assertIsNone(rec_s.along.rewrite_attname)
 
-        other = TrustsRegistry()
+        other = RegistryFactory()
         rec_c = other.register(
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.children, bound=8),
@@ -244,7 +244,7 @@ class AlongRegistrationTest(SimpleTestCase):
         self.assertEqual(rec_c.along.shape, 'C')
         self.assertEqual(rec_c.along.parent_attname, 'parent_id')
 
-        rec_e = TrustsRegistry().register(
+        rec_e = RegistryFactory().register(
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent_links.parent, bound=4),
         )
@@ -253,7 +253,7 @@ class AlongRegistrationTest(SimpleTestCase):
         self.assertEqual(rec_e.along.edge_parent_attname, 'parent_id')
         self.assertEqual(rec_e.along.edge_child_attname, 'child_id')
 
-        rec_d1 = TrustsRegistry().register(
+        rec_d1 = RegistryFactory().register(
             content=j.node.items.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
@@ -262,25 +262,25 @@ class AlongRegistrationTest(SimpleTestCase):
         self.assertIs(rec_d1.content_model, Image)
         self.assertIsNone(rec_d1.along.rewrite_attname)
 
-        rec_d2 = TrustsRegistry().register(
+        rec_d2 = RegistryFactory().register(
             content=j.node.items.image.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
         self.assertEqual(rec_d2.along.suffix_path, ('items', 'image', 'image'))
 
-        rec_o2o = TrustsRegistry().register(
+        rec_o2o = RegistryFactory().register(
             content=j.node.items.portrait, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
         self.assertIs(rec_o2o.content_model, Portrait)
 
-        rec_j1 = TrustsRegistry().register(
+        rec_j1 = RegistryFactory().register(
             content=j.node.rows.content, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
         self.assertEqual(rec_j1.along.suffix_field, 'rows__content')
 
-        rec_rev = TrustsRegistry().register(
+        rec_rev = RegistryFactory().register(
             content=j.node.items, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
@@ -289,7 +289,7 @@ class AlongRegistrationTest(SimpleTestCase):
 
     def test_along_validation_runs_after_build(self):
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         registry.build_registry()
         j = Ref(Grant)
         record = registry.register(
@@ -310,7 +310,7 @@ class AlongRegistrationTest(SimpleTestCase):
 
     def test_zero_mutation_on_every_rejection(self):
         Node, _p, _r, _i, _im, _m, _po, Link, Grant, Permit = _node_graph_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(Grant)
         k = Ref(Permit)
         first = registry.register(
@@ -345,7 +345,7 @@ class AlongRegistrationTest(SimpleTestCase):
         # register here is the zero-SQL proof; a query would raise
         # DatabaseOperationForbidden.
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -359,7 +359,7 @@ class AlongRegistrationTest(SimpleTestCase):
 
     def test_bound_64_is_accepted(self):
         _n, _p, _r, _i, _im, _m, _po, _l, Grant, _np = _node_graph_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(Grant)
         rec = registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -390,7 +390,7 @@ class AlongIdentityRejectionTest(SimpleTestCase):
             'Meta': type('Meta', (), {'app_label': 'trusts_tests'}),
         })
         try:
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             j = Ref(SiteGrant)
             with self.assertRaises(TrustsConfigurationError):
                 registry.register(
@@ -441,7 +441,7 @@ class AlongIdentityRejectionTest(SimpleTestCase):
                 app_label = 'trusts_tests'
 
         # Grant hop uses PK (integer); Along parent uses CharField.
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(SiteGrant)
         with self.assertRaises(TrustsConfigurationError):
             registry.register(
@@ -470,7 +470,7 @@ class AlongIdentityRejectionTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(UuidGrant)
         with self.assertRaises(TrustsConfigurationError):
             registry.register(
@@ -502,7 +502,7 @@ class AlongIdentityRejectionTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(SiteGrant)
         with self.assertRaises(TrustsConfigurationError):
             registry.register(
@@ -601,7 +601,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         leaf = self.Node.objects.create(title='leaf', parent=child)
         other = self.Node.objects.create(title='other')
         self.Grant.objects.create(node=root, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -662,7 +662,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         leaf = self.Node.objects.create(title='leaf', parent=mid)
         other = self.Node.objects.create(title='other')
         self.Grant.objects.create(node=leaf, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -681,7 +681,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Link.objects.create(child=b, parent=a)
         self.Link.objects.create(child=c, parent=b)
         self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -701,7 +701,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         a.save()
         other = self.Node.objects.create(title='cycle-other')
         self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -749,7 +749,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Link.objects.create(child=d, parent=b)
         self.Link.objects.create(child=d, parent=c)
         self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -816,7 +816,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         a.parent = b
         a.save()
         self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -897,7 +897,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         )
         self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
         self.Grant.objects.create(node=a, user=inactive, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -930,7 +930,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Link.objects.create(child=d, parent=c)
         self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
         self.Grant.objects.create(node=c, user=self.bob, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -972,7 +972,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Grant.objects.create(node=a, user=self.alice, permission=self.read)
         self.Grant.objects.create(node=top, user=self.alice, permission=self.read)
         self.Grant.objects.create(node=top, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,
@@ -990,7 +990,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertEqual(len(authorized), len(authorized))
         self.assertIn(self_node.pk, authorized)
 
-        edge_reg = TrustsRegistry()
+        edge_reg = RegistryFactory()
         edge_reg.register(
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent_links.parent, bound=16),
@@ -1003,7 +1003,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             [diamond],
         )
 
-        cut = TrustsRegistry()
+        cut = RegistryFactory()
         cut.register(
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=1),
@@ -1011,7 +1011,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertTrue(cut.has_permission(self.alice, left, self.read))
         self.assertFalse(cut.has_permission(self.alice, deeper, self.read))
 
-        empty = TrustsRegistry()
+        empty = RegistryFactory()
         empty.register(
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
@@ -1058,7 +1058,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
             )
 
         j = Ref(self.Grant)
-        d1 = TrustsRegistry()
+        d1 = RegistryFactory()
         d1.register(
             content=j.node.items.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
@@ -1066,7 +1066,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.read, self.write = read_image, write_image
         self._assert_projections(d1, self.Image, [img_a], [img_b])
 
-        d2 = TrustsRegistry()
+        d2 = RegistryFactory()
         d2.register(
             content=j.node.items.image.image, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
@@ -1074,7 +1074,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertTrue(d2.has_permission(self.alice, meta_a, read_meta))
         self.assertFalse(d2.has_permission(self.alice, meta_b, read_meta))
 
-        o2o = TrustsRegistry()
+        o2o = RegistryFactory()
         o2o.register(
             content=j.node.items.portrait, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
@@ -1082,7 +1082,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertTrue(o2o.has_permission(self.alice, port_a, read_port))
         self.assertFalse(o2o.has_permission(self.alice, port_b, read_port))
 
-        j1 = TrustsRegistry()
+        j1 = RegistryFactory()
         j1.register(
             content=j.node.rows.content, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
@@ -1092,7 +1092,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertFalse(j1.has_permission(self.alice, pay_b, read_pay))
         self.assertFalse(j1.has_permission(self.alice, pay_a, write_pay))
 
-        rev = TrustsRegistry()
+        rev = RegistryFactory()
         rev.register(
             content=j.node.items, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
@@ -1111,7 +1111,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Permit.objects.create(
             node=direct, user=self.alice, permission=self.read,
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         k = Ref(self.Permit)
         registry.register(
@@ -1131,12 +1131,12 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.assertIn('WITH RECURSIVE', sql)
         self.assertIn('EXISTS', sql)
 
-        rec_reg = TrustsRegistry()
+        rec_reg = RegistryFactory()
         rec_reg.register(
             content=j.node, user=j.user, permission=j.permission,
             along=Along(j.node.parent, bound=16),
         )
-        dir_reg = TrustsRegistry()
+        dir_reg = RegistryFactory()
         dir_reg.register(
             content=k.node, user=k.user, permission=k.permission,
         )
@@ -1156,7 +1156,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         node = self.Node.objects.create(title='n')
         other = self.Node.objects.create(title='o')
         self.Grant.objects.create(node=node, user=self.alice, permission=self.read)
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(self.Grant)
         registry.register(content=j.node, user=j.user, permission=j.permission)
         sql = str(registry.filter_authorized(
@@ -1240,7 +1240,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             item_o = CodedItem.objects.create(node=other, title='io')
             CodedGrant.objects.create(node=a, user=alice, permission=read)
             CodedGrant.objects.create(node=a, user=alice, permission=read_item)
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             j = Ref(CodedGrant)
             rec = registry.register(
                 content=j.node, user=j.user, permission=j.permission,
@@ -1251,7 +1251,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             self.assertTrue(registry.has_permission(alice, a, read))
             self.assertTrue(registry.has_permission(alice, b, read))
             self.assertFalse(registry.has_permission(alice, other, read))
-            suf = TrustsRegistry()
+            suf = RegistryFactory()
             suf_rec = suf.register(
                 content=j.node.items, user=j.user, permission=j.permission,
                 along=Along(j.node.parent, bound=8),
@@ -1265,7 +1265,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             ub = UuidNode.objects.create(ident=uuid4(), parent=ua)
             uo = UuidNode.objects.create(ident=uuid4())
             UuidGrant.objects.create(node=ua, user=alice, permission=read_uuid)
-            ureg = TrustsRegistry()
+            ureg = RegistryFactory()
             uj = Ref(UuidGrant)
             urec = ureg.register(
                 content=uj.node, user=uj.user, permission=uj.permission,
@@ -1307,7 +1307,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
             leaf = CodedNode.objects.create(code='leaf', parent=mid)
             other = CodedNode.objects.create(code='other')
             CodedGrant.objects.create(node=leaf, user=alice, permission=read)
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             j = Ref(CodedGrant)
             rec = registry.register(
                 content=j.node, user=j.user, permission=j.permission,
@@ -1353,7 +1353,7 @@ class AlongRuntimeGateTest(TransactionTestCase):
             read = _perm('read_gate')
             node = Node.objects.create()
             NodeGrant.objects.create(node=node, user=alice, permission=read)
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             j = Ref(NodeGrant)
             record = registry.register(
                 content=j.node, user=j.user, permission=j.permission,
@@ -1468,7 +1468,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         j = Ref(NodeGrant)
         registry.register(
             content=j.node, user=j.user, permission=j.permission,

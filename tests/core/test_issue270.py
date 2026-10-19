@@ -21,7 +21,7 @@ from trusts.apps import implementation_for_path
 from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -365,7 +365,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         ).configured_backend().registry
         previous = registry.condition_lookup
         try:
-            registry.set_condition_lookup(None)
+            registry.condition_lookup = None
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted(
@@ -380,7 +380,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                         conditions=('non_confidential',),
                     )
         finally:
-            registry.set_condition_lookup(previous)
+            registry.condition_lookup = previous
         self.assertEqual(
             _pks(self.docs.permitted(
                 'myapp.change_document', self.alice,
@@ -504,7 +504,7 @@ def _extra_models():
 def _handle(path):
     return BackendHandle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
 

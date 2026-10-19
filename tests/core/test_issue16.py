@@ -42,7 +42,7 @@ from trusts.plan.conditions import (
 )
 from trusts.plan.handles import BackendHandle
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 
 
 def _store_expr(registry, model, code, expr):
@@ -114,8 +114,8 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         self.assertEqual(list(second.iter_permission_conditions()), [])
 
     def test_trusts_registry_owns_a_private_condition_store(self):
-        left = TrustsRegistry()
-        right = TrustsRegistry()
+        left = RegistryFactory()
+        right = RegistryFactory()
         self.assertIsInstance(left.conditions, ConditionRegistry)
         self.assertIsNot(left.conditions, right.conditions)
         self.assertIs(left.condition_lookup.conditions, left.conditions)
@@ -130,7 +130,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_expr_and_builder_records_and_shape_errors(self):
         Note, Memo = _note_models()
         u, _p, o = condition_refs()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         expr = u == o.owner
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'owned', expr)
@@ -159,7 +159,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_duplicate_condition_overwrites_same_identity(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         registry.register_permission_condition(
             Note, 'named', lambda u, p, o: u == o.owner,
         )
@@ -177,8 +177,8 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_owners_do_not_share_or_overwrite_records(self):
         Note, _Memo = _note_models()
-        owner_a = TrustsRegistry()
-        owner_b = TrustsRegistry()
+        owner_a = RegistryFactory()
+        owner_b = RegistryFactory()
         owner_a.register_permission_condition(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
@@ -200,12 +200,12 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_repeated_registry_construction_does_not_leak(self):
         Note, _Memo = _note_models()
-        first = TrustsRegistry()
+        first = RegistryFactory()
         first.register_permission_condition(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
         self.assertIsNotNone(first.get_permission_condition_record(Note, 'own'))
-        second = TrustsRegistry()
+        second = RegistryFactory()
         self.assertIsNone(second.get_permission_condition_record(Note, 'own'))
         self.assertEqual(list(second.iter_permission_conditions()), [])
         third = ConditionRegistry()
@@ -214,7 +214,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_condition_registration_after_build_invokes_builder(self):
         Note, _Memo = _note_models()
         log = _BuilderLog()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         registry.build_registry()
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
@@ -223,7 +223,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         handle = BackendHandle(
             path='tests.backends.HostTrustModelBackend',
             registry=registry,
@@ -245,7 +245,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         log = _BuilderLog()
         registry.register_permission_condition(Note, 'spy', log)
         lookup = RegistryConditionLookup(registry)
@@ -279,7 +279,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             log = _BuilderLog(
                 lambda u, p, o: (u == o.owner) & (o.status != 'locked'),
             )
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             with self.assertNumQueries(0):
                 registry.register_permission_condition(Note, 'editable', log)
             self.assertEqual(len(log.calls), 1)
@@ -323,7 +323,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             Ticket._meta.permission_conditions,
             (('meta_own', ticket_meta_own),),
         )
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertNumQueries(0):
             first = self._donate_meta_permission_conditions(registry, Ticket)
         self.assertTrue(first)
@@ -344,7 +344,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
 
     def test_core_registration_path_is_zero_sql_for_builder(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertNumQueries(0):
             registry.register_permission_condition(
                 Note, 'builder', lambda u, p, o: o.status != 'locked',
@@ -359,7 +359,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             )
             note = Note.objects.create(title='n', owner=alice)
             u, _p, o = condition_refs()
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             with self.assertRaises(AttributeError) as missing:
                 registry.compile_registered_condition_q(
                     Note, 'trusts_tests.change_note:missing', alice,
@@ -403,7 +403,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             )
             note = Note.objects.create(title='n', owner=alice, status='open')
             captured = alice
-            registry = TrustsRegistry()
+            registry = RegistryFactory()
             with self.assertNumQueries(0):
                 record = registry.register_permission_condition(
                     Note, 'owner_is', lambda u, p, o: o.owner == captured,
@@ -432,7 +432,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         Note, _Memo = _note_models()
         User = get_user_model()
         unsaved = User(username='ghost-16', email='ghost-16@example.com')
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         with self.assertRaises(PermissionConditionError):
             registry.register_permission_condition(
                 Note, 'unsaved', lambda u, p, o: o.owner == unsaved,
@@ -462,7 +462,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
 
     def test_immutable_scalars_are_accepted(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         record = registry.register_permission_condition(
             Note, 'open', lambda u, p, o: o.status == 'open',
         )
@@ -534,7 +534,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
     def test_check_permission_conditions_reads_handle_registry(self):
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
-        registry = TrustsRegistry()
+        registry = RegistryFactory()
         _store_expr(registry, Note, 'typo', u == o.nope)
 
         class _Handle(object):
@@ -558,8 +558,8 @@ class ConditionRegistryCheckTest(SimpleTestCase):
     def test_two_owners_same_model_code_both_validated(self):
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
-        owner_a = TrustsRegistry()
-        owner_b = TrustsRegistry()
+        owner_a = RegistryFactory()
+        owner_b = RegistryFactory()
         owner_a.register_permission_condition(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
