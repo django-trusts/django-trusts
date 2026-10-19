@@ -26,7 +26,7 @@ from trusts.plan.rewrites import bind_once
 from trusts.backends import TrustModelBackendMixin, _permission_binding
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
-from trusts.plan.handles import pair
+from trusts.plan.handles import registry_of
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.commons import _object_memory_value, _user_lookup
 from trusts.plan.aggregates import _delegated_user_exists
@@ -208,7 +208,7 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
     is the permission-row sentinel, classified as ``permission.<target>``.
     Content is classified as ``content.<target>``.
     """
-    registry, _compiler = pair(handle)
+    registry = registry_of(handle)
     plan = registry.plan_for(content)
     if not plan.records and not plan.delegations:
         raise TrustsConfigurationError(

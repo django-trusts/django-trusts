@@ -47,7 +47,6 @@ def _extra_handle():
     handle = BackendHandle(
         path='tests.core.issue132-extra',
         registry=RegistryFactory(),
-        compiler=PlanQueryCompiler(),
     )
     handle.registry.register_public(
         trust=DocumentGrant,

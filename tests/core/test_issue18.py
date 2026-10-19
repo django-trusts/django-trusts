@@ -356,7 +356,6 @@ class LongPathRegistrationTest(TestCase):
         handle = BackendHandle(
             path='tests.core.longpath',
             registry=via_handle,
-            compiler=PlanQueryCompiler(),
         )
         with self.assertNumQueries(0):
             ref_direct = _direct_ceiling(via_ref, Placement)
@@ -566,7 +565,6 @@ class LongPathAuthorizationTest(TransactionTestCase):
         return (BackendHandle(
             path='issue18',
             registry=self.registry,
-            compiler=PlanQueryCompiler(),
         ),)
 
     def _agree(self, principal, token, obj, expected):
@@ -813,10 +811,10 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handle(self, registry):
+        registry.compiler = self.compiler
         return BackendHandle(
             path='issue18-group',
             registry=registry,
-            compiler=self.compiler,
         )
 
     def test_membership_user_hop_is_not_a_group_slice(self):
@@ -950,7 +948,6 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.handle = BackendHandle(
             path='issue18-prefix',
             registry=self.registry,
-            compiler=PlanQueryCompiler(),
         )
 
     def tearDown(self):
@@ -991,7 +988,6 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         handle = BackendHandle(
             path='issue18-terminal',
             registry=registry,
-            compiler=PlanQueryCompiler(),
         )
         qs = filter_by_permitted_content(
             self.Node.objects.all(),

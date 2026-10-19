@@ -100,7 +100,6 @@ def _handle(path):
     return BackendHandle(
         path=path,
         registry=RegistryFactory(),
-        compiler=PlanQueryCompiler(),
     )
 
 
@@ -709,7 +708,6 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         handle = BackendHandle(
             path='tests.core.issue267-operation',
             registry=registry,
-            compiler=PlanQueryCompiler(),
         )
         document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[handle]),
@@ -761,7 +759,6 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         handle = BackendHandle(
             path='tests.core.issue267-typed',
             registry=registry,
-            compiler=PlanQueryCompiler(),
         )
         document = _load_policy_sql_document(
             render_policy_sql_bytes(handles=[handle]),

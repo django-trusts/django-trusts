@@ -565,7 +565,6 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         return (BackendHandle(
             path='issue98',
             registry=self.registry,
-            compiler=PlanQueryCompiler(),
         ),)
 
     def _object_list_agree(self, principal, operation, obj, expected):

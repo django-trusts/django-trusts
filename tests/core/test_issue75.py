@@ -82,10 +82,10 @@ def _contribute_document(registry):
 
 
 def _evaluate(handle, queryset, user, permission):
-    plan = handle.registry.build_registry().plan_for(
-        queryset, user=user, permission=permission,
-    )
-    return handle.compiler.complete_exists(plan, queryset, user, permission)
+    built = handle.registry.build_registry()
+    plan = built.plan_for(queryset, user=user, permission=permission)
+    compiler = built.compiler if built.compiler is not None else PlanQueryCompiler()
+    return compiler.complete_exists(plan, queryset, user, permission)
 
 
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -96,8 +96,8 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIs(handle.registry, live.registry)
         self.assertIs(live.registry, registries[HostTrustModelBackend])
         self.assertIsInstance(handle, BackendHandle)
-        self.assertIs(handle.compiler, HostTrustModelBackend.query_compiler)
-        self.assertIsInstance(handle.compiler, PlanQueryCompiler)
+        self.assertIs(handle.registry.compiler, HostTrustModelBackend.query_compiler)
+        self.assertIsInstance(handle.registry.compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_dedupe(self):
         live = live_config()
@@ -279,11 +279,9 @@ class CompilerProtocolTest(
 
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        handle = BackendHandle(
-            path=RAISING,
-            registry=RegistryFactory(),
-            compiler=RaisingCompilerBackend.query_compiler,
-        )
+        registry = RegistryFactory()
+        registry.compiler = RaisingCompilerBackend.query_compiler
+        handle = BackendHandle(path=RAISING, registry=registry)
         _contribute_document(handle.registry)
         with self.assertRaises(RuntimeError) as ctx:
             granted(
@@ -341,7 +339,6 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         extra = BackendHandle(
             path=MIXIN,
             registry=isolated,
-            compiler=PlanQueryCompiler(),
         )
         qs = Document.objects.all()
         pred = granted(
@@ -378,11 +375,9 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
         live = live_config()
-        handle = BackendHandle(
-            path=RAISING,
-            registry=RegistryFactory(),
-            compiler=RaisingCompilerBackend.query_compiler,
-        )
+        registry = RegistryFactory()
+        registry.compiler = RaisingCompilerBackend.query_compiler
+        handle = BackendHandle(path=RAISING, registry=registry)
         _contribute_document(handle.registry)
         with self.assertRaises(RuntimeError) as ctx:
             granted(

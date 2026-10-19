@@ -263,7 +263,6 @@ def _handle(path, registry=None):
     return BackendHandle(
         path=path,
         registry=registry,
-        compiler=PlanQueryCompiler(),
     )
 
 

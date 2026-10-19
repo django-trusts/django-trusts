@@ -1,7 +1,8 @@
-"""Configured path: path, registry, and compiler. No methods.
+"""Configured path: a path and the registry that answers it.
 
-Snapshot and checks take one value. Inquiry calls the registry and
-the compiler. Registration lives on the recorder and ``RegistryFactory``.
+Snapshot and checks take this value for the path string. The registry
+carries its compiler. Inquiry calls the registry. Registration lives
+on the recorder and ``RegistryFactory``.
 """
 
 from __future__ import annotations
@@ -15,10 +16,10 @@ from dataclasses import dataclass
 class BackendHandle:
     path: str
     registry: object
-    compiler: object
 
 
-def pair(entry):
-    if isinstance(entry, tuple):
-        return entry
-    return entry.registry, getattr(entry, 'compiler', None)
+def registry_of(entry):
+    """Registry on a configured path, or the entry when it is one."""
+    if hasattr(entry, 'registry'):
+        return entry.registry
+    return entry

@@ -45,7 +45,7 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
 
     def __new__(cls, handle):
         bound = type('BoundBackend', (cls,), {
-            'query_compiler': handle.compiler,
+            'query_compiler': PlanQueryCompiler(),
         })
         return object.__new__(bound)
 
@@ -121,7 +121,6 @@ def _handle(note_grant):
     handle = BackendHandle(
         path='tests.core.issue203',
         registry=RegistryFactory(),
-        compiler=PlanQueryCompiler(),
     )
     handle.registry.register_public(
         trust=note_grant,

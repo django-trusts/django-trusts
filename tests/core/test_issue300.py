@@ -502,7 +502,6 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             handle = BackendHandle(
                 path='tests.annotation.a',
                 registry=registry,
-                compiler=PlanQueryCompiler(),
             )
             handle.registry.register_public(
                 trust=NoteGrant,
@@ -580,7 +579,6 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             handle = BackendHandle(
                 path='tests.along.retarget',
                 registry=registry,
-                compiler=PlanQueryCompiler(),
             )
             handle.registry.register_public(
                 trust=RetargetGrant,
@@ -689,7 +687,6 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     handle = BackendHandle(
                         path='documents.backends.ReviewBackend',
                         registry=RegistryFactory(),
-                        compiler=PlanQueryCompiler(),
                     )
                     handle.registry.register_public(
                         trust=ReviewGrant,

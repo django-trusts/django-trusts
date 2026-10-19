@@ -227,7 +227,6 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         handle = BackendHandle(
             path='tests.backends.HostTrustModelBackend',
             registry=registry,
-            compiler=object(),
         )
         log = _BuilderLog()
         record = handle.registry.register_permission_condition(Note, 'own', log)

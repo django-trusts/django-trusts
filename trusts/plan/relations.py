@@ -24,7 +24,7 @@ from trusts.commons import (
     _require_instance,
 )
 from trusts.plan.recursions import GrantReach
-from trusts.errors import TrustsConfigurationError
+from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
     bind_skip_flags,
@@ -92,6 +92,18 @@ class PlanQueryCompiler(object):
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
         ).content_exists(user, permission)
+
+
+def answering_compiler(registry):
+    """Stored compiler, or ``PlanQueryCompiler`` when none was stored."""
+    compiler = None if registry is None else getattr(registry, 'compiler', None)
+    if compiler is None:
+        return PlanQueryCompiler()
+    complete = getattr(compiler, 'complete_exists', None)
+    group = getattr(compiler, 'group_exists', None)
+    if not callable(complete) or not callable(group):
+        raise TrustsCompilerError('%r is not query-capable' % (compiler,))
+    return compiler
 
 
 def candidate_queryset(content):

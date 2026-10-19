@@ -22,7 +22,6 @@ from trusts.apps import (
 from trusts.compile.factory import RegistryFactory
 from trusts.errors import (
     PermissionConditionError,
-    TrustsCompilerError,
     TrustsConfigurationError,
 )
 from trusts.plan.conditions import (
@@ -30,7 +29,7 @@ from trusts.plan.conditions import (
     permission_has_condition,
 )
 import trusts.inspect.checks  # noqa: F401
-from trusts.plan.handles import pair
+from trusts.plan.handles import registry_of
 from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
 from trusts import utils
 
@@ -180,9 +179,8 @@ class TrustModelBackendMixin(object):
             return False
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
-        compiler = self._require_compiler()
         registry = self._answered_registry()
-        if not compiler.applies(registry.plan_for(obj, user=user_obj)):
+        if not registry.applies(registry.plan_for(obj, user=user_obj)):
             return False
         record, extra_q = self._condition_overlay(
             permext, obj, user_obj, registry=registry,
@@ -194,12 +192,12 @@ class TrustModelBackendMixin(object):
         if isinstance(obj, QuerySet):
             positive = self._collection_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
-                skipped=inquiry.values, registry=registry, compiler=compiler,
+                skipped=inquiry.values, registry=registry,
             )
         else:
             positive = self._instance_has_perm(
                 user_obj, perm, obj, extra_q=extra_q,
-                skipped=inquiry.values, registry=registry, compiler=compiler,
+                skipped=inquiry.values, registry=registry,
             )
         if not positive:
             return False
@@ -243,17 +241,16 @@ class TrustModelBackendMixin(object):
         if stored is None:
             stored = self.ready()
         build = getattr(stored, 'build_registry', None)
-        return build() if callable(build) else stored
-
-    def _require_compiler(self):
-        compiler = self.query_compiler
-        complete = getattr(compiler, 'complete_exists', None)
-        group = getattr(compiler, 'group_exists', None)
-        if compiler is None or not callable(complete) or not callable(group):
-            raise TrustsCompilerError(
-                '%r is not query-capable' % (type(self),)
-            )
-        return compiler
+        built = build() if callable(build) else stored
+        compiler = getattr(self, 'query_compiler', None)
+        if (
+            built is not None
+            and compiler is not None
+            and getattr(built, 'compiler', None) is None
+            and hasattr(built, 'compiler')
+        ):
+            built.compiler = compiler
+        return built
 
     def _sponsor_registries(self):
         """Built registries of other relationship-family paths."""
@@ -264,7 +261,7 @@ class TrustModelBackendMixin(object):
         for handle in trusts_apps._relationship_implementation_handles():
             if getattr(handle, 'path', None) == own_path:
                 continue
-            registry, _compiler = pair(handle)
+            registry = registry_of(handle)
             if registry is None or registry is stored:
                 continue
             build = getattr(registry, 'build_registry', None)
@@ -283,7 +280,6 @@ class TrustModelBackendMixin(object):
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return set()
-        self._require_compiler()
         registry = self._answered_registry()
         if cache:
             self._ensure_perm_cache(user_obj)
@@ -301,7 +297,6 @@ class TrustModelBackendMixin(object):
         qs = registry.permissions_for(
             user_obj, obj, kind=kind,
             sponsors=self._sponsor_registries(),
-            compiler=self.query_compiler,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
         if qs is None or qs == ():
@@ -343,7 +338,7 @@ class TrustModelBackendMixin(object):
         return record, extra_q
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                             skipped=(), registry=None, compiler=None):
+                             skipped=(), registry=None):
         registry = self._answered_registry() if registry is None else registry
         if registry is None:
             return False
@@ -351,13 +346,12 @@ class TrustModelBackendMixin(object):
         return registry.has_permission(
             user_obj, obj, binding, extra_q=extra_q,
             sponsors=self._sponsor_registries(),
-            compiler=compiler if compiler is not None else self.query_compiler,
             permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
 
     def _instance_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                           skipped=(), registry=None, compiler=None):
+                           skipped=(), registry=None):
         registry = self._answered_registry() if registry is None else registry
         if registry is None:
             return False
@@ -365,7 +359,6 @@ class TrustModelBackendMixin(object):
         return registry.has_permission(
             user_obj, obj, binding, extra_q=extra_q,
             sponsors=self._sponsor_registries(),
-            compiler=compiler if compiler is not None else self.query_compiler,
             permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )

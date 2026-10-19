@@ -79,7 +79,7 @@ def _pks(rows):
 
 def _direct_handle(registry, path='tests.along.direct'):
     return BackendHandle(
-        path=path, registry=registry, compiler=PlanQueryCompiler(),
+        path=path, registry=registry,
     )
 
 

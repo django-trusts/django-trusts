@@ -42,7 +42,7 @@ from django.db.models.lookups import Lookup
 from trusts.commons import _resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.handles import BackendHandle
+from trusts.plan.handles import BackendHandle, registry_of
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -266,11 +266,11 @@ def _built_registry(value):
 def _render_handle(handle, cache=None):
     """Handle holding the built registry, built once per ``cache``.
 
-    Reuses ``handle`` when its registry is already the built one, so
-    identity and compiler are preserved exactly; otherwise returns a
-    ``BackendHandle`` with the same path/compiler and the built
-    registry. A ``None`` registry is returned untouched so the
-    caller's missing-registry error still fires.
+    Reuses ``handle`` when its registry is already the built one.
+    Otherwise returns a ``BackendHandle`` with the same path and the
+    built registry. The compiler travels on that registry. A ``None``
+    registry is returned untouched so the caller's missing-registry
+    error still fires.
     """
     if cache is not None:
         key = id(handle)
@@ -282,15 +282,9 @@ def _render_handle(handle, cache=None):
     elif getattr(handle, 'registry', _REGISTRY_MISSING) is _REGISTRY_MISSING and not hasattr(handle, 'path'):
         rendered = handle
     else:
-        from trusts.plan.relations import PlanQueryCompiler
-
-        compiler = getattr(handle, 'compiler', None)
-        if compiler is None:
-            compiler = PlanQueryCompiler()
         rendered = BackendHandle(
             path=getattr(handle, 'path', '') or '',
             registry=built,
-            compiler=compiler,
         )
     if cache is not None:
         cache[id(handle)] = rendered
@@ -922,14 +916,8 @@ def _policy_classifier_records(records, delegations, handles, model):
     selected = list(records)
     seen = {id(record) for record in selected}
     for candidate_handle in handles:
-        # A route pair, a configured path, or a built registry.
-        if isinstance(candidate_handle, tuple):
-            registry = candidate_handle[0]
-        else:
-            registry = getattr(candidate_handle, 'registry', None)
-            if registry is None:
-                registry = candidate_handle
-        if not hasattr(registry, 'plan_for'):
+        registry = registry_of(candidate_handle)
+        if registry is None or not hasattr(registry, 'plan_for'):
             continue
         plan = registry.plan_for(model)
         for ordinary in plan.records:

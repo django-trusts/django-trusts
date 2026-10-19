@@ -205,16 +205,15 @@ _MISSING = object()
 def bound_handle(backend, handle):
     """Point ``backend``'s class at ``handle.registry`` for one block.
 
-    Inquiries read ``registries[cls]``. Tests that used to patch
-    ``_own_handle`` install the same object here, then put it back.
+    Inquiries read ``registries[cls]``. The registry carries its
+    compiler. Tests that used to patch ``_own_handle`` install the
+    same object here, then put it back.
     """
     from trusts.backends import registries
 
     cls = type(backend)
     previous = registries.get(cls, _MISSING)
-    previous_compiler = cls.__dict__.get('query_compiler', _MISSING)
     registries[cls] = handle.registry
-    cls.query_compiler = handle.compiler
     try:
         yield
     finally:
@@ -222,11 +221,6 @@ def bound_handle(backend, handle):
             registries.pop(cls, None)
         else:
             registries[cls] = previous
-        if previous_compiler is _MISSING:
-            if 'query_compiler' in cls.__dict__:
-                delattr(cls, 'query_compiler')
-        else:
-            cls.query_compiler = previous_compiler
 
 
 def install_class_handle(backend_cls, handle):
@@ -235,11 +229,8 @@ def install_class_handle(backend_cls, handle):
 
     if handle is None:
         registries.pop(backend_cls, None)
-        if 'query_compiler' in backend_cls.__dict__:
-            delattr(backend_cls, 'query_compiler')
         return
     registries[backend_cls] = handle.registry
-    backend_cls.query_compiler = handle.compiler
 
 
 def isolate_live_registry(config, registry, path=None):

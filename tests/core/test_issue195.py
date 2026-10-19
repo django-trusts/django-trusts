@@ -125,7 +125,6 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
         empty_handle = BackendHandle(
             path='tests.core.195-empty',
             registry=RegistryFactory(),
-            compiler=compiler,
         )
         self.assertFalse(any_plan_records((empty_handle,), Document))
 
