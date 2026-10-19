@@ -12,15 +12,15 @@ from django.apps import apps
 from django.test import SimpleTestCase, override_settings
 
 import tests as tests_module
-from tests.apps import live_config
+from tests.apps import configured_catalog, live_config
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import (
     TrustsImplementationConfig,
-    configured_implementation_handles,
     implementation_configs,
     implementation_for_class,
     implementation_for_path,
+    relationship_registries,
 )
 from trusts.backends import TrustModelBackendMixin
 from trusts.errors import TrustsConfigurationError
@@ -129,11 +129,11 @@ class OwnerResolutionTest(SimpleTestCase):
     def test_live_host_owner_resolves(self):
         owner = live_config()
         self.assertIsInstance(owner, TrustsImplementationConfig)
-        handle = owner.configured_backend(HOST_BACKEND)
+        handle = configured_catalog(owner, HOST_BACKEND)
         self.assertEqual(handle.path, HOST_BACKEND)
         backend = HostTrustModelBackend()
         self.assertIs(backend._trusts_config(), owner)
-        configured_implementation_handles()
+        relationship_registries()
         implementation_for_path(HOST_BACKEND)
         implementation_for_class(HostTrustModelBackend)
         self.assertIn(owner, implementation_configs())
@@ -142,9 +142,9 @@ class OwnerResolutionTest(SimpleTestCase):
         from trusts.plan.contents import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
-        handles = configured_implementation_handles()
-        self.assertTrue(handles)
-        self.assertEqual(handles[0].path, HOST_BACKEND)
+        registries = relationship_registries()
+        self.assertTrue(registries)
+        self.assertEqual(registries[0].path, HOST_BACKEND)
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(callable(filter_by_permitted_content))
 

@@ -5,6 +5,7 @@ from django.apps import AppConfig
 from trusts.apps import TrustsImplementationConfig
 
 
+
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
@@ -30,6 +31,93 @@ def isolated_owner():
     import tests as tests_module
 
     return IsolatedOwnerConfig('tests', tests_module)
+
+
+def built_registries(items):
+    """Query-time registries for one inquiry.
+
+    A factory is built now. A catalog contributes its built registry.
+    A registry is returned as itself. ``None`` and other objects pass
+    through so a caller can still prove a missing registry fails closed.
+    """
+    from trusts.compile.catalogs import Catalog
+    from trusts.compile.factory import RegistryFactory
+    from trusts.plan.registry import Registry
+
+    if items is None:
+        return None
+    if isinstance(items, (str, bytes)) or not isinstance(items, (list, tuple)):
+        items = (items,)
+    built = []
+    for item in items:
+        if item is None or isinstance(item, Registry):
+            built.append(item)
+        elif isinstance(item, Catalog):
+            built.append(item.registry)
+        elif isinstance(item, RegistryFactory):
+            built.append(item.build_registry())
+        else:
+            built.append(item)
+    return tuple(built)
+
+
+@contextmanager
+def override_catalog(backend_cls, factory, path):
+    """Publish one catalog for ``backend_cls`` and restore the previous entry."""
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
+
+    saved = catalogs.get(backend_cls, _MISSING)
+    catalogs[backend_cls] = Catalog(
+        cls=backend_cls,
+        path=path,
+        family=getattr(factory, 'family', 'relationship'),
+        factory=factory,
+        registry=factory.build_registry(),
+        family_registries=(),
+    )
+    try:
+        yield catalogs[backend_cls]
+    finally:
+        if saved is _MISSING:
+            catalogs.pop(backend_cls, None)
+        else:
+            catalogs[backend_cls] = saved
+
+
+def configured_catalog(config, path=None):
+    """Catalog stored for one owned path. Registration is the recorder."""
+    from trusts.apps import catalogs, implementation_for_path, listed_backend_class
+    from trusts.errors import TrustsConfigurationError
+
+    paths = config._configured_trusts_paths()
+    if path is None:
+        if len(paths) != 1:
+            raise TrustsConfigurationError(
+                'configured catalog needs an explicit path; got %r' % (paths,)
+            )
+        path = paths[0]
+    elif path not in config.owned_backend_paths():
+        try:
+            other = implementation_for_path(path, getattr(config, 'apps', None))
+        except TrustsConfigurationError:
+            other = None
+        if other is not None and other is not config:
+            return configured_catalog(other, path)
+        raise TrustsConfigurationError(
+            '%r is not a configured Trusts backend' % (path,)
+        )
+    elif path not in paths:
+        raise TrustsConfigurationError(
+            '%r is not a configured Trusts backend' % (path,)
+        )
+    cls = listed_backend_class(path)
+    catalog = catalogs.get(cls) if isinstance(cls, type) else None
+    if catalog is None:
+        raise TrustsConfigurationError(
+            '%r is not a configured Trusts backend' % (path,)
+        )
+    return catalog
 
 
 def live_config(apps_registry=None):
@@ -201,65 +289,71 @@ def override_apps_ready(ready, apps_registry=None):
 _MISSING = object()
 
 
-@contextmanager
-def bound_handle(backend, handle):
-    """Point ``backend``'s class at ``handle.registry`` for one block.
+def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
+    """Store one catalog for ``backend_cls``. ``factory`` is the registration object."""
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
 
-    Inquiries read ``registries[cls]``. The registry carries its
-    compiler. Tests that used to patch ``_own_handle`` install the
-    same object here, then put it back.
-    """
-    from trusts.backends import registries
+    if factory is None:
+        catalogs.pop(backend_cls, None)
+        return None
+    built = factory.build_registry()
+    catalogs[backend_cls] = Catalog(
+        cls=backend_cls,
+        path=path or factory.path or (
+            '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
+        ),
+        family=factory.family,
+        factory=factory,
+        registry=built,
+        family_registries=built_registries(tuple(peers)),
+    )
+    return built
+
+
+@contextmanager
+def bound_handle(backend, factory):
+    """Publish ``factory`` as this backend class's catalog for one block."""
+    from trusts.apps import catalogs
 
     cls = type(backend)
-    previous = registries.get(cls, _MISSING)
-    registries[cls] = handle.registry
+    previous = catalogs.get(cls, _MISSING)
+    peers = () if previous is _MISSING else previous.family_registries
+    _publish_catalog(cls, factory, peers=peers)
     try:
         yield
     finally:
         if previous is _MISSING:
-            registries.pop(cls, None)
+            catalogs.pop(cls, None)
         else:
-            registries[cls] = previous
+            catalogs[cls] = previous
 
 
-def install_class_handle(backend_cls, handle):
-    """Class-level form of ``bound_handle`` for backends Django constructs."""
-    from trusts.backends import registries
-
-    if handle is None:
-        registries.pop(backend_cls, None)
-        return
-    registries[backend_cls] = handle.registry
+def install_class_handle(backend_cls, factory):
+    """Publish ``factory`` as ``backend_cls``'s catalog. ``None`` removes it."""
+    _publish_catalog(backend_cls, factory)
 
 
 def isolate_live_registry(config, registry, path=None):
-    """Swap a standalone registry into the live store directly.
+    """Publish a standalone registry as the catalog for one owned path."""
+    from trusts.apps import listed_backend_class
 
-    Test isolation only. Not a host contributor route. This writes
-    the path-scoped dict directly, bypassing the one-path check in
-    the public ``registry`` setter.
-    """
     if path is None:
         paths = config._configured_trusts_paths()
         path = paths[0]
-    config.registries[path] = registry
+    cls = listed_backend_class(path)
+    _publish_catalog(cls, registry, path=path)
     return registry
 
 
 def install_writable_registry(config, path, contribute=None):
-    """Install a standalone registry on a live path for test isolation.
-
-    Callers register on the standalone instance *before* the first
-    supported handle read after ``Apps.ready``. The live store is not a
-    public contributor API.
-    """
+    """Install a standalone factory as the catalog for one live path."""
     from trusts.compile.factory import RegistryFactory
 
-    registry = RegistryFactory()
+    registry = RegistryFactory(path=path)
     if contribute is not None:
         contribute(registry)
-    config.registries[path] = registry
+    isolate_live_registry(config, registry, path)
     return registry
 
 

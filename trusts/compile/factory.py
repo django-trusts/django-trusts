@@ -1412,40 +1412,53 @@ class RegistryFactory(object):
             condition=condition, along=along,
         )
         root = record.root
-        existing_rows = self._delegations_by_root.get(root)
-        if existing_rows:
-            if record in existing_rows:
-                raise TrustsConfigurationError(
-                    'Duplicate delegated registration for %s.'
-                    % root._meta.label
-                )
-            for existing in existing_rows:
-                if existing.content_model is record.content_model:
-                    raise TrustsConfigurationError(
-                        'Conflicting delegated registration for %s content '
-                        'terminal %s: existing %r, new %r.'
-                        % (
-                            root._meta.label,
-                            record.content_model._meta.label,
-                            existing,
-                            record,
-                        )
-                    )
-        self._assert_rules_for_registration(
-            user_model=record.delegate_model,
-            sponsor_model=record.sponsor_model,
+        record = self.validate_delegation(
+            record, self._delegations_by_root.get(root, ()),
         )
-        self._rule_fragment(record.delegate_model, role='user')
-        self._override_fragment(record.delegate_model)
-        record = replace(record, sponsor_rules=self._rule_fragment(
-            record.sponsor_model, role='sponsor', path=record.sponsor_field,
-        ))
+        existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
         else:
             self._delegations_by_root[root] = [record]
         self._delegation_order.append(record)
         return record
+
+    def validate_delegation(self, record, existing):
+        """Reject a duplicate or conflicting delegation. Does not store it.
+
+        ``existing`` is the delegations already held for this comparison,
+        any root. Same-root equality is a duplicate. A second row with the
+        same content model conflicts. User rules on this factory are
+        checked against the delegate and sponsor models, and the returned
+        row carries the compiled sponsor-rules fragment.
+        """
+        same_root = [row for row in existing if row.root is record.root]
+        if record in same_root:
+            raise TrustsConfigurationError(
+                'Duplicate delegated registration for %s.'
+                % record.root._meta.label
+            )
+        for prior in same_root:
+            if prior.content_model is record.content_model:
+                raise TrustsConfigurationError(
+                    'Conflicting delegated registration for %s content '
+                    'terminal %s: existing %r, new %r.'
+                    % (
+                        record.root._meta.label,
+                        record.content_model._meta.label,
+                        prior,
+                        record,
+                    )
+                )
+        self._assert_rules_for_registration(
+            user_model=record.delegate_model,
+            sponsor_model=record.sponsor_model,
+        )
+        self._rule_fragment(record.delegate_model, role='user')
+        self._override_fragment(record.delegate_model)
+        return replace(record, sponsor_rules=self._rule_fragment(
+            record.sponsor_model, role='sponsor', path=record.sponsor_field,
+        ))
 
     def build_relation(self, *, content, user, permission=None, group=None,
                        condition=None, along=None):
@@ -1570,38 +1583,50 @@ class RegistryFactory(object):
             condition=condition, along=along,
         )
         root = record.root
-
+        self.validate_principal(record, self._by_root.get(root, ()))
         existing_rows = self._by_root.get(root)
-        if existing_rows:
-            for existing in existing_rows:
-                if existing == record:
-                    raise TrustsConfigurationError(
-                        'Duplicate registration for %s.' % root._meta.label
-                    )
-                if existing.content_model is record.content_model:
-                    if (
-                        _same_terminal_bindings(existing, record)
-                        and existing.condition != record.condition
-                    ):
-                        continue
-                    raise TrustsConfigurationError(
-                        'Conflicting registration for %s content terminal '
-                        '%s: existing %r, new %r.'
-                        % (
-                            root._meta.label,
-                            record.content_model._meta.label,
-                            existing,
-                            record,
-                        )
-                    )
-        self._assert_rules_for_registration(user_model=record.user_model)
-        self._rule_fragment(record.user_model, role='user')
-        self._override_fragment(record.user_model)
         if existing_rows:
             existing_rows.append(record)
         else:
             self._by_root[root] = [record]
         self._order.append(record)
+        return record
+
+    def validate_principal(self, record, existing):
+        """Reject a duplicate or conflicting ordinary row. Does not store it.
+
+        ``existing`` is the ordinary rows already held, any root. Same-root
+        equality is a duplicate. The same root and content terminal conflict
+        unless the terminal bindings match and the condition differs. User
+        rules on this factory are checked against the row's user model.
+        """
+        for prior in existing:
+            if prior.root is not record.root:
+                continue
+            if prior == record:
+                raise TrustsConfigurationError(
+                    'Duplicate registration for %s.' % record.root._meta.label
+                )
+            if prior.content_model is not record.content_model:
+                continue
+            if (
+                _same_terminal_bindings(prior, record)
+                and prior.condition != record.condition
+            ):
+                continue
+            raise TrustsConfigurationError(
+                'Conflicting registration for %s content terminal '
+                '%s: existing %r, new %r.'
+                % (
+                    record.root._meta.label,
+                    record.content_model._meta.label,
+                    prior,
+                    record,
+                )
+            )
+        self._assert_rules_for_registration(user_model=record.user_model)
+        self._rule_fragment(record.user_model, role='user')
+        self._override_fragment(record.user_model)
         return record
 
     def build_public_registration(

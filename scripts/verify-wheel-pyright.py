@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installed-wheel Pyright proof for public ``configured_backend()`` inference.
+"""Installed-wheel Pyright proof for recorder ``register`` inference.
 
 Must run from outside the checkout after installing the built wheel.
 A valid consumer must be clean; ``t.not_a_field`` must be a diagnostic.
@@ -42,8 +42,8 @@ class DocumentsConfig(TrustsImplementationConfig):
 
     def ready(self):
         super().ready()
-        backend = self.configured_backend()
-        backend.register(
+        from documents.backends import DocumentBackend
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
@@ -76,8 +76,8 @@ class DocumentsConfig(TrustsImplementationConfig):
 
     def ready(self):
         super().ready()
-        backend = self.configured_backend()
-        backend.register(
+        from documents.backends import DocumentBackend
+        DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,

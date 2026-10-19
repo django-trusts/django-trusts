@@ -179,10 +179,10 @@ def main() -> int:
     import trusts
     from trusts.apps import (
         TrustsImplementationConfig,
-        configured_implementation_handles,
         implementation_configs,
         implementation_for_class,
         implementation_for_path,
+        relationship_registries,
     )
     from trusts.backends import TrustModelBackendMixin
     from trusts.compile.factory import (
@@ -191,7 +191,6 @@ def main() -> int:
     )
     from trusts.plan.contents import filter_by_permitted_content
     from trusts.core import (
-    BackendHandle,
     ConditionLookup,
     Ref,
     RelationPlan,
@@ -216,7 +215,9 @@ def main() -> int:
     typed_marker = Path(trusts.__file__).resolve().parent / 'py.typed'
     if not typed_marker.is_file():
         raise SystemExit('installed wheel missing trusts/py.typed')
-    if hasattr(BackendHandle, 'register_relationship'):
+    if hasattr(trusts.core, 'BackendHandle'):
+        raise SystemExit('library wheel still exports BackendHandle')
+    if hasattr(RegistryFactory, 'register_relationship'):
         raise SystemExit('library wheel still exposes register_relationship')
     assert_register_signature(RegistryFactory.register_public)
     print('py.typed present')
@@ -271,8 +272,8 @@ def main() -> int:
         raise SystemExit('trusts.core_backends still imports from the library wheel')
     if implementation_configs() != ():
         raise SystemExit('library-only wheel must expose no implementation configs')
-    if configured_implementation_handles() != ():
-        raise SystemExit('library-only wheel must expose no implementation handles')
+    if relationship_registries() != ():
+        raise SystemExit('library-only wheel must expose no relationship registries')
     try:
         from trusts.backends import TrustModelBackend  # noqa: F401
     except ImportError:

@@ -14,7 +14,7 @@ from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import override_settings
 
-from tests.apps import live_config
+from tests.apps import configured_catalog, live_config
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.backends import DocumentBackend
@@ -81,17 +81,17 @@ class ReadmeExampleAuthorizationTest(TestCase):
         owner = implementation_for_path(DOCUMENT_BACKEND)
         self.assertIs(type(owner), DocumentConfig)
         self.assertIsInstance(owner, TrustsImplementationConfig)
-        handle = owner.configured_backend()
-        self.assertEqual(handle.path, DOCUMENT_BACKEND)
-        from trusts.backends import registries
+        catalog = configured_catalog(owner)
+        self.assertEqual(catalog.path, DOCUMENT_BACKEND)
+        from trusts.apps import catalogs
 
-        self.assertIs(handle.registry, registries[DocumentBackend])
-        self.assertTrue(handle.registry.build_registry().records)
+        self.assertIs(catalog, catalogs[DocumentBackend])
+        self.assertTrue(catalog.registry.records)
         self.assertIs(
-            handle.registry.build_registry().records[0].content_model,
+            catalog.registry.records[0].content_model,
             Document,
         )
-        record = handle.registry.build_registry().get_permission_condition_record(
+        record = catalog.registry.get_permission_condition_record(
             Document, 'non_confidential',
         )
         self.assertIsNotNone(record)

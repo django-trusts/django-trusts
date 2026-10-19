@@ -23,6 +23,8 @@ from trusts.errors import TrustsConfigurationError
 from trusts.plan.aggregates import common_permissions
 from trusts.decorators import authorization_required
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
+from tests.apps import built_registries
+
 
 
 def _request(user):
@@ -54,7 +56,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 
     document = _load_policy_sql_document(
-        render_policy_sql_bytes(handles=[handle]),
+        render_policy_sql_bytes(registries=[(handle).build_registry()]),
     )
     test.assertEqual(document['schema_version'], 1)
     content = document['backends'][0]['contents'][0]
@@ -65,13 +67,13 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     ]
     test.assertEqual(len(rows), 1)
     row = rows[0]
-    record = handle.registry.build_registry().plan_for(content_model).records[0]
+    record = handle.build_registry().plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
         _role_sentinel(record, 'user', 'default'),
         _role_sentinel(record, 'permission', 'default'),
         content=content_model,
-        handles=(handle,),
+        registries=built_registries((handle,)),
     )
     recorded = []
 
@@ -197,7 +199,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
 
     def _handle(self):
         handle = _handle('tests.core.issue282-permitted-content')
-        handle.registry.register_public(
+        handle.register_public(
             trust=self.Grant,
             user='user',
             permission='permission',
@@ -210,7 +212,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                skip_is_active=False):
         sheets = list(self.Sheet.objects.all())
         with _listed(handle):
-            authorized = set(handle.registry.build_registry().filter_authorized(
+            authorized = set(handle.build_registry().filter_authorized(
                 self.Sheet.objects.all(), user, permission,
                 skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
@@ -225,7 +227,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 )
             listed = filter_by_permitted_content(
                 self.Cabinet.objects.all(), user, permission,
-                content=self.Sheet, handles=(handle,),
+                content=self.Sheet, registries=built_registries((handle,)),
                 skip_is_active=skip_is_active,
             )
             self.assertIsNone(listed._result_cache)
@@ -293,7 +295,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
 
         with _tables(Folder, Payload, Row, FolderGrant):
             handle = _handle('tests.core.issue282-permitted-content-suffix')
-            handle.registry.register_public(
+            handle.register_public(
                 trust=FolderGrant,
                 user='user',
                 permission='permission',
@@ -315,7 +317,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, folder=root, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.registry.build_registry().filter_authorized(
+                authorized = set(handle.build_registry().filter_authorized(
                     Payload.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -324,12 +326,12 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             )
             folders = set(filter_by_permitted_content(
                 Folder.objects.all(), self.alice, change,
-                content=Payload, handles=(handle,),
+                content=Payload, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(folders, {root.pk, child.pk})
             found_rows = set(filter_by_permitted_content(
                 Row.objects.all(), self.alice, change,
-                content=Payload, handles=(handle,),
+                content=Payload, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(
                 found_rows, {rows[root.pk].pk, rows[child.pk].pk},
@@ -387,7 +389,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
 
         with _tables(Office, AncCabinet, AncSheet, OfficeGrant):
             handle = _handle('tests.core.issue282-permitted-content-ancestor')
-            handle.registry.register_public(
+            handle.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
@@ -414,7 +416,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, office=office, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.registry.build_registry().filter_authorized(
+                authorized = set(handle.build_registry().filter_authorized(
                     AncSheet.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -423,13 +425,13 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             )
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.alice, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 AncCabinet.objects.all(), self.alice, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk, child.pk})
             self.assertNotIn(past.pk, cabinets)
@@ -530,14 +532,14 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
     def _register(self, *, sponsor_along=None, delegation_along=None):
         handle = _handle('tests.core.issue282-delegated-permitted-content')
-        handle.registry.register_public(
+        handle.register_public(
             trust=self.Grant,
             user='user',
             permission='permission',
             content='cabinet__sheets',
             along=sponsor_along,
         )
-        handle.registry.register_public(
+        handle.register_public(
             trust=self.Delegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -549,7 +551,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
     def _permitted_content(self, handle, user, *, skip_is_active=False):
         return set(filter_by_permitted_content(
             self.Cabinet.objects.all(), user, self.change,
-            content=self.Sheet, handles=(handle,),
+            content=self.Sheet, registries=built_registries((handle,)),
             skip_is_active=skip_is_active,
         ).values_list('pk', flat=True))
 
@@ -711,13 +713,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
                 delegate=self.delegate, sponsor=self.sponsor, cabinet=self.child,
             )
             handle = _handle('tests.core.issue282-suffix')
-            handle.registry.register_public(
+            handle.register_public(
                 trust=AttachmentGrant,
                 user='user',
                 permission='permission',
                 content='attachment',
             )
-            handle.registry.register_public(
+            handle.register_public(
                 trust=SuffixDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -734,12 +736,12 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 filter_by_permitted_content(
                     self.Cabinet.objects.all(), self.delegate, change,
-                    content=Attachment, handles=(handle,),
+                    content=Attachment, registries=built_registries((handle,)),
                 )
 
     def test_delegation_without_an_ordinary_grant_lists_nothing(self):
         handle = _handle('tests.core.issue282-deleg-no-grant')
-        handle.registry.register_public(
+        handle.register_public(
             trust=self.Delegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -818,13 +820,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             Office, AncCabinet, AncSheet, OfficeGrant, OfficeDelegation,
         ):
             handle = _handle('tests.core.issue282-deleg-ancestor')
-            handle.registry.register_public(
+            handle.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
                 content='office__cabinets__sheets',
             )
-            handle.registry.register_public(
+            handle.register_public(
                 trust=OfficeDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -858,13 +860,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             self.assertEqual(authorized, {sheets[root.pk].pk})
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 AncCabinet.objects.all(), self.delegate, change,
-                content=AncSheet, handles=(handle,),
+                content=AncSheet, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk})
             self.assertNotIn(child.pk, cabinets)
@@ -937,14 +939,14 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             Office, WalkCabinet, WalkSheet, OfficeGrant, OfficeDelegation,
         ):
             handle = _handle('tests.core.issue282-sponsor-ancestor')
-            handle.registry.register_public(
+            handle.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
                 content='office__cabinets__sheets',
                 along=('office__cabinets__parent', 1),
             )
-            handle.registry.register_public(
+            handle.register_public(
                 trust=OfficeDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -981,24 +983,24 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             self.assertIn(self.delegate.pk, permitted)
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=WalkSheet, handles=(handle,),
+                content=WalkSheet, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 WalkCabinet.objects.all(), self.delegate, change,
-                content=WalkSheet, handles=(handle,),
+                content=WalkSheet, registries=built_registries((handle,)),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk})
             both = _handle('tests.core.issue282-sponsor-ancestor-both')
-            both.registry.register_public(
+            both.register_public(
                 trust=OfficeGrant,
                 user='user',
                 permission='permission',
                 content='office__cabinets__sheets',
                 along=('office__cabinets__parent', 1),
             )
-            both.registry.register_public(
+            both.register_public(
                 trust=OfficeDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -1015,7 +1017,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             )
             both_offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=WalkSheet, handles=(both,),
+                content=WalkSheet, registries=built_registries((both,)),
             ).values_list('pk', flat=True))
             self.assertEqual(both_offices, {office.pk})
             self.assertNotIn(other.pk, both_offices)
@@ -1083,14 +1085,14 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
 
         with _tables(Folder, Payload, Row, FolderGrant, FolderDelegation):
             handle = _handle('tests.core.issue282-sponsor-later')
-            handle.registry.register_public(
+            handle.register_public(
                 trust=FolderGrant,
                 user='user',
                 permission='permission',
                 content='folder__rows__content',
                 along=('folder__parent', 1),
             )
-            handle.registry.register_public(
+            handle.register_public(
                 trust=FolderDelegation,
                 delegate='delegate',
                 sponsor='sponsor',
@@ -1116,7 +1118,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
                 with self.assertRaises(TrustsConfigurationError):
                     filter_by_permitted_content(
                         model.objects.all(), self.delegate, change,
-                        content=Payload, handles=(handle,),
+                        content=Payload, registries=built_registries((handle,)),
                     )
 
     def test_delegated_grant_lockfile_matches_the_executed_statement(self):
@@ -1187,7 +1189,7 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
             user=self.alice, trust=self.root, permission=self.change,
         )
         self.handle = _handle('tests.core.issue282-trust-content')
-        self.handle.registry.register_public(
+        self.handle.register_public(
             trust=TrustGrant,
             user='user',
             permission='permission',
@@ -1201,16 +1203,16 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
         mixed = self.Trust.objects.filter(pk__in=[self.child.pk, self.past.pk])
         self.assertEqual(
             set(common_permissions(
-                (self.handle,), child_only, self.alice,
+                built_registries((self.handle,)), child_only, self.alice,
             ).values_list('pk', flat=True)),
             {self.change.pk},
         )
         self.assertEqual(
-            list(common_permissions((self.handle,), past_only, self.alice)),
+            list(common_permissions(built_registries((self.handle,)), past_only, self.alice)),
             [],
         )
         self.assertEqual(
-            list(common_permissions((self.handle,), mixed, self.alice)),
+            list(common_permissions(built_registries((self.handle,)), mixed, self.alice)),
             [],
         )
 
@@ -1227,7 +1229,7 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
                 view(_request(self.alice), pk=self.past.pk)
 
     def test_trust_content_follows_along(self):
-        found = set(self.handle.registry.build_registry().filter_authorized(
+        found = set(self.handle.build_registry().filter_authorized(
             self.Trust.objects.all(), self.alice, self.change,
         ).values_list('pk', flat=True))
         self.assertEqual(found, {self.root.pk, self.child.pk})

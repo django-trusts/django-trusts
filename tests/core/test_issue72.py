@@ -7,7 +7,7 @@ from django.apps import apps
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import TestsConfig, live_config
+from tests.apps import configured_catalog, TestsConfig, live_config
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.models import Document
@@ -21,10 +21,11 @@ class IsolatedHostDoesNotReceiveDocumentContributionTest(
     def test_host_registry_stays_empty_of_document_terminal(self):
         host = live_config()
         self.assertEqual(host._configured_trusts_paths(), (HOST_BACKEND,))
-        self.assertFalse(host.registry.plan_for(Document).records)
-        before = host.registry.records
+        registry = configured_catalog(host).registry
+        self.assertFalse(registry.plan_for(Document).records)
+        before = registry.records
         host.ready()
-        self.assertEqual(host.registry.records, before)
+        self.assertEqual(registry.records, before)
 
 
 @isolate_apps(
@@ -37,8 +38,8 @@ class IsolatedAppsDoesNotDonateTicketContributionTest(
     KernelHostRequiredMixin, SimpleTestCase,
 ):
     def test_tests_config_ready_on_isolate_does_not_touch_live(self):
-        live_host = live_config().registry
-        live_doc = apps.get_app_config('myapp').configured_backend().registry
+        live_host = configured_catalog(live_config()).registry
+        live_doc = configured_catalog(apps.get_app_config('myapp')).registry
         before_host = live_host.records
         before_doc = live_doc.records
         contributor = TestsConfig('tests', tests_module)

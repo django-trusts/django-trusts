@@ -40,6 +40,8 @@ from trusts.inspect.yaml import (
     parse_canonical_float,
     _load_policy_yaml,
 )
+from tests.apps import built_registries
+
 
 
 def _e009():
@@ -233,7 +235,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
             with self.subTest(alias=alias):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
                     render_policy_sql_bytes(
-                        alias=alias, handles=[_handle('documents.backends.One')],
+                        alias=alias, registries=built_registries([_handle('documents.backends.One')]),
                     )
                 self.assertIn('TRUSTS_POLICY_DATABASE', str(ctx.exception))
 
@@ -244,51 +246,46 @@ class PolicyLockConfigurationTest(SimpleTestCase):
         databases['default']['ENGINE'] = ''
         with override_settings(DATABASES=databases):
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_policy_sql_bytes(handles=[_handle('documents.backends.One')])
+                render_policy_sql_bytes(registries=[(_handle('documents.backends.One')).build_registry()])
         self.assertIn('no DATABASES ENGINE', str(ctx.exception))
 
         first = _handle('documents.backends.Same')
         second = _handle('documents.backends.Same')
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[first, second])
+            render_policy_sql_bytes(registries=[(first).build_registry(), (second).build_registry()])
         self.assertIn('duplicate backend paths', str(ctx.exception))
 
-        class _BareHandle(object):
-            def __init__(self, path, registry):
-                self.path = path
-                self.registry = registry
+        class _MissingPath(object):
+            path = ''
 
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[_BareHandle('', object())])
+            render_policy_sql_bytes(registries=[_MissingPath()])
         self.assertIn('missing a configured path', str(ctx.exception))
 
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[
-                _BareHandle('documents.backends.NoRegistry', None),
-            ])
+            render_policy_sql_bytes(registries=[None])
         self.assertIn('requires a registry', str(ctx.exception))
 
-        populated = _document_handle('documents.backends.FilterlessBackend')
+        populated = _document_handle('documents.backends.FilterlessBackend').build_registry()
 
         class _NoFilterRegistry(object):
             def __init__(self, inner):
                 self._inner = inner
+                self.path = inner.path
+                self.family = inner.family
                 self.records = inner.records
+                self.delegations = inner.delegations
                 self.iter_permission_conditions = None
 
             def __getattr__(self, name):
                 return getattr(self._inner, name)
 
-        class _View(object):
-            path = populated.path
-            registry = _NoFilterRegistry(populated.registry)
-
-        bare = _View()
+        bare = _NoFilterRegistry(populated)
         omitted = _load_policy_sql_document(
-            render_policy_sql_bytes(handles=[bare]),
+            render_policy_sql_bytes(registries=[bare]),
         )
         kept = _load_policy_sql_document(
-            render_policy_sql_bytes(handles=[populated]),
+            render_policy_sql_bytes(registries=[populated]),
         )
         omitted_content = omitted['backends'][0]['contents'][0]
         kept_content = kept['backends'][0]['contents'][0]
@@ -493,14 +490,14 @@ class PolicyLockSentinelTest(SimpleTestCase):
     def test_unpreparable_primary_key_fails_before_a_document(self):
         content, grant = _pk_pair('RejectDoc', _RejectingField())
         handle = _handle('documents.backends.RejectDocBackend')
-        handle.registry.register_public(
+        handle.register_public(
             trust=grant,
             user='user',
             permission='permission',
             content='document',
         )
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(handles=[handle])
+            render_policy_sql_bytes(registries=[(handle).build_registry()])
         message = str(ctx.exception)
         self.assertIn('RejectDoc', message)
         self.assertIn('pk_value', message)
@@ -509,14 +506,14 @@ class PolicyLockSentinelTest(SimpleTestCase):
     def test_json_primary_key_is_a_call_input(self):
         content, grant = _pk_pair('JsonDoc', models.JSONField())
         handle = _handle('documents.backends.JsonDocBackend')
-        handle.registry.register_public(
+        handle.register_public(
             trust=grant,
             user='user',
             permission='permission',
             content='document',
         )
         document = _load_policy_sql_document(
-            render_policy_sql_bytes(handles=[handle]),
+            render_policy_sql_bytes(registries=[(handle).build_registry()]),
         )
         params = document['backends'][0]['contents'][0]['has_perm']['params']
         self.assertIn('$content.pk_value', params)
@@ -527,7 +524,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
         handle = _document_handle('documents.backends.MissingQueryBackend')
         with patch('trusts.plan.contents._compile_granted', return_value=None):
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_policy_sql_bytes(handles=[handle])
+                render_policy_sql_bytes(registries=[(handle).build_registry()])
         self.assertIn('no grant', str(ctx.exception))
 
         with patch(
@@ -535,7 +532,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
             return_value=None,
         ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_policy_sql_bytes(handles=[handle])
+                render_policy_sql_bytes(registries=[(handle).build_registry()])
         self.assertIn('no permissions query', str(ctx.exception))
 
     def test_missing_group_permissions_query_fails_closed(self):
@@ -547,7 +544,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
                 app_label = 'documents'
 
         handle = _handle('documents.backends.GroupQueryBackend')
-        handle.registry.register_public(
+        handle.register_public(
             trust=GroupGrant,
             user='group__user',
             group='group',
@@ -559,14 +556,14 @@ class PolicyLockSentinelTest(SimpleTestCase):
             if kind == 'group':
                 return None
             return _compile_common_permissions(
-                handles, instance, user, kind=kind,
+                built_registries(handles), instance, user, kind=kind,
             )
 
         with patch(
             'trusts.plan.aggregates._compile_common_permissions', hide_group,
         ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                render_policy_sql_bytes(handles=[handle])
+                render_policy_sql_bytes(registries=[(handle).build_registry()])
         self.assertIn('no group-permissions query', str(ctx.exception))
 
 
@@ -589,13 +586,13 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         def differs(user, permission, obj):
             return obj.label != 'nope'
 
-        handle.registry.register_permission_condition(ConstantDocument, 'both', both)
-        handle.registry.register_permission_condition(ConstantDocument, 'either', either)
-        handle.registry.register_permission_condition(ConstantDocument, 'owner', owner)
-        handle.registry.register_permission_condition(ConstantDocument, 'username', username)
-        handle.registry.register_permission_condition(ConstantDocument, 'differs', differs)
-        first = render_policy_sql_bytes(handles=[handle])
-        second = render_policy_sql_bytes(handles=[handle])
+        handle.register_permission_condition(ConstantDocument, 'both', both)
+        handle.register_permission_condition(ConstantDocument, 'either', either)
+        handle.register_permission_condition(ConstantDocument, 'owner', owner)
+        handle.register_permission_condition(ConstantDocument, 'username', username)
+        handle.register_permission_condition(ConstantDocument, 'differs', differs)
+        first = render_policy_sql_bytes(registries=[(handle).build_registry()])
+        second = render_policy_sql_bytes(registries=[(handle).build_registry()])
         self.assertEqual(first, second)
         document = _load_policy_sql_document(first)
         filters = {
@@ -623,12 +620,12 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         self.assertIn('NOT', filters[prefix + 'differs']['sql'])
 
         same = _handle('documents.backends.SameFieldBackend')
-        same.registry.register_permission_condition(
+        same.register_permission_condition(
             ConstantDocument, 'same_label',
             lambda user, permission, obj: obj.label == obj.label,
         )
-        same_bytes = render_policy_sql_bytes(handles=[same])
-        self.assertEqual(same_bytes, render_policy_sql_bytes(handles=[same]))
+        same_bytes = render_policy_sql_bytes(registries=[(same).build_registry()])
+        self.assertEqual(same_bytes, render_policy_sql_bytes(registries=[(same).build_registry()]))
         same_row = _load_policy_sql_document(same_bytes)['backends'][0]['contents'][0]
         same_filter = same_row['named_filters'][0]
         self.assertEqual(same_filter['params'], [])
@@ -671,20 +668,20 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
                 app_label = 'documents'
 
         handle = _handle('documents.backends.SplitTargetBackend')
-        handle.registry.register_public(
+        handle.register_public(
             trust=GrantById,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.registry.register_public(
+        handle.register_public(
             trust=GrantByCode,
             user='user',
             permission='permission',
             content='document',
         )
         document = _load_policy_sql_document(
-            render_policy_sql_bytes(handles=[handle]),
+            render_policy_sql_bytes(registries=[(handle).build_registry()]),
         )
         content_row = document['backends'][0]['contents'][0]
         self.assertEqual(content_row['model'], 'documents.CodeDocument')
@@ -743,14 +740,14 @@ def math_sign(value):
 def _has_perm_content_token(name, field):
     content, grant = _pk_pair(name, field)
     handle = _handle('documents.backends.%sBackend' % name)
-    handle.registry.register_public(
+    handle.register_public(
         trust=grant,
         user='user',
         permission='permission',
         content='document',
     )
-    first = render_policy_sql_bytes(handles=[handle])
-    second = render_policy_sql_bytes(handles=[handle])
+    first = render_policy_sql_bytes(registries=[(handle).build_registry()])
+    second = render_policy_sql_bytes(registries=[(handle).build_registry()])
     if first != second:
         raise AssertionError('sentinel render was not deterministic for %s' % name)
     document = _load_policy_sql_document(first)

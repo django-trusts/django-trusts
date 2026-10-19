@@ -9,7 +9,8 @@ django-trusts-zero production on the same-named branch ``45ea795``
 - ``TrustsConfigurationError`` — ``trusts/zero/apps.py``,
   ``trusts/zero/query.py``
 - ``PlanQueryCompiler`` — ``trusts/zero/backends.py``
-- ``BackendHandle`` — ``trusts/zero/registration.py``
+- the path object Zero imported — ``trusts/zero/registration.py``
+  (removed here; Zero registers on the recorder)
 - ``granted`` — ``trusts/zero/query.py``
 - ``filter_authorized_scopes`` and ``any_plan_records`` — still
   imported by the pair pin ``833866b`` (``trusts/zero/query.py``).
@@ -20,7 +21,8 @@ django-trusts-zero production on the same-named branch ``45ea795``
 
 django-trusts-gh-permissions production:
 
-- ``BackendHandle`` — ``gh_permissions/policy.py``
+- the path object gh-permissions imported — ``gh_permissions/policy.py``
+  (removed here; that package registers on the recorder)
 
 Test-only movers, one follow-up rather than a name at a time:
 ``compiler_for_class`` (Zero ``tests/apps.py`` and
@@ -48,7 +50,6 @@ from trusts.plan.aggregates import (
     compiler_for_class,
 )
 from trusts.plan.contents import filter_authorized_scopes, granted
-from trusts.plan.handles import BackendHandle
 from trusts.plan.registry import Registry as _FrozenRegistry
 from trusts.plan.relations import (
     ConditionLookup,

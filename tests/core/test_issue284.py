@@ -5,10 +5,8 @@ Default Trusts inquiries deny a user whose ``is_active`` is false.
 unauthenticated users stay denied when it is true. Superuser shortcuts
 and explicit conditions stay in place.
 """
-
 import datetime
 from unittest.mock import patch
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.contrib.auth.models import AnonymousUser, Permission
@@ -17,86 +15,54 @@ from django.db import connection, models
 from django.db.models import Q
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import isolate_apps, override_settings
-
 from tests.core import KernelHostRequiredMixin, kernel_host_listed
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
-from trusts.query import (
-    AuthorizedQuerySet,
-    PermittedQuerySet,
-    PermittedUsersManagerMixin,
-    PermittedUsersMixin,
-)
-
+from trusts.query import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
+from tests.apps import built_registries
 
 PERM = 'myapp.change_document'
 
-
 def _permission(model, codename):
     ct = ContentType.objects.get_for_model(model)
-    permission, _created = Permission.objects.get_or_create(
-        content_type=ct,
-        codename=codename,
-        defaults={'name': codename},
-    )
+    permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
-
 
 def _pks(queryset):
     return set(queryset.values_list('pk', flat=True))
 
-
-class _Handle(object):
-    def __init__(self, registry):
-        self.registry = registry
-        self.compiler = PlanQueryCompiler()
-
-
 class Issue284SuiteRegistrationTest(TestCase):
+
     def test_module_is_on_kernel_and_pair_suites(self):
         self.assertIn('tests.core.test_issue284', KERNEL_SUITE)
         self.assertIn('tests.core.test_issue284', PAIR_KERNEL_SUITE)
 
-
 class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
+
     def setUp(self):
         super().setUp()
         User = get_user_model()
         self.alice = User.objects.create_user('alice-284', password='x')
         self.sponsor = User.objects.create_user('sponsor-284', password='x')
         self.delegate = User.objects.create_user('delegate-284', password='x')
-        self.superuser = User.objects.create_superuser(
-            'super-284', email='super-284@example.com', password='x',
-        )
-        self.inactive_super = User.objects.create_superuser(
-            'inactive-super-284', email='inactive-super-284@example.com',
-            password='x',
-        )
+        self.superuser = User.objects.create_superuser('super-284', email='super-284@example.com', password='x')
+        self.inactive_super = User.objects.create_superuser('inactive-super-284', email='inactive-super-284@example.com', password='x')
         self.inactive_super.is_active = False
         self.inactive_super.save(update_fields=['is_active'])
         self.change = _permission(Document, 'change_document')
         self.open_doc = Document.objects.create(title='open-284', confidential=False)
         self.secret = Document.objects.create(title='secret-284', confidential=True)
-        DocumentGrant.objects.create(
-            document=self.open_doc, user=self.alice, permission=self.change,
-        )
-        DocumentGrant.objects.create(
-            document=self.secret, user=self.alice, permission=self.change,
-        )
-        DocumentGrant.objects.create(
-            document=self.open_doc, user=self.sponsor, permission=self.change,
-        )
-        relationship = DocumentDelegation.objects.create(
-            document=self.open_doc, delegate=self.delegate, sponsor=self.sponsor,
-        )
+        DocumentGrant.objects.create(document=self.open_doc, user=self.alice, permission=self.change)
+        DocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
+        DocumentGrant.objects.create(document=self.open_doc, user=self.sponsor, permission=self.change)
+        relationship = DocumentDelegation.objects.create(document=self.open_doc, delegate=self.delegate, sponsor=self.sponsor)
         relationship.allowed_permissions.add(self.change)
         self.backend = DocumentBackend()
 
@@ -108,52 +74,17 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         self._deactivate(self.alice)
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
         with self.assertNumQueries(5):
-            self.assertFalse(
-                Document.objects.authorized(self.alice, self.change).exists()
-            )
-            self.assertEqual(
-                _pks(permitted.permitted(self.change, self.alice)), set(),
-            )
+            self.assertFalse(Document.objects.authorized(self.alice, self.change).exists())
+            self.assertEqual(_pks(permitted.permitted(self.change, self.alice)), set())
             self.assertFalse(self.alice.has_perm(PERM, self.open_doc))
-            self.assertFalse(
-                self.backend.has_perm(self.alice, PERM, self.open_doc)
-            )
-            self.assertEqual(
-                self.backend.get_all_permissions(self.alice, self.open_doc),
-                set(),
-            )
-            self.assertEqual(
-                self.backend.get_group_permissions(self.alice, self.open_doc),
-                set(),
-            )
-        self.assertEqual(
-            _pks(Document.objects.authorized(
-                self.alice, self.change, skip_is_active=True,
-            )),
-            {self.open_doc.pk, self.secret.pk},
-        )
-        self.assertEqual(
-            _pks(permitted.permitted(
-                self.change, self.alice, skip_is_active=True,
-            )),
-            {self.open_doc.pk, self.secret.pk},
-        )
-        self.assertEqual(
-            _pks(permitted.permitted(
-                PERM, self.alice, conditions=('non_confidential',),
-                skip_is_active=True,
-            )),
-            {self.open_doc.pk},
-        )
-        self.assertTrue(self.backend.has_perm(
-            self.alice, PERM, self.open_doc, skip_is_active=True,
-        ))
-        self.assertIn(
-            PERM,
-            self.backend.get_all_permissions(
-                self.alice, self.open_doc, skip_is_active=True,
-            ),
-        )
+            self.assertFalse(self.backend.has_perm(self.alice, PERM, self.open_doc))
+            self.assertEqual(self.backend.get_all_permissions(self.alice, self.open_doc), set())
+            self.assertEqual(self.backend.get_group_permissions(self.alice, self.open_doc), set())
+        self.assertEqual(_pks(Document.objects.authorized(self.alice, self.change, skip_is_active=True)), {self.open_doc.pk, self.secret.pk})
+        self.assertEqual(_pks(permitted.permitted(self.change, self.alice, skip_is_active=True)), {self.open_doc.pk, self.secret.pk})
+        self.assertEqual(_pks(permitted.permitted(PERM, self.alice, conditions=('non_confidential',), skip_is_active=True)), {self.open_doc.pk})
+        self.assertTrue(self.backend.has_perm(self.alice, PERM, self.open_doc, skip_is_active=True))
+        self.assertIn(PERM, self.backend.get_all_permissions(self.alice, self.open_doc, skip_is_active=True))
         self.assertFalse(self.alice.has_perm(PERM, self.open_doc))
         with self.assertRaises(TypeError):
             self.alice.has_perm(PERM, self.open_doc, skip_is_active=True)
@@ -162,54 +93,32 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         anonymous = AnonymousUser()
         permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
         with self.assertNumQueries(0):
-            self.assertEqual(
-                _pks(permitted.permitted(
-                    self.change, anonymous, skip_is_active=True,
-                )),
-                set(),
-            )
-            self.assertFalse(self.backend.has_perm(
-                anonymous, PERM, self.open_doc, skip_is_active=True,
-            ))
-            with patch('trusts.plan.contents.granted') as compiled:
+            self.assertEqual(_pks(permitted.permitted(self.change, anonymous, skip_is_active=True)), set())
+            self.assertFalse(self.backend.has_perm(anonymous, PERM, self.open_doc, skip_is_active=True))
+            with patch('trusts.query.granted') as compiled:
                 denied = Document.objects.authorized(anonymous, self.change)
-                audited = Document.objects.authorized(
-                    anonymous, self.change, skip_is_active=True,
-                )
+                audited = Document.objects.authorized(anonymous, self.change, skip_is_active=True)
                 self.assertEqual(_pks(denied), set())
                 self.assertEqual(_pks(audited), set())
             compiled.assert_not_called()
 
     def test_superuser_shortcut_is_unchanged(self):
         self.assertTrue(self.superuser.has_perm(PERM, self.open_doc))
-        self.assertFalse(
-            Document.objects.authorized(self.superuser, self.change).exists()
-        )
+        self.assertFalse(Document.objects.authorized(self.superuser, self.change).exists())
         self.assertFalse(self.inactive_super.has_perm(PERM, self.open_doc))
-        self.assertFalse(self.backend.has_perm(
-            self.inactive_super, PERM, self.open_doc, skip_is_active=True,
-        ))
-        self.assertFalse(
-            Document.objects.authorized(
-                self.inactive_super, self.change, skip_is_active=True,
-            ).exists()
-        )
+        self.assertFalse(self.backend.has_perm(self.inactive_super, PERM, self.open_doc, skip_is_active=True))
+        self.assertFalse(Document.objects.authorized(self.inactive_super, self.change, skip_is_active=True).exists())
 
     def test_user_list_includes_inactive_grant_only_with_skip_is_active(self):
         self._deactivate(self.alice)
 
         class Listing(PermittedUsersManagerMixin, type(get_user_model().objects)):
             pass
-
         listing = Listing()
         listing.model = get_user_model()
         default_users = _pks(self.open_doc.get_permitted_users(self.change))
-        audited_users = _pks(self.open_doc.get_permitted_users(
-            self.change, skip_is_active=True,
-        ))
-        via_manager = _pks(listing.permitted(
-            self.open_doc, self.change, skip_is_active=True,
-        ))
+        audited_users = _pks(self.open_doc.get_permitted_users(self.change, skip_is_active=True))
+        via_manager = _pks(listing.permitted(self.open_doc, self.change, skip_is_active=True))
         self.assertNotIn(self.alice.pk, default_users)
         self.assertIn(self.sponsor.pk, default_users)
         self.assertIn(self.alice.pk, audited_users)
@@ -222,53 +131,29 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
     def test_inactive_delegate_and_sponsor_fail_closed_unless_skip_is_active(self):
         self._deactivate(self.delegate)
         self.assertFalse(self.delegate.has_perm(PERM, self.open_doc))
-        self.assertTrue(self.backend.has_perm(
-            self.delegate, PERM, self.open_doc, skip_is_active=True,
-        ))
-        self.assertNotIn(
-            self.delegate,
-            set(self.open_doc.get_permitted_users(self.change)),
-        )
-        self.assertIn(
-            self.delegate,
-            set(self.open_doc.get_permitted_users(
-                self.change, skip_is_active=True,
-            )),
-        )
+        self.assertTrue(self.backend.has_perm(self.delegate, PERM, self.open_doc, skip_is_active=True))
+        self.assertNotIn(self.delegate, set(self.open_doc.get_permitted_users(self.change)))
+        self.assertIn(self.delegate, set(self.open_doc.get_permitted_users(self.change, skip_is_active=True)))
         self.delegate.is_active = True
         self.delegate.save(update_fields=['is_active'])
         self._deactivate(self.sponsor)
         self.assertFalse(self.delegate.has_perm(PERM, self.open_doc))
-        self.assertTrue(self.backend.has_perm(
-            self.delegate, PERM, self.open_doc, skip_is_active=True,
-        ))
-        self.assertNotIn(
-            self.delegate,
-            set(self.open_doc.get_permitted_users(self.change)),
-        )
-        self.assertIn(
-            self.delegate,
-            set(self.open_doc.get_permitted_users(
-                self.change, skip_is_active=True,
-            )),
-        )
+        self.assertTrue(self.backend.has_perm(self.delegate, PERM, self.open_doc, skip_is_active=True))
+        self.assertNotIn(self.delegate, set(self.open_doc.get_permitted_users(self.change)))
+        self.assertIn(self.delegate, set(self.open_doc.get_permitted_users(self.change, skip_is_active=True)))
 
     def test_skip_is_active_flag_must_be_a_bool_before_sql(self):
         with self.assertNumQueries(0):
             with self.assertRaises(TypeError):
-                Document.objects.authorized(
-                    self.alice, self.change, skip_is_active=1,
-                )
+                Document.objects.authorized(self.alice, self.change, skip_is_active=1)
             with self.assertRaises(TypeError):
                 self.open_doc.get_permitted_users(self.change, skip_is_active=1)
             with self.assertRaises(TypeError):
-                self.backend.has_perm(
-                    self.alice, PERM, self.open_doc, skip_is_active='yes',
-                )
-
+                self.backend.has_perm(self.alice, PERM, self.open_doc, skip_is_active='yes')
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class InactiveRegistryInquiryTest(TransactionTestCase):
+
     def test_registry_and_scopes_deny_inactive_users_and_keep_schemaless_holders(self):
         User = get_user_model()
 
@@ -285,12 +170,8 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         class Row(models.Model):
-            folder = models.ForeignKey(
-                'Folder', related_name='rows', on_delete=models.CASCADE,
-            )
-            note = models.ForeignKey(
-                'Note', related_name='rows', on_delete=models.CASCADE,
-            )
+            folder = models.ForeignKey('Folder', related_name='rows', on_delete=models.CASCADE)
+            note = models.ForeignKey('Note', related_name='rows', on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -324,11 +205,8 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-
         with connection.schema_editor() as editor:
-            for model in (
-                Note, Folder, Row, Account, NoteGrant, AccountGrant, FolderGrant,
-            ):
+            for model in (Note, Folder, Row, Account, NoteGrant, AccountGrant, FolderGrant):
                 editor.create_model(model)
         try:
             alice = User.objects.create_user('alice-reg-284', password='x')
@@ -336,10 +214,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             inactive.is_active = False
             inactive.save(update_fields=['is_active'])
             ct = ContentType.objects.get_for_model(Note)
-            read, _created = Permission.objects.get_or_create(
-                content_type=ct, codename='read_note_284',
-                defaults={'name': 'read note 284'},
-            )
+            read, _created = Permission.objects.get_or_create(content_type=ct, codename='read_note_284', defaults={'name': 'read note 284'})
             note = Note.objects.create(title='n')
             folder = Folder.objects.create(title='f')
             Row.objects.create(folder=folder, note=note)
@@ -347,117 +222,49 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             NoteGrant.objects.create(note=note, user=inactive, permission=read)
             account = Account.objects.create(name='acct')
             AccountGrant.objects.create(note=note, account=account, action=read)
-            FolderGrant.objects.create(
-                folder=folder, user=alice, permission=read,
-            )
-            FolderGrant.objects.create(
-                folder=folder, user=inactive, permission=read,
-            )
-
+            FolderGrant.objects.create(folder=folder, user=alice, permission=read)
+            FolderGrant.objects.create(folder=folder, user=inactive, permission=read)
             registry = RegistryFactory()
             grant = Ref(NoteGrant)
-            registry.register(
-                content=grant.note, user=grant.user, permission=grant.permission,
-            )
-            self.assertEqual(
-                _pks(registry.permissions_for(alice, note)), {read.pk},
-            )
+            registry.register(content=grant.note, user=grant.user, permission=grant.permission)
+            self.assertEqual(_pks(registry.permissions_for(alice, note)), {read.pk})
             self.assertTrue(registry.has_permission(alice, note, read))
-            self.assertEqual(
-                _pks(registry.filter_authorized(Note.objects.all(), alice, read)),
-                {note.pk},
-            )
+            self.assertEqual(_pks(registry.filter_authorized(Note.objects.all(), alice, read)), {note.pk})
             with self.assertNumQueries(3):
-                self.assertEqual(
-                    list(registry.permissions_for(inactive, note)), [],
-                )
+                self.assertEqual(list(registry.permissions_for(inactive, note)), [])
                 self.assertFalse(registry.has_permission(inactive, note, read))
-                self.assertFalse(
-                    registry.filter_authorized(
-                        Note.objects.all(), inactive, read,
-                    ).exists()
-                )
-            self.assertEqual(
-                _pks(registry.permissions_for(
-                    inactive, note, skip_is_active=True,
-                )),
-                {read.pk},
-            )
-            self.assertTrue(registry.has_permission(
-                inactive, note, read, skip_is_active=True,
-            ))
-            self.assertEqual(
-                _pks(registry.filter_authorized(
-                    Note.objects.all(), inactive, read,
-                    skip_is_active=True,
-                )),
-                {note.pk},
-            )
-
+                self.assertFalse(registry.filter_authorized(Note.objects.all(), inactive, read).exists())
+            self.assertEqual(_pks(registry.permissions_for(inactive, note, skip_is_active=True)), {read.pk})
+            self.assertTrue(registry.has_permission(inactive, note, read, skip_is_active=True))
+            self.assertEqual(_pks(registry.filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
             account_registry = RegistryFactory()
             account_grant = Ref(AccountGrant)
-            account_registry.register(
-                content=account_grant.note,
-                user=account_grant.account,
-                permission=account_grant.action,
-            )
-            self.assertEqual(
-                _pks(account_registry.permissions_for(account, note)),
-                {read.pk},
-            )
-            self.assertTrue(
-                account_registry.has_permission(account, note, read)
-            )
+            account_registry.register(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
+            self.assertEqual(_pks(account_registry.permissions_for(account, note)), {read.pk})
+            self.assertTrue(account_registry.has_permission(account, note, read))
             account_sql = str(account_registry.permissions_for(account, note).query)
             self.assertNotIn('is_active', account_sql)
             active_sql = str(registry.permissions_for(alice, note).query)
             self.assertIn('"is_active"', active_sql)
-            skipped = registry.permissions_for(
-                inactive, note, skip_is_active=True,
-            )
+            skipped = registry.permissions_for(inactive, note, skip_is_active=True)
             self.assertEqual(_pks(skipped), {read.pk})
-            self.assertEqual(
-                skipped.query.sql_with_params()[0],
-                registry.permissions_for(alice, note).query.sql_with_params()[0],
-            )
+            self.assertEqual(skipped.query.sql_with_params()[0], registry.permissions_for(alice, note).query.sql_with_params()[0])
             self.assertIn('is_active', str(skipped.query))
-
             scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
-            scope_registry.register(
-                content=scope_grant.folder.rows.note,
-                user=scope_grant.user,
-                permission=scope_grant.permission,
-            )
-            handle = _Handle(scope_registry)
-            self.assertEqual(
-                _pks(filter_by_permitted_content(
-                    Folder.objects.all(), alice, read,
-                    content=Note, handles=(handle,),
-                )),
-                {folder.pk},
-            )
+            scope_registry.register(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
+            handle = scope_registry
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), alice, read, content=Note, registries=built_registries((handle,)))), {folder.pk})
             with self.assertNumQueries(1):
-                self.assertFalse(filter_by_permitted_content(
-                    Folder.objects.all(), inactive, read,
-                    content=Note, handles=(handle,),
-                ).exists())
-            self.assertEqual(
-                _pks(filter_by_permitted_content(
-                    Folder.objects.all(), inactive, read,
-                    content=Note, handles=(handle,),
-                    skip_is_active=True,
-                )),
-                {folder.pk},
-            )
+                self.assertFalse(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registries=built_registries((handle,))).exists())
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registries=built_registries((handle,)), skip_is_active=True)), {folder.pk})
         finally:
             with connection.schema_editor() as editor:
-                for model in (
-                    FolderGrant, AccountGrant, NoteGrant, Account, Row, Folder, Note,
-                ):
+                for model in (FolderGrant, AccountGrant, NoteGrant, Account, Row, Folder, Note):
                     editor.delete_model(model)
 
     def test_model_backed_anonymous_and_unauthenticated_are_denied_in_both_modes(self):
+
         class Note(models.Model):
             title = models.CharField(max_length=40)
 
@@ -471,12 +278,8 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         class Row(models.Model):
-            folder = models.ForeignKey(
-                'Folder', related_name='identity_rows', on_delete=models.CASCADE,
-            )
-            note = models.ForeignKey(
-                'Note', related_name='identity_rows', on_delete=models.CASCADE,
-            )
+            folder = models.ForeignKey('Folder', related_name='identity_rows', on_delete=models.CASCADE)
+            note = models.ForeignKey('Note', related_name='identity_rows', on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -511,10 +314,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-
-        models_ = (
-            Note, Folder, Row, LocalUser, Bare, LocalUserGrant, FolderGrant,
-        )
+        models_ = (Note, Folder, Row, LocalUser, Bare, LocalUserGrant, FolderGrant)
         with connection.schema_editor() as editor:
             for model in models_:
                 editor.create_model(model)
@@ -524,121 +324,57 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             folder = Folder.objects.create(title='f')
             Row.objects.create(folder=folder, note=note)
             visible = LocalUser.objects.create(name='visible')
-            anonymous = LocalUser.objects.create(
-                name='anonymous', is_anonymous=True,
-            )
-            guest = LocalUser.objects.create(
-                name='guest', is_authenticated=False,
-            )
+            anonymous = LocalUser.objects.create(name='anonymous', is_anonymous=True)
+            guest = LocalUser.objects.create(name='guest', is_authenticated=False)
             bare = Bare.objects.create(name='bare')
             for holder in (visible, anonymous, guest):
-                LocalUserGrant.objects.create(
-                    note=note, holder=holder, action=read,
-                )
-                FolderGrant.objects.create(
-                    folder=folder, holder=holder, permission=read,
-                )
-
-            with patch('trusts.plan.contents.granted', return_value=Q(pk=note.pk)) as compiled:
+                LocalUserGrant.objects.create(note=note, holder=holder, action=read)
+                FolderGrant.objects.create(folder=folder, holder=holder, permission=read)
+            with patch('trusts.query.granted', return_value=Q(pk=note.pk)) as compiled:
                 kept = AuthorizedQuerySet(Note).authorized(bare, read)
                 self.assertEqual(_pks(kept), {note.pk})
             compiled.assert_called()
-            with patch('trusts.plan.contents.granted') as compiled:
+            with patch('trusts.query.granted') as compiled:
                 with self.assertNumQueries(0):
                     for holder in (anonymous, guest):
                         for include_inactive in (False, True):
-                            rows = AuthorizedQuerySet(Note).authorized(
-                                holder, read, skip_is_active=include_inactive,
-                            )
+                            rows = AuthorizedQuerySet(Note).authorized(holder, read, skip_is_active=include_inactive)
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
-
             registry = RegistryFactory()
             grant = Ref(LocalUserGrant)
-            registry.register(
-                content=grant.note,
-                user=grant.holder,
-                permission=grant.action,
-            )
-            self.assertEqual(
-                _pks(registry.permissions_for(visible, note)), {read.pk},
-            )
+            registry.register(content=grant.note, user=grant.holder, permission=grant.action)
+            self.assertEqual(_pks(registry.permissions_for(visible, note)), {read.pk})
             self.assertTrue(registry.has_permission(visible, note, read))
             scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
-            scope_registry.register(
-                content=scope_grant.folder.identity_rows.note,
-                user=scope_grant.holder,
-                permission=scope_grant.permission,
-            )
-            handle = _Handle(scope_registry)
-            self.assertEqual(
-                _pks(filter_by_permitted_content(
-                    Folder.objects.all(), visible, read,
-                    content=Note, handles=(handle,),
-                )),
-                {folder.pk},
-            )
+            scope_registry.register(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
+            handle = scope_registry
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), visible, read, content=Note, registries=built_registries((handle,)))), {folder.pk})
             backend = DocumentBackend()
             for holder in (anonymous, guest):
                 with self.assertNumQueries(0):
                     for include_inactive in (False, True):
-                        self.assertEqual(
-                            list(registry.permissions_for(
-                                holder, note, skip_is_active=include_inactive,
-                            )),
-                            [],
-                        )
-                        self.assertFalse(registry.has_permission(
-                            holder, note, read, skip_is_active=include_inactive,
-                        ))
-                        self.assertFalse(registry.filter_authorized(
-                            Note.objects.all(), holder, read,
-                            skip_is_active=include_inactive,
-                        ).exists())
-                        self.assertFalse(filter_by_permitted_content(
-                            Folder.objects.all(), holder, read,
-                            content=Note, handles=(handle,),
-                            skip_is_active=include_inactive,
-                        ).exists())
-                        self.assertFalse(backend.has_perm(
-                            holder, 'myapp.change_document', note,
-                            skip_is_active=include_inactive,
-                        ))
-                        self.assertEqual(
-                            backend.get_all_permissions(
-                                holder, note, skip_is_active=include_inactive,
-                            ),
-                            set(),
-                        )
-                        self.assertEqual(
-                            backend.get_group_permissions(
-                                holder, note, skip_is_active=include_inactive,
-                            ),
-                            set(),
-                        )
+                        self.assertEqual(list(registry.permissions_for(holder, note, skip_is_active=include_inactive)), [])
+                        self.assertFalse(registry.has_permission(holder, note, read, skip_is_active=include_inactive))
+                        self.assertFalse(registry.filter_authorized(Note.objects.all(), holder, read, skip_is_active=include_inactive).exists())
+                        self.assertFalse(filter_by_permitted_content(Folder.objects.all(), holder, read, content=Note, registries=built_registries((handle,)), skip_is_active=include_inactive).exists())
+                        self.assertFalse(backend.has_perm(holder, 'myapp.change_document', note, skip_is_active=include_inactive))
+                        self.assertEqual(backend.get_all_permissions(holder, note, skip_is_active=include_inactive), set())
+                        self.assertEqual(backend.get_group_permissions(holder, note, skip_is_active=include_inactive), set())
             if kernel_host_listed():
                 change = _permission(Document, 'change_document')
-                permitted = PermittedQuerySet(
-                    model=Document, using=Document.objects.db,
-                )
+                permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
                 with self.assertNumQueries(0):
                     for holder in (anonymous, guest):
-                        self.assertEqual(
-                            list(permitted.permitted(
-                                change, holder, skip_is_active=True,
-                            )),
-                            [],
-                        )
+                        self.assertEqual(list(permitted.permitted(change, holder, skip_is_active=True)), [])
         finally:
             with connection.schema_editor() as editor:
                 for model in reversed(models_):
                     editor.delete_model(model)
 
-
 class _AcceptanceBackend(TrustModelBackendMixin, ModelBackend):
     """Installed only for the acceptance class below."""
-
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class DelegationAcceptanceInquiryTest(TransactionTestCase):
@@ -665,9 +401,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         class Sheet(PermittedUsersMixin, models.Model):
-            cabinet = models.ForeignKey(
-                Cabinet, related_name='sheets', on_delete=models.CASCADE,
-            )
+            cabinet = models.ForeignKey(Cabinet, related_name='sheets', on_delete=models.CASCADE)
             title = models.CharField(max_length=40)
             expires_on = models.DateField()
             as_of = models.DateField()
@@ -685,19 +419,12 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
 
         class Relationship(models.Model):
             cabinet = models.ForeignKey(Cabinet, on_delete=models.CASCADE)
-            delegate = models.ForeignKey(
-                User, related_name='+', on_delete=models.CASCADE,
-            )
-            sponsor = models.ForeignKey(
-                User, related_name='+', on_delete=models.CASCADE,
-            )
-            allowed_permissions = models.ManyToManyField(
-                Permission, related_name='+',
-            )
+            delegate = models.ForeignKey(User, related_name='+', on_delete=models.CASCADE)
+            sponsor = models.ForeignKey(User, related_name='+', on_delete=models.CASCADE)
+            allowed_permissions = models.ManyToManyField(Permission, related_name='+')
 
             class Meta:
                 app_label = 'trusts_tests'
-
         self.Cabinet = Cabinet
         self.Sheet = Sheet
         self.Grant = Grant
@@ -721,78 +448,26 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.code = 'trusts_tests.read_sheet'
             self.filtered = self.code + ':active_only'
             self.cabinet = Cabinet.objects.create(name='cabinet')
-            self.sheet = Sheet.objects.create(
-                cabinet=self.cabinet, title='sheet',
-                expires_on=self.live, as_of=self.live,
-            )
+            self.sheet = Sheet.objects.create(cabinet=self.cabinet, title='sheet', expires_on=self.live, as_of=self.live)
             for user in (self.sponsor, self.nora, self.cara):
-                Grant.objects.create(
-                    cabinet=self.cabinet, user=user, permission=self.read,
-                )
-            self.relationship = Relationship.objects.create(
-                cabinet=self.cabinet,
-                delegate=self.delegate,
-                sponsor=self.sponsor,
-            )
+                Grant.objects.create(cabinet=self.cabinet, user=user, permission=self.read)
+            self.relationship = Relationship.objects.create(cabinet=self.cabinet, delegate=self.delegate, sponsor=self.sponsor)
             self.relationship.allowed_permissions.add(self.read)
-            self.handle = BackendHandle(
-                path='tests.core.test_issue284._AcceptanceBackend',
-                registry=RegistryFactory(),
-            )
-            self.handle.registry.register_public(
-                trust=Grant,
-                user='user',
-                permission='permission',
-                content='cabinet__sheets',
-            )
-            self.handle.registry.register_public(
-                trust=Relationship,
-                delegate='delegate',
-                sponsor='sponsor',
-                content='cabinet__sheets',
-                condition=lambda relationship, permission: (
-                    relationship.allowed_permissions.contains(permission)
-                ),
-            )
-            self.handle.registry.register_permission_condition(
-                Sheet,
-                'active_only',
-                lambda user, permission, content: user.is_active == True,
-            )
-            self.handle.registry.register_permission_condition(
-                Sheet,
-                'unexpired',
-                lambda user, permission, content: (
-                    content.expires_on == content.as_of
-                ),
-            )
+            self.handle = RegistryFactory(path='tests.core.test_issue284._AcceptanceBackend')
+            self.handle.register_public(trust=Grant, user='user', permission='permission', content='cabinet__sheets')
+            self.handle.register_public(trust=Relationship, delegate='delegate', sponsor='sponsor', content='cabinet__sheets', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
+            self.handle.register_permission_condition(Sheet, 'active_only', lambda user, permission, content: user.is_active == True)
+            self.handle.register_permission_condition(Sheet, 'unexpired', lambda user, permission, content: content.expires_on == content.as_of)
             from tests.apps import install_class_handle
-
             install_class_handle(_AcceptanceBackend, self.handle)
             from trusts.apps import catalogs
             from trusts.compile.catalogs import Catalog
-
-            factory = self.handle.registry
-            catalogs[_AcceptanceBackend] = Catalog(
-                cls=_AcceptanceBackend,
-                path='%s.%s' % (
-                    _AcceptanceBackend.__module__,
-                    _AcceptanceBackend.__qualname__,
-                ),
-                family=_AcceptanceBackend.family,
-                factory=factory,
-                registry=factory.build_registry(),
-                family_registries=(),
-            )
+            factory = self.handle
+            catalogs[_AcceptanceBackend] = Catalog(cls=_AcceptanceBackend, path='%s.%s' % (_AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__), family=_AcceptanceBackend.family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(()))
             self.backend = _AcceptanceBackend()
-            self._settings = override_settings(AUTHENTICATION_BACKENDS=(
-                'tests.core.test_issue284._AcceptanceBackend',
-            ))
+            self._settings = override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue284._AcceptanceBackend',))
             self._settings.enable()
-            self._handles = patch(
-                'trusts.apps._relationship_implementation_handles',
-                return_value=(self.handle,),
-            )
+            self._handles = patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((self.handle,)))
             self._handles.start()
         except Exception:
             self._drop_tables()
@@ -800,7 +475,6 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
 
     def tearDown(self):
         from tests.apps import install_class_handle
-
         install_class_handle(_AcceptanceBackend, None)
         from trusts.apps import catalogs
         catalogs.pop(_AcceptanceBackend, None)
@@ -824,78 +498,49 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         user.save(update_fields=['is_active'])
 
     def _user_pks(self, perm, **kwargs):
-        return set(self.sheet.get_permitted_users(perm, **kwargs).values_list(
-            'pk', flat=True,
-        ))
+        return set(self.sheet.get_permitted_users(perm, **kwargs).values_list('pk', flat=True))
 
     def _scope_pks(self, user, **kwargs):
-        return set(filter_by_permitted_content(
-            self.Cabinet.objects.all(), user, self.read,
-            content=self.Sheet, handles=(self.handle,), **kwargs,
-        ).values_list('pk', flat=True))
+        return set(filter_by_permitted_content(self.Cabinet.objects.all(), user, self.read, content=self.Sheet, registries=built_registries((self.handle,)), **kwargs).values_list('pk', flat=True))
 
     def test_both_inactive_delegate_and_sponsor_need_the_optional_keyword(self):
-        self.assertTrue(self.backend.has_perm(
-            self.delegate, self.code, self.sheet,
-        ))
+        self.assertTrue(self.backend.has_perm(self.delegate, self.code, self.sheet))
         self.assertIn(self.delegate.pk, self._user_pks(self.code))
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
         self._deactivate(self.delegate)
         self._deactivate(self.sponsor)
-        self.assertFalse(self.backend.has_perm(
-            self.delegate, self.code, self.sheet,
-        ))
-        self.assertFalse(self.backend.has_perm(
-            self.sponsor, self.code, self.sheet,
-        ))
-        self.assertTrue(self.backend.has_perm(
-            self.delegate, self.code, self.sheet, skip_is_active=True,
-        ))
-        self.assertTrue(self.backend.has_perm(
-            self.sponsor, self.code, self.sheet, skip_is_active=True,
-        ))
+        self.assertFalse(self.backend.has_perm(self.delegate, self.code, self.sheet))
+        self.assertFalse(self.backend.has_perm(self.sponsor, self.code, self.sheet))
+        self.assertTrue(self.backend.has_perm(self.delegate, self.code, self.sheet, skip_is_active=True))
+        self.assertTrue(self.backend.has_perm(self.sponsor, self.code, self.sheet, skip_is_active=True))
         self.assertNotIn(self.delegate.pk, self._user_pks(self.code))
         self.assertNotIn(self.sponsor.pk, self._user_pks(self.code))
         included = self._user_pks(self.code, skip_is_active=True)
         self.assertIn(self.delegate.pk, included)
         self.assertIn(self.sponsor.pk, included)
         self.assertEqual(self._scope_pks(self.delegate), set())
-        self.assertEqual(
-            self._scope_pks(self.delegate, skip_is_active=True),
-            {self.cabinet.pk},
-        )
+        self.assertEqual(self._scope_pks(self.delegate, skip_is_active=True), {self.cabinet.pk})
         self.assertEqual(self._scope_pks(self.sponsor), set())
-        self.assertEqual(
-            self._scope_pks(self.sponsor, skip_is_active=True),
-            {self.cabinet.pk},
-        )
+        self.assertEqual(self._scope_pks(self.sponsor, skip_is_active=True), {self.cabinet.pk})
 
     def test_removing_the_allowed_permission_denies_the_delegate(self):
         self.relationship.allowed_permissions.remove(self.read)
-        self.assertFalse(self.backend.has_perm(
-            self.delegate, self.code, self.sheet,
-        ))
+        self.assertFalse(self.backend.has_perm(self.delegate, self.code, self.sheet))
         self.assertNotIn(self.delegate.pk, self._user_pks(self.code))
         self.assertIn(self.sponsor.pk, self._user_pks(self.code))
         self.assertEqual(self._scope_pks(self.delegate), set())
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
         self._deactivate(self.delegate)
         self._deactivate(self.sponsor)
-        self.assertFalse(self.backend.has_perm(
-            self.delegate, self.code, self.sheet, skip_is_active=True,
-        ))
+        self.assertFalse(self.backend.has_perm(self.delegate, self.code, self.sheet, skip_is_active=True))
         included = self._user_pks(self.code, skip_is_active=True)
         self.assertNotIn(self.delegate.pk, included)
         self.assertIn(self.sponsor.pk, included)
 
     def test_revoking_the_sponsor_grant_denies_the_delegate(self):
         self.Grant.objects.filter(user=self.sponsor).delete()
-        self.assertFalse(self.backend.has_perm(
-            self.delegate, self.code, self.sheet,
-        ))
-        self.assertFalse(self.backend.has_perm(
-            self.sponsor, self.code, self.sheet,
-        ))
+        self.assertFalse(self.backend.has_perm(self.delegate, self.code, self.sheet))
+        self.assertFalse(self.backend.has_perm(self.sponsor, self.code, self.sheet))
         users = self._user_pks(self.code)
         self.assertNotIn(self.delegate.pk, users)
         self.assertNotIn(self.sponsor.pk, users)
@@ -904,43 +549,25 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self._deactivate(self.delegate)
         self._deactivate(self.sponsor)
         for user in (self.delegate, self.sponsor):
-            self.assertFalse(self.backend.has_perm(
-                user, self.code, self.sheet, skip_is_active=True,
-            ))
-            self.assertNotIn(
-                user.pk, self._user_pks(self.code, skip_is_active=True),
-            )
+            self.assertFalse(self.backend.has_perm(user, self.code, self.sheet, skip_is_active=True))
+            self.assertNotIn(user.pk, self._user_pks(self.code, skip_is_active=True))
 
     def test_unexpired_named_filter_denies_when_the_dates_differ(self):
         filtered = self.code + ':unexpired'
-        self.assertTrue(self.backend.has_perm(
-            self.delegate, filtered, self.sheet,
-        ))
+        self.assertTrue(self.backend.has_perm(self.delegate, filtered, self.sheet))
         self.assertIn(self.delegate.pk, self._user_pks(filtered))
         self.assertEqual(self._scope_pks(self.sponsor), {self.cabinet.pk})
-        self.assertTrue(self.backend.has_perm(
-            self.delegate, filtered, self.sheet, skip_is_active=True,
-        ))
-        self.assertIn(
-            self.delegate.pk, self._user_pks(filtered, skip_is_active=True),
-        )
+        self.assertTrue(self.backend.has_perm(self.delegate, filtered, self.sheet, skip_is_active=True))
+        self.assertIn(self.delegate.pk, self._user_pks(filtered, skip_is_active=True))
         self.sheet.expires_on = self.earlier
         self.sheet.save(update_fields=['expires_on'])
-        self.assertFalse(self.backend.has_perm(
-            self.delegate, filtered, self.sheet,
-        ))
-        self.assertFalse(self.backend.has_perm(
-            self.sponsor, filtered, self.sheet,
-        ))
+        self.assertFalse(self.backend.has_perm(self.delegate, filtered, self.sheet))
+        self.assertFalse(self.backend.has_perm(self.sponsor, filtered, self.sheet))
         expired_users = self._user_pks(filtered)
         self.assertNotIn(self.delegate.pk, expired_users)
         self.assertNotIn(self.sponsor.pk, expired_users)
-        self.assertTrue(self.backend.has_perm(
-            self.sponsor, self.code, self.sheet,
-        ))
-        self.assertTrue(self.backend.has_perm(
-            self.delegate, self.code, self.sheet,
-        ))
+        self.assertTrue(self.backend.has_perm(self.sponsor, self.code, self.sheet))
+        self.assertTrue(self.backend.has_perm(self.delegate, self.code, self.sheet))
         self.assertIn(self.sponsor.pk, self._user_pks(self.code))
         self.assertIn(self.delegate.pk, self._user_pks(self.code))
         self.assertEqual(self._scope_pks(self.delegate), {self.cabinet.pk})
@@ -948,37 +575,18 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         self._deactivate(self.delegate)
         self._deactivate(self.sponsor)
         for user in (self.delegate, self.sponsor):
-            self.assertFalse(self.backend.has_perm(
-                user, filtered, self.sheet, skip_is_active=True,
-            ))
-            self.assertNotIn(
-                user.pk, self._user_pks(filtered, skip_is_active=True),
-            )
-        self.assertTrue(self.backend.has_perm(
-            self.sponsor, self.code, self.sheet, skip_is_active=True,
-        ))
+            self.assertFalse(self.backend.has_perm(user, filtered, self.sheet, skip_is_active=True))
+            self.assertNotIn(user.pk, self._user_pks(filtered, skip_is_active=True))
+        self.assertTrue(self.backend.has_perm(self.sponsor, self.code, self.sheet, skip_is_active=True))
 
     def test_active_only_named_filter_keeps_an_inactive_user_denied(self):
         self._deactivate(self.cara)
-        self.assertFalse(self.backend.has_perm(
-            self.cara, self.filtered, self.sheet,
-        ))
-        self.assertFalse(self.backend.has_perm(
-            self.cara, self.filtered, self.sheet, skip_is_active=True,
-        ))
-        self.assertTrue(self.backend.has_perm(
-            self.cara, self.code, self.sheet, skip_is_active=True,
-        ))
-        self.assertTrue(self.backend.has_perm(
-            self.nora, self.filtered, self.sheet,
-        ))
-        self.assertNotIn(
-            self.cara.pk, self._user_pks(self.filtered, skip_is_active=True),
-        )
+        self.assertFalse(self.backend.has_perm(self.cara, self.filtered, self.sheet))
+        self.assertFalse(self.backend.has_perm(self.cara, self.filtered, self.sheet, skip_is_active=True))
+        self.assertTrue(self.backend.has_perm(self.cara, self.code, self.sheet, skip_is_active=True))
+        self.assertTrue(self.backend.has_perm(self.nora, self.filtered, self.sheet))
+        self.assertNotIn(self.cara.pk, self._user_pks(self.filtered, skip_is_active=True))
         self.assertIn(self.nora.pk, self._user_pks(self.filtered))
         self.assertEqual(self._scope_pks(self.cara), set())
-        self.assertEqual(
-            self._scope_pks(self.cara, skip_is_active=True),
-            {self.cabinet.pk},
-        )
+        self.assertEqual(self._scope_pks(self.cara, skip_is_active=True), {self.cabinet.pk})
         self.assertEqual(self._scope_pks(self.nora), {self.cabinet.pk})

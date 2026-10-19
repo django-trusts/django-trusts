@@ -1,3 +1,4 @@
+from tests.apps import configured_catalog
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
 Public ``TrustModelBackendMixin`` methods, ``set_condition_lookup``,
@@ -173,7 +174,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        registry = implementation_for_path(DOCUMENT_BACKEND).configured_backend().registry
+        registry = configured_catalog(implementation_for_path(DOCUMENT_BACKEND)).registry
         previous = registry.condition_lookup
         qs = Document.objects.filter(pk=self.document.pk)
         try:
@@ -222,14 +223,14 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 class ImplementationOwnershipReadyTest(TestCase):
     def test_owned_non_mixin_path_fails_at_ready_with_zero_sql(self):
         config = _bind(NonMixinOwnerConfig, ready=False)
-        self.assertEqual(config.registries, {})
+        self.assertFalse(hasattr(config, 'registries'))
         with override_settings(AUTHENTICATION_BACKENDS=(MODEL_BACKEND, HOST)):
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
                     config.ready()
         self.assertIn('not a TrustModelBackendMixin', str(ctx.exception))
         self.assertIn(MODEL_BACKEND, str(ctx.exception))
-        self.assertEqual(config.registries, {})
+        self.assertFalse(hasattr(config, 'registries'))
 
 
 class Issue199SuiteRegistrationTest(SimpleTestCase):

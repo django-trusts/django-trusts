@@ -1,3 +1,4 @@
+from tests.apps import configured_catalog
 """#151 C1: construct-time self-bind of Core's private condition lookup.
 
 Library-only proofs. Applications register builders; they do not import
@@ -246,7 +247,7 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
 class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
         owner = implementation_for_path(DOCUMENT_BACKEND)
-        registry = owner.configured_backend().registry
+        registry = configured_catalog(owner).registry
         lookup = registry.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)

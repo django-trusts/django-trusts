@@ -1,10 +1,8 @@
 """One placeholder per inquiry value, and ``is_active`` in the statement (#300)."""
-
 import re
 from collections import Counter
 from contextlib import contextmanager
 from unittest.mock import patch
-
 import django
 from django.contrib.auth.models import Permission, User
 from django.contrib.contenttypes.models import ContentType
@@ -13,40 +11,25 @@ from django.db.models import CharField, IntegerField, OuterRef, Value
 from django.db.models.sql.query import Query
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext, isolate_apps
-
 from tests.core import KernelHostRequiredMixin
-from tests.core.test_issue147.test_sql_export import (
-    Document as GuideDocument,
-    _document_handle,
-)
+from tests.core.test_issue147.test_sql_export import Document as GuideDocument, _document_handle
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 import trusts.plan.rewrites as bind_once_module
-from trusts.plan.rewrites import (
-    BIND_ALIAS,
-    BindRef,
-    BindTable,
-    SqlInt,
-    bind_once,
-    strip_exists_marker,
-    trusts_bind_once,
-)
+from trusts.plan.rewrites import BIND_ALIAS, BindRef, BindTable, SqlInt, bind_once, strip_exists_marker, trusts_bind_once
 from trusts.plan.walk import _render_reach_sql
-from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
+from tests.apps import built_registries
 
 
 def _document_rows():
-    document = _load_policy_sql_document(
-        render_policy_sql_bytes(handles=[_document_handle()]),
-    )
+    document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(_document_handle()).build_registry()]))
     return document['backends'][0]['contents'][0]
-
 
 def _repeat_count(params):
     """Extra copies of one full token.
@@ -54,21 +37,19 @@ def _repeat_count(params):
     Two ``True`` values with different sources are distinct.
     """
     counts = Counter(params)
-    return sum(count - 1 for count in counts.values() if count > 1)
-
+    return sum((count - 1 for count in counts.values() if count > 1))
 
 class Issue300SuiteRegistrationTest(SimpleTestCase):
+
     def test_module_is_on_kernel_and_pair_suites(self):
         self.assertIn('tests.core.test_issue300', KERNEL_SUITE)
         self.assertIn('tests.core.test_issue300', PAIR_KERNEL_SUITE)
 
-
 class Issue300LockfileTest(SimpleTestCase):
+
     def test_each_distinct_value_is_one_placeholder_and_content_type_stays(self):
         content = _document_rows()
-        for key in (
-            'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
-        ):
+        for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
             row = content[key]
             self.assertEqual(row['sql'].count('%s'), len(row['params']), key)
             self.assertIn('trusts_bind', row['sql'])
@@ -78,42 +59,30 @@ class Issue300LockfileTest(SimpleTestCase):
             self.assertIn('$content.model="document"', row['params'])
         users = content['get_permitted_users']
         self.assertEqual(users['params'].count('user.is_active=True'), 1)
-        self.assertIn(
-            '"is_active" = ("trusts_bind"."is_active")', users['sql'],
-        )
+        self.assertIn('"is_active" = ("trusts_bind"."is_active")', users['sql'])
         self.assertNotIn('"is_active" = %s', users['sql'])
         self.assertNotIn('skip_is_active', users['sql'])
 
     def test_flag_off_records_the_plain_queryset(self):
         with override_settings(TRUSTS_SQL_BIND_ONCE=False):
             content = _document_rows()
-        for key in (
-            'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
-        ):
+        for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
             row = content[key]
             self.assertNotIn('trusts_bind', row['sql'], key)
             self.assertNotIn('SELECT 1 AS "a"', row['sql'])
             self.assertIn('SELECT %s AS "a"', row['sql'])
             self.assertEqual(row['sql'].count('%s'), len(row['params']))
-            self.assertFalse(any('allow inactive' in param for param in row['params']))
+            self.assertFalse(any(('allow inactive' in param for param in row['params'])))
         users = content['get_permitted_users']
         self.assertIn('"is_active" = %s', users['sql'])
-        self.assertGreater(
-            len(content['permitted']['params']),
-            len(_document_rows()['permitted']['params']),
-        )
-
+        self.assertGreater(len(content['permitted']['params']), len(_document_rows()['permitted']['params']))
 
 class Issue300EligibilitySqlTest(SimpleTestCase):
+
     def test_skip_is_active_keeps_the_condition_in_one_statement(self):
         from trusts.plan.standards import compile_user_rules
-
-        denied = bind_once(User.objects.filter(compile_user_rules(
-            User, '', None, role='user', values={'is_active': False},
-        )))
-        included = bind_once(User.objects.filter(compile_user_rules(
-            User, '', None, role='user', values={'is_active': True},
-        )))
+        denied = bind_once(User.objects.filter(compile_user_rules(User, '', None, role='user', values={'is_active': False})))
+        included = bind_once(User.objects.filter(compile_user_rules(User, '', None, role='user', values={'is_active': True})))
         denied_sql, denied_params = denied.query.sql_with_params()
         included_sql, included_params = included.query.sql_with_params()
         self.assertEqual(denied_sql, included_sql)
@@ -121,37 +90,31 @@ class Issue300EligibilitySqlTest(SimpleTestCase):
         self.assertIn('OR', str(denied.query.where))
         self.assertIn(False, denied_params)
         self.assertNotIn(False, included_params)
-        eligibility = str(User.objects.filter(
-            _trusts_eligibility_q(User),
-        ).query.where)
+        eligibility = str(User.objects.filter(_trusts_eligibility_q(User)).query.where)
         self.assertNotIn('is_active', eligibility)
 
-
 class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
+
     def test_authorized_denies_a_non_model_without_is_active_and_none_raises(self):
+
         class Authenticated(object):
             is_authenticated = True
             is_anonymous = False
             pk = 1
-
         content_type = ContentType.objects.get_for_model(Document)
-        permission, _created = Permission.objects.get_or_create(
-            content_type=content_type,
-            codename='change_document',
-            defaults={'name': 'Can change document'},
-        )
+        permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='change_document', defaults={'name': 'Can change document'})
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 Document.objects.authorized(Authenticated(), permission)
         handle = _document_handle()
         content = GuideDocument(title='note-300', pk=1)
         with self.assertRaises(TrustsConfigurationError):
-            granted((handle,), content, None, permission)
+            granted(built_registries((handle,)), content, None, permission)
         with self.assertRaises(TrustsConfigurationError):
-            granted((handle,), content, object(), permission)
-
+            granted(built_registries((handle,)), content, object(), permission)
 
 class Issue300BindOnceTest(SimpleTestCase):
+
     def test_repeated_user_id_is_one_column_and_the_caller_is_unchanged(self):
         original = User.objects.filter(id=5).filter(pk=5)
         bound = bind_once(original)
@@ -173,10 +136,7 @@ class Issue300BindOnceTest(SimpleTestCase):
         self.assertIn('OuterRef', where)
         self.assertIn(BIND_ALIAS, bound.query.alias_map)
         active = bound.query.alias_map[BIND_ALIAS]
-        self.assertEqual(
-            [column.label for column in active.columns],
-            ['active'],
-        )
+        self.assertEqual([column.label for column in active.columns], ['active'])
         self.assertEqual(active.columns[0].value, True)
         repeated = User.objects.filter(is_active=True)
         for _index in range(3):
@@ -184,13 +144,8 @@ class Issue300BindOnceTest(SimpleTestCase):
         repeated_sql, repeated_params = bind_once(repeated).query.sql_with_params()
         self.assertEqual(list(repeated_params), [True])
         self.assertEqual(repeated_sql.count('%s'), 1)
-        self.assertEqual(
-            repeated_sql.count('"is_active" = ("trusts_bind"."is_active")'),
-            4,
-        )
-        table_sql, table_params = bind_once(
-            User.objects.filter(id=4).filter(is_active=True),
-        ).query.sql_with_params()
+        self.assertEqual(repeated_sql.count('"is_active" = ("trusts_bind"."is_active")'), 4)
+        table_sql, table_params = bind_once(User.objects.filter(id=4).filter(is_active=True)).query.sql_with_params()
         self.assertIn('trusts_bind', table_sql)
         self.assertIn('is_active', table_sql)
         self.assertEqual(table_params.count(4), 1)
@@ -201,9 +156,7 @@ class Issue300BindOnceTest(SimpleTestCase):
         self.assertTrue(trusts_bind_once())
         with override_settings(TRUSTS_SQL_BIND_ONCE=True):
             self.assertTrue(trusts_bind_once())
-            sql, params = bind_once(
-                User.objects.filter(id=4).filter(pk=4),
-            ).query.sql_with_params()
+            sql, params = bind_once(User.objects.filter(id=4).filter(pk=4)).query.sql_with_params()
             self.assertIn('trusts_bind', sql)
             self.assertEqual(list(params), [4])
         with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -243,7 +196,6 @@ class Issue300BindOnceTest(SimpleTestCase):
         with self.assertRaises(IndexError):
             table.next_column()
 
-
 def _engine_connection(engine):
     """Database wrapper for one engine, or ``None`` when its driver is absent.
 
@@ -252,52 +204,29 @@ def _engine_connection(engine):
     """
     from django.core.exceptions import ImproperlyConfigured
     from django.db.utils import load_backend
-
     try:
         backend = load_backend(engine)
     except ImproperlyConfigured:
         return None
-    return backend.DatabaseWrapper({
-        'ENGINE': engine,
-        'NAME': ':memory:',
-        'USER': '',
-        'PASSWORD': '',
-        'HOST': '',
-        'PORT': '',
-        'TIME_ZONE': None,
-        'CONN_MAX_AGE': 0,
-        'CONN_HEALTH_CHECKS': False,
-        'OPTIONS': {},
-        'AUTOCOMMIT': True,
-        'ATOMIC_REQUESTS': False,
-    })
-
+    return backend.DatabaseWrapper({'ENGINE': engine, 'NAME': ':memory:', 'USER': '', 'PASSWORD': '', 'HOST': '', 'PORT': '', 'TIME_ZONE': None, 'CONN_MAX_AGE': 0, 'CONN_HEALTH_CHECKS': False, 'OPTIONS': {}, 'AUTOCOMMIT': True, 'ATOMIC_REQUESTS': False})
 
 class Issue300ExistsMarkerTest(SimpleTestCase):
+
     def test_literal_one_is_standard_sql_on_sqlite_mysql_and_postgresql(self):
         from django.db.models import Exists
-
         from trusts.plan.rewrites import LiteralExists
-
         inner = User.objects.filter(pk=1)
         exists = LiteralExists(inner)
         self.assertIsInstance(exists.query.annotations['a'], SqlInt)
         bare = Exists(User.objects.filter(pk=1))
         self.assertEqual(bare.query.annotations['a'].value, 1)
-
-        engines = (
-            'django.db.backends.sqlite3',
-            'django.db.backends.mysql',
-            'django.db.backends.postgresql',
-        )
+        engines = ('django.db.backends.sqlite3', 'django.db.backends.mysql', 'django.db.backends.postgresql')
         for engine in engines:
             with self.subTest(engine=engine):
                 connection = _engine_connection(engine)
                 if connection is None:
                     self.skipTest('%s driver is not installed' % engine)
-                sql, params = exists.query.get_compiler(
-                    connection=connection,
-                ).as_sql()
+                sql, params = exists.query.get_compiler(connection=connection).as_sql()
                 quote = connection.ops.quote_name('a')
                 self.assertIn('SELECT 1 AS %s' % quote, sql)
                 self.assertNotIn('SELECT %%s AS %s' % quote, sql)
@@ -308,15 +237,8 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
 
     def test_is_active_true_stays_a_bound_parameter_on_each_engine(self):
         from trusts.plan.standards import compile_user_rules
-
-        query = bind_once(User.objects.filter(compile_user_rules(
-            User, '', None, role='user', values={},
-        ))).query
-        engines = (
-            'django.db.backends.sqlite3',
-            'django.db.backends.mysql',
-            'django.db.backends.postgresql',
-        )
+        query = bind_once(User.objects.filter(compile_user_rules(User, '', None, role='user', values={}))).query
+        engines = ('django.db.backends.sqlite3', 'django.db.backends.mysql', 'django.db.backends.postgresql')
         for engine in engines:
             with self.subTest(engine=engine):
                 connection = _engine_connection(engine)
@@ -341,8 +263,8 @@ class Issue300ExistsMarkerTest(SimpleTestCase):
         self.assertEqual(list(plain_params), list(raw_params))
         self.assertNotIn('trusts_bind', plain_sql)
 
-
 class Issue300ShapeFallbackTest(TestCase):
+
     def setUp(self):
         bind_once_module._warned = False
 
@@ -368,10 +290,7 @@ class Issue300ShapeFallbackTest(TestCase):
         self.assertIn('list', message)
         self.assertIn(django.get_version(), message)
         self.assertIs(returned, queryset)
-        self.assertEqual(
-            returned.query.sql_with_params(),
-            plain_bound.query.sql_with_params(),
-        )
+        self.assertEqual(returned.query.sql_with_params(), plain_bound.query.sql_with_params())
         self.assertEqual(list(returned), [user])
         self.assertEqual(list(plain_bound), [user])
         self.assertNotIn(outsider, list(returned))
@@ -393,9 +312,7 @@ class Issue300ShapeFallbackTest(TestCase):
         self.assertIn('combined_queries', message)
         self.assertIn(django.get_version(), message)
         self.assertEqual(fallback, plain)
-        for key in (
-            'permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users',
-        ):
+        for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
             self.assertNotIn('trusts_bind', fallback[key]['sql'], key)
             self.assertIn('SELECT %s AS "a"', fallback[key]['sql'], key)
 
@@ -406,7 +323,6 @@ class Issue300ShapeFallbackTest(TestCase):
 
         def boom(*args, **kwargs):
             raise RuntimeError('bind row failed')
-
         with patch('trusts.plan.rewrites._install', boom):
             with self.assertLogs('trusts', level='WARNING') as logs:
                 returned = bind_once(queryset)
@@ -435,10 +351,7 @@ class Issue300ShapeFallbackTest(TestCase):
         self.assertNotIn('SELECT ? AS "a"', sql)
         self.assertNotIn('SELECT %s AS "a"', sql)
         self.assertIn(' AS "user_id") "trusts_bind"', sql)
-        self.assertEqual(
-            sql.count('"auth_user"."id" = ("trusts_bind"."user_id")'), 2, sql,
-        )
-
+        self.assertEqual(sql.count('"auth_user"."id" = ("trusts_bind"."user_id")'), 2, sql)
 
 @contextmanager
 def _model_tables(*model_classes):
@@ -452,26 +365,19 @@ def _model_tables(*model_classes):
             for model in reversed(model_classes):
                 editor.delete_model(model)
 
-
 def _render_parenthesized_depth(walk, seed_sql, seed_params, connection, neighbor=None):
     """The review repro: ``depth < %s`` becomes ``depth < (%s)``."""
-    sql, params = _render_reach_sql(
-        walk, seed_sql, seed_params, connection, neighbor=neighbor,
-    )
-    rewritten, count = re.subn(
-        r'(["`]depth["`]\s*<\s*)%s',
-        r'\1(%s)',
-        sql,
-        count=1,
-    )
+    sql, params = _render_reach_sql(walk, seed_sql, seed_params, connection, neighbor=neighbor)
+    rewritten, count = re.subn('(["`]depth["`]\\s*<\\s*)%s', '\\1(%s)', sql, count=1)
     if count != 1:
         raise AssertionError(sql)
-    return rewritten, params
-
+    return (rewritten, params)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class Issue300UserAnnotationTest(TransactionTestCase):
+
     def test_annotation_named_a_keeps_its_value_and_output_type(self):
+
         class Note(models.Model):
             title = models.CharField(max_length=40)
 
@@ -485,41 +391,20 @@ class Issue300UserAnnotationTest(TransactionTestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-
         with _model_tables(Note, NoteGrant):
             user = User.objects.create_user(username='ann-a-300', password='x')
-            content_type, _created = ContentType.objects.get_or_create(
-                app_label='trusts_tests', model='note',
-            )
-            permission, _created = Permission.objects.get_or_create(
-                content_type=content_type,
-                codename='read_note_a',
-                defaults={'name': 'read_note_a'},
-            )
+            content_type, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='note')
+            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_note_a', defaults={'name': 'read_note_a'})
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
             registry = RegistryFactory()
-            handle = BackendHandle(
-                path='tests.annotation.a',
-                registry=registry,
-            )
-            handle.registry.register_public(
-                trust=NoteGrant,
-                user='user',
-                permission='permission',
-                content='note',
-            )
-            candidates = Note.objects.annotate(
-                a=Value(1, output_field=CharField()),
-            )
+            handle = [registry, setattr(registry, 'path', 'tests.annotation.a')][0]
+            handle.register_public(trust=NoteGrant, user='user', permission='permission', content='note')
+            candidates = Note.objects.annotate(a=Value(1, output_field=CharField()))
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                plain = handle.registry.build_registry().filter_authorized(
-                    candidates, user, permission,
-                )
+                plain = handle.build_registry().filter_authorized(candidates, user, permission)
                 plain_values = list(plain.values_list('a', flat=True))
-            bound = handle.registry.build_registry().filter_authorized(
-                candidates, user, permission,
-            )
+            bound = handle.build_registry().filter_authorized(candidates, user, permission)
             bound_values = list(bound.values_list('a', flat=True))
             self.assertEqual(plain_values, ['1'])
             self.assertEqual(bound_values, ['1'])
@@ -534,9 +419,9 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             self.assertNotIn('SELECT %s AS "a"', sql)
             self.assertIn('trusts_bind', sql)
 
-
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class Issue300AlongRetargetFallbackTest(TransactionTestCase):
+
     def setUp(self):
         bind_once_module._warned = False
 
@@ -544,11 +429,9 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
         bind_once_module._warned = False
 
     def test_parenthesized_depth_cap_falls_back_for_execution_and_lock(self):
+
         class RetargetNode(models.Model):
-            parent = models.ForeignKey(
-                'self', null=True, related_name='children',
-                on_delete=models.CASCADE,
-            )
+            parent = models.ForeignKey('self', null=True, related_name='children', on_delete=models.CASCADE)
 
             class Meta:
                 app_label = 'trusts_tests'
@@ -560,66 +443,32 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-
         with _model_tables(RetargetNode, RetargetGrant):
             user = User.objects.create_user(username='along-cap-300', password='x')
-            content_type, _created = ContentType.objects.get_or_create(
-                app_label='trusts_tests', model='retargetnode',
-            )
-            permission, _created = Permission.objects.get_or_create(
-                content_type=content_type,
-                codename='read_retarget',
-                defaults={'name': 'read_retarget'},
-            )
+            content_type, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='retargetnode')
+            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget', defaults={'name': 'read_retarget'})
             node = RetargetNode.objects.create()
-            RetargetGrant.objects.create(
-                node=node, user=user, permission=permission,
-            )
+            RetargetGrant.objects.create(node=node, user=user, permission=permission)
             registry = RegistryFactory()
-            handle = BackendHandle(
-                path='tests.along.retarget',
-                registry=registry,
-            )
-            handle.registry.register_public(
-                trust=RetargetGrant,
-                user='user',
-                permission='permission',
-                content='node',
-                along=('node__parent', 4),
-            )
+            handle = [registry, setattr(registry, 'path', 'tests.along.retarget')][0]
+            handle.register_public(trust=RetargetGrant, user='user', permission='permission', content='node', along=('node__parent', 4))
             candidates = RetargetNode.objects.order_by('pk')
-            with patch(
-                'trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth,
-            ):
+            with patch('trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                    plain = handle.registry.build_registry().filter_authorized(
-                        candidates, user, permission,
-                    )
+                    plain = handle.build_registry().filter_authorized(candidates, user, permission)
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
-                    plain_has = handle.registry.build_registry().has_permission(
-                        user, node, permission,
-                    )
-                    plain_doc = _load_policy_sql_document(
-                        render_policy_sql_bytes(handles=[handle]),
-                    )
+                    plain_has = handle.build_registry().has_permission(user, node, permission)
+                    plain_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
-                    bound = handle.registry.build_registry().filter_authorized(
-                        candidates, user, permission,
-                    )
+                    bound = handle.build_registry().filter_authorized(candidates, user, permission)
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
-                    bound_has = handle.registry.build_registry().has_permission(
-                        user, node, permission,
-                    )
-                    bound_doc = _load_policy_sql_document(
-                        render_policy_sql_bytes(handles=[handle]),
-                    )
-                    list(handle.registry.build_registry().filter_authorized(
-                        candidates, user, permission,
-                    ))
-                    render_policy_sql_bytes(handles=[handle])
+                    bound_has = handle.build_registry().has_permission(user, node, permission)
+                    bound_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+                    list(handle.build_registry().filter_authorized(candidates, user, permission))
+                    render_policy_sql_bytes(registries=[(handle).build_registry()])
             self.assertEqual(len(logs.records), 1)
             message = logs.records[0].getMessage()
             self.assertIn('TrustsConfigurationError', message)
@@ -631,27 +480,17 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             self.assertIs(bound_has, True)
             self.assertEqual(bound_sql, plain_sql)
             self.assertNotIn('trusts_bind', bound_sql[0])
-            self.assertRegex(bound_sql[0], r'["`]depth["`]\s*<\s*\(%s\)')
+            self.assertRegex(bound_sql[0], '["`]depth["`]\\s*<\\s*\\(%s\\)')
             self.assertEqual(bound_doc, plain_doc)
             for content in bound_doc['backends'][0]['contents']:
-                for key in (
-                    'permitted', 'has_perm', 'get_all_permissions',
-                    'get_permitted_users',
-                ):
+                for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_permitted_users'):
                     self.assertNotIn('trusts_bind', content[key]['sql'], key)
-                    self.assertRegex(
-                        content[key]['sql'],
-                        r'["`]depth["`]\s*<\s*\(%s\)',
-                        key,
-                    )
-
+                    self.assertRegex(content[key]['sql'], '["`]depth["`]\\s*<\\s*\\(%s\\)', key)
 
 class ReviewManager(models.Manager):
-    def get_queryset(self):
-        return super().get_queryset().annotate(
-            review_annotation=Value(1, output_field=IntegerField()),
-        )
 
+    def get_queryset(self):
+        return super().get_queryset().annotate(review_annotation=Value(1, output_field=IntegerField()))
 
 class ReviewDocument(models.Model):
     title = models.CharField(max_length=40)
@@ -661,7 +500,6 @@ class ReviewDocument(models.Model):
     class Meta:
         app_label = 'documents'
 
-
 class ReviewGrant(models.Model):
     document = models.ForeignKey(ReviewDocument, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -670,64 +508,36 @@ class ReviewGrant(models.Model):
     class Meta:
         app_label = 'documents'
 
-
 def _published(user, permission, obj):
     del user, permission
     return obj.published == True
 
-
 class Issue300ManagerAnnotationTest(SimpleTestCase):
+
     def test_value_annotation_stays_in_the_lockfile_for_both_settings(self):
         from trusts.plan.contents import _compile_granted
         from trusts.inspect.snapshot import _content_manager, _role_sentinel
-
         for enabled in (True, False):
             with self.subTest(TRUSTS_SQL_BIND_ONCE=enabled):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=enabled):
-                    handle = BackendHandle(
-                        path='documents.backends.ReviewBackend',
-                        registry=RegistryFactory(),
-                    )
-                    handle.registry.register_public(
-                        trust=ReviewGrant,
-                        user='user',
-                        permission='permission',
-                        content='document',
-                    )
-                    handle.registry.register_permission_condition(
-                        ReviewDocument, 'published', _published,
-                    )
-                    document = _load_policy_sql_document(
-                        render_policy_sql_bytes(handles=[handle]),
-                    )
+                    handle = RegistryFactory(path='documents.backends.ReviewBackend')
+                    handle.register_public(trust=ReviewGrant, user='user', permission='permission', content='document')
+                    handle.register_permission_condition(ReviewDocument, 'published', _published)
+                    document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']
                     named = content['named_filters'][0]
-                    records = handle.registry.build_registry().plan_for(ReviewDocument).records
+                    records = handle.build_registry().plan_for(ReviewDocument).records
                     user = _role_sentinel(records[0], 'user', 'default')
-                    permission = _role_sentinel(
-                        records[0], 'permission', 'default',
-                    )
+                    permission = _role_sentinel(records[0], 'permission', 'default')
                     queryset = _content_manager(ReviewDocument).all()
-                    granted = _compile_granted(
-                        (handle,), queryset, user, permission,
-                        kind='complete', family_registries=(handle,),
-                    )
-                    raw_sql, raw_params = bind_once(
-                        queryset.filter(granted).distinct(),
-                    ).query.sql_with_params()
-                    self._assert_cardinality_and_order(
-                        permitted, raw_params,
-                    )
+                    granted = _compile_granted(built_registries((handle,)), queryset, user, permission, kind='complete', family_registries=built_registries((handle,)))
+                    raw_sql, raw_params = bind_once(queryset.filter(granted).distinct()).query.sql_with_params()
+                    self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))
                     self.assertIn('review_annotation=1', permitted['params'])
-                    self.assertEqual(
-                        permitted['params'].count('review_annotation=1'), 1,
-                    )
-                    named_sql, named_params = (
-                        ReviewDocument.objects.filter(published=True)
-                        .query.sql_with_params()
-                    )
+                    self.assertEqual(permitted['params'].count('review_annotation=1'), 1)
+                    named_sql, named_params = ReviewDocument.objects.filter(published=True).query.sql_with_params()
                     self._assert_cardinality_and_order(named, named_params)
                     self.assertEqual(named_sql.count('%s'), len(named_params))
                     self.assertIn('review_annotation=1', named['params'])
@@ -742,8 +552,6 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                 continue
             self.assertEqual(_presented_const_for(token), raw)
 
-
 def _presented_const_for(token):
     from trusts.inspect.snapshot import _presented_const
-
     return _presented_const(token)

@@ -3,7 +3,7 @@
 Importable before the app registry is ready. Does not import
 ``trusts.backends`` (``Permission`` calls ``apps.check_apps_ready()``)
 or ``trusts.inspect.checks``. ``ready()`` validates ownership.
-The backend class seals on first inquiry.
+Registration closes at ``ready()``. Peers are fixed at that sweep.
 """
 
 import sys
@@ -15,14 +15,10 @@ from django.core.exceptions import ImproperlyConfigured
 
 from trusts._meta_options import _ensure_permission_conditions_option
 from trusts.errors import TrustsConfigurationError
-from trusts.inspect.commands import install_policy_commands
-from trusts.plan.aggregates import compiler_for_class
-from trusts.plan.handles import BackendHandle
 
 _ensure_permission_conditions_option()
 
 recorders = {}
-registries = {}
 catalogs = {}
 
 
@@ -40,42 +36,6 @@ def listed_backend_class(path):
     return obj if isinstance(obj, type) else None
 
 
-class _PathRegistries(dict):
-    """Path store on an implementation owner.
-
-    A write of a path that names a backend class also stores that object
-    at ``registries[cls]``. Deleting the path removes the class key.
-    Production registration writes the class recorder and leaves this
-    dict empty.
-    """
-
-    def __setitem__(self, path, value):
-        dict.__setitem__(self, path, value)
-        cls = listed_backend_class(path)
-        if isinstance(cls, type):
-            registries[cls] = value
-
-    def __delitem__(self, path):
-        dict.__delitem__(self, path)
-        cls = listed_backend_class(path)
-        if isinstance(cls, type):
-            registries.pop(cls, None)
-
-    def clear(self):
-        for path in list(self):
-            del self[path]
-
-    def update(self, other=(), **kwargs):
-        if hasattr(other, 'keys'):
-            pairs = ((key, other[key]) for key in other.keys())
-        else:
-            pairs = other
-        for key, value in pairs:
-            self[key] = value
-        for key, value in kwargs.items():
-            self[key] = value
-
-
 class TrustsImplementationConfig(DjangoAppConfig):
     """Implementation owner. Declares ``trusts_backend_paths``.
 
@@ -86,10 +46,6 @@ class TrustsImplementationConfig(DjangoAppConfig):
     default = False
     trusts_backend_paths = ()
     _authorization_family = 'relationship'
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.registries = _PathRegistries()
 
     def owned_backend_paths(self):
         return tuple(self.trusts_backend_paths)
@@ -119,71 +75,7 @@ class TrustsImplementationConfig(DjangoAppConfig):
     def path_for_backend(self, backend):
         return self.path_for_class(type(backend))
 
-    def configured_backend(self, path=None):
-        """Configured path for ``path``. Not a registration door."""
-        paths = self._configured_trusts_paths()
-        if path is None:
-            if len(paths) != 1:
-                raise TrustsConfigurationError(
-                    'configured_backend() needs an explicit path; got %r'
-                    % (paths,)
-                )
-            path = paths[0]
-        elif path not in self.owned_backend_paths():
-            try:
-                other = implementation_for_path(path, getattr(self, 'apps', None))
-            except TrustsConfigurationError:
-                other = None
-            if other is not None and other is not self:
-                return other.configured_backend(path)
-            raise TrustsConfigurationError(
-                '%r is not a configured Trusts backend' % (path,)
-            )
-        elif path not in paths:
-            raise TrustsConfigurationError(
-                '%r is not a configured Trusts backend' % (path,)
-            )
-        cls = listed_backend_class(path)
-        if path in self.registries:
-            if isinstance(cls, type):
-                compiler_for_class(cls)
-            registry = self.registries[path]
-        else:
-            registry = _sealed_registry(path, cls)
-            compiler_for_class(cls)
-        return BackendHandle(path=path, registry=registry)
-
-    def configured_handles(self):
-        return tuple(
-            self.configured_backend(path)
-            for path in self._configured_trusts_paths()
-        )
-
-    @property
-    def registry(self):
-        paths = self._configured_trusts_paths()
-        if len(paths) != 1:
-            raise TrustsConfigurationError(
-                'registry alias needs exactly one configured Trusts path; '
-                'got %r' % (paths,)
-            )
-        path = paths[0]
-        if path in self.registries:
-            return self.registries[path]
-        return self.configured_backend(path).registry
-
-    @registry.setter
-    def registry(self, value):
-        paths = self._configured_trusts_paths()
-        if len(paths) != 1:
-            raise TrustsConfigurationError(
-                'registry alias needs exactly one configured Trusts path; '
-                'got %r' % (paths,)
-            )
-        self.registries[paths[0]] = value
-
     def ready(self):
-        install_policy_commands()
         _assert_owned(self)
 
 
@@ -242,25 +134,6 @@ def _is_mixin(cls):
     return any(
         base.__name__ == 'TrustModelBackendMixin' for base in cls.__mro__
     )
-
-
-def _sealed_registry(path, cls):
-    if not isinstance(cls, type) or not _is_mixin(cls):
-        raise TrustsConfigurationError(
-            '%r is not a configured Trusts backend' % (path,)
-        )
-    backend = None
-    for candidate in get_backends():
-        if type(candidate) is cls:
-            backend = candidate
-            break
-    if backend is None:
-        raise TrustsConfigurationError(
-            '%r is not a configured Trusts backend' % (path,)
-        )
-    if cls not in registries:
-        backend.ready()
-    return registries[cls]
 
 
 def _assert_owned(config):
@@ -341,37 +214,10 @@ def _listed_mixin_paths():
     return tuple(paths)
 
 
-def configured_implementation_handles(apps_registry=None):
-    """Handles for every installed implementation, owner then path order."""
-    handles = []
-    for config in implementation_configs(apps_registry):
-        handles.extend(config.configured_handles())
-    return tuple(handles)
-
-
-def _handle_authorization_family(handle, apps_registry=None):
-    """Family of the owner of ``handle.path``. Unowned handles are relationship."""
-    path = getattr(handle, 'path', None)
-    if not path:
-        return 'relationship'
-    try:
-        config = implementation_for_path(path, apps_registry)
-    except TrustsConfigurationError:
-        return 'relationship'
-    return getattr(config, '_authorization_family', 'relationship')
-
-
-def _relationship_family_handles(handles, apps_registry=None):
-    """Keep handles whose owned family is ``"relationship"``."""
+def relationship_registries():
+    """Built registries whose catalog family is relationship, publish order."""
     return tuple(
-        handle for handle in handles
-        if _handle_authorization_family(handle, apps_registry) == 'relationship'
-    )
-
-
-def _relationship_implementation_handles(apps_registry=None):
-    """Configured handles that participate in Core list/guard aggregates."""
-    return _relationship_family_handles(
-        configured_implementation_handles(apps_registry),
-        apps_registry,
+        catalog.registry
+        for catalog in catalogs.values()
+        if catalog.family == 'relationship'
     )
