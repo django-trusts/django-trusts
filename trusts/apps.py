@@ -7,9 +7,6 @@ from django.core.exceptions import ImproperlyConfigured
 
 from trusts._meta_options import _ensure_permission_conditions_option
 
-if TYPE_CHECKING:
-    from trusts.plan.handles import BackendHandle
-
 # Hosts load this module before Django constructs their models. Register
 # Meta.permission_conditions here so applications do not import _ir.
 _ensure_permission_conditions_option()
@@ -56,112 +53,56 @@ def _listed_mixin_paths():
     return tuple(paths)
 
 
-class _TrustsRegistryOwner(object):
-    """Path-scoped registry store shared by implementation AppConfigs."""
+def _compiled_for_path(path):
+    """Compiled plan for one exact Trusts backend path."""
+    from django.utils.module_loading import import_string
 
-    def _init_registries(self):
-        # Import here: a module-level compile.factory import loads contenttypes
-        # models before Apps.populate finishes. Backends may be imported
-        # from _configured_trusts_paths; they must not import trusts.models.
-        # Path-scoped store. Empty until ready() / _ensure. Never replace
-        # this dict or an existing value on re-entry.
-        self.registries = {}
+    from trusts.backends import SimpleRegistry, registries
+    from trusts.plan.aggregates import compiler_for_class
 
-    def _configured_trusts_paths(self):
-        raise NotImplementedError
+    cls = import_string(path)
+    registry = registries.get(cls)
+    if registry is None:
+        registry = registries[cls] = SimpleRegistry(cls)
+    build = getattr(registry, 'build_compiled', None)
+    compiled = build() if callable(build) else registry
+    compiled.path = path
+    compiled.compiler = compiler_for_class(cls)
+    return compiled
+
+
+class TrustsImplementationConfig(DjangoAppConfig):
+    """Reusable implementation AppConfig helper. Not installed by core.
+
+    Host implementations (Zero, GH, Windows, or a project app) subclass
+    this and declare ``trusts_backend_paths``. Core ships no AppConfig
+    and no Django app label; do not list ``'trusts'`` in INSTALLED_APPS.
+
+    Protected provisional hooks ``_create_registry``, ``_create_handle``,
+    and ``_authorization_family`` are backend plumbing for first-party
+    extensions. They are not a public family API.
+    """
+
+    default = False
+    trusts_backend_paths = ()
+    # Protected / provisional family discriminator. Not a public API.
+    # Relationship-family configs keep the default; an extension config
+    # may override it. Core list/guard/common-permission aggregates
+    # include only ``"relationship"`` handles.
+    _authorization_family = 'relationship'
+
+    def owned_backend_paths(self):
+        return tuple(self.trusts_backend_paths)
 
     def _apps_instance_ready(self):
-        """True when *this* AppConfig's Apps instance has finished populate.
-
-        Uses ``self.apps.ready``, not Django's global ``apps`` object and
-        not ``apps_ready``. A manually constructed AppConfig with no
-        bound Apps stays unready. During ``Apps.populate`` phase 3,
-        contributor ``ready()`` methods run while this flag is still
-        false.
-        """
+        """True when *this* AppConfig's Apps instance has finished populate."""
         apps_registry = getattr(self, 'apps', None)
         return bool(apps_registry is not None and apps_registry.ready)
 
-    def _create_registry(self, path):
-        """Construct the path-owned registry. Protected / provisional.
-
-        The default is Core ``TrustsRegistry``. An extension config may
-        return a family-owned store. ``path`` is the exact configured
-        backend string; the relationship default does not key on it.
-        """
-        from trusts.compile.factory import TrustsRegistry
-
-        return TrustsRegistry()
-
-    def _create_handle(self, path, registry, compiler) -> BackendHandle:
-        """Construct the path-owned handle. Protected / provisional.
-
-        The default is Core ``BackendHandle``. An extension config may
-        return a family-owned handle. Not a public family API.
-        """
-        from trusts.plan.handles import BackendHandle
-
-        return BackendHandle(path=path, registry=registry, compiler=compiler)
-
-    def _ensure(self, path):
-        if path not in self.registries:
-            self.registries[path] = self._create_registry(path)
-        return self.registries[path]
-
-    def _exposed_registry(self, path):
-        """Return the stored registry for ``path``.
-
-        The stored builder is returned as-is at any readiness stage;
-        each backend question builds a fresh ``Registry`` from its
-        current records, so late registration takes effect on the
-        next question.
-        """
-        return self._ensure(path)
-
-    def configured_backend(self, path=None) -> BackendHandle:
-        """Return the configured backend for one exact Trusts path.
-
-        With one Trusts path, ``path`` may be omitted. With zero or
-        several, omission fails loud. An unconfigured path fails loud.
-        The stored builder is returned as-is; building a query-time
-        registry happens per question, on demand.
-        """
-        from django.utils.module_loading import import_string
-
-        from trusts.errors import TrustsConfigurationError
-        from trusts.plan.aggregates import compiler_for_class
-
-        paths = self._configured_trusts_paths()
-        if path is None:
-            if len(paths) != 1:
-                raise TrustsConfigurationError(
-                    'configured_backend() needs an explicit path; got %r'
-                    % (paths,)
-                )
-            path = paths[0]
-        elif path not in paths:
-            apps_registry = getattr(self, 'apps', None)
-            try:
-                other = implementation_for_path(path, apps_registry)
-            except TrustsConfigurationError:
-                other = None
-            if other is not None and other is not self:
-                return other.configured_backend(path)
-            raise TrustsConfigurationError(
-                '%r is not a configured Trusts backend' % (path,)
-            )
-        cls = import_string(path)
-        return self._create_handle(
-            path,
-            self._exposed_registry(path),
-            compiler_for_class(cls),
-        )
-
-    def configured_handles(self) -> tuple[BackendHandle, ...]:
-        """Handles for every configured Trusts path, in settings order."""
+    def _configured_trusts_paths(self):
+        owned = set(self.owned_backend_paths())
         return tuple(
-            self.configured_backend(path)
-            for path in self._configured_trusts_paths()
+            path for path in _listed_mixin_paths() if path in owned
         )
 
     def path_for_backend(self, backend):
@@ -185,72 +126,6 @@ class _TrustsRegistryOwner(object):
             )
         raise TrustsConfigurationError(
             '%r is listed under multiple paths: %s' % (cls, matches)
-        )
-
-    @property
-    def registry(self):
-        """One-path compatibility alias of ``registries[that_path]``.
-
-        Zero or several configured Trusts paths fail loud. Isolated
-        tests keep constructing their own ``TrustsRegistry()``.
-        """
-        from trusts.errors import TrustsConfigurationError
-
-        paths = self._configured_trusts_paths()
-        if len(paths) != 1:
-            raise TrustsConfigurationError(
-                'registry alias needs exactly one configured Trusts path; '
-                'got %r' % (paths,)
-            )
-        return self._exposed_registry(paths[0])
-
-    @registry.setter
-    def registry(self, value):
-        from trusts.errors import TrustsConfigurationError
-
-        paths = self._configured_trusts_paths()
-        if len(paths) != 1:
-            raise TrustsConfigurationError(
-                'registry alias needs exactly one configured Trusts path; '
-                'got %r' % (paths,)
-            )
-        # Install the replacement as-is at any readiness stage.
-        # Registration on it (by a contributor, or through a
-        # caller-held reference) takes effect on the next build.
-        self.registries[paths[0]] = value
-
-
-class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
-    """Reusable implementation AppConfig helper. Not installed by core.
-
-    Host implementations (Zero, GH, Windows, or a project app) subclass
-    this and declare ``trusts_backend_paths``. Core ships no AppConfig
-    and no Django app label; do not list ``'trusts'`` in INSTALLED_APPS.
-
-    Protected provisional hooks ``_create_registry``, ``_create_handle``,
-    and ``_authorization_family`` are backend plumbing for first-party
-    extensions. They are not a public family API.
-    """
-
-    default = False
-    trusts_backend_paths = ()
-    # Protected / provisional family discriminator. Not a public API.
-    # Relationship-family configs keep the default; an extension config
-    # may override it. Core list/guard/common-permission aggregates
-    # include only ``"relationship"`` handles.
-    _authorization_family = 'relationship'
-
-    def __init__(self, *args, **kwargs):
-        super(TrustsImplementationConfig, self).__init__(*args, **kwargs)
-        self._init_registries()
-
-    def owned_backend_paths(self):
-        return tuple(self.trusts_backend_paths)
-
-    def _configured_trusts_paths(self):
-        owned = set(self.owned_backend_paths())
-        return tuple(
-            path for path in _listed_mixin_paths() if path in owned
         )
 
     def _validate_ownership(self):
@@ -299,35 +174,53 @@ class TrustsImplementationConfig(_TrustsRegistryOwner, DjangoAppConfig):
                     % (path, [self] + others)
                 )
 
+    def freeze_owned_backends(self):
+        """Freeze and compile each owned backend's registry.
+
+        Call at the end of an implementation ``ready()``, after that
+        implementation has registered its grants. This is the startup
+        freeze hook: contributor registrations must happen before it.
+        """
+        from django.utils.module_loading import import_string
+
+        for path in self.owned_backend_paths():
+            import_string(path)().ready()
+
     def ready(self):
         # Discover trusts_policy_sql after models are populated. Core is not
         # an installed app and does not ship trusts/management (#129), so
         # the command attaches here. Subclasses that replace ready() must
         # call super() or the command stays unregistered.
+        from django.utils.module_loading import import_string
+
+        from trusts.backends import SimpleRegistry, registries
         from trusts.inspect.commands import install_policy_commands
 
         install_policy_commands()
         self._validate_ownership()
         for path in self.owned_backend_paths():
-            self._ensure(path)
+            cls = import_string(path)
+            if cls not in registries:
+                registries[cls] = SimpleRegistry(cls)
         from trusts.inspect import checks as _trusts_checks  # noqa: F401
 
 
-def configured_implementation_handles(apps_registry=None):
-    """Handles from every installed implementation, in owner then path order.
+def configured_compiled_plans(apps_registry=None):
+    """Compiled plans from every installed implementation, in order.
 
     Empty when no ``TrustsImplementationConfig`` is installed. This
     listing is not the Core list/guard aggregate: callers that authorize
     a QuerySet, view guard, or common-permission set must use
-    ``_relationship_implementation_handles``.
+    ``_relationship_compiled_plans``.
     """
-    handles = []
+    plans = []
     for config in implementation_configs(apps_registry):
-        handles.extend(config.configured_handles())
-    return tuple(handles)
+        for path in config._configured_trusts_paths():
+            plans.append(_compiled_for_path(path))
+    return tuple(plans)
 
 
-def _handle_authorization_family(handle, apps_registry=None):
+def _plan_authorization_family(handle, apps_registry=None):
     """Family of the implementation that owns ``handle.path``.
 
     Unowned or pathless handles default to ``"relationship"`` so isolated
@@ -345,18 +238,18 @@ def _handle_authorization_family(handle, apps_registry=None):
     return getattr(config, '_authorization_family', 'relationship')
 
 
-def _relationship_family_handles(handles, apps_registry=None):
+def _relationship_family_plans(handles, apps_registry=None):
     """Keep handles whose owned family is ``"relationship"``."""
     return tuple(
         handle for handle in handles
-        if _handle_authorization_family(handle, apps_registry) == 'relationship'
+        if _plan_authorization_family(handle, apps_registry) == 'relationship'
     )
 
 
-def _relationship_implementation_handles(apps_registry=None):
+def _relationship_compiled_plans(apps_registry=None):
     """Configured handles that participate in Core list/guard aggregates."""
-    return _relationship_family_handles(
-        configured_implementation_handles(apps_registry),
+    return _relationship_family_plans(
+        configured_compiled_plans(apps_registry),
         apps_registry,
     )
 

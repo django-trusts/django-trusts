@@ -5,20 +5,43 @@
 are ``trusts.zero.backends``. ``trusts.core_backends`` is gone.
 """
 
+from collections.abc import Callable
+from typing import TypeVar
+
+from django.conf import settings
 from django.contrib.auth.models import Permission
+from django.utils.module_loading import import_string
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts.errors import PermissionConditionError
+from trusts.compile.factory import PublicRegistration, TrustsCompiler
+from trusts.compile.resolution import _resolve_path
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import (
     evaluate_registered_expression,
     permission_has_condition,
 )
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.plan.aggregates import _compiler_applies
+from trusts.plan.aggregates import _compiler_applies, compiler_for_class
 from trusts import utils
 
 
 registries = {}
+
+T = TypeVar('T', bound=Model)
+
+
+def _listed_paths(cls):
+    paths = []
+    for path in (getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()):
+        if not isinstance(path, str):
+            continue
+        try:
+            resolved = import_string(path)
+        except Exception:
+            continue
+        if resolved is cls:
+            paths.append(path)
+    return tuple(paths)
 
 def _permission_binding(perm, model):
     """Unevaluated Permission pk for ``perm`` (instance or dotted code).
@@ -60,54 +83,55 @@ class TrustModelBackendMixin(object):
 
     def __init__(self):
         cls = type(self)
-        if cls in registries:
-            return registries[self]
-        registries[cls] = SimpleRegistry()
+        if cls not in registries:
+            registries[cls] = SimpleRegistry(cls)
 
-    def get_registry():
+    def get_registry(self):
+        cls = type(self)
+        registry = registries.get(cls)
+        if registry is None:
+            registry = registries[cls] = SimpleRegistry(cls)
         return registry
 
-    def ready():
-        cls = type(self)
-        registry = registries[cls]
-
+    def ready(self, visitor=None):
+        registry = self.get_registry()
         registry.freeze()
+        if visitor is not None:
+            return registry.walk(visitor)
+        return registry.build_compiled()
 
-        registry.walk(query_compiler.get_visitor())
+    def _own_compiled(self):
+        compiled = self.get_registry().build_compiled()
+        compiled.compiler = compiler_for_class(type(self))
+        paths = _listed_paths(type(self))
+        if paths:
+            compiled.path = paths[0]
+        return compiled
 
-    def _trusts_config(self):
-        from trusts.apps import implementation_for_class
-
-        return implementation_for_class(type(self), required=True)
-
-    def _own_handle(self):
-        config = self._trusts_config()
-        return config.configured_backend(config.path_for_backend(self))
-
-    def _built_registry(self, handle=None):
-        """Built registry for ``handle``, or ``None`` (factory signal).
+    def _built_compiled(self, handle=None):
+        """Compiled plan for ``handle``, or ``None`` (factory signal).
 
         ``None`` is translated by every caller to ``False`` / ``set()``
         / ``None``-predicate and never returned as a Django result.
         """
-        handle = self._own_handle() if handle is None else handle
-        build = getattr(handle, 'build_registry', None)
+        handle = self._own_compiled() if handle is None else handle
+        build = getattr(handle, 'build_compiled', None)
         if callable(build):
             return build()
         registry = getattr(handle, 'registry', None)
-        build = getattr(registry, 'build_registry', None)
+        build = getattr(registry, 'build_compiled', None)
         return build() if callable(build) else registry
 
     def _sponsor_registries(self, own_handle):
         """Built registries of other configured paths (sponsors)."""
-        from trusts.apps import _relationship_implementation_handles
+        from trusts.apps import _relationship_compiled_plans
 
         own_path = getattr(own_handle, 'path', None)
         sponsors = []
-        for handle in _relationship_implementation_handles():
+        for handle in _relationship_compiled_plans():
             if own_path is not None and getattr(handle, 'path', None) == own_path:
                 continue
-            built = self._built_registry(handle)
+            built = self._built_compiled(handle)
             if built is not None:
                 sponsors.append(built)
         return tuple(sponsors)
@@ -118,8 +142,8 @@ class TrustModelBackendMixin(object):
         Routes through ``QueryCompiler.applies``. Inapplicable is
         ``False`` at zero SQL, before ``:name`` overlay.
         """
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
+        handle = self._own_compiled() if handle is None else handle
+        registry = self._built_compiled(handle) if registry is None else registry
         if registry is None:
             return False
         plan = registry.plan_for(obj, user=user_obj)
@@ -133,8 +157,8 @@ class TrustModelBackendMixin(object):
 
     def _path_permissions(self, user_obj, obj, *, kind,
                           skipped=(), handle=None, registry=None):
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
+        handle = self._own_compiled() if handle is None else handle
+        registry = self._built_compiled(handle) if registry is None else registry
         if registry is None:
             return set()
         qs = registry.permissions_for(
@@ -156,19 +180,19 @@ class TrustModelBackendMixin(object):
             )
         return bind_checked_user(
             user_obj, skip_flags=skip_flags,
-            registry=lambda: self._own_handle().registry,
+            registry=lambda: self._built_compiled(),
         )
 
     def _listed_permissions(self, user_obj, obj, skip_flags, *, kind,
                             cache=False):
-        # Inquiry first (lazy _own_handle inside it) so a denied or
+        # Inquiry first (lazy _own_compiled inside it) so a denied or
         # object-less inquiry returns set() without requiring a
         # configured handle, exactly as before Pass 4.
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return set()
-        handle = self._own_handle()
-        registry = self._built_registry(handle)
+        handle = self._own_compiled()
+        registry = self._built_compiled(handle)
         if cache:
             self._ensure_perm_cache(user_obj)
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
@@ -225,7 +249,7 @@ class TrustModelBackendMixin(object):
         raises.
         """
         if registry is None:
-            registry = self._built_registry()
+            registry = self._built_compiled()
         if registry is None:
             return None
         return getattr(registry, 'condition_lookup', None)
@@ -264,8 +288,8 @@ class TrustModelBackendMixin(object):
 
     def _collection_has_perm(self, user_obj, perm, obj, extra_q=None, *,
                              skipped=(), handle=None, registry=None):
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
+        handle = self._own_compiled() if handle is None else handle
+        registry = self._built_compiled(handle) if registry is None else registry
         if registry is None:
             return False
         binding = _permission_binding(perm, obj.model)
@@ -278,8 +302,8 @@ class TrustModelBackendMixin(object):
 
     def _instance_has_perm(self, user_obj, perm, obj, extra_q=None, *,
                            skipped=(), handle=None, registry=None):
-        handle = self._own_handle() if handle is None else handle
-        registry = self._built_registry(handle) if registry is None else registry
+        handle = self._own_compiled() if handle is None else handle
+        registry = self._built_compiled(handle) if registry is None else registry
         if registry is None:
             return False
         binding = _permission_binding(perm, obj.__class__)
@@ -300,7 +324,7 @@ class TrustModelBackendMixin(object):
         parameter on that registered user condition.
         Django's ``user.has_perm`` does not forward these keywords.
         """
-        # Inquiry first (lazy _own_handle inside it) so a denied or
+        # Inquiry first (lazy _own_compiled inside it) so a denied or
         # object-less inquiry returns False without requiring a
         # configured handle, exactly as before Pass 4.
         inquiry = self._skip_inquiry(user_obj, skip_flags)
@@ -310,8 +334,8 @@ class TrustModelBackendMixin(object):
 
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
-        handle = self._own_handle()
-        registry = self._built_registry(handle)
+        handle = self._own_compiled()
+        registry = self._built_compiled(handle)
 
         if not self._own_plan_applies(
             obj, user_obj, handle=handle, registry=registry,
@@ -363,8 +387,8 @@ class TrustModelBackendMixin(object):
         eligible grants outside that walk. ``skipped`` is the bound
         ``skip_<name>`` parameter map.
         """
-        handle = self._own_handle()
-        registry = self._built_registry(handle)
+        handle = self._own_compiled()
+        registry = self._built_compiled(handle)
         if registry is None:
             return None
         return registry.permitted_users_predicate(
@@ -374,51 +398,214 @@ class TrustModelBackendMixin(object):
         )
 
 class SimpleRegistry(object):
-    user_conditions = {}
-    user_overrides = {}
-    principles = {}
-    delegates = {}
-    named_filters = {}
+    """The one registry for one backend class.
 
-    frozen = false
+    ``DocumentBackend().get_registry()`` returns the identical object
+    for every instance of that backend class (module-level
+    ``registries`` keyed by backend class). This class itself holds
+    the raw registrations: ``register()`` validates symbolically via
+    ``TrustsCompiler.build_public_registration`` and stores the raw
+    kwargs dict per content model in ``principles`` / ``delegates``;
+    lowering into records happens on freeze / first inquiry, when the
+    stored shapes are replayed into the compiler. The lowered
+    answering object is ``CompiledPlan``, never a registry.
+    """
 
-    def register(trust=trust, user=user, permission=permission, content=content, delegate=delegate, sponsor=sponsor, condition=condition, **kwargs):
-        if frozen:
-            raise Error("forzen already")
+    def __init__(self, backend_class=None):
+        self._backend_class = backend_class
+        self.principles = {}
+        self.delegates = {}
+        self.named_filters = {}
+        self.user_conditions = {}
+        self.user_overrides = {}
+        self.frozen = False
+        self._compiler = TrustsCompiler()
+        self._shapes = []
+        self._lowered = 0
 
-        # TODO: implement me
-
-        # TODO is not exclusive
-
-        # TODO: validate content, get cotent's model class as key
-        content_model = None   # TODO: get content's models
-
-        if True or False: # TODO: check args it rules for principle vs. delegate, if princples
-            # TODO: make sure args has all expected ones and none of the delegate ones
-
-            # walk the models, make sure path or lambda is valid, raise otherwise
-
-            if self.principles[content_model] is None:
-                self.principles[content_model] = []
-            self.principles[content_model] = {k: kwargs[k] for k in ("trust", "user", "permission", "content", "condition") if k in kwargs}
+    # -- registration (public before private) -------------------------
+    def register(
+        self, *, trust: type[T], user: str | Callable[[T], object] | None = None,
+        permission: str | Callable[[T], object] | None = None,
+        content: str | Callable[[T], object],
+        group: str | Callable[[T], object] | None = None,
+        delegate: str | Callable[[T], object] | None = None,
+        sponsor: str | Callable[[T], object] | None = None,
+        condition: (
+            Callable[[T], object] | Callable[[T, object], object] | None
+        ) = None,
+        along=None,
+    ) -> PublicRegistration:
+        if self.frozen:
+            raise TrustsConfigurationError('registry is frozen already')
+        shape = self._compiler.build_public_registration(
+            trust=trust, user=user, permission=permission, content=content,
+            group=group, delegate=delegate, sponsor=sponsor,
+            condition=condition, along=along,
+        )
+        content_model = _resolve_path(
+            trust, shape.content._path, 'content', trailing_reverse=True,
+        )[1]
+        raw_all = {
+            'trust': trust, 'user': user, 'permission': permission,
+            'content': content, 'group': group, 'delegate': delegate,
+            'sponsor': sponsor, 'condition': condition, 'along': along,
+        }
+        if shape.delegate is not None:
+            raw = {
+                k: raw_all[k]
+                for k in ("trust", "sponsor", "delegate", "content", "condition")
+                if raw_all[k] is not None
+            }
+            if along is not None:
+                raw['along'] = along
+            self.delegates.setdefault(content_model, []).append(raw)
         else:
-            # TODO: make sure args has all expected ones and none of the principles ones
+            raw = {
+                k: raw_all[k]
+                for k in ("trust", "user", "permission", "content", "condition")
+                if raw_all[k] is not None
+            }
+            if group is not None:
+                raw['group'] = group
+            if along is not None:
+                raw['along'] = along
+            self.principles.setdefault(content_model, []).append(raw)
+        self._shapes.append(shape)
+        return shape
 
-            # walk the models, make sure path or lambda is valid, raise otherwise
+    def add_named_filter(self, model, code, predicate):
+        if self.frozen:
+            raise TrustsConfigurationError('registry is frozen already')
+        result = self._compiler.register_permission_condition(
+            model, code, predicate,
+        )
+        self.named_filters.setdefault(model, {})[code] = predicate
+        return result
 
-            if self.delegates[content_model] is None:
-                self.delegates[content_model] = []
-            self.delegates[content_model] = {k: kwargs[k] for k in ("trust", "sponsor", "delegate", "content", "condition") if k in kwargs}
+    def set_user_condition(self, name, expr, on='*'):
+        if self.frozen:
+            raise TrustsConfigurationError('registry is frozen already')
+        if self._shapes:
+            raise TrustsConfigurationError(
+                'Set user conditions and the user override before register().'
+            )
+        result = self._compiler.set_user_condition(name, expr, on=on)
+        if expr is None:
+            self.user_conditions.pop(name, None)
+        else:
+            self.user_conditions[name] = result
+        return result
 
-    # TODO: implements a) set_user_conditions / overrides, b) aadd_named_filters()
+    def set_user_override(self, name, expr, on='user'):
+        if self.frozen:
+            raise TrustsConfigurationError('registry is frozen already')
+        if self._shapes:
+            raise TrustsConfigurationError(
+                'Set user conditions and the user override before register().'
+            )
+        result = self._compiler.set_user_override(name, expr, on=on)
+        if expr is None:
+            self.user_overrides.pop(name, None)
+        else:
+            self.user_overrides[name] = result
+        return result
 
-    def freeze():
-        frozen = True
+    def freeze(self):
+        self.frozen = True
+        return self.build_compiled()
 
-    def walk(visitor):
-        # TODO: call visitor.visit_user ...
+    def walk(self, visitor, sponsors=()):
+        return self.build_compiled().walk_questions(visitor, sponsors=sponsors)
 
-        for princple in principles:
-            visitor.vist_princple(**dict(princple))
+    # -- lowering / answering -------------------------------------------
+    def build_compiled(self):
+        for shape in self._shapes[self._lowered:]:
+            if shape.delegate is not None:
+                self._compiler.register_delegation(
+                    content=shape.content, delegate=shape.delegate,
+                    sponsor=shape.sponsor, condition=shape.condition,
+                    along=shape.along,
+                )
+            elif shape.group is not None:
+                self._compiler.register(
+                    content=shape.content, user=shape.user,
+                    group=shape.group, condition=shape.condition,
+                    along=shape.along,
+                )
+            else:
+                self._compiler.register(
+                    content=shape.content, user=shape.user,
+                    permission=shape.permission, condition=shape.condition,
+                    along=shape.along,
+                )
+            self._lowered += 1
+        compiled = self._compiler.build_compiled()
+        if self._backend_class is not None:
+            compiled.compiler = compiler_for_class(self._backend_class)                 if _has_query_compiler(self._backend_class) else compiled.compiler
+            paths = _listed_paths(self._backend_class)
+            if paths:
+                compiled.path = paths[0]
+        return compiled
 
-        # TODO: do the same for delegates, then named_filters
+    @property
+    def records(self):
+        return self.build_compiled().records
+
+    @property
+    def delegations(self):
+        return self.build_compiled().delegations
+
+    @property
+    def conditions(self):
+        return self._compiler.conditions
+
+    @property
+    def condition_lookup(self):
+        return self._compiler.condition_lookup
+
+    def set_condition_lookup(self, lookup):
+        return self._compiler.set_condition_lookup(lookup)
+
+    def plan_for(self, content, *, user=None, permission=None):
+        return self.build_compiled().plan_for(
+            content, user=user, permission=permission,
+        )
+
+    def has_permission(self, user, content, permission, **skip_flags):
+        return self.build_compiled().has_permission(
+            user, content, permission, **skip_flags,
+        )
+
+    def permissions_for(self, user, content, **skip_flags):
+        return self.build_compiled().permissions_for(
+            user, content, **skip_flags,
+        )
+
+    def filter_authorized(self, queryset, user, permission, **skip_flags):
+        return self.build_compiled().filter_authorized(
+            queryset, user, permission, **skip_flags,
+        )
+
+    def compile_registered_condition_q(self, model, perm, user):
+        return self._compiler.compile_registered_condition_q(model, perm, user)
+
+    def get_permission_condition_record(self, model, cond_code):
+        return self._compiler.get_permission_condition_record(model, cond_code)
+
+    def iter_permission_conditions(self):
+        return self._compiler.iter_permission_conditions()
+
+    def _stored_user_conditions(self):
+        return self._compiler._stored_user_conditions()
+
+    def _known_skip_names(self):
+        return self._compiler._known_skip_names()
+
+    @property
+    def _user_override(self):
+        return self._compiler._user_override
+
+
+def _has_query_compiler(cls):
+    return getattr(cls, 'query_compiler', None) is not None

@@ -10,7 +10,7 @@ is not a compatibility shim for django-trusts-zero: Zero imports
 
 
 class TrustsConfigurationError(Exception):
-    """Malformed or unsupported ``TrustsRegistry`` registration."""
+    """Malformed or unsupported ``TrustsCompiler`` registration."""
 
 
 class TrustsCompilerError(TrustsConfigurationError):

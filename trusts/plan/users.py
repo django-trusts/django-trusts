@@ -53,13 +53,13 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     # Call-time: tests patch this on ``trusts.apps``. A top-level import
     # would snapshot the real function. Sibling handles are not injected
     # into the registry, so this lookup stays the patch point.
-    from trusts.apps import _relationship_implementation_handles
+    from trusts.apps import _relationship_compiled_plans
 
     _require_saved_content(content)
     _reject_permission_shape(perm)
     inquiry = bind_checked_user(
         None, skip_flags=skip_flags,
-        handles=_relationship_implementation_handles(),
+        handles=_relationship_compiled_plans(),
         require_user=False,
     )
     skipped = inquiry.values
@@ -142,7 +142,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
     # registry answers directly. Both expose plan_for.
     plan_for = getattr(registry, 'plan_for', None)
     if not callable(plan_for):
-        build = getattr(registry, 'build_registry', None)
+        build = getattr(registry, 'build_compiled', None)
         registry = build() if callable(build) else registry
         plan_for = registry.plan_for
     plan = plan_for(content)
@@ -196,12 +196,12 @@ def trusts_mixin_predicate(backend, content, perm, *,
                            skipped=()):
     """Complete-path reverse predicate for one ``TrustModelBackendMixin``."""
     # Same call-time patch point as ``compile_permitted_users``.
-    from trusts.apps import _relationship_implementation_handles
+    from trusts.apps import _relationship_compiled_plans
 
-    handle = backend._own_handle()
+    handle = backend._own_compiled()
     return permitted_users_predicate_for_registry(
-        handle.registry, content, perm,
-        sponsor_handles=_relationship_implementation_handles(),
+        handle, content, perm,
+        sponsor_handles=_relationship_compiled_plans(),
         skipped=skipped, backend=backend,
     )
 
@@ -653,7 +653,7 @@ def _trusts_eligibility_q(model):
 def _assert_registration_user_model(backend, content, user_model):
     if not isinstance(backend, TrustModelBackendMixin):
         return
-    plan = backend._own_handle().registry.plan_for(content)
+    plan = backend._own_compiled().plan_for(content)
     expected = user_model._meta.concrete_model
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
@@ -684,7 +684,7 @@ def _assert_registration_user_model(backend, content, user_model):
 def _registration_models(backend, content):
     if not isinstance(backend, TrustModelBackendMixin):
         return []
-    plan = backend._own_handle().registry.plan_for(content)
+    plan = backend._own_compiled().plan_for(content)
     models = []
     for record in plan.records:
         models.extend((

@@ -69,10 +69,10 @@ def _coerce_pk(model, raw):
 def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
     from django.apps import apps as django_apps
-    from trusts.apps import _relationship_implementation_handles
+    from trusts.apps import _relationship_compiled_plans
     from trusts.plan.relations import bind_checked_user
 
-    handles = _relationship_implementation_handles()
+    handles = _relationship_compiled_plans()
 
     user = getattr(request, 'user', None)
     raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None

@@ -1,7 +1,7 @@
 """Private condition IR and compiler (issue #4 V1 / #142 Stage B).
 
 This module is not an application-facing import. Register named
-conditions as builders on ``BackendHandle.add_named_filter``.
+conditions as builders on ``SimpleRegistry.add_named_filter``.
 ``from trusts.conditions import Expr`` must fail.
 
 A callable argument to condition registration is a **builder**: Core
@@ -17,8 +17,8 @@ registration path issues zero SQL (symbolic refs plus ``_meta``).
 Prebuilt ``Expr`` trees are not accepted at register.
 
 Permission-condition records live on an instantiable
-``ConditionRegistry`` (also exposed on each ``TrustsRegistry`` and
-``BackendHandle.add_named_filter``). There is no
+``ConditionRegistry`` (also exposed on each ``TrustsCompiler`` and
+``SimpleRegistry.add_named_filter``). There is no
 process-global store: each implementation handle owns its own records
 so owners cannot share or overwrite each other.
 
@@ -1192,10 +1192,10 @@ class ConditionRegistry(object):
 class RegistryConditionLookup(ConditionLookup):
     """Generic ``ConditionLookup`` over a ``ConditionRegistry``.
 
-    ``TrustsRegistry`` self-binds this adapter at construct. Applications
+    ``TrustsCompiler`` self-binds this adapter at construct. Applications
     register builders; they do not import or construct this type.
     Accepts a ``ConditionRegistry`` or any object with a ``conditions``
-    store (a ``TrustsRegistry``). Core never imports Zero nouns.
+    store (a ``TrustsCompiler``). Core never imports Zero nouns.
     """
 
     def __init__(self, registry):
@@ -1205,7 +1205,7 @@ class RegistryConditionLookup(ConditionLookup):
         if not callable(record_for) or not callable(compile_q):
             raise TypeError(
                 'RegistryConditionLookup requires a ConditionRegistry '
-                'or TrustsRegistry, not %r.' % (type(registry).__name__,)
+                'or TrustsCompiler, not %r.' % (type(registry).__name__,)
             )
         self.conditions = conditions
 

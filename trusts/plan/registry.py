@@ -1,4 +1,4 @@
-"""Registry constructed from already-lowered values.
+"""CompiledPlan constructed from already-lowered values.
 
 Records, delegations, the named-filter condition store, stored user
 conditions, and the user override are passed in as data, all at once.
@@ -11,6 +11,7 @@ __all__ = []
 
 from dataclasses import dataclass
 from functools import partial
+from types import SimpleNamespace
 
 from django.db.models import QuerySet
 
@@ -18,7 +19,6 @@ from trusts.commons import (
     _concrete_model, _content_model, _require_instance, _resolved_hop,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import (
     PlanQueryCompiler,
     RelationPlan,
@@ -67,8 +67,8 @@ class Question(object):
     question: object
 
 
-class Registry(object):
-    """Query-time registry built whole from lowered values.
+class CompiledPlan(object):
+    """Query-time compiled plan built whole from lowered values.
 
     ``records`` and ``delegations`` are the lowered rows.
     ``conditions`` is the named-filter store (shared, not copied);
@@ -82,8 +82,10 @@ class Registry(object):
     def __init__(
         self, *, records, delegations, conditions=None,
         user_conditions=None, user_override=None,
-        condition_lookup=_CONDITION_LOOKUP_UNSET,
+        condition_lookup=_CONDITION_LOOKUP_UNSET, path='', compiler=None,
     ):
+        self.path = path
+        self.compiler = compiler if compiler is not None else PlanQueryCompiler()
         self.records = tuple(records)
         self.delegations = tuple(delegations)
         if conditions is None:
@@ -108,7 +110,7 @@ class Registry(object):
         self._override_fragments = {}
 
     def plan_for(self, content, *, user=None, permission=None):
-        """Same terminal selection as ``TrustsRegistry.plan_for``.
+        """Same terminal selection as ``TrustsCompiler.plan_for``.
 
         Lowered rows and rule data come from construction. ``content``,
         ``user``, and ``permission`` are the runtime parameters.
@@ -155,12 +157,16 @@ class Registry(object):
         )
 
     # -- compatibility surface used by handle-based callers -------------
-    # ``TrustsRegistry`` (the builder) exposes these names; built
+    # ``TrustsCompiler`` (the builder) exposes these names; built
     # registries must too, because Zero and the snapshot read them off
     # ``handle.registry`` / a built registry interchangeably.
 
-    def build_registry(self):
-        """Return ``self``: a built registry is already query-time data."""
+    def build_compiled(self):
+        """Return ``self``: a compiled plan is already query-time data."""
+        return self
+
+    @property
+    def registry(self):
         return self
 
     @property
@@ -189,16 +195,16 @@ class Registry(object):
     # -- question helpers ------------------------------------------------
 
     def _handle(self, compiler=None):
-        return BackendHandle(
-            path='', registry=self,
-            compiler=compiler if compiler is not None else PlanQueryCompiler(),
+        return SimpleNamespace(
+            path=self.path, registry=self,
+            compiler=compiler if compiler is not None else self.compiler,
         )
 
     @staticmethod
     def _as_registry(value):
-        if value is None or isinstance(value, Registry):
+        if value is None or isinstance(value, CompiledPlan):
             return value
-        build = getattr(value, 'build_registry', None)
+        build = getattr(value, 'build_compiled', None)
         return build() if callable(build) else value
 
     def _sponsor_handles(self, sponsors, compiler=None):
@@ -209,12 +215,12 @@ class Registry(object):
             if registry is None or id(registry) in seen:
                 continue
             seen.add(id(registry))
-            if isinstance(registry, Registry):
+            if isinstance(registry, CompiledPlan):
                 handles.append(registry._handle(compiler=compiler))
             else:
                 # Duck-typed registry (fake in tests): keep it as the
                 # handle's registry so its plan_for/records are used.
-                handles.append(BackendHandle(
+                handles.append(SimpleNamespace(
                     path='', registry=registry,
                     compiler=compiler if compiler is not None else PlanQueryCompiler(),
                 ))

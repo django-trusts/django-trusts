@@ -1,11 +1,11 @@
 """Registration marshaling and the builder-half registry.
 
-``TrustsRegistry`` collects ``register`` and ``set_*`` calls and stores
+``TrustsCompiler`` collects ``register`` and ``set_*`` calls and stores
 lowered rows. Its ``build_*`` methods return the lowered shapes without
 storing them; the ``register*`` methods own duplicate and
-rule checks and append those shapes. ``build_registry`` builds the
-query-time ``Registry`` from stored values. ``trusts.core`` re-exports
-``TrustsRegistry``. This module does not import ``trusts.core``.
+rule checks and append those shapes. ``build_compiled`` builds the
+query-time ``CompiledPlan`` from stored values. ``trusts.core`` re-exports
+``TrustsCompiler``. This module does not import ``trusts.core``.
 """
 
 __all__ = []
@@ -62,7 +62,7 @@ from trusts.compile.resolution import (
     _resolve_permission_path,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.registry import Registry
+from trusts.plan.registry import CompiledPlan
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
@@ -971,7 +971,7 @@ def _bind_public_along(root, along):
     path, bound = along
     return Along(_public_ref(root, path, 'along'), bound)
 
-class TrustsRegistry(object):
+class TrustsCompiler(object):
     """Instantiable registry of permission-bearing relation declarations.
 
     Create a new instance per isolated context. There is no process-global
@@ -981,10 +981,10 @@ class TrustsRegistry(object):
     models, or when the same bindings use a different closed condition.
 
         Registration stays open for the life of the instance:
-        ``build_registry()`` builds a fresh ``Registry`` from the
+        ``build_compiled()`` builds a fresh ``CompiledPlan`` from the
         current records on each call, so registering after a build
         takes effect on the next build. A standalone
-        ``TrustsRegistry()`` never inspects Django readiness.
+        ``TrustsCompiler()`` never inspects Django readiness.
     """
 
     def __init__(self):
@@ -1672,11 +1672,7 @@ class TrustsRegistry(object):
         self, *, trust, user=None, permission=None, content, group=None,
         delegate=None, sponsor=None, condition=None, along=None,
     ):
-        """Public ``BackendHandle.register`` body, on the registry it stores.
-
-        The handle forwards here so ``trusts.plan.handles`` does not import
-        this module. Callers keep using ``BackendHandle.register``.
-        """
+        """Public register body, stored on this compiler."""
         shape = self.build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,
@@ -1734,14 +1730,14 @@ class TrustsRegistry(object):
             chosen.append(record)
         return tuple(chosen)
 
-    def build_registry(self):
-        """Build a query-time ``Registry`` from stored values.
+    def build_compiled(self):
+        """Build a query-time ``CompiledPlan`` from stored values.
 
         Records, delegations, the shared condition store, stored user
         conditions, the user override, and the bound condition lookup
         are passed as data, all at once. No builders are injected.
         """
-        return Registry(
+        return CompiledPlan(
             records=self.records,
             delegations=self.delegations,
             conditions=self.conditions,
@@ -1757,7 +1753,7 @@ class TrustsRegistry(object):
         Optional ``user`` / ``permission`` instances keep only registrations
         whose inferred terminals match those models. Construction is lazy.
         """
-        return self.build_registry().plan_for(
+        return self.build_compiled().plan_for(
             content, user=user, permission=permission,
         )
 
@@ -1767,27 +1763,20 @@ class TrustsRegistry(object):
         Delegates to the built registry, so delegations/sponsors use
         production semantics rather than the old plan-only trio.
         """
-        return self.build_registry().permissions_for(
+        return self.build_compiled().permissions_for(
             user, content, **skip_flags,
         )
 
     def has_permission(self, user, content, permission, **skip_flags):
         """Whether ``permission`` is granted to ``user`` on ``content``."""
-        return self.build_registry().has_permission(
+        return self.build_compiled().has_permission(
             user, content, permission, **skip_flags,
         )
 
     def filter_authorized(self, queryset, user, permission, **skip_flags):
         """Lazy queryset of rows ``user`` holds ``permission`` on."""
-        return self.build_registry().filter_authorized(
+        return self.build_compiled().filter_authorized(
             queryset, user, permission, **skip_flags,
         )
 
 
-# ``BackendHandle.register`` annotates these names. ``plan.handles`` does
-# not import this module, so ``get_type_hints`` resolves them from the
-# function globals. Compile may import plan; plan does not import compile.
-from trusts.plan.handles import BackendHandle as _BackendHandle
-
-_BackendHandle.register.__globals__['RegisteredRelation'] = RegisteredRelation
-_BackendHandle.register.__globals__['RegisteredDelegation'] = RegisteredDelegation

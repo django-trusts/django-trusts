@@ -29,16 +29,13 @@ def assert_register_signature(register) -> None:
 
     Ordinary roles stay one-argument path callables. Delegated registration
     adds ``delegate`` and ``sponsor``, a second ``condition`` callable, and
-    the ``RegisteredRelation | RegisteredDelegation`` return.
+    the ``PublicRegistration`` return.
     """
     import inspect
     from collections.abc import Callable as AbcCallable
     from typing import TypeVar, get_args, get_origin, get_type_hints
 
-    from trusts.compile.factory import (
-        RegisteredDelegation,
-        RegisteredRelation,
-    )
+    from trusts.compile.factory import PublicRegistration
 
     signature = inspect.signature(register)
     param_names = [name for name in signature.parameters if name != 'self']
@@ -120,10 +117,10 @@ def assert_register_signature(register) -> None:
             '[TypeVar, object] + object' % (shapes,)
         )
     return_hint = hints.get('return')
-    if set(get_args(return_hint)) != {RegisteredRelation, RegisteredDelegation}:
+    if return_hint is not PublicRegistration:
         raise SystemExit(
             'register return annotation is %r, expected '
-            'RegisteredRelation | RegisteredDelegation' % return_hint
+            'PublicRegistration' % return_hint
         )
 
 
@@ -179,25 +176,22 @@ def main() -> int:
     import trusts
     from trusts.apps import (
         TrustsImplementationConfig,
-        configured_implementation_handles,
+        configured_compiled_plans,
         implementation_configs,
         implementation_for_class,
         implementation_for_path,
     )
     from trusts.backends import TrustModelBackendMixin
-    from trusts.compile.factory import (
-        RegisteredDelegation,
-        RegisteredRelation,
-    )
+    from trusts.compile.factory import PublicRegistration
     from trusts.plan.contents import filter_by_permitted_content
+    from trusts.backends import SimpleRegistry
     from trusts.core import (
-    BackendHandle,
-    ConditionLookup,
-    Ref,
-    RelationPlan,
-    TrustsRegistry,
-    filter_authorized_scopes,
-)
+        ConditionLookup,
+        Ref,
+        RelationPlan,
+        TrustsCompiler,
+        filter_authorized_scopes,
+    )
     from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
         PermissionConditionError,
@@ -216,11 +210,11 @@ def main() -> int:
     typed_marker = Path(trusts.__file__).resolve().parent / 'py.typed'
     if not typed_marker.is_file():
         raise SystemExit('installed wheel missing trusts/py.typed')
-    if hasattr(BackendHandle, 'register_relationship'):
+    if hasattr(SimpleRegistry, 'register_relationship'):
         raise SystemExit('library wheel still exposes register_relationship')
-    assert_register_signature(BackendHandle.register)
+    assert_register_signature(SimpleRegistry.register)
     print('py.typed present')
-    print('register contextual typing', BackendHandle.register)
+    print('register contextual typing', SimpleRegistry.register)
 
     from django.apps import apps as django_apps
 
@@ -313,16 +307,15 @@ def main() -> int:
     print('filter_by_permitted_content', filter_by_permitted_content)
     print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
-    standalone = TrustsRegistry()
+    standalone = TrustsCompiler()
     bound = standalone.condition_lookup
     if bound is None:
-        raise SystemExit('TrustsRegistry did not self-bind condition lookup')
+        raise SystemExit('TrustsCompiler did not self-bind condition lookup')
     if bound.conditions is not standalone.conditions:
         raise SystemExit('self-bound lookup does not wrap registry.conditions')
     print('condition lookup self-bound')
     print(
-        'trusts.core', TrustsRegistry, Ref, RegisteredRelation,
-        RegisteredDelegation, RelationPlan,
+        'trusts.core', TrustsCompiler, Ref, RelationPlan,
     )
     print('permission_has_condition', permission_has_condition)
     print('permission_condition_code', permission_condition_code)

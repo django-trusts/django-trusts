@@ -29,7 +29,7 @@ class AuthorizedQuerySet(QuerySet):
     """
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
-        from trusts.apps import _relationship_implementation_handles
+        from trusts.apps import _relationship_compiled_plans
         from trusts.errors import TrustsConfigurationError
         from trusts.plan.contents import granted
         from trusts.plan.relations import bind_checked_user
@@ -39,7 +39,7 @@ class AuthorizedQuerySet(QuerySet):
                 'permission must be a model instance, not %r.' % (permission,)
             )
 
-        handles = _relationship_implementation_handles()
+        handles = _relationship_compiled_plans()
         inquiry = bind_checked_user(
             user, skip_flags=skip_flags, handles=handles)
         if user is None:
@@ -98,14 +98,14 @@ class PermittedQuerySetMixin:
         active-superuser shortcut.
         """
         from trusts._permitted import permitted_queryset
-        from trusts.apps import _relationship_implementation_handles
+        from trusts.apps import _relationship_compiled_plans
 
         return permitted_queryset(
             self,
             permission,
             user,
             conditions,
-            handles=_relationship_implementation_handles(),
+            handles=_relationship_compiled_plans(),
             **skip_flags,
         )
 

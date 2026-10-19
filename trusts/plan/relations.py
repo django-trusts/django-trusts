@@ -111,7 +111,7 @@ def candidate_queryset(content):
 class ConditionLookup(object):
     """Duck-typed ``:condition`` overlay protocol. Not a registry or store.
 
-    ``TrustsRegistry`` self-binds a private store adapter at construct.
+    ``TrustsCompiler`` self-binds a private store adapter at construct.
     ``set_condition_lookup`` remains for tests and explicit unbind.
     Core never imports a Zero ``Content`` registry to evaluate
     conditions. Unbound lookup on an instance-only caller is a no-op.

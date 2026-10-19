@@ -179,12 +179,14 @@ def _covered_content_models(config):
         return covered
     for path in paths:
         try:
-            handle = config.configured_backend(path)
+            from trusts.apps import _compiled_for_path
+
+            handle = _compiled_for_path(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
-        for record in handle.registry.records:
+        for record in handle.records:
             covered.add(record.content_model)
-        for record in handle.registry.delegations:
+        for record in handle.delegations:
             covered.add(record.content_model)
     return covered
 
@@ -302,14 +304,16 @@ def _iter_handle_permission_conditions(config):
         return
     for path in paths:
         try:
-            handle = config.configured_backend(path)
+            from trusts.apps import _compiled_for_path
+
+            handle = _compiled_for_path(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
-        iter_fn = getattr(handle.registry, 'iter_permission_conditions', None)
+        iter_fn = getattr(handle, 'iter_permission_conditions', None)
         if callable(iter_fn):
             yield from iter_fn()
             continue
-        conditions = getattr(handle.registry, 'conditions', None)
+        conditions = getattr(handle, 'conditions', None)
         if conditions is not None:
             yield from conditions.iter_permission_conditions()
 
@@ -317,7 +321,7 @@ def _iter_handle_permission_conditions(config):
 def iter_live_permission_conditions(apps_registry=None):
     """Yield ``(model, cond_code, record)`` from configured registries.
 
-    Implementation-owned ``TrustsRegistry`` condition stores are the
+    Implementation-owned ``TrustsCompiler`` condition stores are the
     source of truth. Every configured owner/registry record is
     preserved: the same model/code on two owners is two records, and
     both are validated. The only skip is the transitional Zero
@@ -372,36 +376,31 @@ def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
 def _authorization_check_handles():
     """Relationship-family handles for E008. Isolated configs may omit helpers."""
     from trusts.apps import (
-        _relationship_family_handles,
-        configured_implementation_handles,
+        _relationship_family_plans,
+        configured_compiled_plans,
         implementation_configs,
     )
     from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 
     try:
-        return _relationship_family_handles(tuple(configured_implementation_handles()))
+        return _relationship_family_plans(tuple(configured_compiled_plans()))
     except AttributeError:
         pass
 
     handles = []
     for config in implementation_configs():
-        getter = getattr(config, 'configured_handles', None)
-        if callable(getter):
-            try:
-                handles.extend(getter())
-                continue
-            except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
-                pass
         try:
             paths = config._configured_trusts_paths()
         except (TrustsConfigurationError, AttributeError):
             continue
         for path in paths:
             try:
-                handles.append(config.configured_backend(path))
+                from trusts.apps import _compiled_for_path
+
+                handles.append(_compiled_for_path(path))
             except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
                 continue
-    return _relationship_family_handles(tuple(handles))
+    return _relationship_family_plans(tuple(handles))
 
 
 @django_checks.register()
@@ -506,7 +505,9 @@ def _live_along_records(config):
         return found
     for path in paths:
         try:
-            handle = config.configured_backend(path)
+            from trusts.apps import _compiled_for_path
+
+            handle = _compiled_for_path(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
         for record in handle.registry.records:
@@ -525,7 +526,7 @@ def check_along_renderer(app_configs, **kwargs):
 
     Honors Django's ``databases`` argument exactly. ``None`` or empty
     opens no connections, executes no SQL, and is not an all-clear.
-    Isolated ``TrustsRegistry()`` instances are not scanned.
+    Isolated ``TrustsCompiler()`` instances are not scanned.
     """
     databases = kwargs.get('databases')
     if not databases:

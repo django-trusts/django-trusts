@@ -181,9 +181,9 @@ def render_policy_sql_bytes(*, alias=None, handles=None):
     """
     resolved = resolve_policy_database(alias)
     if handles is None:
-        from trusts.apps import configured_implementation_handles
+        from trusts.apps import configured_compiled_plans
 
-        handles = configured_implementation_handles()
+        handles = configured_compiled_plans()
     document = _build_document(tuple(handles), resolved)
     return _dump_document(document)
 
@@ -248,7 +248,7 @@ _REGISTRY_MISSING = object()
 def _built_registry(value):
     """Built registry for a handle or registry, or ``None``.
 
-    A handle builds through its own ``build_registry()`` when it has
+    A handle builds through its own ``build_compiled()`` when it has
     one; a registry itself builds (or is returned) the same way.
     ``None`` is preserved so the caller keeps its present-but-broken
     error, rather than silently skipping an unconfigured backend.
@@ -259,15 +259,15 @@ def _built_registry(value):
     if registry is not _REGISTRY_MISSING:
         if registry is None:
             return None
-        # Only a handle's own build_registry() decides: BackendHandle
-        # builds a builder, returns a built registry as-is, and passes
-        # a duck registry without build_registry through untouched.
-        # A handle with no build_registry (duck views in tests) keeps
+        # Only a handle's own build_compiled() decides:
+        # builds a builder, returns a built plan as-is, and passes
+        # a duck registry without build_compiled through untouched.
+        # A handle with no build_compiled (duck views in tests) keeps
         # its registry object exactly, including attribute overrides
-        # a delegated build_registry() on that registry would lose.
-        build_handle = getattr(value, 'build_registry', None)
+        # a delegated build_compiled() on that registry would lose.
+        build_handle = getattr(value, 'build_compiled', None)
         return build_handle() if callable(build_handle) else registry
-    build = getattr(value, 'build_registry', None)
+    build = getattr(value, 'build_compiled', None)
     return build() if callable(build) else value
 
 
@@ -276,7 +276,7 @@ def _render_handle(handle, cache=None):
 
     Reuses ``handle`` when its registry is already the built one, so
     identity and compiler are preserved exactly; otherwise returns a
-    ``BackendHandle`` with the same path/compiler and the built
+    a namespace with the same path/compiler and the built
     registry. A ``None`` registry is returned untouched so the
     caller's missing-registry error still fires.
     """
@@ -290,13 +290,14 @@ def _render_handle(handle, cache=None):
     elif getattr(handle, 'registry', _REGISTRY_MISSING) is _REGISTRY_MISSING and not hasattr(handle, 'path'):
         rendered = handle
     else:
-        from trusts.plan.handles import BackendHandle
+        from types import SimpleNamespace
+
         from trusts.plan.relations import PlanQueryCompiler
 
         compiler = getattr(handle, 'compiler', None)
         if compiler is None:
             compiler = PlanQueryCompiler()
-        rendered = BackendHandle(
+        rendered = SimpleNamespace(
             path=getattr(handle, 'path', '') or '',
             registry=built,
             compiler=compiler,
@@ -655,9 +656,9 @@ def _project_backend(handle, alias, handles):
             'Policy SQL render handle is missing a configured path: %r.'
             % (path,)
         )
-    from trusts.apps import _handle_authorization_family
+    from trusts.apps import _plan_authorization_family
 
-    family = _handle_authorization_family(handle)
+    family = _plan_authorization_family(handle)
     if family != 'relationship':
         raise TrustsConfigurationError(
             'Policy SQL render only serializes family %r; backend path '

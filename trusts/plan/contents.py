@@ -58,9 +58,9 @@ def _plan_for_permission(handle, candidates, user, permission):
 
 
 def _relationship_handles(handles):
-    from trusts.apps import _relationship_family_handles
+    from trusts.apps import _relationship_family_plans
 
-    return _relationship_family_handles(handles)
+    return _relationship_family_plans(handles)
 
 
 def _apply_checked_user(grant, plan, user, values, permission, content_identity,
@@ -139,7 +139,7 @@ def granted(handles, candidates, user, permission, *, kind='complete',
     fallback.
 
     Mixin instance / QuerySet evaluation uses ``_compile_granted`` on
-    ``self._own_handle()`` so an extension family can still project
+    the backend's compiled plan so an extension family can still project
     through the mixin.
 
     ``permission`` may be a permission instance or an unevaluated lookup
@@ -447,8 +447,8 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
             % (queryset,)
         )
     if handles is None:
-        from trusts.apps import _relationship_implementation_handles
-        handles = _relationship_implementation_handles()
+        from trusts.apps import _relationship_compiled_plans
+        handles = _relationship_compiled_plans()
     else:
         handles = _relationship_handles(handles)
     user = _require_instance(user, 'user')

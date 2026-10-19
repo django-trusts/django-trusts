@@ -219,7 +219,7 @@ def common_permissions(handles, candidates, user, *, kind='complete',
     may use the undeclared fallback. Uses nested ``OuterRef`` so the permission
     identity is the outer permission row, not the candidate.
     Applicability is ``compiler.applies(plan)``. Mixin enumeration uses
-    ``_compile_common_permissions`` on ``self._own_handle()``.
+    ``_compile_common_permissions`` on the backend's compiled plan.
     Only relationship-family handles participate.
     ``RelationPlan.common_permissions`` is not this function.
     ``skip_<name>`` is a bound parameter on the registered rules.
