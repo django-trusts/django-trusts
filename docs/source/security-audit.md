@@ -75,7 +75,7 @@ its skip name.
 
 ### Ordinary relationship authorization
 
-Call `backend.register()` or `backend.register_delegation()` from the owning
+Call `registry.register()` or `registry.register_delegation()` from the owning
 implementation's `AppConfig.ready()` before the registry freezes.
 
 The public registration signature is
@@ -84,7 +84,7 @@ An ordinary registration supplies `user=` and exactly one of `permission=` or
 `group=`. The required `trust=` model is the root of its non-empty paths:
 
 ```python
-backend.register(
+registry.register(
     trust=DocumentPermission,
     user="user",
     permission="permission",
@@ -362,7 +362,7 @@ A named filter is registered against the protected model during application
 setup:
 
 ```python
-backend.add_named_filter(
+registry.add_named_filter(
     Document,
     "non_confidential",
     predicate=lambda u, p, o: o.confidential != True,
@@ -455,7 +455,6 @@ cannot be safely authorized not to become grants silently. This includes:
 - incompatible `to_field` identities;
 - unknown named filters;
 - unsupported condition expressions;
-- frozen-registry mutation;
 - unsupported database renderers; and
 - invalid request primary-key coercion.
 

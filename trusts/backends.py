@@ -18,6 +18,8 @@ from trusts.plan.aggregates import _compiler_applies
 from trusts import utils
 
 
+registry = SimpleRegistry()
+
 def _permission_binding(perm, model):
     """Unevaluated Permission pk for ``perm`` (instance or dotted code).
 
@@ -55,6 +57,9 @@ class TrustModelBackendMixin(object):
         else:
             klass = obj.__class__
         return klass
+
+    def get_registry():
+        return registry
 
     def _trusts_config(self):
         from trusts.apps import implementation_for_class
@@ -353,3 +358,37 @@ class TrustModelBackendMixin(object):
             sponsors=self._sponsor_registries(handle),
             skipped=skipped, backend=self,
         )
+
+class SimpleRegistry(object):
+    principles = {}
+    delegates = {}
+    named_filters = {}
+    user_conditions = {}
+    user_overrides = {}
+
+    def register(trust=trust, user=user, permission=permission, content=content, delegate=delegate, sponsor=sponsor, condition=condition):
+        # TODO: implement me
+
+        # TODO is not exclusive
+
+        # TODO: validate content, get cotent's model class as key
+        content_model = None   # TODO: get content's models
+
+        if True or False: # TODO: check args it rules for principle vs. delegate, if princples
+            # TODO: make sure args has all expected ones and none of the delegate ones
+
+            # walk the models, make sure path or lambda is valid, raise otherwise
+
+            if self.principles[content_model] is None:
+                self.principles[content_model] = []
+            self.principles[content_model].append((content, trust, user, condition, ))
+        else:
+            # TODO: make sure args has all expected ones and none of the principles ones
+
+            # walk the models, make sure path or lambda is valid, raise otherwise
+
+            if self.delegates[content_model] is None:
+                self.delegates[content_model] = []
+            self.delegates.append((content, trust, sponsor, delegate, condition, ))
+
+    # TODO: implements a) set_user_conditions / overrides, b) aadd_named_filters()
