@@ -23,6 +23,7 @@ _ensure_permission_conditions_option()
 
 recorders = {}
 registries = {}
+catalogs = {}
 
 
 def listed_backend_class(path):

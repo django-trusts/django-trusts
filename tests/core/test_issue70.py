@@ -7,7 +7,10 @@ from django.apps import apps
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import isolate_live_registry, live_config, override_apps_ready
+from tests.apps import (
+    isolate_live_registry, live_config, override_apps_ready,
+    restore_isolated_catalogs,
+)
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document, DocumentGrant
@@ -26,6 +29,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.saved_sentinel = self.contributor._document_grant_registry_id
 
     def tearDown(self):
+        restore_isolated_catalogs(self.contributor)
         self.contributor.registries.clear()
         self.contributor.registries.update(self.saved_registries)
         self.contributor._document_grant_registry_id = self.saved_sentinel

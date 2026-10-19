@@ -1,8 +1,8 @@
 """#89: build-on-demand / projection lifecycle on standalone and live registries.
 
-Registration stays open: a backend question builds a fresh registry
-from the builder's current records, so registering after a build (or
-after a first live read) takes effect on the next build / question.
+A catalog builds once. A factory stored in ``registries[cls]`` is not
+rebuilt into the next question. Registration on that factory after the
+build does not change the answer.
 
 Missing-declaration E003 on Content/Junction stays on Zero ``tests/legacy/``.
 """
@@ -15,7 +15,9 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from tests.apps import install_writable_registry, live_config, override_apps_ready
+from tests.apps import (
+    install_writable_registry, live_config, override_apps_ready, publish_catalog,
+)
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
@@ -252,18 +254,28 @@ class SentinelAfterFirstReadTest(
 class BackendQuestionAfterLateRegistrationTest(
     KernelHostRequiredMixin, TestCase,
 ):
-    """A backend question after late registration sees the new record."""
+    """A question uses the catalog built from the swapped factory once."""
 
     def setUp(self):
         super().setUp()
+        from trusts.apps import catalogs
+
         self.config = implementation_for_path(DOCUMENT)
         self.saved_registries = dict(self.config.registries)
+        self.saved_catalog = catalogs.get(DocumentBackend)
         self.isolated = RegistryFactory()
         self.config.registries[DOCUMENT] = self.isolated
+        publish_catalog(DOCUMENT, self.isolated)
 
     def tearDown(self):
+        from trusts.apps import catalogs
+
         self.config.registries.clear()
         self.config.registries.update(self.saved_registries)
+        if self.saved_catalog is None:
+            catalogs.pop(DocumentBackend, None)
+        else:
+            catalogs[DocumentBackend] = self.saved_catalog
         super().tearDown()
 
     def test_backend_question_after_late_registration_sees_it(self):
@@ -280,14 +292,17 @@ class BackendQuestionAfterLateRegistrationTest(
         DocumentGrant.objects.create(
             document=document, user=user, permission=permission,
         )
+        from trusts.apps import catalogs
+
         backend = DocumentBackend()
-        # Empty builder: the first question builds an empty registry.
+        # The first question builds the empty factory. That snapshot sticks.
         self.assertFalse(
             backend.has_perm(user, 'myapp.change_document', document),
         )
-        # Late registration on the same builder: next question sees it.
         _contribute_document(self.isolated)
-        self.assertTrue(
+        self.assertEqual(len(self.isolated.records), 1)
+        self.assertEqual(len(catalogs[DocumentBackend].registry.records), 0)
+        self.assertFalse(
             backend.has_perm(user, 'myapp.change_document', document),
         )
 

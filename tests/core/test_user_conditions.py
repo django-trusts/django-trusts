@@ -1443,6 +1443,9 @@ def _restore_document_registry(config, original, sentinel):
         from trusts.backends import registries
 
         registries[DocumentBackend] = original
+    from tests.apps import restore_isolated_catalogs
+
+    restore_isolated_catalogs(config)
     config._document_grant_registry_id = sentinel
 
 

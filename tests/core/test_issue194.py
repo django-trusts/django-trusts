@@ -200,9 +200,25 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         )
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         self.fold_owner.registries[MIXIN] = self.fold_registry
+        from tests.apps import publish_catalog
+        from tests.backends import MixinOnlyBackend
+        from trusts.apps import catalogs
+
+        self._saved_fold_catalog = catalogs.get(MixinOnlyBackend)
+        publish_catalog(MIXIN, self.fold_registry, backend_cls=MixinOnlyBackend)
         self.fold_owner.apps._configs = [self.rel_owner, self.fold_owner]
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()
+
+    def tearDown(self):
+        from tests.backends import MixinOnlyBackend
+        from trusts.apps import catalogs
+
+        if self._saved_fold_catalog is None:
+            catalogs.pop(MixinOnlyBackend, None)
+        else:
+            catalogs[MixinOnlyBackend] = self._saved_fold_catalog
+        super().tearDown()
 
     def _family_patches(self):
         return (

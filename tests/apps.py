@@ -201,19 +201,45 @@ def override_apps_ready(ready, apps_registry=None):
 _MISSING = object()
 
 
+def _catalog_for_handle(backend_cls, handle):
+    """Catalog in front of ``handle.registry``.
+
+    A factory is built on the next inquiry. An already-built registry
+    is used as it stands. A factory left only in ``registries[cls]``
+    is not rebuilt into an answer.
+    """
+    from trusts.compile.catalogs import Catalog
+
+    registry = handle.registry
+    kwargs = {
+        'cls': backend_cls,
+        'path': getattr(handle, 'path', '') or '',
+        'family': getattr(backend_cls, 'family', 'relationship'),
+        'compiler': getattr(backend_cls, 'query_compiler', None),
+    }
+    if callable(getattr(registry, 'build_registry', None)):
+        kwargs['factory'] = registry
+    else:
+        kwargs['registry'] = registry
+    return Catalog(**kwargs)
+
+
 @contextmanager
 def bound_handle(backend, handle):
     """Point ``backend``'s class at ``handle.registry`` for one block.
 
-    Inquiries read ``registries[cls]``. The registry carries its
-    compiler. Tests that used to patch ``_own_handle`` install the
-    same object here, then put it back.
+    Inquiries read the class catalog. The registry carries its
+    compiler from construction. Tests that used to patch
+    ``_own_handle`` install the same object here, then put it back.
     """
+    from trusts.apps import catalogs
     from trusts.backends import registries
 
     cls = type(backend)
     previous = registries.get(cls, _MISSING)
+    previous_catalog = catalogs.get(cls, _MISSING)
     registries[cls] = handle.registry
+    catalogs[cls] = _catalog_for_handle(cls, handle)
     try:
         yield
     finally:
@@ -221,16 +247,49 @@ def bound_handle(backend, handle):
             registries.pop(cls, None)
         else:
             registries[cls] = previous
+        if previous_catalog is _MISSING:
+            catalogs.pop(cls, None)
+        else:
+            catalogs[cls] = previous_catalog
 
 
 def install_class_handle(backend_cls, handle):
     """Class-level form of ``bound_handle`` for backends Django constructs."""
+    from trusts.apps import catalogs
     from trusts.backends import registries
 
     if handle is None:
         registries.pop(backend_cls, None)
+        catalogs.pop(backend_cls, None)
         return
     registries[backend_cls] = handle.registry
+    catalogs[backend_cls] = _catalog_for_handle(backend_cls, handle)
+
+
+def publish_catalog(path, registry, backend_cls=None):
+    """Install a catalog for ``registry`` so inquiries read it.
+
+    Writing ``registries[cls]`` alone does not redirect an inquiry.
+    """
+    from trusts.apps import catalogs, listed_backend_class
+    from trusts.compile.catalogs import Catalog
+
+    cls = backend_cls if backend_cls is not None else listed_backend_class(path)
+    if not isinstance(cls, type):
+        return None
+    kwargs = {
+        'cls': cls,
+        'path': path or '',
+        'family': getattr(cls, 'family', 'relationship'),
+        'compiler': getattr(cls, 'query_compiler', None),
+    }
+    if callable(getattr(registry, 'build_registry', None)):
+        kwargs['factory'] = registry
+    else:
+        kwargs['registry'] = registry
+    catalog = Catalog(**kwargs)
+    catalogs[cls] = catalog
+    return catalog
 
 
 def isolate_live_registry(config, registry, path=None):
@@ -244,7 +303,32 @@ def isolate_live_registry(config, registry, path=None):
         paths = config._configured_trusts_paths()
         path = paths[0]
     config.registries[path] = registry
+    from trusts.apps import catalogs, listed_backend_class
+
+    cls = listed_backend_class(path)
+    if isinstance(cls, type):
+        stack = getattr(config, '_isolated_catalogs', None)
+        if stack is None:
+            stack = []
+            config._isolated_catalogs = stack
+        stack.append((cls, catalogs.get(cls, _MISSING)))
+        publish_catalog(path, registry, backend_cls=cls)
     return registry
+
+
+def restore_isolated_catalogs(config):
+    """Put back catalogs displaced by ``isolate_live_registry``."""
+    from trusts.apps import catalogs
+
+    stack = getattr(config, '_isolated_catalogs', None)
+    if not stack:
+        return
+    for cls, previous in reversed(stack):
+        if previous is _MISSING:
+            catalogs.pop(cls, None)
+        else:
+            catalogs[cls] = previous
+    config._isolated_catalogs = []
 
 
 def install_writable_registry(config, path, contribute=None):
