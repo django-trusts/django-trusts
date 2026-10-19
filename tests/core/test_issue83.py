@@ -1145,13 +1145,6 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
             self.Row.objects.create(
                 folder=self.folder_b, content=payload, alt_content=self.pay_a,
             )
-        self.direct = RegistryFactory()
-        j = Ref(self.FolderGrant)
-        self.direct.register(
-            content=j.folder.rows.content,
-            user=j.user,
-            permission=j.permission,
-        )
         self.group = RegistryFactory()
         k = Ref(self.FolderGroupGrant)
         self.group.register(
@@ -1159,7 +1152,13 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
             user=k.user,
             permission=k.permission,
         )
-        self.direct.compiler = _SplitCompiler(self.group)
+        self.direct = RegistryFactory(compiler=_SplitCompiler(self.group))
+        j = Ref(self.FolderGrant)
+        self.direct.register(
+            content=j.folder.rows.content,
+            user=j.user,
+            permission=j.permission,
+        )
         self.handle = BackendHandle(
             path='tests.s5.split',
             registry=self.direct,

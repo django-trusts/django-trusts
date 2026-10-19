@@ -19,6 +19,7 @@ from trusts.commons import (
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import (
+    PlanQueryCompiler,
     RelationPlan,
     _candidate_model,
     answering_compiler,
@@ -86,7 +87,8 @@ class Registry(object):
     ):
         self.records = tuple(records)
         self.delegations = tuple(delegations)
-        self.compiler = compiler
+        # Born with a compiler. Callers do not assign one later.
+        self._compiler = PlanQueryCompiler() if compiler is None else compiler
         self.path = path
         self.family = family
         if conditions is None:
@@ -109,6 +111,11 @@ class Registry(object):
         self.condition_lookup = condition_lookup
         self._rule_fragments = {}
         self._override_fragments = {}
+
+    @property
+    def compiler(self):
+        """Compiler bound at construction."""
+        return self._compiler
 
     def plan_for(self, content, *, user=None, permission=None):
         """Same terminal selection as ``TrustsRegistry.plan_for``.
@@ -243,10 +250,7 @@ class Registry(object):
 
         ``content`` is one instance (instance check) or a QuerySet
         (every row must hold). Delegations via sponsors are included.
-        With no compiler stored, an ordinary instance uses the plan's
-        own projection so non-PK permission targets correlate exactly.
-        A stored compiler, a QuerySet, an overlay, or a delegation
-        uses that compiler's SQL.
+        The compiler bound at construction compiles the grant.
         """
         from django.db.models import Model
 
@@ -270,14 +274,6 @@ class Registry(object):
         content = _require_instance(content, 'content')
         if denied:
             return False
-        plan = self.plan_for(
-            content, user=user,
-            permission=permission if isinstance(permission, Model) else None,
-        )
-        if self.compiler is None and extra_q is None and not plan.delegations:
-            return plan.has_permission(
-                user, content, permission, skipped=values,
-            )
         matched = instance_match(
             self, content, user, permission,
             kind='complete', extra_q=extra_q,
@@ -301,11 +297,6 @@ class Registry(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        plan = self.plan_for(queryset, user=user, permission=permission)
-        if self.compiler is None and not plan.delegations:
-            return plan.filter_content(
-                queryset, user, permission, skipped=values,
-            )
         granted_q = _compile_granted(
             (self,), queryset, user, permission,
             kind='complete',
@@ -345,10 +336,7 @@ class Registry(object):
 
         ``kind='group'`` is the group variant used by
         ``get_group_permissions``; ``'complete'`` is ``get_all_permissions``.
-        A single instance with no delegations and no stored compiler
-        uses the plan's own projection (exact non-PK target
-        correlation). QuerySet candidates, group kind, delegations,
-        and a stored compiler use the common-permissions aggregate.
+        The compiler bound at construction compiles the grant.
         """
         from trusts.plan.aggregates import _compile_common_permissions
 
@@ -359,12 +347,6 @@ class Registry(object):
             if not (plan.records or plan.delegations) or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
-        if (
-            self.compiler is None and kind == 'complete'
-            and not isinstance(content, QuerySet)
-            and not plan.delegations
-        ):
-            return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
             (self,), content, user, kind=kind,
             sponsor_handles=self._with_sponsors(sponsors),

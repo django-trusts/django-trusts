@@ -67,7 +67,7 @@ from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
 from trusts.plan.registry import Registry
-from trusts.plan.relations import bind_checked_user
+from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
 from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
@@ -1013,7 +1013,7 @@ class RegistryFactory(object):
         ``TrustsRegistry()`` never inspects Django readiness.
     """
 
-    def __init__(self):
+    def __init__(self, *, compiler=None, path='', family='relationship'):
         # Stay lazy: importing this module must not load the condition IR.
         from trusts.plan.conditions import (
             ConditionRegistry,
@@ -1031,9 +1031,14 @@ class RegistryFactory(object):
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
-        self.compiler = None
-        self.path = ''
-        self.family = 'relationship'
+        self._compiler = PlanQueryCompiler() if compiler is None else compiler
+        self.path = path
+        self.family = family
+
+    @property
+    def compiler(self):
+        """Compiler handed to every registry this factory builds."""
+        return self._compiler
 
     @property
     def condition_lookup(self):
@@ -1788,9 +1793,9 @@ class RegistryFactory(object):
             user_conditions=self._stored_user_conditions(),
             user_override=self._user_override,
             condition_lookup=self._condition_lookup,
-            compiler=getattr(self, 'compiler', None),
-            path=getattr(self, 'path', '') or '',
-            family=getattr(self, 'family', 'relationship'),
+            compiler=self.compiler,
+            path=self.path or '',
+            family=self.family,
         )
 
     def plan_for(self, content, *, user=None, permission=None):

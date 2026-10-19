@@ -112,10 +112,11 @@ class TrustModelBackendMixin(object):
         if recorder.frozen and cls in registries:
             return registries[cls]
         recorder.freeze()
-        factory = RegistryFactory()
-        factory.compiler = self.query_compiler
-        factory.path = _canonical_path(cls)
-        factory.family = getattr(cls, 'family', 'relationship')
+        factory = RegistryFactory(
+            compiler=self.query_compiler,
+            path=_canonical_path(cls),
+            family=getattr(cls, 'family', 'relationship'),
+        )
         recorder.play(factory.get_record_adapter())
         built = factory.build_registry()
         registries[cls] = built
@@ -235,22 +236,18 @@ class TrustModelBackendMixin(object):
         )
 
     def _answered_registry(self):
-        """Built registry. A stored factory is rebuilt so late rows show."""
+        """Built registry for this class. Seals on first read.
+
+        A stored factory is built so late rows show. Its compiler was
+        bound when the factory was constructed.
+        """
         cls = type(self)
         stored = registries.get(cls)
         if stored is None:
-            stored = self.ready()
-        build = getattr(stored, 'build_registry', None)
-        built = build() if callable(build) else stored
-        compiler = getattr(self, 'query_compiler', None)
-        if (
-            built is not None
-            and compiler is not None
-            and getattr(built, 'compiler', None) is None
-            and hasattr(built, 'compiler')
-        ):
-            built.compiler = compiler
-        return built
+            return self.ready()
+        if isinstance(stored, RegistryFactory):
+            return stored.build_registry()
+        return stored
 
     def _sponsor_registries(self):
         """Built registries of other relationship-family paths."""

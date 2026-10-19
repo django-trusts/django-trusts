@@ -279,8 +279,9 @@ class CompilerProtocolTest(
 
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        registry = RegistryFactory()
-        registry.compiler = RaisingCompilerBackend.query_compiler
+        registry = RegistryFactory(
+            compiler=RaisingCompilerBackend.query_compiler,
+        )
         handle = BackendHandle(path=RAISING, registry=registry)
         _contribute_document(handle.registry)
         with self.assertRaises(RuntimeError) as ctx:
@@ -375,8 +376,9 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
         live = live_config()
-        registry = RegistryFactory()
-        registry.compiler = RaisingCompilerBackend.query_compiler
+        registry = RegistryFactory(
+            compiler=RaisingCompilerBackend.query_compiler,
+        )
         handle = BackendHandle(path=RAISING, registry=registry)
         _contribute_document(handle.registry)
         with self.assertRaises(RuntimeError) as ctx:

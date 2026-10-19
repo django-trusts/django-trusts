@@ -811,7 +811,6 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handle(self, registry):
-        registry.compiler = self.compiler
         return BackendHandle(
             path='issue18-group',
             registry=registry,
