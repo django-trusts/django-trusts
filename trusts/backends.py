@@ -19,14 +19,9 @@ from trusts.apps import (
     recorders,
     registries,
 )
-from trusts.compile.factory import RegistryFactory
 from trusts.errors import (
     PermissionConditionError,
     TrustsConfigurationError,
-)
-from trusts.plan.conditions import (
-    evaluate_registered_expression,
-    permission_has_condition,
 )
 import trusts.inspect.checks  # noqa: F401
 from trusts.plan.handles import registry_of
@@ -68,7 +63,6 @@ def _canonical_path(cls):
 class TrustModelBackendMixin(object):
     """Object-permission backend. One recorder and one built registry per class."""
 
-    query_compiler = PlanQueryCompiler()
     family = 'relationship'
 
     @staticmethod
@@ -97,11 +91,15 @@ class TrustModelBackendMixin(object):
             self.recorder = recorders[cls]
         return recorders[cls]
 
-    def ready(self):
-        """Freeze the class recorder and publish ``registries[cls]``.
+
+    def ready(self) -> None:
+        self._get_or_create_catalog()
+
+    def _get_or_create_catalog() -> Catalog:
+        """Freeze the class recorder and publish ``catalogs[cls]``.
 
         Idempotent once this class is sealed. A later replacement of
-        ``registries[cls]`` (test isolation) is left in place.
+        ``catalogs[cls]`` (test isolation) is left in place.
         """
         cls = type(self)
         recorder = recorders.get(cls)
@@ -109,18 +107,16 @@ class TrustModelBackendMixin(object):
             recorder = Recorder()
             recorders[cls] = recorder
             self.recorder = recorder
-        if recorder.frozen and cls in registries:
-            return registries[cls]
+        if recorder.frozen and cls in catalogs:
+            return catalogs[cls]
         recorder.freeze()
-        factory = RegistryFactory(
-            compiler=self.query_compiler,
-            path=_canonical_path(cls),
-            family=getattr(cls, 'family', 'relationship'),
-        )
-        recorder.play(factory.get_record_adapter())
-        built = factory.build_registry()
-        registries[cls] = built
-        return built
+
+        catalog = Catalog(path=_canonical_path(cls), family=getattr(cls, 'family', 'relationship'))
+        recorder.play(catalog.get_record_adapter())
+        catalog.build()
+        catalogs[cls] = catalog
+
+        return catalog
 
     @property
     def registry(self):
@@ -141,30 +137,6 @@ class TrustModelBackendMixin(object):
             user_obj, obj, skip_flags, kind='complete', cache=True,
         )
 
-    def permission_condition_met(self, record, user_obj, perm, obj):
-        if record.expr is None:
-            model = obj.model if isinstance(obj, QuerySet) else getattr(obj, '__class__', obj)
-            raise PermissionConditionError(
-                'Permission condition on %s is unbound.'
-                % getattr(getattr(model, '_meta', None), 'label', model)
-            )
-        if isinstance(obj, QuerySet):
-            objs = obj.all()
-            model = obj.model
-        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
-            objs = obj
-            model = None
-        else:
-            objs = [obj]
-            model = obj.__class__
-
-        return all([
-            evaluate_registered_expression(
-                record.expr, user_obj, perm, o, model=model or o.__class__
-            )
-            for o in objs
-        ])
-
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
         """Object check for one permission string.
 
@@ -175,36 +147,26 @@ class TrustModelBackendMixin(object):
         parameter on that registered user condition.
         Django's ``user.has_perm`` does not forward these keywords.
         """
+
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return False
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
-        registry = self._answered_registry()
-        if not registry.applies(registry.plan_for(obj, user=user_obj)):
-            return False
-        record, extra_q = self._condition_overlay(
-            permext, obj, user_obj, registry=registry,
-        )
-        applabel, modelname, action, _cond = utils.parse_perm_code(permext)
-        perm = '%s.%s_%s' % (applabel, action, modelname)
-        if permission_has_condition(permext) and record is None:
-            return False
-        if isinstance(obj, QuerySet):
-            positive = self._collection_has_perm(
-                user_obj, perm, obj, extra_q=extra_q,
-                skipped=inquiry.values, registry=registry,
-            )
-        else:
-            positive = self._instance_has_perm(
-                user_obj, perm, obj, extra_q=extra_q,
-                skipped=inquiry.values, registry=registry,
-            )
-        if not positive:
-            return False
-        if record is None or extra_q is not None:
-            return True
-        return self.permission_condition_met(record, user_obj, perm, obj)
+
+        catalog = self._get_or_create_catalog()
+
+        entry = catalog.prepare_has_perm_entry(user_obj, permext, obj, **skip_flags)
+        return entry.execute()
+
+    # @TODO: move other permission inquires entry to this backend
+    # follow the same pattern as has_perm. check things, then obtain an entry from catalog
+    # the permission inquiry decide to return the qs or execute it.
+    # backend is becoming a thin object that keep the register() via Recorder, and forward the
+    # eval to Catalog. everything /compile or /plan created by this backend directly or directly
+    # always belong to a single backend cls, so no handle is needed. the backend should not have
+    # any information that /compile or /plan needs after they are built. all the information
+    #  /compile or /plan needed are passed to them at __init__, built, or catalog.prepare_xyz call
 
     def singular_permission_accepted(self, perm):
         """True when object ``has_perm`` treats ``perm`` as one permission row.
@@ -234,20 +196,6 @@ class TrustModelBackendMixin(object):
             sponsors=self._sponsor_registries(),
             skipped=skipped, backend=self,
         )
-
-    def _answered_registry(self):
-        """Built registry for this class. Seals on first read.
-
-        A stored factory is built so late rows show. Its compiler was
-        bound when the factory was constructed.
-        """
-        cls = type(self)
-        stored = registries.get(cls)
-        if stored is None:
-            return self.ready()
-        if isinstance(stored, RegistryFactory):
-            return stored.build_registry()
-        return stored
 
     def _sponsor_registries(self):
         """Built registries of other relationship-family paths."""
