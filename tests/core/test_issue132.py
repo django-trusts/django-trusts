@@ -122,13 +122,32 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         with self.assertNumQueries(0):
             self._assert_public_deny()
             from tests.apps import bound_handle
+            from trusts.apps import catalogs
+            from trusts.compile.catalogs import Catalog
 
-            with bound_handle(self.document_backend, extra):
-                self.assertFalse(
-                    self.document_backend.has_perm(
-                        self.alice, '%s:always' % PERM, self.report,
+            cls = type(self.document_backend)
+            saved = catalogs.get(cls)
+            factory = extra.registry
+            catalogs[cls] = Catalog(
+                cls=cls,
+                path=extra.path,
+                family=cls.family,
+                factory=factory,
+                registry=factory.build_registry(),
+                sponsors=saved.sponsors if saved is not None else (),
+            )
+            try:
+                with bound_handle(self.document_backend, extra):
+                    self.assertFalse(
+                        self.document_backend.has_perm(
+                            self.alice, '%s:always' % PERM, self.report,
+                        )
                     )
-                )
+            finally:
+                if saved is None:
+                    catalogs.pop(cls, None)
+                else:
+                    catalogs[cls] = saved
             for bundled in (
                 (self.host_handle, self.document_handle, extra),
                 (extra, self.host_handle, self.document_handle),

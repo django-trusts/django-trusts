@@ -200,12 +200,19 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         )
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         self.fold_owner.registries[MIXIN] = self.fold_registry
-        from tests.apps import publish_catalog
         from tests.backends import MixinOnlyBackend
         from trusts.apps import catalogs
+        from trusts.compile.catalogs import Catalog
 
         self._saved_fold_catalog = catalogs.get(MixinOnlyBackend)
-        publish_catalog(MIXIN, self.fold_registry, backend_cls=MixinOnlyBackend)
+        catalogs[MixinOnlyBackend] = Catalog(
+            cls=MixinOnlyBackend,
+            path=MIXIN,
+            family=MixinOnlyBackend.family,
+            factory=self.fold_registry,
+            registry=self.fold_registry.build_registry(),
+            sponsors=(),
+        )
         self.fold_owner.apps._configs = [self.rel_owner, self.fold_owner]
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()
@@ -380,16 +387,31 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
             ),
         )
         from tests.apps import bound_handle
+        from trusts.apps import catalogs
+        from trusts.compile.catalogs import Catalog
 
-        with bound_handle(self.backend, silent):
-            with self.assertNumQueries(0):
-                self.assertFalse(
-                    self.backend.has_perm(self.alice, PERM, self.doc),
-                )
-                self.assertEqual(
-                    self.backend.get_all_permissions(self.alice, self.doc),
-                    set(),
-                )
+        cls = type(self.backend)
+        saved = catalogs.get(cls)
+        built = silent.registry
+        catalogs[cls] = Catalog(
+            cls=cls, path=silent.path, family=built.family,
+            factory=built, registry=built, sponsors=(),
+        )
+        try:
+            with bound_handle(self.backend, silent):
+                with self.assertNumQueries(0):
+                    self.assertFalse(
+                        self.backend.has_perm(self.alice, PERM, self.doc),
+                    )
+                    self.assertEqual(
+                        self.backend.get_all_permissions(self.alice, self.doc),
+                        set(),
+                    )
+        finally:
+            if saved is None:
+                catalogs.pop(cls, None)
+            else:
+                catalogs[cls] = saved
 
     def test_relationship_applies_keeps_live_grant(self):
         with self.assertNumQueries(1):

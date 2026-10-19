@@ -230,12 +230,19 @@ class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 class _LiveRegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
+        from trusts.apps import registries
+
         self.live = live_config()
         self.saved_registries = dict(self.live.registries)
+        self.saved_class_registries = dict(registries)
 
     def tearDown(self):
+        from trusts.apps import registries
+
         self.live.registries.clear()
         self.live.registries.update(self.saved_registries)
+        registries.clear()
+        registries.update(self.saved_class_registries)
         super().tearDown()
 
 

@@ -1170,6 +1170,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.config._document_grant_registry_id = None
         with override_apps_ready(False, self.config.apps):
             self.config.ready()
+        self.saved_catalog = _seal_document_factory(registry)
         self.registry = registry
         User = get_user_model()
         self.plain = User.objects.create_user('surf-plain', password='x')
@@ -1194,6 +1195,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
     def tearDown(self):
         _restore_document_registry(
             self.config, self.original, self.original_sentinel,
+            self.saved_catalog,
         )
 
     def test_staff_is_enforced_and_skippable(self):
@@ -1432,7 +1434,39 @@ class StaffPrefixFilterTest(TransactionTestCase):
                 editor.delete_model(Scope)
 
 
-def _restore_document_registry(config, original, sentinel):
+def _seal_document_factory(factory):
+    """The test filled ``factory``. Pass that built registry into Catalog."""
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
+
+    previous = catalogs.get(DocumentBackend)
+    sponsors = () if previous is None else previous.sponsors
+    catalogs[DocumentBackend] = Catalog(
+        cls=DocumentBackend,
+        path=DOCUMENT_BACKEND,
+        family=DocumentBackend.family,
+        factory=factory,
+        registry=factory.build_registry(),
+        sponsors=sponsors,
+    )
+    return previous
+
+
+def _restore_document_catalog(previous):
+    from trusts.apps import catalogs
+
+    if previous is None:
+        catalogs.pop(DocumentBackend, None)
+    else:
+        catalogs[DocumentBackend] = previous
+
+
+_CATALOG_UNSET = object()
+
+
+def _restore_document_registry(
+    config, original, sentinel, saved_catalog=_CATALOG_UNSET,
+):
     # Drop the swapped path key. ``__delitem__`` also pops the class
     # entry; put the built registry back so the next inquiry does not
     # rebuild, and so a later ``ready()`` does not see a built object
@@ -1443,9 +1477,8 @@ def _restore_document_registry(config, original, sentinel):
         from trusts.backends import registries
 
         registries[DocumentBackend] = original
-    from tests.apps import restore_isolated_catalogs
-
-    restore_isolated_catalogs(config)
+    if saved_catalog is not _CATALOG_UNSET:
+        _restore_document_catalog(saved_catalog)
     config._document_grant_registry_id = sentinel
 
 
@@ -1466,7 +1499,8 @@ def _install_document_registry(*, override):
     config._document_grant_registry_id = None
     with override_apps_ready(False, config.apps):
         config.ready()
-    return config, original, sentinel, registry
+    saved_catalog = _seal_document_factory(registry)
+    return config, original, sentinel, registry, saved_catalog
 
 
 def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
@@ -1530,11 +1564,11 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.assertEqual(set(flags_out.values()), {allowed})
 
     def test_without_override_superuser_is_an_ordinary_principal(self):
-        config, original, sentinel, registry = _install_document_registry(
+        config, original, sentinel, registry, saved_catalog = _install_document_registry(
             override=False,
         )
         self.addCleanup(
-            _restore_document_registry, config, original, sentinel,
+            _restore_document_registry, config, original, sentinel, saved_catalog,
         )
         handle = config.configured_backend(DOCUMENT_BACKEND)
         self.assertIsNone(registry._user_override)
@@ -1562,11 +1596,11 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self._expect(handle, self.active, True)
 
     def test_with_override_active_superuser_passes_without_a_grant(self):
-        config, original, sentinel, registry = _install_document_registry(
+        config, original, sentinel, registry, saved_catalog = _install_document_registry(
             override=True,
         )
         self.addCleanup(
-            _restore_document_registry, config, original, sentinel,
+            _restore_document_registry, config, original, sentinel, saved_catalog,
         )
         handle = config.configured_backend(DOCUMENT_BACKEND)
         self.assertEqual(registry._user_override.name, 'superuser')
@@ -1626,11 +1660,11 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
             pass
 
     def test_without_override_active_superuser_needs_a_grant(self):
-        config, original, sentinel, registry = _install_document_registry(
+        config, original, sentinel, registry, saved_catalog = _install_document_registry(
             override=False,
         )
         self.addCleanup(
-            _restore_document_registry, config, original, sentinel,
+            _restore_document_registry, config, original, sentinel, saved_catalog,
         )
         self.assertIsNone(registry._user_override)
         view = self._view()
@@ -1654,11 +1688,11 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_override_allows_active_superuser_without_a_grant(self):
-        config, original, sentinel, registry = _install_document_registry(
+        config, original, sentinel, registry, saved_catalog = _install_document_registry(
             override=True,
         )
         self.addCleanup(
-            _restore_document_registry, config, original, sentinel,
+            _restore_document_registry, config, original, sentinel, saved_catalog,
         )
         self.assertEqual(registry._user_override.name, 'superuser')
         view = self._view()
@@ -1671,11 +1705,11 @@ class AuthorizationRequiredSuperuserTest(KernelHostRequiredMixin, TestCase):
                 view(_guard_request(self.dormant), pk=self.doc.pk)
 
     def test_skip_superuser_drops_the_override(self):
-        config, original, sentinel, registry = _install_document_registry(
+        config, original, sentinel, registry, saved_catalog = _install_document_registry(
             override=True,
         )
         self.addCleanup(
-            _restore_document_registry, config, original, sentinel,
+            _restore_document_registry, config, original, sentinel, saved_catalog,
         )
         self.assertEqual(registry._user_override.name, 'superuser')
         plain = self._view()
@@ -1845,6 +1879,7 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
                 permission='permission',
                 content='note',
             )
+            saved_catalog = _seal_document_factory(registry)
             permission = _permission(PlainNote, 'change_plainnote')
             note = PlainNote.objects.create(title='plain')
             holder = PlainPrincipal.objects.create(
@@ -1880,7 +1915,9 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             self.assertNotIn('is_superuser', sql)
             self.assertIn('is_active', sql)
         finally:
-            _restore_document_registry(config, original, sentinel)
+            _restore_document_registry(
+                config, original, sentinel, saved_catalog,
+            )
             with connection.schema_editor() as editor:
                 editor.delete_model(PlainNoteGrant)
                 editor.delete_model(PlainNote)

@@ -43,11 +43,28 @@ class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     """Settings-listed probe. The test installs a registry for one block."""
 
 
+def _seal_factory(backend_cls, factory):
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
+
+    built = factory.build_registry()
+    catalogs[backend_cls] = Catalog(
+        cls=backend_cls,
+        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
+        family=backend_cls.family,
+        factory=factory,
+        registry=built,
+        sponsors=(),
+    )
+
+
 @contextmanager
 def _listed(handle):
     from tests.apps import install_class_handle
+    from trusts.apps import catalogs
 
     install_class_handle(_ListedBackend, handle)
+    _seal_factory(_ListedBackend, handle.registry)
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue263._ListedBackend',
     )):
@@ -55,6 +72,7 @@ def _listed(handle):
             yield
         finally:
             install_class_handle(_ListedBackend, None)
+            catalogs.pop(_ListedBackend, None)
 
 
 @contextmanager

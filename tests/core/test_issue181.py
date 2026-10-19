@@ -16,6 +16,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, override_settings
 
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from trusts.backends import TrustModelBackendMixin
+from django.contrib.auth.backends import ModelBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
@@ -33,6 +35,10 @@ WRONG = 'myapp.add_document'
 WRONG_FILTERED = 'myapp.add_document:non_confidential'
 MISSING = 'myapp.change_document:missing'
 MIXIN = 'tests.backends.MixinOnlyBackend'
+
+
+class _AltGrantBackend(TrustModelBackendMixin, ModelBackend):
+    """Second class. Its recorder holds DocumentAltGrant and nothing else."""
 
 
 def _permission(model, codename, name):
@@ -175,28 +181,20 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         both = self._granted_qs(self.open_one, self.open_two)
         owner = implementation_for_path(DOCUMENT_BACKEND)
         saved = owner.trusts_backend_paths
-        alt_registry = RegistryFactory()
-        BackendHandle(
-            path=MIXIN,
-            registry=alt_registry,
-        ).registry.register_public(
+        alt = _AltGrantBackend()
+        alt.get_registry().register(
             trust=DocumentAltGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        from tests.apps import publish_catalog
-        from trusts.apps import catalogs
-
-        owner.registries[MIXIN] = alt_registry
-        had_catalog = MixinOnlyBackend in catalogs
-        saved_catalog = catalogs.get(MixinOnlyBackend)
-        publish_catalog(MIXIN, alt_registry, backend_cls=MixinOnlyBackend)
-        mixin = MixinOnlyBackend()
+        alt.ready()
+        mixin = _AltGrantBackend()
         try:
             owner.trusts_backend_paths = (DOCUMENT_BACKEND, MIXIN)
             with override_settings(AUTHENTICATION_BACKENDS=(
-                HOST_BACKEND, DOCUMENT_BACKEND, MIXIN,
+                HOST_BACKEND, DOCUMENT_BACKEND,
+                'tests.core.test_issue181._AltGrantBackend',
             )):
                 with self.assertNumQueries(1):
                     self.assertTrue(
@@ -226,7 +224,8 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
                 self.assertTrue(self.alice.has_perm(PERM, two))
 
             with override_settings(AUTHENTICATION_BACKENDS=(
-                MIXIN, DOCUMENT_BACKEND, HOST_BACKEND,
+                'tests.core.test_issue181._AltGrantBackend',
+                DOCUMENT_BACKEND, HOST_BACKEND,
             )):
                 with self.assertNumQueries(2):
                     self.assertFalse(self.alice.has_perm(PERM, both))
@@ -235,11 +234,9 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
                 self.assertTrue(self.alice.has_perm(PERM, two))
         finally:
             owner.trusts_backend_paths = saved
-            owner.registries.pop(MIXIN, None)
-            if had_catalog:
-                catalogs[MixinOnlyBackend] = saved_catalog
-            else:
-                catalogs.pop(MixinOnlyBackend, None)
+            from trusts.apps import catalogs, recorders
+            catalogs.pop(_AltGrantBackend, None)
+            recorders.pop(_AltGrantBackend, None)
 
     def test_duplicate_path_is_two_evaluations(self):
         qs = self._granted_qs(self.open_one)

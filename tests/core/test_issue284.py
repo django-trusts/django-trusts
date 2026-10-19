@@ -769,6 +769,21 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             from tests.apps import install_class_handle
 
             install_class_handle(_AcceptanceBackend, self.handle)
+            from trusts.apps import catalogs
+            from trusts.compile.catalogs import Catalog
+
+            factory = self.handle.registry
+            catalogs[_AcceptanceBackend] = Catalog(
+                cls=_AcceptanceBackend,
+                path='%s.%s' % (
+                    _AcceptanceBackend.__module__,
+                    _AcceptanceBackend.__qualname__,
+                ),
+                family=_AcceptanceBackend.family,
+                factory=factory,
+                registry=factory.build_registry(),
+                sponsors=(),
+            )
             self.backend = _AcceptanceBackend()
             self._settings = override_settings(AUTHENTICATION_BACKENDS=(
                 'tests.core.test_issue284._AcceptanceBackend',
@@ -787,6 +802,8 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         from tests.apps import install_class_handle
 
         install_class_handle(_AcceptanceBackend, None)
+        from trusts.apps import catalogs
+        catalogs.pop(_AcceptanceBackend, None)
         if getattr(self, '_handles', None) is not None:
             self._handles.stop()
         if getattr(self, '_settings', None) is not None:
