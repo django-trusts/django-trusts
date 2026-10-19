@@ -1031,7 +1031,8 @@ class RegistryFactory(object):
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
         self.set_condition_lookup(RegistryConditionLookup(self))
-        self._compiler = PlanQueryCompiler() if compiler is None else compiler
+        self._explicit_compiler = compiler is not None
+        self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path
         self.family = family
 
@@ -1793,7 +1794,7 @@ class RegistryFactory(object):
             user_conditions=self._stored_user_conditions(),
             user_override=self._user_override,
             condition_lookup=self._condition_lookup,
-            compiler=self.compiler,
+            compiler=self._compiler if self._explicit_compiler else None,
             path=self.path or '',
             family=self.family,
         )
