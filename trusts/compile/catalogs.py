@@ -8,8 +8,38 @@ from trusts.plan.conditions import (
     Catalog is an instance created for a backend class.
     Every object created inside / under trace back to a single backend class.
     So, getting a handle is not needed.
+
+    CLARITY (sketch, not implementation) -- what this class is meant to be:
+
+    (a) Owner, not a second store: ``Catalog`` is the per-backend-class
+        owner of the encapsulated compile/plan step, living in
+        ``trusts/compile/``. It holds the ``RegistryFactory``, builds and
+        caches the lowered registry as private data (``catalog.registry``),
+        and owns the query compiler. It does NOT invent a second store;
+        nothing lowered lives directly on the Catalog except via that
+        built registry.
+    (b) What is inside, via its built registry: ``records`` (tuple of
+        ``RegisteredRelation``), ``delegations`` (tuple of
+        ``RegisteredDelegation``), ``conditions`` (``ConditionRegistry``),
+        and ``user_conditions`` / ``user_override``. ``RelationPlan``s are
+        built on demand from the records; they are not stored.
+    (c) Two modes only -- Catalog constructs, it never executes for the
+        caller: ``has_perm()`` -> get_qs from Catalog -> execute it
+        (``qs.exists()`` -> ``bool``) and return the result; and
+        ``User.with_perm()`` -> get_qs from Catalog -> return the qs
+        unevaluated. Execution/return is the caller's choice.
+    (d) Vocabulary: "entries" means those lowered records/delegations a
+        Catalog holds. The answer to one inquiry is NOT an entry; it is
+        a ``PreparedInquiry`` (see below).
+
+    Compiler ownership: the compiler arrives at construction -- passed
+    from the backend class's ``query_compiler`` into the Catalog /
+    ``RegistryFactory`` constructor (and on to the built registry).
+    A ``Catalog`` class attribute is NOT the customization surface; the
+    class attribute in this sketch is a placeholder only.
 """
 class Catalog(object):
+    # Placeholder only -- see module note on compiler ownership above.
     query_compiler = PlanQueryCompiler()
 
     def __init__(path=path, family=family, cls=cls):
@@ -25,8 +55,8 @@ class Catalog(object):
         """Adapter ``Recorder.play`` calls. Methods forward to this factory."""
         return _RecordAdapter(self.factory)
 
-    def prepare_has_perm_entry(self, user_obj, permext, obj=None, **skip_flags) -> CatalogEntry:
-        # @TODO: convert to return CatalogEntry
+    def prepare_has_perm(self, user_obj, permext, obj=None, **skip_flags) -> PreparedInquiry:
+        # @TODO: convert to return PreparedInquiry (inquiry answer, not a stored entry)
 
         registry = self._get_or_create_registry()
         if not registry.applies(registry.plan_for(obj, user=user_obj)):
@@ -54,13 +84,29 @@ class Catalog(object):
             return True
         return self.permission_condition_met(record, user_obj, perm, obj)
 
-        # @TODO: Implement the rest of prepare_xyz() -> CatalogEntry for other 4 permission inquiries
+        # @TODO: Implement prepare_* -> PreparedInquiry for the inquiries,
+        # in this order (stage 1 is has_perm only; the rest migrate later
+        # by the same prepare pattern, not in the same run):
+        #   1. has_perm (this method)
+        #   2. permissions_for / get_all_permissions + get_group_permissions
+        #   3. permitted_users / permitted_users_predicate
+        #   4. filter_authorized / permitted content
         # there should be only two shape of permission inqury, eg,
         #   has_perm() -> get_qs from Catalog -> execute it and return result
         #   User.with_perm() -> get_qs from Catalog -> return qs
-        # So, return CatalogEntry() for all 4, and let backend choose what to do.
+        # So, return PreparedInquiry() for all of them, and let backend choose what to do.
         # If non-qs result is known without executing the qs, or fail-safe == False, then set result.
         # caller's responsiblity to check qs first.
+        #
+        # OPEN execute() shape question: the inquiries do not share one
+        # result shape -- has_perm wants a bool (qs.exists()), the
+        # permissions_for family materializes a set of codes, and the
+        # permitted-users predicate returns a Q or None. PreparedInquiry
+        # .execute() as sketched only fits the bool shape; the other
+        # shapes must be resolved explicitly, not folded into execute().
+        # A preset result also needs a sentinel distinct from None:
+        # None cannot mean "no preset", because False / an empty set
+        # are legitimate preset answers.
         #
         # move all code that need /compile /plan into here
 
@@ -82,7 +128,7 @@ class Catalog(object):
             model = obj.__class__
 
         # @TODO: implement me
-        return CatalogEntry(model=model, result=None, qs= ...)
+        return PreparedInquiry(model=model, result=None, qs= ...)
         """
         all([
             evaluate_registered_expression(
@@ -98,7 +144,13 @@ class Catalog(object):
         return self.registry
 
 
-class CatalogEntry(object):
+class PreparedInquiry(object):
+    """One inquiry's answer envelope: (model, result, qs).
+
+    Not a stored registration -- do not confuse with the Catalog's
+    entries (its lowered records/delegations).
+    """
+
     def __init__(model=model, result=result, qs=qs):
         self.model = model
         self.result = result
@@ -112,11 +164,16 @@ class CatalogEntry(object):
         return self.model
 
     def execute():
+        # Sketch only: a QuerySet has no .execute(); the bool mode is
+        # qs.exists(). See the OPEN execute() shape note in Catalog.
         if (result != None):
             return result
         return self.qs.execute()
 
 
+# CLARITY: this _RecordAdapter duplicates the adapter already in
+# trusts/compile/factory.py. Implementation must reuse factory's
+# adapter and delete this duplicate; do not keep two adapters.
 class _RecordAdapter(object):
     """Visitor ``Recorder.play`` drives. Forwards to this factory's public API."""
 
