@@ -34,6 +34,7 @@ import threading
 import uuid
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
@@ -290,8 +291,6 @@ def _render_handle(handle, cache=None):
     elif getattr(handle, 'registry', _REGISTRY_MISSING) is _REGISTRY_MISSING and not hasattr(handle, 'path'):
         rendered = handle
     else:
-        from types import SimpleNamespace
-
         from trusts.plan.relations import PlanQueryCompiler
 
         compiler = getattr(handle, 'compiler', None)

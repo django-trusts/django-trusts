@@ -21,6 +21,7 @@ from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
+from trusts.apps import _compiled_for_path
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
@@ -179,8 +180,6 @@ def _covered_content_models(config):
         return covered
     for path in paths:
         try:
-            from trusts.apps import _compiled_for_path
-
             handle = _compiled_for_path(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
@@ -304,8 +303,6 @@ def _iter_handle_permission_conditions(config):
         return
     for path in paths:
         try:
-            from trusts.apps import _compiled_for_path
-
             handle = _compiled_for_path(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue
@@ -395,8 +392,6 @@ def _authorization_check_handles():
             continue
         for path in paths:
             try:
-                from trusts.apps import _compiled_for_path
-
                 handles.append(_compiled_for_path(path))
             except (TrustsConfigurationError, TrustsCompilerError, AttributeError):
                 continue
@@ -505,8 +500,6 @@ def _live_along_records(config):
         return found
     for path in paths:
         try:
-            from trusts.apps import _compiled_for_path
-
             handle = _compiled_for_path(path)
         except (TrustsConfigurationError, TrustsCompilerError):
             continue

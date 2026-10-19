@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from django.apps import AppConfig as DjangoAppConfig
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import import_string
 
 from trusts._meta_options import _ensure_permission_conditions_option
 
@@ -54,20 +55,20 @@ def _listed_mixin_paths():
 
 
 def _compiled_for_path(path):
-    """Compiled plan for one exact Trusts backend path."""
-    from django.utils.module_loading import import_string
+    """Compiled plan for one exact Trusts backend path.
 
-    from trusts.backends import SimpleRegistry, registries
-    from trusts.plan.aggregates import compiler_for_class
-
-    cls = import_string(path)
-    registry = registries.get(cls)
-    if registry is None:
-        registry = registries[cls] = SimpleRegistry(cls)
-    build = getattr(registry, 'build_compiled', None)
-    compiled = build() if callable(build) else registry
+    Resolves the plan through a disposable backend instance
+    (``import_string(path)().get_registry()`` via ``_own_compiled``)
+    so this module never imports ``trusts.backends``: hosts load
+    ``trusts.apps`` during ``apps.populate()`` before Django has
+    constructed any models, and ``trusts.backends`` imports
+    ``django.contrib.auth.models.Permission``, which raises
+    ``AppRegistryNotReady`` at that point. That load-order chain,
+    not a plain import cycle, is why the backend module cannot be
+    imported here at top level.
+    """
+    compiled = import_string(path)()._own_compiled()
     compiled.path = path
-    compiled.compiler = compiler_for_class(cls)
     return compiled
 
 
@@ -191,17 +192,12 @@ class TrustsImplementationConfig(DjangoAppConfig):
         # an installed app and does not ship trusts/management (#129), so
         # the command attaches here. Subclasses that replace ready() must
         # call super() or the command stays unregistered.
-        from django.utils.module_loading import import_string
-
-        from trusts.backends import SimpleRegistry, registries
         from trusts.inspect.commands import install_policy_commands
 
         install_policy_commands()
         self._validate_ownership()
         for path in self.owned_backend_paths():
-            cls = import_string(path)
-            if cls not in registries:
-                registries[cls] = SimpleRegistry(cls)
+            import_string(path)().get_registry()
         from trusts.inspect import checks as _trusts_checks  # noqa: F401
 
 
