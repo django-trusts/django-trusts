@@ -236,28 +236,46 @@ def _assert_agrees(test, content, perm, candidates):
 
 
 @contextmanager
+def _seal_document_factory(factory):
+    """This test filled ``factory``. Pass that built registry into Catalog."""
+    from tests.myapp.backends import DocumentBackend
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
+
+    previous = catalogs.get(DocumentBackend)
+    sponsors = previous.sponsors if previous is not None else ()
+    built = factory.build_registry()
+    catalogs[DocumentBackend] = Catalog(
+        cls=DocumentBackend,
+        path=DOCUMENT_BACKEND,
+        family=DocumentBackend.family,
+        factory=factory,
+        registry=built,
+        sponsors=sponsors,
+    )
+    return built
+
+
+@contextmanager
 def _document_registry():
-    from tests.apps import publish_catalog
-    from trusts.apps import catalogs, listed_backend_class
+    from tests.myapp.backends import DocumentBackend
+    from trusts.apps import catalogs
 
     config = implementation_for_path(DOCUMENT_BACKEND)
     saved = dict(config.registries)
-    cls = listed_backend_class(DOCUMENT_BACKEND)
-    had_catalog = isinstance(cls, type) and cls in catalogs
-    saved_catalog = catalogs.get(cls)
+    had_catalog = DocumentBackend in catalogs
+    saved_catalog = catalogs.get(DocumentBackend)
     registry = RegistryFactory()
     config.registries[DOCUMENT_BACKEND] = registry
-    publish_catalog(DOCUMENT_BACKEND, registry, backend_cls=cls)
     try:
         yield registry
     finally:
         config.registries.clear()
         config.registries.update(saved)
-        if isinstance(cls, type):
-            if had_catalog:
-                catalogs[cls] = saved_catalog
-            else:
-                catalogs.pop(cls, None)
+        if had_catalog:
+            catalogs[DocumentBackend] = saved_catalog
+        else:
+            catalogs.pop(DocumentBackend, None)
 
 
 def _handle(registry):
@@ -971,6 +989,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         self.addCleanup(self._registry_cm.__exit__, None, None, None)
         self.handle = _handle(self.registry)
         self._register()
+        _seal_document_factory(self.registry)
         self.change = _permission(self.Paper, 'change_paper')
         self.add = _permission(self.Paper, 'add_paper')
         self.code = '%s.%s' % (
@@ -1378,6 +1397,7 @@ def _user_manager():
 
 
 def _reverse_agrees(test, handle, content, perm, candidates):
+    _seal_document_factory(handle.registry)
     code = perm.user_perm_str
     with test.assertNumQueries(1):
         found = _pks(content.get_permitted_users(perm))

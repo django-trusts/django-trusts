@@ -52,6 +52,27 @@ class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
     """Stand-in for ``DocumentBackend`` when pair settings omit myapp."""
 
 
+class _GrantBackend(TrustModelBackendMixin, ModelBackend):
+    """Grant rows for a second class. Sponsors are that class's catalog."""
+
+
+def _seal_factory(backend_cls, factory, sponsors=()):
+    """Construct this class's catalog from a factory this test filled."""
+    from trusts.apps import catalogs
+    from trusts.compile.catalogs import Catalog
+
+    built = factory.build_registry()
+    catalogs[backend_cls] = Catalog(
+        cls=backend_cls,
+        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
+        family=backend_cls.family,
+        factory=factory,
+        registry=built,
+        sponsors=sponsors,
+    )
+    return built
+
+
 def _document_host_handle():
     """Same registration ``DocumentConfig.ready`` installs on the kernel host."""
     handle = _handle('tests.myapp.backends.DocumentBackend')
@@ -81,8 +102,10 @@ def _document_host_handle():
 @contextmanager
 def _listed(handle):
     from tests.apps import install_class_handle
+    from trusts.apps import catalogs
 
     install_class_handle(_PairDocumentBackend, handle)
+    _seal_factory(_PairDocumentBackend, handle.registry)
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue266._PairDocumentBackend',
     )), patch(
@@ -93,6 +116,7 @@ def _listed(handle):
             yield
         finally:
             install_class_handle(_PairDocumentBackend, None)
+            catalogs.pop(_PairDocumentBackend, None)
 
 
 @contextmanager
@@ -1450,11 +1474,14 @@ class DelegatedAuthorityLiveTest(TestCase):
         if not kernel_host_listed():
             handle = _document_host_handle()
             from tests.apps import install_class_handle
+            from trusts.apps import catalogs
 
             install_class_handle(_PairDocumentBackend, handle)
+            _seal_factory(_PairDocumentBackend, handle.registry)
             self.addCleanup(
                 lambda: install_class_handle(_PairDocumentBackend, None),
             )
+            self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
             settings_override = override_settings(AUTHENTICATION_BACKENDS=(
                 'tests.core.test_issue266._PairDocumentBackend',
             ))
@@ -1651,13 +1678,20 @@ class DelegatedAuthorityLiveTest(TestCase):
                 relationship.allowed_permissions.contains(permission)
             ),
         )
-        from tests.apps import install_class_handle
+        from trusts.apps import catalogs
 
-        install_class_handle(_PairDocumentBackend, delegation_handle)
-        self.addCleanup(
-            lambda: install_class_handle(_PairDocumentBackend, None),
+        grant_built = _seal_factory(_GrantBackend, grant_handle.registry)
+        deleg_built = _seal_factory(
+            _PairDocumentBackend, delegation_handle.registry,
+            sponsors=(grant_built,),
         )
+        _seal_factory(
+            _GrantBackend, grant_handle.registry, sponsors=(deleg_built,),
+        )
+        self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
+        self.addCleanup(lambda: catalogs.pop(_GrantBackend, None))
         with override_settings(AUTHENTICATION_BACKENDS=(
+            'tests.core.test_issue266._GrantBackend',
             'tests.core.test_issue266._PairDocumentBackend',
         )), patch(
             'trusts.apps._relationship_implementation_handles',

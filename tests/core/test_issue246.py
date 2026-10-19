@@ -474,10 +474,31 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
+    @contextmanager
     def _backend(self):
         from tests.apps import bound_handle
+        from trusts.apps import catalogs
+        from trusts.compile.catalogs import Catalog
 
-        return bound_handle(self.backend, self.handle)
+        cls = type(self.backend)
+        saved = catalogs.get(cls)
+        factory = self.handle.registry
+        catalogs[cls] = Catalog(
+            cls=cls,
+            path='%s.%s' % (cls.__module__, cls.__qualname__),
+            family=cls.family,
+            factory=factory,
+            registry=factory.build_registry(),
+            sponsors=saved.sponsors if saved is not None else (),
+        )
+        try:
+            with bound_handle(self.backend, self.handle):
+                yield
+        finally:
+            if saved is None:
+                catalogs.pop(cls, None)
+            else:
+                catalogs[cls] = saved
 
     def test_explicit_group_feeds_group_and_ordinary_authorization(self):
         with self._backend():
@@ -766,10 +787,31 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
+    @contextmanager
     def _backend(self):
         from tests.apps import bound_handle
+        from trusts.apps import catalogs
+        from trusts.compile.catalogs import Catalog
 
-        return bound_handle(self.backend, self.handle)
+        cls = type(self.backend)
+        saved = catalogs.get(cls)
+        factory = self.handle.registry
+        catalogs[cls] = Catalog(
+            cls=cls,
+            path='%s.%s' % (cls.__module__, cls.__qualname__),
+            family=cls.family,
+            factory=factory,
+            registry=factory.build_registry(),
+            sponsors=saved.sponsors if saved is not None else (),
+        )
+        try:
+            with bound_handle(self.backend, self.handle):
+                yield
+        finally:
+            if saved is None:
+                catalogs.pop(cls, None)
+            else:
+                catalogs[cls] = saved
 
     def _handles(self):
         return patch(
@@ -1048,45 +1090,65 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
         from tests.apps import bound_handle
+        from trusts.apps import catalogs
+        from trusts.compile.catalogs import Catalog
 
-        with bound_handle(backend, handle):
-            for perm in granted:
-                code = _code(perm)
+        cls = type(backend)
+        saved = catalogs.get(cls)
+        factory = handle.registry
+        catalogs[cls] = Catalog(
+            cls=cls,
+            path='%s.%s' % (cls.__module__, cls.__qualname__),
+            family=cls.family,
+            factory=factory,
+            registry=factory.build_registry(),
+            sponsors=saved.sponsors if saved is not None else (),
+        )
+        try:
+            with bound_handle(backend, handle):
+                for perm in granted:
+                    code = _code(perm)
+                    for label, target in (('instance', paper), ('queryset', one)):
+                        with self.subTest(
+                            user=user.username, paper=paper.title, code=code,
+                            has_perm=label, granted=True,
+                        ):
+                            self.assertIs(
+                                backend.has_perm(user, code, target), True,
+                            )
+                for perm in denied:
+                    code = _code(perm)
+                    for label, target in (('instance', paper), ('queryset', one)):
+                        with self.subTest(
+                            user=user.username, paper=paper.title, code=code,
+                            has_perm=label, granted=False,
+                        ):
+                            self.assertIs(
+                                backend.has_perm(user, code, target), False,
+                            )
                 for label, target in (('instance', paper), ('queryset', one)):
                     with self.subTest(
-                        user=user.username, paper=paper.title, code=code,
-                        has_perm=label, granted=True,
+                        user=user.username, paper=paper.title,
+                        enumeration=label, kind='get_all_permissions',
                     ):
-                        self.assertIs(
-                            backend.has_perm(user, code, target), True,
+                        self.assertEqual(
+                            backend.get_all_permissions(user, target),
+                            granted_codes,
                         )
-            for perm in denied:
-                code = _code(perm)
-                for label, target in (('instance', paper), ('queryset', one)):
                     with self.subTest(
-                        user=user.username, paper=paper.title, code=code,
-                        has_perm=label, granted=False,
+                        user=user.username, paper=paper.title,
+                        enumeration=label, kind='get_group_permissions',
                     ):
-                        self.assertIs(
-                            backend.has_perm(user, code, target), False,
+                        self.assertEqual(
+                            backend.get_group_permissions(user, target),
+                            set(group_codes),
                         )
-            for label, target in (('instance', paper), ('queryset', one)):
-                with self.subTest(
-                    user=user.username, paper=paper.title,
-                    enumeration=label, kind='get_all_permissions',
-                ):
-                    self.assertEqual(
-                        backend.get_all_permissions(user, target),
-                        granted_codes,
-                    )
-                with self.subTest(
-                    user=user.username, paper=paper.title,
-                    enumeration=label, kind='get_group_permissions',
-                ):
-                    self.assertEqual(
-                        backend.get_group_permissions(user, target),
-                        set(group_codes),
-                    )
+
+        finally:
+            if saved is None:
+                catalogs.pop(cls, None)
+            else:
+                catalogs[cls] = saved
 
     def _authorized(self, handle, expectations):
         with patch(

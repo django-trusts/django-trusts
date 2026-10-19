@@ -9,7 +9,6 @@ from django.test.utils import isolate_apps
 
 from tests.apps import (
     isolate_live_registry, live_config, override_apps_ready,
-    restore_isolated_catalogs,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
@@ -22,16 +21,22 @@ from trusts.compile.factory import RegistryFactory
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def setUp(self):
         super().setUp()
+        from trusts.apps import registries
+
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
         self.saved_registries = dict(self.contributor.registries)
+        self.saved_class_registries = dict(registries)
         self.live_registry = self.contributor.configured_backend().registry
         self.saved_sentinel = self.contributor._document_grant_registry_id
 
     def tearDown(self):
-        restore_isolated_catalogs(self.contributor)
+        from trusts.apps import registries
+
         self.contributor.registries.clear()
         self.contributor.registries.update(self.saved_registries)
+        registries.clear()
+        registries.update(self.saved_class_registries)
         self.contributor._document_grant_registry_id = self.saved_sentinel
 
     def test_reenter_same_contributor_ready_is_noop(self):

@@ -51,17 +51,24 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
 
     def __init__(self, handle):
         super().__init__()
+        self._factory = handle.registry
+
+    def has_perm(self, user_obj, perm, obj=None, **skip_flags):
         from trusts.apps import catalogs
         from trusts.compile.catalogs import Catalog
 
         cls = type(self)
-        catalogs[cls] = Catalog(
-            cls=cls,
-            path='tests.core.issue203',
-            family='relationship',
-            compiler=self.query_compiler,
-            factory=handle.registry,
-        )
+        if cls not in catalogs:
+            factory = self._factory
+            catalogs[cls] = Catalog(
+                cls=cls,
+                path='tests.core.issue203',
+                family=self.family,
+                factory=factory,
+                registry=factory.build_registry(),
+                sponsors=(),
+            )
+        return super().has_perm(user_obj, perm, obj, **skip_flags)
 
 
 class _BuilderLog(object):

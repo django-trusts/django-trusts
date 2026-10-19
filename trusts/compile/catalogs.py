@@ -10,48 +10,35 @@ from trusts.plan.conditions import (
     permission_has_condition,
 )
 from trusts.utils import parse_perm_code
+
 _NO_PRESET = object()  # not None: False and empty answers are real
 
-class PreparedInquiry(object):
-    def __init__(self, model, result=_NO_PRESET, qs=None):
-        self.model = model
-        self.result = result
-        self.qs = qs
-
-    def execute(self):
-        if self.result is not _NO_PRESET:
-            return self.result
-        return bool(self.qs.exists())
 
 class Catalog(object):
-    def __init__(self, *, cls, path, family, compiler, factory=None,
-                 registry=None):
+    def __init__(self, *, cls, path, family, factory, registry, sponsors):
         self.cls = cls
         self.path = path
         self.family = family
-        self._replay = factory is None
-        self.factory = factory if factory is not None else RegistryFactory(
-            compiler=compiler, path=path, family=family,
-        )
+        self.factory = factory
         self._registry = registry
+        self.sponsors = sponsors
+
+    @classmethod
+    def compile(cls, *, path, family, compiler, recorder):
+        """Walk ``recorder`` once. The caller passes the registry into ``Catalog``."""
+        factory = RegistryFactory(compiler=compiler, path=path, family=family)
+        recorder.freeze()
+        recorder.play(factory.get_record_adapter())
+        return factory, factory.build_registry()
 
     @property
     def registry(self):
         return self._registry
 
-    def build(self, recorder):
-        if self._registry is not None:
-            return self._registry
-        recorder.freeze()
-        if self._replay:
-            recorder.play(self.get_record_adapter())
-        self._registry = self.factory.build_registry()
-        return self._registry
-
     def get_record_adapter(self):
         return self.factory.get_record_adapter()
 
-    def prepare_has_perm(self, user_obj, permext, obj, *, skipped, sponsors):
+    def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         registry = self.registry
         model = _content_model(obj)
         if not registry.applies(registry.plan_for(obj, user=user_obj)):
@@ -63,7 +50,7 @@ class Catalog(object):
             return PreparedInquiry(model, result=False)
         held = registry.has_permission(
             user_obj, obj, _permission_binding(perm, model),
-            extra_q=extra_q, sponsors=_registries(sponsors),
+            extra_q=extra_q, sponsors=self.sponsors,
             permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
@@ -100,7 +87,7 @@ class Catalog(object):
             return None, None
         applabel, modelname, _action, cond = parse_perm_code(permext)
         model = _content_model(obj)
-        lookup = getattr(self.registry, 'condition_lookup', None)
+        lookup = self.registry.condition_lookup
         if lookup is None:
             if isinstance(obj, QuerySet):
                 return None, None
@@ -113,13 +100,22 @@ class Catalog(object):
             return record, None
         return record, lookup.compile_q(obj.model, permext, user_obj)
 
+
+class PreparedInquiry(object):
+    def __init__(self, model, result=_NO_PRESET, qs=None):
+        self.model = model
+        self.result = result
+        self.qs = qs
+
+    def execute(self):
+        if self.result is not _NO_PRESET:
+            return self.result
+        return bool(self.qs.exists())
+
+
 def _content_model(obj):
     return obj.model if isinstance(obj, QuerySet) else obj.__class__
 
-def _registries(sponsors):
-    return tuple(
-        sponsor.registry for sponsor in sponsors if sponsor.registry is not None
-    )
 
 def _permission_binding(perm, model):
     if isinstance(perm, Permission):

@@ -1,8 +1,11 @@
 """#89: build-on-demand / projection lifecycle on standalone and live registries.
 
-A catalog builds once. A factory stored in ``registries[cls]`` is not
-rebuilt into the next question. Registration on that factory after the
-build does not change the answer.
+Constructing a catalog freezes that class's recorder. A later
+``register`` on the frozen recorder is refused. That freeze-at-build
+rule still needs confirmation.
+
+A path store may still hold a factory that was assigned there. That
+assignment is the configured-backend surface, separate from the catalog.
 
 Missing-declaration E003 on Content/Junction stays on Zero ``tests/legacy/``.
 """
@@ -13,10 +16,11 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from tests.apps import (
-    install_writable_registry, live_config, override_apps_ready, publish_catalog,
+    install_writable_registry, live_config, override_apps_ready,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -28,6 +32,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.backends import TrustModelBackendMixin
 from trusts.compile.factory import RegistryFactory
 
 
@@ -125,12 +130,19 @@ class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 class _LiveRegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
+        from trusts.apps import registries
+
         self.live = live_config()
         self.saved_registries = dict(self.live.registries)
+        self.saved_class_registries = dict(registries)
 
     def tearDown(self):
+        from trusts.apps import registries
+
         self.live.registries.clear()
         self.live.registries.update(self.saved_registries)
+        registries.clear()
+        registries.update(self.saved_class_registries)
         super().tearDown()
 
 
@@ -251,60 +263,31 @@ class SentinelAfterFirstReadTest(
         self.assertEqual(len(isolated.records), 1)
 
 
-class BackendQuestionAfterLateRegistrationTest(
-    KernelHostRequiredMixin, TestCase,
-):
-    """A question uses the catalog built from the swapped factory once."""
+class _LateBackend(TrustModelBackendMixin, ModelBackend):
+    """A class whose recorder has not been built yet."""
 
-    def setUp(self):
-        super().setUp()
-        from trusts.apps import catalogs
 
-        self.config = implementation_for_path(DOCUMENT)
-        self.saved_registries = dict(self.config.registries)
-        self.saved_catalog = catalogs.get(DocumentBackend)
-        self.isolated = RegistryFactory()
-        self.config.registries[DOCUMENT] = self.isolated
-        publish_catalog(DOCUMENT, self.isolated)
+class BackendQuestionAfterLateRegistrationTest(SimpleTestCase):
+    """Freeze happens when the catalog is constructed."""
 
-    def tearDown(self):
-        from trusts.apps import catalogs
+    def test_register_after_build_is_refused(self):
+        from trusts.errors import TrustsConfigurationError
 
-        self.config.registries.clear()
-        self.config.registries.update(self.saved_registries)
-        if self.saved_catalog is None:
-            catalogs.pop(DocumentBackend, None)
-        else:
-            catalogs[DocumentBackend] = self.saved_catalog
-        super().tearDown()
-
-    def test_backend_question_after_late_registration_sees_it(self):
-        user = get_user_model().objects.create_user(
-            'late-89', password='x',
-        )
-        content_type = ContentType.objects.get_for_model(Document)
-        permission, _created = Permission.objects.get_or_create(
-            content_type=content_type,
-            codename='change_document',
-            defaults={'name': 'Can change document'},
-        )
-        document = Document.objects.create(title='late-89')
-        DocumentGrant.objects.create(
-            document=document, user=user, permission=permission,
-        )
-        from trusts.apps import catalogs
-
-        backend = DocumentBackend()
-        # The first question builds the empty factory. That snapshot sticks.
-        self.assertFalse(
-            backend.has_perm(user, 'myapp.change_document', document),
-        )
-        _contribute_document(self.isolated)
-        self.assertEqual(len(self.isolated.records), 1)
-        self.assertEqual(len(catalogs[DocumentBackend].registry.records), 0)
-        self.assertFalse(
-            backend.has_perm(user, 'myapp.change_document', document),
-        )
+        backend = _LateBackend()
+        recorder = backend.get_registry()
+        catalog = backend.ready()
+        self.assertIs(catalog.registry, backend.registry)
+        self.assertTrue(recorder.frozen)
+        with self.assertRaisesRegex(
+            TrustsConfigurationError, 'register refused: this recorder is frozen',
+        ):
+            recorder.register(
+                trust=DocumentGrant,
+                user='user',
+                permission='permission',
+                content='document',
+            )
+        self.assertEqual(catalog.registry.records, ())
 
 
 class HandleBuildRegistrySignalTest(SimpleTestCase):
