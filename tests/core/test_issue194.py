@@ -31,6 +31,7 @@ from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
+from trusts.plan.registry import Registry
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies, common_permissions
 from trusts.decorators import (
@@ -347,24 +348,32 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
 
     def test_inapplicable_compiler_is_zero_sql(self):
         handle = implementation_for_path(DOCUMENT).configured_backend()
-        registry = handle.registry
-        previous = registry.compiler
-        registry.compiler = _NeverAppliesCompiler()
-        silent = BackendHandle(path=handle.path, registry=registry)
+        live = handle.registry
+        silent = BackendHandle(
+            path=handle.path,
+            registry=Registry(
+                records=live.records,
+                delegations=live.delegations,
+                conditions=live.conditions,
+                user_conditions=live.user_conditions,
+                user_override=live.user_override,
+                condition_lookup=live.condition_lookup,
+                compiler=_NeverAppliesCompiler(),
+                path=live.path,
+                family=live.family,
+            ),
+        )
         from tests.apps import bound_handle
 
-        try:
-            with bound_handle(self.backend, silent):
-                with self.assertNumQueries(0):
-                    self.assertFalse(
-                        self.backend.has_perm(self.alice, PERM, self.doc),
-                    )
-                    self.assertEqual(
-                        self.backend.get_all_permissions(self.alice, self.doc),
-                        set(),
-                    )
-        finally:
-            registry.compiler = previous
+        with bound_handle(self.backend, silent):
+            with self.assertNumQueries(0):
+                self.assertFalse(
+                    self.backend.has_perm(self.alice, PERM, self.doc),
+                )
+                self.assertEqual(
+                    self.backend.get_all_permissions(self.alice, self.doc),
+                    set(),
+                )
 
     def test_relationship_applies_keeps_live_grant(self):
         with self.assertNumQueries(1):

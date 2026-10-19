@@ -52,8 +52,9 @@ def _contribute_document(registry):
 class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
-        registry = RegistryFactory()
-        registry.compiler = RaisingCompilerBackend.query_compiler
+        registry = RegistryFactory(
+            compiler=RaisingCompilerBackend.query_compiler,
+        )
         handle = BackendHandle(
             path='tests.backends.RaisingCompilerBackend',
             registry=registry,

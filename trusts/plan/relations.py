@@ -95,10 +95,8 @@ class PlanQueryCompiler(object):
 
 
 def answering_compiler(registry):
-    """Stored compiler, or ``PlanQueryCompiler`` when none was stored."""
-    compiler = None if registry is None else getattr(registry, 'compiler', None)
-    if compiler is None:
-        return PlanQueryCompiler()
+    """Compiler bound when ``registry`` was built."""
+    compiler = registry.compiler
     complete = getattr(compiler, 'complete_exists', None)
     group = getattr(compiler, 'group_exists', None)
     if not callable(complete) or not callable(group):
