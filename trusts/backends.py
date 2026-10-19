@@ -2,9 +2,10 @@
 
 Registration is a per-class ``Recorder``. ``ready()`` builds a
 ``Catalog`` for each configured class and stores ``catalogs[cls]``.
-Sponsors are the other classes' built registries, passed into that
-constructor. ``registries[cls]`` receives the built registry when the
-key is empty so existing readers keep a registry object.
+An inquiry reads that catalog. It calls ``ready()`` only when the
+class is missing. Sponsors are the other catalogs of the same
+authorization family at prepare time. ``registries[cls]`` receives
+the built registry when the key is empty.
 """
 
 from django.contrib.auth import get_backends
@@ -51,20 +52,24 @@ class TrustModelBackendMixin(object):
         return recorders[cls]
 
     def ready(self):
-        return self._get_or_create_catalog()
-
-    def _get_or_create_catalog(self):
-        """Return this class's catalog. A catalog already stored is kept."""
+        """Build this class's catalog when it is not stored yet."""
         _materialize_configured_catalogs(self)
         return catalogs[type(self)]
 
-    def _built_registry(self):
-        return self._get_or_create_catalog().registry
+    def _answered_catalog(self):
+        """Catalog stored for this class. ``ready()`` only if it is missing."""
+        cls = type(self)
+        if cls not in catalogs:
+            return self.ready()
+        return catalogs[cls]
+
+    def _answered_registry(self):
+        return self._answered_catalog().registry
 
     @property
     def registry(self):
-        """Built registry for this class. Seals on first read."""
-        return self._built_registry()
+        """Built registry stored on this class's catalog."""
+        return self._answered_registry()
 
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
         return self._listed_permissions(
@@ -83,7 +88,7 @@ class TrustModelBackendMixin(object):
             return False
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
-        catalog = self._get_or_create_catalog()
+        catalog = self._answered_catalog()
         entry = catalog.prepare_has_perm(
             user_obj, permext, obj, skipped=inquiry.values,
         )
@@ -95,7 +100,7 @@ class TrustModelBackendMixin(object):
 
     def permitted_users_predicate(self, content, perm, *, skipped=()):
         """``Q`` over candidate users, or ``None`` when this path does not apply."""
-        catalog = self._get_or_create_catalog()
+        catalog = self._answered_catalog()
         return catalog.registry.permitted_users_predicate(
             content, perm,
             sponsors=catalog.sponsors,
@@ -105,30 +110,26 @@ class TrustModelBackendMixin(object):
     def _skip_inquiry(self, user_obj, skip_flags):
         return bind_checked_user(
             user_obj, skip_flags=skip_flags,
-            registry=self._built_registry,
+            registry=self._answered_registry(),
         )
 
     def _listed_permissions(self, user_obj, obj, skip_flags, *, kind, cache=False):
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return set()
-        registry = self._built_registry()
         if cache:
             self._ensure_perm_cache(user_obj)
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
             return self._path_permissions(
                 user_obj, obj, kind=kind, skipped=inquiry.values,
-                registry=registry,
             )
         return set()
 
-    def _path_permissions(self, user_obj, obj, *, kind, skipped=(), registry=None):
-        registry = self._built_registry() if registry is None else registry
-        if registry is None:
-            return set()
-        qs = registry.permissions_for(
+    def _path_permissions(self, user_obj, obj, *, kind, skipped):
+        catalog = self._answered_catalog()
+        qs = catalog.registry.permissions_for(
             user_obj, obj, kind=kind,
-            sponsors=self._get_or_create_catalog().sponsors,
+            sponsors=catalog.sponsors,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
         if qs is None or qs == ():
@@ -276,8 +277,20 @@ def _canonical_path(cls):
     return '%s.%s' % (cls.__module__, cls.__qualname__)
 
 
+def _sponsorship_family(cls):
+    """Family that decides which catalogs sponsor each other.
+
+    The implementation owner declares ``_authorization_family``. A class
+    with no owner has only the class attribute.
+    """
+    config = implementation_for_class(cls, required=False)
+    if config is None:
+        return cls.family
+    return config._authorization_family
+
+
 def _materialize_configured_catalogs(extra):
-    """Compile each missing class, then construct catalogs with sponsors."""
+    """Compile each class that has no catalog yet."""
     backends = list(get_backends())
     if extra is not None:
         backends.append(extra)
@@ -291,36 +304,25 @@ def _materialize_configured_catalogs(extra):
             continue
         seen.add(cls)
         chosen.append(backend)
-    missing = [backend for backend in chosen if type(backend) not in catalogs]
-    if missing:
-        compiled = []
-        for backend in missing:
-            cls = type(backend)
-            recorder = recorders.get(cls)
-            if recorder is None:
-                recorder = Recorder()
-                recorders[cls] = recorder
-            backend.recorder = recorder
-            path = _canonical_path(cls)
-            family = cls.family
-            factory, registry = Catalog.compile(
-                path=path, family=family,
-                compiler=backend.query_compiler, recorder=recorder,
-            )
-            compiled.append((cls, path, family, factory, registry))
-        by_cls = {cls: catalog.registry for cls, catalog in catalogs.items()}
-        for cls, path, family, factory, registry in compiled:
-            by_cls[cls] = registry
-        for cls, path, family, factory, registry in compiled:
-            sponsors = tuple(
-                by_cls[other]
-                for other in by_cls
-                if other is not cls and other.family == family
-            )
-            catalogs[cls] = Catalog(
-                cls=cls, path=path, family=family,
-                factory=factory, registry=registry, sponsors=sponsors,
-            )
+    for backend in chosen:
+        cls = type(backend)
+        if cls in catalogs:
+            continue
+        recorder = recorders.get(cls)
+        if recorder is None:
+            recorder = Recorder()
+            recorders[cls] = recorder
+        backend.recorder = recorder
+        path = _canonical_path(cls)
+        family = _sponsorship_family(cls)
+        factory, registry = Catalog.compile(
+            path=path, family=family,
+            compiler=backend.query_compiler, recorder=recorder,
+        )
+        catalogs[cls] = Catalog(
+            cls=cls, path=path, family=family,
+            factory=factory, registry=registry, catalogs=catalogs,
+        )
     for backend in chosen:
         cls = type(backend)
         registries.setdefault(cls, catalogs[cls].registry)

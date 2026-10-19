@@ -131,10 +131,10 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
             catalogs[cls] = Catalog(
                 cls=cls,
                 path=extra.path,
-                family=cls.family,
+                family=cls.family if saved is None else saved.family,
                 factory=factory,
                 registry=factory.build_registry(),
-                sponsors=saved.sponsors if saved is not None else (),
+                catalogs=catalogs,
             )
             try:
                 with bound_handle(self.document_backend, extra):

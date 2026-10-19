@@ -41,7 +41,13 @@ def listed_backend_class(path):
 
 
 class _PathRegistries(dict):
-    """Path-keyed mirror tests assign. A write also updates ``registries[cls]``."""
+    """Path store on an implementation owner.
+
+    A write of a path that names a backend class also stores that object
+    at ``registries[cls]``. Deleting the path removes the class key.
+    Production registration writes the class recorder and leaves this
+    dict empty.
+    """
 
     def __setitem__(self, path, value):
         dict.__setitem__(self, path, value)

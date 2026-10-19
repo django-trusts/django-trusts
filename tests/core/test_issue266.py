@@ -56,7 +56,7 @@ class _GrantBackend(TrustModelBackendMixin, ModelBackend):
     """Grant rows for a second class. Sponsors are that class's catalog."""
 
 
-def _seal_factory(backend_cls, factory, sponsors=()):
+def _seal_factory(backend_cls, factory):
     """Construct this class's catalog from a factory this test filled."""
     from trusts.apps import catalogs
     from trusts.compile.catalogs import Catalog
@@ -68,7 +68,7 @@ def _seal_factory(backend_cls, factory, sponsors=()):
         family=backend_cls.family,
         factory=factory,
         registry=built,
-        sponsors=sponsors,
+        catalogs=catalogs,
     )
     return built
 
@@ -1680,14 +1680,8 @@ class DelegatedAuthorityLiveTest(TestCase):
         )
         from trusts.apps import catalogs
 
-        grant_built = _seal_factory(_GrantBackend, grant_handle.registry)
-        deleg_built = _seal_factory(
-            _PairDocumentBackend, delegation_handle.registry,
-            sponsors=(grant_built,),
-        )
-        _seal_factory(
-            _GrantBackend, grant_handle.registry, sponsors=(deleg_built,),
-        )
+        _seal_factory(_GrantBackend, grant_handle.registry)
+        _seal_factory(_PairDocumentBackend, delegation_handle.registry)
         self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
         self.addCleanup(lambda: catalogs.pop(_GrantBackend, None))
         with override_settings(AUTHENTICATION_BACKENDS=(

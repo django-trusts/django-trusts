@@ -486,10 +486,10 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         catalogs[cls] = Catalog(
             cls=cls,
             path='%s.%s' % (cls.__module__, cls.__qualname__),
-            family=cls.family,
+            family=cls.family if saved is None else saved.family,
             factory=factory,
             registry=factory.build_registry(),
-            sponsors=saved.sponsors if saved is not None else (),
+            catalogs=catalogs,
         )
         try:
             with bound_handle(self.backend, self.handle):
@@ -799,10 +799,10 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         catalogs[cls] = Catalog(
             cls=cls,
             path='%s.%s' % (cls.__module__, cls.__qualname__),
-            family=cls.family,
+            family=cls.family if saved is None else saved.family,
             factory=factory,
             registry=factory.build_registry(),
-            sponsors=saved.sponsors if saved is not None else (),
+            catalogs=catalogs,
         )
         try:
             with bound_handle(self.backend, self.handle):
@@ -1099,10 +1099,10 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         catalogs[cls] = Catalog(
             cls=cls,
             path='%s.%s' % (cls.__module__, cls.__qualname__),
-            family=cls.family,
+            family=cls.family if saved is None else saved.family,
             factory=factory,
             registry=factory.build_registry(),
-            sponsors=saved.sponsors if saved is not None else (),
+            catalogs=catalogs,
         )
         try:
             with bound_handle(backend, handle):

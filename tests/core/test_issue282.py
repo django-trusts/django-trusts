@@ -64,7 +64,7 @@ def _seal_factory(backend_cls, factory):
         family=backend_cls.family,
         factory=factory,
         registry=built,
-        sponsors=(),
+        catalogs=catalogs,
     )
 
 

@@ -168,8 +168,6 @@ def user_skip_params(user, skip_flags, *, handles=None, registry=None,
     )
     if denied:
         return SkipParams(True, {})
-    if callable(registry):
-        registry = registry()
     if registry is not None:
         known = registry._known_skip_names()
     else:
