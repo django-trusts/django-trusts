@@ -39,7 +39,7 @@ those tests move. Deleting this module waits on that downstream set.
 export. ``plan.registry`` does not import ``compile``.
 """
 
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.aggregates import (
