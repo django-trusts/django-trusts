@@ -54,7 +54,7 @@ def _seal_factory(backend_cls, factory):
         family=backend_cls.family,
         factory=factory,
         registry=built,
-        catalogs=catalogs,
+        family_registries=(),
     )
 
 

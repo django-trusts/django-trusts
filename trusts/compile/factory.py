@@ -1813,8 +1813,7 @@ class RegistryFactory(object):
     def permissions_for(self, user, content, **skip_flags):
         """Distinct permission rows granted to ``user`` on ``content``.
 
-        Delegates to the built registry, so delegations/sponsors use
-        production semantics rather than the old plan-only trio.
+        Delegates to the built registry.
         """
         return self.build_registry().permissions_for(
             user, content, **skip_flags,

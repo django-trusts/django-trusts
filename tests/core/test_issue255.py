@@ -251,7 +251,9 @@ def _seal_document_factory(factory):
         family=family,
         factory=factory,
         registry=built,
-        catalogs=catalogs,
+        family_registries=(
+            () if previous is None else previous.family_registries
+        ),
     )
     return built
 

@@ -56,7 +56,7 @@ class _GrantBackend(TrustModelBackendMixin, ModelBackend):
     """Grant rows for a second class. Sponsors are that class's catalog."""
 
 
-def _seal_factory(backend_cls, factory):
+def _seal_factory(backend_cls, factory, family_registries=()):
     """Construct this class's catalog from a factory this test filled."""
     from trusts.apps import catalogs
     from trusts.compile.catalogs import Catalog
@@ -68,7 +68,7 @@ def _seal_factory(backend_cls, factory):
         family=backend_cls.family,
         factory=factory,
         registry=built,
-        catalogs=catalogs,
+        family_registries=tuple(family_registries),
     )
     return built
 
@@ -1604,7 +1604,7 @@ class DelegatedAuthorityLiveTest(TestCase):
 
         granted = _compile_granted(
             (delegation_handle,), Document.objects.all(), self.delegate,
-            self.change, sponsor_handles=handles,
+            self.change, family_registries=handles,
         )
         self.assertIsNotNone(granted)
         self.assertTrue(Document.objects.filter(granted).exists())
@@ -1617,7 +1617,7 @@ class DelegatedAuthorityLiveTest(TestCase):
 
         permissions = _compile_common_permissions(
             (delegation_handle,), self.document, self.delegate,
-            sponsor_handles=handles,
+            family_registries=handles,
         )
         self.assertEqual(list(permissions), [self.change])
 
@@ -1680,8 +1680,11 @@ class DelegatedAuthorityLiveTest(TestCase):
         )
         from trusts.apps import catalogs
 
-        _seal_factory(_GrantBackend, grant_handle.registry)
-        _seal_factory(_PairDocumentBackend, delegation_handle.registry)
+        grant_built = _seal_factory(_GrantBackend, grant_handle.registry)
+        _seal_factory(
+            _PairDocumentBackend, delegation_handle.registry,
+            family_registries=(grant_built,),
+        )
         self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
         self.addCleanup(lambda: catalogs.pop(_GrantBackend, None))
         with override_settings(AUTHENTICATION_BACKENDS=(

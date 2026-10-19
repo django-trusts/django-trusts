@@ -489,7 +489,9 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             family=cls.family if saved is None else saved.family,
             factory=factory,
             registry=factory.build_registry(),
-            catalogs=catalogs,
+            family_registries=(
+                () if saved is None else saved.family_registries
+            ),
         )
         try:
             with bound_handle(self.backend, self.handle):
@@ -802,7 +804,9 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
             family=cls.family if saved is None else saved.family,
             factory=factory,
             registry=factory.build_registry(),
-            catalogs=catalogs,
+            family_registries=(
+                () if saved is None else saved.family_registries
+            ),
         )
         try:
             with bound_handle(self.backend, self.handle):
@@ -1102,7 +1106,9 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             family=cls.family if saved is None else saved.family,
             factory=factory,
             registry=factory.build_registry(),
-            catalogs=catalogs,
+            family_registries=(
+                () if saved is None else saved.family_registries
+            ),
         )
         try:
             with bound_handle(backend, handle):

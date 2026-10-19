@@ -180,7 +180,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             built.has_permission(self.alice, self.doc_a, self.read),
             instance_match(
                 handle, self.doc_a, self.alice, self.read,
-                sponsor_handles=(handle,),
+                family_registries=(handle,),
             ),
         )
 
@@ -190,7 +190,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         )
         granted_q = _compile_granted(
             (handle,), self.Document.objects.all(), self.alice, self.read,
-            sponsor_handles=(handle,),
+            family_registries=(handle,),
         )
         production_qs = bind_once(
             self.Document.objects.filter(granted_q).distinct()
@@ -262,7 +262,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             built.has_permission(self.bob, self.doc_a, self.read),
             instance_match(
                 handle, self.doc_a, self.bob, self.read,
-                sponsor_handles=(handle,),
+                family_registries=(handle,),
             ),
         )
         self.assertFalse(built.has_permission(self.outsider, self.doc_a, self.read))
@@ -277,7 +277,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         )
         production_permissions = _compile_common_permissions(
             (handle,), self.doc_a, self.bob, kind='complete',
-            sponsor_handles=(handle,),
+            family_registries=(handle,),
         )
         self.assertEqual(
             str(built.permissions_for(self.bob, self.doc_a).query),
@@ -404,7 +404,7 @@ class RegistryQuestionsTest(TransactionTestCase):
                 return question.name
 
         built_delegated.walk_questions(
-            _Visitor2(), sponsors=(built_delegated,))
+            _Visitor2(), family_registries=(built_delegated,))
         by_name = {q.name: q for q in seen2}
         self.assertEqual(len(by_name['permitted'].delegations), 1)
         self.assertTrue(by_name['has_perm'].question(
