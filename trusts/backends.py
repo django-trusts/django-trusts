@@ -18,7 +18,7 @@ from trusts.plan.aggregates import _compiler_applies
 from trusts import utils
 
 
-registry = SimpleRegistry()
+registries = {}
 
 def _permission_binding(perm, model):
     """Unevaluated Permission pk for ``perm`` (instance or dotted code).
@@ -58,8 +58,22 @@ class TrustModelBackendMixin(object):
             klass = obj.__class__
         return klass
 
+    def __init__(self):
+        cls = type(self)
+        if cls in registries:
+            return registries[self]
+        registries[cls] = SimpleRegistry()
+
     def get_registry():
         return registry
+
+    def ready():
+        cls = type(self)
+        registry = registries[cls]
+
+        registry.freeze()
+
+        registry.walk(query_compiler.get_visitor())
 
     def _trusts_config(self):
         from trusts.apps import implementation_for_class
@@ -360,13 +374,18 @@ class TrustModelBackendMixin(object):
         )
 
 class SimpleRegistry(object):
+    user_conditions = {}
+    user_overrides = {}
     principles = {}
     delegates = {}
     named_filters = {}
-    user_conditions = {}
-    user_overrides = {}
 
-    def register(trust=trust, user=user, permission=permission, content=content, delegate=delegate, sponsor=sponsor, condition=condition):
+    frozen = false
+
+    def register(trust=trust, user=user, permission=permission, content=content, delegate=delegate, sponsor=sponsor, condition=condition, **kwargs):
+        if frozen:
+            raise Error("forzen already")
+
         # TODO: implement me
 
         # TODO is not exclusive
@@ -381,7 +400,7 @@ class SimpleRegistry(object):
 
             if self.principles[content_model] is None:
                 self.principles[content_model] = []
-            self.principles[content_model].append((content, trust, user, condition, ))
+            self.principles[content_model] = {k: kwargs[k] for k in ("trust", "user", "permission", "content", "condition") if k in kwargs}
         else:
             # TODO: make sure args has all expected ones and none of the principles ones
 
@@ -389,6 +408,17 @@ class SimpleRegistry(object):
 
             if self.delegates[content_model] is None:
                 self.delegates[content_model] = []
-            self.delegates.append((content, trust, sponsor, delegate, condition, ))
+            self.delegates[content_model] = {k: kwargs[k] for k in ("trust", "sponsor", "delegate", "content", "condition") if k in kwargs}
 
     # TODO: implements a) set_user_conditions / overrides, b) aadd_named_filters()
+
+    def freeze():
+        frozen = True
+
+    def walk(visitor):
+        # TODO: call visitor.visit_user ...
+
+        for princple in principles:
+            visitor.vist_princple(**dict(princple))
+
+        # TODO: do the same for delegates, then named_filters
