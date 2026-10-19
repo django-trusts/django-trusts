@@ -302,7 +302,7 @@ class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias, the user/permission/content sentinels, and the
-    sponsor handles for one backend render. Built registries are held,
+    family registries for one backend render. Built registries are held,
     not re-derived: ``handle`` / ``handles`` are render handles whose
     registry is the registry built once for this render, and
     ``registry`` is that built registry. ``visit(question)`` is the
@@ -324,23 +324,23 @@ class _PolicyVisitor(object):
         self._classifier_records = {}
         self._ordinary_records = {}
 
-    def sponsor_registries(self):
-        """Distinct built sponsor registries, excluding this registry."""
-        sponsors = []
+    def family_registries(self):
+        """Distinct built registries in this render, excluding this one."""
+        found = []
         for item in self.handles:
             registry = _built_registry(item)
             if registry is None or registry is self.registry:
                 continue
-            if any(registry is seen for seen in sponsors):
+            if any(registry is seen for seen in found):
                 continue
-            sponsors.append(registry)
-        return tuple(sponsors)
+            found.append(registry)
+        return tuple(found)
 
     def _all_registries(self):
-        sponsors = self.sponsor_registries()
+        peers = self.family_registries()
         if self.registry is None:
-            return sponsors
-        return (self.registry,) + sponsors
+            return peers
+        return (self.registry,) + peers
 
     def content_for(self, label):
         return self._contents[label]
@@ -478,7 +478,7 @@ class _PolicyVisitor(object):
         queryset = _content_manager(model).all()
         granted = _compile_granted(
             (handle,), queryset, user, permission, kind='complete',
-            sponsor_handles=handles,
+            family_registries=handles,
         )
         if granted is None:
             raise TrustsConfigurationError(
@@ -499,7 +499,7 @@ class _PolicyVisitor(object):
         instance = _content_sentinel(model, alias)
         granted = _compile_granted(
             (handle,), instance, user, permission, kind='complete',
-            sponsor_handles=handles,
+            family_registries=handles,
         )
         if granted is None:
             raise TrustsConfigurationError(
@@ -522,7 +522,7 @@ class _PolicyVisitor(object):
         if plan.delegations:
             queryset = _compile_common_permissions(
                 (handle,), instance, user, kind='complete',
-                sponsor_handles=handles,
+                family_registries=handles,
             )
         else:
             queryset = _compile_common_permissions(
@@ -563,7 +563,7 @@ class _PolicyVisitor(object):
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         listed = _relationship_handles((handle,))
-        sponsors = _relationship_handles(handles)
+        peers = _relationship_handles(handles)
         rows = []
         for prefix in _permitted_content_prefix_models(handle, model):
             queryset = _compile_permitted_content_queryset(
@@ -572,7 +572,7 @@ class _PolicyVisitor(object):
                 permission,
                 content=model,
                 handles=listed,
-                sponsor_handles=sponsors,
+                family_registries=peers,
             )
             if queryset.query.is_empty():
                 continue
@@ -704,7 +704,9 @@ def _project_contents(handle, alias, records, ids, named_filters, handles):
     if groups and registry is not None and hasattr(registry, 'walk_questions'):
         # The visitor supplies sentinels/alias; the registry walks all
         # possible questions per content group in document order.
-        registry.walk_questions(visitor, sponsors=visitor.sponsor_registries())
+        registry.walk_questions(
+            visitor, family_registries=visitor.family_registries(),
+        )
         for group in groups:
             seen.add(group['label'])
             content = visitor.content_for(group['label'])

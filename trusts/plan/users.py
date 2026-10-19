@@ -126,18 +126,18 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
 
 
 def permitted_users_predicate_for_registry(registry, content, perm, *,
-                                           sponsor_handles=(),
+                                           family_registries=(),
                                            skipped=(), backend=None):
     """Reverse predicate for one built (or builder) registry.
 
     This is the single implementation behind both
     ``trusts_mixin_predicate`` (backend adapter, which supplies its
-    own sponsor handles and ``:condition`` overlay) and
+    family registries and ``:condition`` overlay) and
     ``Registry.permitted_users_predicate`` (standalone, where
-    sponsors are other built registries and the overlay comes from
-    this registry's condition lookup). ``backend=None`` uses the
+    family registries are other built registries and the overlay comes
+    from this registry's condition lookup). ``backend=None`` uses the
     mixin default singular-permission acceptance (auth.Permission).
-    Sponsor records are each sponsor registry's ordinary rows.
+    Ordinary rows come from each family registry.
     """
     # A builder registry answers plan_for by building; a built
     # registry answers directly. Both expose plan_for.
@@ -159,7 +159,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
             if isinstance(binding, Model) else Permission
         )
         sponsor_records = _ordinary_records(
-            tuple(sponsor_handles), content, permission_model,
+            tuple(family_registries), content, permission_model,
         )
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
@@ -219,7 +219,7 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
     user_model = _plan_user_model(plan, content)
     exists = plan.user_exists(content, permission) if plan.records else None
     if plan.delegations:
-        sponsor_handles = (handle,) if handles is None else tuple(handles)
+        family_registries = (handle,) if handles is None else tuple(handles)
         permission_model = (
             permission._meta.concrete_model
             if isinstance(permission, Model) else None
@@ -227,7 +227,7 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
         delegated = _delegated_user_exists(
             plan.delegations,
             _ordinary_records(
-                sponsor_handles, content, permission_model,
+                family_registries, content, permission_model,
             ),
             content,
             permission,

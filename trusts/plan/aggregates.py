@@ -81,7 +81,7 @@ def _compiler_applies(compiler, plan):
 
 
 def all_match(handles, candidates, user, permission, *, kind='complete',
-              extra_q=None, sponsor_handles=None, permission_model=None,
+              extra_q=None, family_registries=None, permission_model=None,
               skipped=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
@@ -92,7 +92,7 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
     handles = tuple(handles)
     granted_q = _compile_granted(
         handles, candidates, user, permission, kind=kind,
-        sponsor_handles=sponsor_handles,
+        family_registries=family_registries,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -109,7 +109,7 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
 
 
 def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None,
-                   sponsor_handles=None, permission_model=None,
+                   family_registries=None, permission_model=None,
                    skipped=()):
     """One grant EXISTS for ``obj`` through ``handle`` only.
 
@@ -118,7 +118,7 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
     """
     granted_q = _compile_granted(
         (handle,), obj, user, permission, kind=kind,
-        sponsor_handles=sponsor_handles,
+        family_registries=family_registries,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -132,13 +132,13 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
 
 
 def _compile_common_permissions(handles, candidates, user, *, kind='complete',
-                                sponsor_handles=None,
+                                family_registries=None,
                                 skipped=()):
     """Permission queryset for the given handles. No family filter."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
     handles = tuple(handles)
-    sponsor_handles = handles if sponsor_handles is None else tuple(sponsor_handles)
+    family_registries = handles if family_registries is None else tuple(family_registries)
     parts = []
     permission_model = None
     applicable = False
@@ -168,7 +168,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
         part = _as_q(fn(plan, qs, user, perm_expr))
         delegated = None
         if kind == 'complete' and getattr(plan, 'delegations', None):
-            sponsor_records = _ordinary_records(sponsor_handles, candidates)
+            sponsor_records = _ordinary_records(family_registries, candidates)
             compatible_records = _compatible_sponsor_records(
                 plan.delegations, sponsor_records,
             )
@@ -217,20 +217,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
 
 def common_permissions(handles, candidates, user, *, kind='complete',
                        **skip_flags):
-    """Permission queryset held on every candidate via the aggregate proof.
-
-    Core-owned aggregate: fold-family handles are omitted. One SQL when
-    evaluated. ``None`` when no remaining handle applies so the caller
-    may use the undeclared fallback. Uses nested ``OuterRef`` so the permission
-    identity is the outer permission row, not the candidate.
-    Applicability is ``compiler.applies(plan)``. Mixin enumeration uses
-    ``_compile_common_permissions`` on ``self._own_handle()``.
-    Only relationship-family handles participate.
-    ``RelationPlan.common_permissions`` is not this function.
-    ``skip_<name>`` is a bound parameter on the registered rules.
-    Anonymous, unauthenticated, and ``None`` are an empty queryset when
-    a handle applies, and ``None`` only when no handle applies.
-    """
+    """Permission rows held on every candidate. Fold-family handles are omitted."""
     participating = _relationship_handles(handles)
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, handles=participating)
@@ -238,7 +225,7 @@ def common_permissions(handles, candidates, user, *, kind='complete',
         return _anonymous_common_permissions(participating, candidates)
     return _compile_common_permissions(
         participating, candidates, user, kind=kind,
-        sponsor_handles=participating,
+        family_registries=participating,
         skipped=inquiry.values,
     )
 

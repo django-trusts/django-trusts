@@ -711,7 +711,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     queryset = _content_manager(ReviewDocument).all()
                     granted = _compile_granted(
                         (handle,), queryset, user, permission,
-                        kind='complete', sponsor_handles=(handle,),
+                        kind='complete', family_registries=(handle,),
                     )
                     raw_sql, raw_params = bind_once(
                         queryset.filter(granted).distinct(),

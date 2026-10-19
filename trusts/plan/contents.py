@@ -83,16 +83,16 @@ def _apply_checked_user(grant, plan, user, values, permission, content_identity,
 
 
 def _compile_granted(handles, candidates, user, permission, *, kind='complete',
-                     sponsor_handles=None, permission_model=None,
+                     family_registries=None, permission_model=None,
                      skipped=()):
     """OR ordinary predicates and one-level delegated predicates.
 
     ``handles`` owns the direct and delegation branches being projected.
-    ``sponsor_handles`` supplies the complete ordinary-authority union inside
+    ``family_registries`` supplies the complete ordinary-authority union inside
     each delegation branch and defaults to the same handles.
     """
     handles = tuple(handles)
-    sponsor_handles = handles if sponsor_handles is None else tuple(sponsor_handles)
+    family_registries = handles if family_registries is None else tuple(family_registries)
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     parts = []
@@ -111,7 +111,7 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
         if kind == 'complete' and getattr(plan, 'delegations', None):
             if sponsor_records is None:
                 sponsor_records = _ordinary_records(
-                    sponsor_handles, candidates, permission_model,
+                    family_registries, candidates, permission_model,
                 )
             delegated = _delegated_content_exists(
                 tuple(plan.delegations), sponsor_records, user, permission,
@@ -132,33 +132,15 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
 
 
 def granted(handles, candidates, user, permission, *, kind='complete',
-            sponsor_handles=None, permission_model=None,
+            family_registries=None, permission_model=None,
             skipped=()):
-    """OR each applicable relationship-family handle's complete (or group) predicate.
-
-    Core-owned aggregate: fold-family handles are omitted. Noun-blind
-    among relationship handles: this builder does not know Trust, Group,
-    Guardian, or ceiling. A valid compiler returning ``None`` is
-    inapplicable and is omitted. Compiler exceptions propagate. An empty
-    result is ``None`` so the caller may use the transitional undeclared
-    fallback.
-
-    Mixin instance / QuerySet evaluation uses ``_compile_granted`` on
-    ``self._own_handle()`` so an extension family can still project
-    through the mixin.
-
-    ``permission`` may be a permission instance or an unevaluated lookup
-    (``Subquery`` / ``OuterRef``). Expressions are not passed to
-    ``plan_for``; the plan is selected by content and user terminals.
-
-    Only relationship-family handles participate.
-    """
+    """OR each applicable relationship-family handle's predicate."""
     participating = _relationship_handles(handles)
     return _compile_granted(
         participating, candidates, user, permission, kind=kind,
-        sponsor_handles=(
-            participating if sponsor_handles is None
-            else _relationship_handles(sponsor_handles)
+        family_registries=(
+            participating if family_registries is None
+            else _relationship_handles(family_registries)
         ),
         permission_model=permission_model,
         skipped=skipped,
@@ -351,18 +333,18 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 
 
 def _compile_permitted_content_queryset(
-    queryset, user, permission, *, content, handles, sponsor_handles,
+    queryset, user, permission, *, content, handles, family_registries,
     skipped=(),
 ):
     """Compile the permitted-content queryset for resolved handles.
 
     ``handles`` owns the ordinary and delegation branches being listed.
-    ``sponsor_handles`` supplies the ordinary grants a delegation may
+    ``family_registries`` supplies the ordinary grants a delegation may
     use. Callers resolve relationship handles and apply the inactive-user
     gate before this helper runs.
     """
     handles = tuple(handles)
-    sponsor_handles = tuple(sponsor_handles)
+    family_registries = tuple(family_registries)
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
@@ -384,7 +366,7 @@ def _compile_permitted_content_queryset(
             plan_parts.extend(_delegated_prefix_predicates(
                 tuple(plan.delegations),
                 _ordinary_records(
-                    sponsor_handles, content, permission._meta.concrete_model,
+                    family_registries, content, permission._meta.concrete_model,
                 ),
                 user, permission, scope_model,
                 content_identity=content_identity,
@@ -412,40 +394,7 @@ def _compile_permitted_content_queryset(
 
 def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
                                 **skip_flags):
-    """Filter scope-model rows that appear as a proper prefix of ``content``.
-
-    Fail closed unless ``queryset.model`` is a proper prefix node of some
-    applicable record's ``content_path`` whose content terminal is
-    ``content``. Compile ``EXISTS`` of root rows correlated to
-    ``OuterRef`` of that hop's resolved target field (the related
-    ``attname`` from ``get_path_info()``, which need not be ``pk``) at
-    that node, bind user + permission from the same record, and OR
-    applicable records.
-
-    An ``along=`` registration uses the same bounded ``WITH RECURSIVE``
-    walk as the forward check. A prefix at the walk site is kept when
-    its identity is in that walk. A later proper prefix is kept when it
-    hangs off a walk-site row in the walk. A one-level delegation
-    contributes a prefix only when the delegation and the sponsor's
-    ordinary permission both reach it. A second delegation level does
-    not. A delegated ``along=`` whose content suffix is longer than one
-    reverse hop raises ``TrustsConfigurationError``.
-
-    ``queryset.model`` equal to the content terminal is allowed when a
-    proper prefix hop of that same model exists (self-referential
-    trees). A terminal-only path has no proper prefix, so the same-model
-    queryset still returns ``none()``. Unknown terminal, empty handles,
-    or a scope model not on the path also return ``none()``.
-    ``permission`` must be a model instance. Construction of a
-    fail-closed result issues zero SQL; SQL runs only when a compiled
-    predicate is evaluated. Default and explicit handle lists include
-    relationship-family handles only.
-
-    Noun-blind: this builder does not import or name Zero schema models
-    and does not use a compiler's historical group
-    OR. Explicit ``group=`` records participate through the same prefix
-    correlation. Membership shape is not a group.
-    """
+    """Rows of a proper content-path prefix that the grant reaches."""
     if not isinstance(queryset, QuerySet):
         raise TrustsConfigurationError(
             'filter_by_permitted_content requires a QuerySet, not %r.'
@@ -464,7 +413,7 @@ def filter_by_permitted_content(queryset, user, permission, *, content, handles=
     skipped = inquiry.values
     return _compile_permitted_content_queryset(
         queryset, user, permission, content=content, handles=handles,
-        sponsor_handles=handles,
+        family_registries=handles,
         skipped=skipped,
     )
 

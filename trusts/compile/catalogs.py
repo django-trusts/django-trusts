@@ -15,13 +15,13 @@ _NO_PRESET = object()  # not None: False and empty answers are real
 
 
 class Catalog(object):
-    def __init__(self, *, cls, path, family, factory, registry, catalogs):
+    def __init__(self, *, cls, path, family, factory, registry, family_registries):
         self.cls = cls
         self.path = path
         self.family = family
         self.factory = factory
         self._registry = registry
-        self._catalogs = catalogs
+        self.family_registries = tuple(family_registries)
 
     @classmethod
     def compile(cls, *, path, family, compiler, recorder):
@@ -35,16 +35,6 @@ class Catalog(object):
     def registry(self):
         return self._registry
 
-    @property
-    def sponsors(self):
-        """Registries of the other catalogs in this family right now."""
-        found = []
-        for other_cls, other in self._catalogs.items():
-            if other_cls is self.cls or other.family != self.family:
-                continue
-            found.append(other.registry)
-        return tuple(found)
-
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         registry = self.registry
         model = _content_model(obj)
@@ -57,7 +47,7 @@ class Catalog(object):
             return PreparedInquiry(model, result=False)
         held = registry.has_permission(
             user_obj, obj, _permission_binding(perm, model),
-            extra_q=extra_q, sponsors=self.sponsors,
+            extra_q=extra_q, family_registries=self.family_registries,
             permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )

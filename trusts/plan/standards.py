@@ -27,7 +27,7 @@ _MSG = 'User conditions only support concrete boolean fields, &, and ~.'
 _RESERVED = frozenset({
     'user', 'user_obj', 'permission', 'perm', 'permext', 'content', 'obj',
     'extra_q', 'conditions', 'queryset', 'handles', 'kind', 'candidates',
-    'plan', 'sponsor_handles', 'permission_model', 'skipped', 'skip_flags',
+    'plan', 'family_registries', 'permission_model', 'skipped', 'skip_flags',
 })
 
 Node = namedtuple('Node', 'kind name left right')

@@ -276,7 +276,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             complete += 1
             part = granted(
                 (handle,), candidates, user, binding, kind='complete',
-                sponsor_handles=handles,
+                family_registries=handles,
                 permission_model=Permission,
                 skipped=skipped,
             )
@@ -286,7 +286,7 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             continue
         part = granted(
             (handle,), candidates, user, binding, kind='complete',
-            sponsor_handles=handles,
+            family_registries=handles,
             permission_model=Permission,
             skipped=skipped,
         )

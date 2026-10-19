@@ -1,10 +1,9 @@
 """Generic Trusts backend mixin.
 
-Registration is a per-class ``Recorder``. ``ready()`` builds a
-``Catalog`` for each configured class and stores ``catalogs[cls]``.
-An inquiry reads that catalog. It calls ``ready()`` only when the
-class is missing. Sponsors are the other catalogs of the same
-authorization family at prepare time. ``registries[cls]`` receives
+Registration is a per-class ``Recorder``. ``ready()`` compiles every
+configured class, then stores ``catalogs[cls]`` with that class's
+family registries fixed. An inquiry reads the stored catalog and calls
+``ready()`` only when the class is missing. ``registries[cls]`` receives
 the built registry when the key is empty.
 """
 
@@ -38,10 +37,6 @@ class TrustModelBackendMixin(object):
         if cls not in recorders:
             recorders[cls] = Recorder()
         self.recorder = recorders[cls]
-
-    def _trusts_config(self):
-        """Implementation owner for this class, if one is installed."""
-        return implementation_for_class(type(self), required=True)
 
     def get_registry(self):
         """The application registry: this class's recorder, still open until ``ready``."""
@@ -103,9 +98,13 @@ class TrustModelBackendMixin(object):
         catalog = self._answered_catalog()
         return catalog.registry.permitted_users_predicate(
             content, perm,
-            sponsors=catalog.sponsors,
+            family_registries=catalog.family_registries,
             skipped=skipped, backend=self,
         )
+
+    def _trusts_config(self):
+        """Implementation owner for this class, if one is installed."""
+        return implementation_for_class(type(self), required=True)
 
     def _skip_inquiry(self, user_obj, skip_flags):
         return bind_checked_user(
@@ -129,7 +128,7 @@ class TrustModelBackendMixin(object):
         catalog = self._answered_catalog()
         qs = catalog.registry.permissions_for(
             user_obj, obj, kind=kind,
-            sponsors=catalog.sponsors,
+            family_registries=catalog.family_registries,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
         )
         if qs is None or qs == ():
@@ -153,13 +152,9 @@ class Recorder(object):
         self.user_conditions = []
         self.user_overrides = []
         self._rows = []
+        self._principals = []
+        self._delegations = []
         self.frozen = False
-
-    def _open(self):
-        if self.frozen:
-            raise TrustsConfigurationError(
-                'register refused: this recorder is frozen.'
-            )
 
     def register(self, *, trust, content, user=None, permission=None,
                  group=None, delegate=None, sponsor=None, condition=None,
@@ -176,9 +171,12 @@ class Recorder(object):
                 'sponsor': shape.sponsor, 'condition': shape.condition,
                 'along': shape.along,
             }
-            record = self._scratch().register_delegation(**payload)
+            built = RegistryFactory().build_delegation(**payload)
+            self._reject_known_delegation(built)
+            record = self._rules_factory().register_delegation(**payload)
             self.delegates.setdefault(record.content_model, []).append(payload)
             self._rows.append(('delegate', record.content_model, payload))
+            self._delegations.append(record)
             return record
         payload = {
             'content': shape.content, 'user': shape.user,
@@ -188,9 +186,12 @@ class Recorder(object):
             payload['group'] = shape.group
         else:
             payload['permission'] = shape.permission
-        record = self._scratch().register(**payload)
+        built = RegistryFactory().build_relation(**payload)
+        self._reject_known_principal(built)
+        record = self._rules_factory().register(**payload)
         self.principals.setdefault(record.content_model, []).append(payload)
         self._rows.append(('principal', record.content_model, payload))
+        self._principals.append(record)
         return record
 
     def add_named_filter(self, model, code, predicate):
@@ -202,13 +203,15 @@ class Recorder(object):
 
     def set_user_condition(self, name, expr, on='*'):
         self._open()
-        result = self._scratch().set_user_condition(name, expr, on=on)
+        self._rules_before_rows()
+        result = self._rules_factory().set_user_condition(name, expr, on=on)
         self.user_conditions.append((name, expr, on))
         return result
 
     def set_user_override(self, name, expr, on='user'):
         self._open()
-        result = self._scratch().set_user_override(name, expr, on=on)
+        self._rules_before_rows()
+        result = self._rules_factory().set_user_override(name, expr, on=on)
         self.user_overrides.append((name, expr, on))
         return result
 
@@ -228,15 +231,79 @@ class Recorder(object):
             else:
                 visitor.register_delegate(**payload)
 
-    def _scratch(self):
-        """Discarded factory holding the rows already stored."""
+    def _open(self):
+        if self.frozen:
+            raise TrustsConfigurationError(
+                'register refused: this recorder is frozen.'
+            )
+
+    def _rules_before_rows(self):
+        if self._rows:
+            raise TrustsConfigurationError(
+                'Set user conditions and the user override before '
+                'register() or register_delegation().'
+            )
+
+    def _rules_factory(self):
         factory = RegistryFactory()
-        self.play(factory.get_record_adapter())
+        for name, expr, on in self.user_conditions:
+            factory.set_user_condition(name, expr, on=on)
+        for name, expr, on in self.user_overrides:
+            factory.set_user_override(name, expr, on=on)
         return factory
+
+    def _reject_known_principal(self, record):
+        for existing in self._principals:
+            if existing.root is not record.root:
+                continue
+            if existing == record:
+                raise TrustsConfigurationError(
+                    'Duplicate registration for %s.' % record.root._meta.label
+                )
+            if existing.content_model is not record.content_model:
+                continue
+            if (
+                _same_terminal_bindings(existing, record)
+                and existing.condition != record.condition
+            ):
+                continue
+            raise TrustsConfigurationError(
+                'Conflicting registration for %s content terminal '
+                '%s: existing %r, new %r.'
+                % (
+                    record.root._meta.label,
+                    record.content_model._meta.label,
+                    existing,
+                    record,
+                )
+            )
+
+    def _reject_known_delegation(self, record):
+        same_root = [
+            existing for existing in self._delegations
+            if existing.root is record.root
+        ]
+        if record in same_root:
+            raise TrustsConfigurationError(
+                'Duplicate delegated registration for %s.'
+                % record.root._meta.label
+            )
+        for existing in same_root:
+            if existing.content_model is record.content_model:
+                raise TrustsConfigurationError(
+                    'Conflicting delegated registration for %s content '
+                    'terminal %s: existing %r, new %r.'
+                    % (
+                        record.root._meta.label,
+                        record.content_model._meta.label,
+                        existing,
+                        record,
+                    )
+                )
 
 
 class _Once(object):
-    """Invoke ``fn`` once. ``play`` and the scratch check both call it."""
+    """Invoke ``fn`` once. ``add_named_filter`` and ``play`` both call it."""
 
     def __init__(self, fn):
         self.fn = fn
@@ -278,19 +345,32 @@ def _canonical_path(cls):
 
 
 def _sponsorship_family(cls):
-    """Family that decides which catalogs sponsor each other.
-
-    The implementation owner declares ``_authorization_family``. A class
-    with no owner has only the class attribute.
-    """
+    """Family of the implementation owner, or the class attribute when none."""
     config = implementation_for_class(cls, required=False)
     if config is None:
         return cls.family
     return config._authorization_family
 
 
+def _same_terminal_bindings(existing, record):
+    return (
+        existing.content_path == record.content_path
+        and existing.content_model is record.content_model
+        and existing.content_target == record.content_target
+        and existing.user_path == record.user_path
+        and existing.user_model is record.user_model
+        and existing.user_target == record.user_target
+        and existing.permission_path == record.permission_path
+        and existing.permission_model is record.permission_model
+        and existing.permission_target == record.permission_target
+        and existing.along == record.along
+        and existing.via_group == record.via_group
+        and existing.group_path == record.group_path
+    )
+
+
 def _materialize_configured_catalogs(extra):
-    """Compile each class that has no catalog yet."""
+    """Compile every missing class, then fix each catalog's family registries."""
     backends = list(get_backends())
     if extra is not None:
         backends.append(extra)
@@ -304,6 +384,7 @@ def _materialize_configured_catalogs(extra):
             continue
         seen.add(cls)
         chosen.append(backend)
+    pending = []
     for backend in chosen:
         cls = type(backend)
         if cls in catalogs:
@@ -319,11 +400,21 @@ def _materialize_configured_catalogs(extra):
             path=path, family=family,
             compiler=backend.query_compiler, recorder=recorder,
         )
+        pending.append((cls, path, family, factory, registry))
+    pool = [(catalog.family, catalog.registry) for catalog in catalogs.values()]
+    pool.extend(
+        (family, registry)
+        for _cls, _path, family, _factory, registry in pending
+    )
+    for cls, path, family, factory, registry in pending:
+        peers = tuple(
+            other for other_family, other in pool
+            if other_family == family and other is not registry
+        )
         catalogs[cls] = Catalog(
             cls=cls, path=path, family=family,
-            factory=factory, registry=registry, catalogs=catalogs,
+            factory=factory, registry=registry, family_registries=peers,
         )
     for backend in chosen:
         cls = type(backend)
         registries.setdefault(cls, catalogs[cls].registry)
-
