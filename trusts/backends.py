@@ -156,17 +156,24 @@ class TrustModelBackendMixin(object):
 
         catalog = self._get_or_create_catalog()
 
-        entry = catalog.prepare_has_perm_entry(user_obj, permext, obj, **skip_flags)
-        return entry.execute()
+        prepared = catalog.prepare_has_perm(user_obj, permext, obj, **skip_flags)
+        return prepared.execute()
 
     # @TODO: move other permission inquires entry to this backend
-    # follow the same pattern as has_perm. check things, then obtain an entry from catalog
+    # follow the same pattern as has_perm. check things, then obtain a PreparedInquiry from catalog
     # the permission inquiry decide to return the qs or execute it.
     # backend is becoming a thin object that keep the register() via Recorder, and forward the
     # eval to Catalog. everything /compile or /plan created by this backend directly or directly
     # always belong to a single backend cls, so no handle is needed. the backend should not have
     # any information that /compile or /plan needs after they are built. all the information
     #  /compile or /plan needed are passed to them at __init__, built, or catalog.prepare_xyz call
+    #
+    # CLARITY (stage 1): Catalog + has_perm only (above). The other
+    # inquiries migrate later, one by one, by the same prepare pattern;
+    # they are listed in trusts/compile/catalogs.py. The backend keeps
+    # register() via Recorder and otherwise forwards. In the end state
+    # there is no BackendHandle, and catalogs[cls] is the built-catalog
+    # store, beside recorders[cls] (one per backend class).
 
     def singular_permission_accepted(self, perm):
         """True when object ``has_perm`` treats ``perm`` as one permission row.
