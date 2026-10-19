@@ -66,7 +66,7 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
                 family=self.family,
                 factory=factory,
                 registry=factory.build_registry(),
-                sponsors=(),
+                catalogs=catalogs,
             )
         return super().has_perm(user_obj, perm, obj, **skip_flags)
 

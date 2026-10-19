@@ -15,13 +15,13 @@ _NO_PRESET = object()  # not None: False and empty answers are real
 
 
 class Catalog(object):
-    def __init__(self, *, cls, path, family, factory, registry, sponsors):
+    def __init__(self, *, cls, path, family, factory, registry, catalogs):
         self.cls = cls
         self.path = path
         self.family = family
         self.factory = factory
         self._registry = registry
-        self.sponsors = sponsors
+        self._catalogs = catalogs
 
     @classmethod
     def compile(cls, *, path, family, compiler, recorder):
@@ -35,8 +35,15 @@ class Catalog(object):
     def registry(self):
         return self._registry
 
-    def get_record_adapter(self):
-        return self.factory.get_record_adapter()
+    @property
+    def sponsors(self):
+        """Registries of the other catalogs in this family right now."""
+        found = []
+        for other_cls, other in self._catalogs.items():
+            if other_cls is self.cls or other.family != self.family:
+                continue
+            found.append(other.registry)
+        return tuple(found)
 
     def prepare_has_perm(self, user_obj, permext, obj, *, skipped):
         registry = self.registry

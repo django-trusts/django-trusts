@@ -782,7 +782,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                 family=_AcceptanceBackend.family,
                 factory=factory,
                 registry=factory.build_registry(),
-                sponsors=(),
+                catalogs=catalogs,
             )
             self.backend = _AcceptanceBackend()
             self._settings = override_settings(AUTHENTICATION_BACKENDS=(

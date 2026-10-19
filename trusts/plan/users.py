@@ -433,7 +433,7 @@ def _named_filter_q(backend, content, perm, singular, user_model):
     a singular object check that returns false. Construction reads only
     values already loaded on ``content``.
     """
-    catalog = backend._get_or_create_catalog()
+    catalog = backend._answered_catalog()
     record, _extra = catalog._condition_overlay(perm, content, None)
     if record is None:
         return None

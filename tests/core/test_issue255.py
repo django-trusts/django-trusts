@@ -243,15 +243,15 @@ def _seal_document_factory(factory):
     from trusts.compile.catalogs import Catalog
 
     previous = catalogs.get(DocumentBackend)
-    sponsors = previous.sponsors if previous is not None else ()
+    family = DocumentBackend.family if previous is None else previous.family
     built = factory.build_registry()
     catalogs[DocumentBackend] = Catalog(
         cls=DocumentBackend,
         path=DOCUMENT_BACKEND,
-        family=DocumentBackend.family,
+        family=family,
         factory=factory,
         registry=built,
-        sponsors=sponsors,
+        catalogs=catalogs,
     )
     return built
 

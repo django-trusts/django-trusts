@@ -208,10 +208,10 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         catalogs[MixinOnlyBackend] = Catalog(
             cls=MixinOnlyBackend,
             path=MIXIN,
-            family=MixinOnlyBackend.family,
+            family=self.fold_owner._authorization_family,
             factory=self.fold_registry,
             registry=self.fold_registry.build_registry(),
-            sponsors=(),
+            catalogs=catalogs,
         )
         self.fold_owner.apps._configs = [self.rel_owner, self.fold_owner]
         self.mixin = MixinOnlyBackend()
@@ -394,8 +394,9 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         saved = catalogs.get(cls)
         built = silent.registry
         catalogs[cls] = Catalog(
-            cls=cls, path=silent.path, family=built.family,
-            factory=built, registry=built, sponsors=(),
+            cls=cls, path=silent.path,
+            family=saved.family if saved is not None else built.family,
+            factory=built, registry=built, catalogs=catalogs,
         )
         try:
             with bound_handle(self.backend, silent):
