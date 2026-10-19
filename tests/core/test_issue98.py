@@ -17,14 +17,14 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import permission_in
 from trusts.core import (
     All,
-    BackendHandle,
     Equal,
     PermissionIn,
     PlanQueryCompiler,
     Ref,
     TrustsConfigurationError,
-    TrustsRegistry,
+    TrustsCompiler,
 )
+from tests.apps import backend_handle
 from trusts.query import AuthorizedManager
 
 
@@ -251,7 +251,7 @@ class ClosedPredicateRegistrationTest(TestCase):
             _Account, _Organization, _Team, _Operation, _Bundle,
             Repository, TeamRepoGrant, _Direct,
         ) = _gh_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             record = _register_team(registry, TeamRepoGrant)
         self.assertEqual(len(registry.records), 1)
@@ -267,7 +267,7 @@ class ClosedPredicateRegistrationTest(TestCase):
     def test_untyped_condition_still_rejected_with_zero_sql(self):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         t = Ref(TeamRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, r'not supported'):
@@ -307,7 +307,7 @@ class ClosedPredicateRegistrationTest(TestCase):
             Account, _Organization, _Team, _Operation, _Bundle,
             _Repository, TeamRepoGrant, _Direct,
         ) = _gh_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         t = Ref(TeamRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(
@@ -335,7 +335,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         Holder, Site, Document, Action, SiteGrant = _to_field_models(
             match=False,
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             # Distinct unique fields on one model. These unsaved rows
             # collide across fields (A.slug == B.code) and would satisfy
@@ -367,7 +367,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         _Holder, _Site, Document, _Action, SiteGrant = _to_field_models(
             match=True,
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             record = _register_site_grant(registry, SiteGrant)
         self.assertEqual(len(registry.records), 1)
@@ -378,7 +378,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
         AccountRepoGrant = _models[7]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         t = Ref(TeamRepoGrant)
         d = Ref(AccountRepoGrant)
         with self.assertNumQueries(0):
@@ -442,7 +442,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
         AccountRepoGrant = _models[7]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         t = Ref(TeamRepoGrant)
         d = Ref(AccountRepoGrant)
         with self.assertNumQueries(0):
@@ -460,7 +460,7 @@ class ClosedPredicateRegistrationTest(TestCase):
     def test_direct_user_hop_still_registers(self):
         _models = _gh_models()
         AccountRepoGrant = _models[7]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             record = _register_direct(registry, AccountRepoGrant)
         self.assertEqual(record.user_path, ('account',))
@@ -469,7 +469,7 @@ class ClosedPredicateRegistrationTest(TestCase):
     def test_condition_none_still_accepted(self):
         _models = _gh_models()
         AccountRepoGrant = _models[7]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         d = Ref(AccountRepoGrant)
         record = registry.register(
             content=d.repository,
@@ -554,7 +554,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
             account=self.collaborator, repository=self.repo_b,
             operation=self.write,
         )
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         _register_direct(self.registry, self.AccountRepoGrant)
         _register_team(self.registry, self.TeamRepoGrant)
 
@@ -562,7 +562,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        return (BackendHandle(
+        return (backend_handle(
             path='issue98',
             registry=self.registry,
             compiler=PlanQueryCompiler(),
@@ -579,7 +579,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
                 )
             )
         with patch(
-            'trusts.apps.configured_implementation_handles',
+            'trusts.apps.configured_compiled_plans',
             return_value=self._handles(),
         ):
             with self.assertNumQueries(1):
@@ -691,7 +691,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self.assertIn('teamrepogrant', sql)
 
     def test_unregistered_content_fails_closed(self):
-        empty = TrustsRegistry()
+        empty = TrustsCompiler()
         self.assertFalse(
             empty.has_permission(self.member, self.repo_a, self.read),
         )
@@ -737,7 +737,7 @@ class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):
             holder=self.holder, document=self.doc_other, action=self.read,
             left=self.site_a, right=self.site_b,
         )
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         _register_site_grant(self.registry, self.SiteGrant)
 
     def tearDown(self):

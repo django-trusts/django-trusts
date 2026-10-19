@@ -19,18 +19,18 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import (
     TrustsImplementationConfig,
-    _handle_authorization_family,
-    _relationship_family_handles,
-    _relationship_implementation_handles,
-    configured_implementation_handles,
+    _plan_authorization_family,
+    _relationship_family_plans,
+    _relationship_compiled_plans,
+    configured_compiled_plans,
     implementation_for_path,
 )
 from trusts.plan.contents import filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies, common_permissions
 from trusts.decorators import (
@@ -50,30 +50,6 @@ class FoldFamilyConfig(TrustsImplementationConfig):
     label = 'trusts_impl_194_fold'
     trusts_backend_paths = (MIXIN,)
     _authorization_family = 'ordered_fold'
-
-
-class RecordingRegistry(TrustsRegistry):
-    created = True
-
-
-class RecordingHandle(BackendHandle):
-    created = True
-
-
-class RecordingConfig(TrustsImplementationConfig):
-    name = 'tests'
-    label = 'trusts_impl_194_record'
-    trusts_backend_paths = (HOST,)
-
-    def _create_registry(self, path):
-        self.created_paths = getattr(self, 'created_paths', ()) + (path,)
-        return RecordingRegistry()
-
-    def _create_handle(self, path, registry, compiler):
-        self.handle_paths = getattr(self, 'handle_paths', ()) + (path,)
-        return RecordingHandle(
-            path=path, registry=registry, compiler=compiler,
-        )
 
 
 class _NeverAppliesCompiler(PlanQueryCompiler):
@@ -126,8 +102,8 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
             TrustsImplementationConfig._authorization_family, 'relationship',
         )
         self.assertFalse(hasattr(TrustsImplementationConfig, 'authorization_family'))
-        self.assertTrue(callable(TrustsImplementationConfig._create_registry))
-        self.assertTrue(callable(TrustsImplementationConfig._create_handle))
+        self.assertFalse(hasattr(TrustsImplementationConfig, '_create_registry'))
+        self.assertFalse(hasattr(TrustsImplementationConfig, '_create_handle'))
         self.assertTrue(callable(QueryCompiler().applies))
         self.assertTrue(callable(PlanQueryCompiler().applies))
 
@@ -151,33 +127,25 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertFalse(protocol.applies(strategy_only))
         self.assertFalse(_compiler_applies(compiler, strategy_only))
 
-    def test_ensure_and_configured_backend_use_factories(self):
-        config = _bind(RecordingConfig, ready=False)
+    def test_compiled_for_path_uses_per_class_registry(self):
+        from tests.backends import HostTrustModelBackend
+        from trusts.apps import _compiled_for_path
+
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            first = config._ensure(HOST)
-            self.assertIsInstance(first, RecordingRegistry)
-            self.assertEqual(config.created_paths, (HOST,))
-            self.assertIs(config._ensure(HOST), first)
-            self.assertEqual(config.created_paths, (HOST,))
-            handle = config.configured_backend(HOST)
-            self.assertIsInstance(handle, RecordingHandle)
-            self.assertTrue(handle.created)
-            self.assertIs(handle.registry, first)
-            self.assertEqual(config.handle_paths, (HOST,))
-            config.apps.ready = True
-            live = config.configured_backend(HOST)
-            self.assertIs(live.registry, first)
-            self.assertIsInstance(live, RecordingHandle)
-            self.assertEqual(live.build_registry().records, first.records)
+            registry = HostTrustModelBackend().get_registry()
+            compiled = _compiled_for_path(HOST)
+            self.assertIs(compiled.registry, compiled)
+            self.assertEqual(compiled.path, HOST)
+            self.assertEqual(compiled.records, registry.build_compiled().records)
 
     def test_unowned_handle_defaults_to_relationship_family(self):
-        handle = BackendHandle(
+        handle = backend_handle(
             path=MIXIN,
-            registry=TrustsRegistry(),
+            registry=TrustsCompiler(),
             compiler=PlanQueryCompiler(),
         )
-        self.assertEqual(_handle_authorization_family(handle), 'relationship')
-        self.assertEqual(_relationship_family_handles((handle,)), (handle,))
+        self.assertEqual(_plan_authorization_family(handle), 'relationship')
+        self.assertEqual(_relationship_family_plans((handle,)), (handle,))
 
 
 class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
@@ -195,9 +163,11 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             document=self.fold_doc, user=self.alice, permission=self.change,
         )
         self.rel_owner = implementation_for_path(DOCUMENT)
-        self.rel_handle = self.rel_owner.configured_backend()
-        self.fold_registry = TrustsRegistry()
-        self.fold_handle = BackendHandle(
+        from trusts.apps import _compiled_for_path
+
+        self.rel_handle = _compiled_for_path(DOCUMENT)
+        self.fold_registry = TrustsCompiler()
+        self.fold_handle = backend_handle(
             path=MIXIN,
             registry=self.fold_registry,
             compiler=PlanQueryCompiler(),
@@ -209,10 +179,22 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             content='document',
         )
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
-        self.fold_owner.registries[MIXIN] = self.fold_registry
+        from trusts.backends import registries as _registries
+
+        self._saved_mixin_registry = _registries.get(MixinOnlyBackend)
+        _registries[MixinOnlyBackend] = self.fold_registry
+        self.addCleanup(self._restore_mixin_registry)
         self.fold_owner.apps._configs = [self.rel_owner, self.fold_owner]
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()
+
+    def _restore_mixin_registry(self):
+        from trusts.backends import registries as _registries
+
+        if self._saved_mixin_registry is None:
+            _registries.pop(MixinOnlyBackend, None)
+        else:
+            _registries[MixinOnlyBackend] = self._saved_mixin_registry
 
     def _family_patches(self):
         return (
@@ -221,7 +203,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
                 return_value=(self.rel_owner, self.fold_owner),
             ),
             patch(
-                'trusts.apps.configured_implementation_handles',
+                'trusts.apps.configured_compiled_plans',
                 return_value=(self.rel_handle, self.fold_handle),
             ),
             override_settings(AUTHENTICATION_BACKENDS=(
@@ -282,13 +264,13 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
             self.assertEqual(
-                [handle.path for handle in _relationship_implementation_handles()],
+                [handle.path for handle in _relationship_compiled_plans()],
                 [DOCUMENT],
             )
             self.assertEqual(
                 [
                     handle.path
-                    for handle in configured_implementation_handles()
+                    for handle in configured_compiled_plans()
                 ],
                 [DOCUMENT, MIXIN],
             )
@@ -357,13 +339,15 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         self.backend = DocumentBackend()
 
     def test_inapplicable_compiler_is_zero_sql(self):
-        handle = implementation_for_path(DOCUMENT).configured_backend()
-        silent = BackendHandle(
+        from trusts.apps import _compiled_for_path
+
+        handle = _compiled_for_path(DOCUMENT)
+        silent = backend_handle(
             path=handle.path,
             registry=handle.registry,
             compiler=_NeverAppliesCompiler(),
         )
-        with patch.object(self.backend, '_own_handle', return_value=silent):
+        with patch.object(self.backend, '_own_compiled', return_value=silent):
             with self.assertNumQueries(0):
                 self.assertFalse(
                     self.backend.has_perm(self.alice, PERM, self.doc),
@@ -379,39 +363,36 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
 
 
 class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
-    def test_live_configured_backend_builds_factory_registry_on_demand(self):
+    def test_live_backend_builds_compiled_on_demand(self):
+        from tests.apps import isolate_live_registry
+        from tests.backends import HostTrustModelBackend
+
         live = live_config()
-        isolated = live._create_registry(HOST)
-        self.assertIsInstance(isolated, TrustsRegistry)
-        saved = dict(live.registries)
-        live.registries[HOST] = isolated
+        isolated = TrustsCompiler()
+        saved = HostTrustModelBackend().get_registry()
+        isolate_live_registry(live, isolated, HOST)
         try:
-            with override_apps_ready(False):
-                handle = live.configured_backend()
-                self.assertIs(handle.registry, isolated)
-                first_build = handle.build_registry()
-            handle = live.configured_backend()
-            self.assertIs(handle.registry, isolated)
-            self.assertIsInstance(handle, BackendHandle)
-            self.assertEqual(handle.path, HOST)
-            second_build = handle.build_registry()
+            backend = HostTrustModelBackend()
+            self.assertIs(backend.get_registry()._compiler, isolated)
+            first_build = backend.get_registry().build_compiled()
+            second_build = backend.get_registry().build_compiled()
             self.assertIsNot(first_build, second_build)
             self.assertEqual(first_build.records, second_build.records)
-            # Late registration takes effect on the next build.
             from tests.myapp.models import DocumentGrant
             from trusts.compile.nodes import Ref
             j = Ref(DocumentGrant)
             isolated.register(
                 content=j.document, user=j.user, permission=j.permission,
             )
-            self.assertEqual(handle.build_registry().records, isolated.records)
+            self.assertEqual(
+                backend.get_registry().build_compiled().records,
+                isolated.records,
+            )
             self.assertEqual(first_build.records, ())
         finally:
-            live.registries.clear()
-            live.registries.update(saved)
+            isolate_live_registry(live, saved, HOST)
 
     def test_unconfigured_path_still_fails_loud(self):
-        live = live_config()
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            live.configured_backend(MIXIN)
+            implementation_for_path(MIXIN)
         self.assertIn(MIXIN, str(ctx.exception))

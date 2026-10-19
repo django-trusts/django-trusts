@@ -250,9 +250,9 @@ class AuthorizationRequiredReadinessPreflightTest(
         def _filtered(request, pk):
             return 'ok'
 
-        registry = implementation_for_path(
-            DOCUMENT_BACKEND,
-        ).configured_backend().registry
+        from tests.myapp.backends import DocumentBackend
+
+        registry = DocumentBackend().get_registry()
         previous = registry.condition_lookup
         try:
             registry.set_condition_lookup(None)

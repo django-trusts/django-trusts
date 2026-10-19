@@ -22,9 +22,9 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import implementation_for_path
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 
 
 PERM = 'myapp.change_document'
@@ -175,8 +175,8 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         both = self._granted_qs(self.open_one, self.open_two)
         owner = implementation_for_path(DOCUMENT_BACKEND)
         saved = owner.trusts_backend_paths
-        alt_registry = TrustsRegistry()
-        BackendHandle(
+        alt_registry = TrustsCompiler()
+        backend_handle(
             path=MIXIN,
             registry=alt_registry,
             compiler=PlanQueryCompiler(),
@@ -186,7 +186,9 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             permission='permission',
             content='document',
         )
-        owner.registries[MIXIN] = alt_registry
+        from trusts.backends import registries as backend_registries
+
+        backend_registries[MixinOnlyBackend] = alt_registry
         mixin = MixinOnlyBackend()
         try:
             owner.trusts_backend_paths = (DOCUMENT_BACKEND, MIXIN)
@@ -230,7 +232,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
                 self.assertTrue(self.alice.has_perm(PERM, two))
         finally:
             owner.trusts_backend_paths = saved
-            owner.registries.pop(MIXIN, None)
+            backend_registries.pop(MixinOnlyBackend, None)
 
     def test_duplicate_path_is_two_evaluations(self):
         qs = self._granted_qs(self.open_one)

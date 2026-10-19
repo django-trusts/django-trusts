@@ -81,15 +81,18 @@ class ReadmeExampleAuthorizationTest(TestCase):
         owner = implementation_for_path(DOCUMENT_BACKEND)
         self.assertIs(type(owner), DocumentConfig)
         self.assertIsInstance(owner, TrustsImplementationConfig)
-        handle = owner.configured_backend()
+        from tests.myapp.backends import DocumentBackend
+        from trusts.apps import _compiled_for_path
+
+        handle = _compiled_for_path(DOCUMENT_BACKEND)
         self.assertEqual(handle.path, DOCUMENT_BACKEND)
-        self.assertIs(handle.registry, owner.registries[DOCUMENT_BACKEND])
-        self.assertTrue(handle.build_registry().records)
-        self.assertIs(
-            handle.build_registry().records[0].content_model,
-            Document,
+        self.assertEqual(
+            DocumentBackend().get_registry().build_compiled().records,
+            handle.records,
         )
-        record = handle.build_registry().get_permission_condition_record(
+        self.assertTrue(handle.records)
+        self.assertIs(handle.records[0].content_model, Document)
+        record = handle.get_permission_condition_record(
             Document, 'non_confidential',
         )
         self.assertIsNotNone(record)
@@ -260,7 +263,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertNotIn('register_ordered_fold()', rst)
         self.assertIn('django-trusts-ordered-fold', rst)
         self.assertIn('django-trusts-windows-acl', rst)
-        self.assertIn('backend.add_named_filter(', rst)
+        self.assertIn('registry.add_named_filter(', rst)
         self.assertIn('Document.objects.permitted(', rst)
         self.assertIn('class DocumentQuerySet(PermittedQuerySetMixin, models.QuerySet)', rst)
         self.assertIn('objects = DocumentQuerySet.as_manager()', rst)

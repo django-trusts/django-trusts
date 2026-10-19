@@ -9,7 +9,7 @@ from django.test import SimpleTestCase
 from tests.models import Organization
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Ref
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.plan.aggregates import any_plan_records
 
 
@@ -30,8 +30,8 @@ def _contribute_document(registry):
 
 class AnyPlanRecordsGateRuleTest(SimpleTestCase):
     def test_any_path_establishes_support_empty_and_other_terminals_do_not(self):
-        empty = TrustsRegistry()
-        filled = TrustsRegistry()
+        empty = TrustsCompiler()
+        filled = TrustsCompiler()
         _contribute_document(filled)
         unused = _Handle(empty)
         supporting = _Handle(filled)

@@ -18,17 +18,21 @@ class DocumentConfig(TrustsImplementationConfig):
             DocumentGrant,
         )
 
-        handle = self.configured_backend()
-        registry = handle.registry
+        from tests.myapp.backends import DocumentBackend
+
+        registry = DocumentBackend().get_registry()
         if getattr(self, '_document_grant_registry_id', None) is registry:
             return
-        handle.register(
+        if getattr(registry, '_document_contributed', False):
+            self._document_grant_registry_id = registry
+            return
+        registry.register(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register(
+        registry.register(
             trust=DocumentDelegation,
             delegate='delegate',
             sponsor='sponsor',
@@ -37,9 +41,11 @@ class DocumentConfig(TrustsImplementationConfig):
                 relationship.allowed_permissions.contains(permission)
             ),
         )
-        handle.add_named_filter(
+        registry.add_named_filter(
             Document,
             'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
+        self.freeze_owned_backends()
+        registry._document_contributed = True
         self._document_grant_registry_id = registry

@@ -40,9 +40,11 @@ from trusts.plan.conditions import (
     condition_refs,
     obsolete_legacy_callback_setting_enabled,
 )
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from trusts.backends import registries as backend_registries
+from trusts.compile.factory import TrustsCompiler
 
 
 def _store_expr(registry, model, code, expr):
@@ -114,8 +116,8 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         self.assertEqual(list(second.iter_permission_conditions()), [])
 
     def test_trusts_registry_owns_a_private_condition_store(self):
-        left = TrustsRegistry()
-        right = TrustsRegistry()
+        left = TrustsCompiler()
+        right = TrustsCompiler()
         self.assertIsInstance(left.conditions, ConditionRegistry)
         self.assertIsNot(left.conditions, right.conditions)
         self.assertIs(left.condition_lookup.conditions, left.conditions)
@@ -130,7 +132,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_expr_and_builder_records_and_shape_errors(self):
         Note, Memo = _note_models()
         u, _p, o = condition_refs()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         expr = u == o.owner
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'owned', expr)
@@ -159,7 +161,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_duplicate_condition_overwrites_same_identity(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         registry.register_permission_condition(
             Note, 'named', lambda u, p, o: u == o.owner,
         )
@@ -177,8 +179,8 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_owners_do_not_share_or_overwrite_records(self):
         Note, _Memo = _note_models()
-        owner_a = TrustsRegistry()
-        owner_b = TrustsRegistry()
+        owner_a = TrustsCompiler()
+        owner_b = TrustsCompiler()
         owner_a.register_permission_condition(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
@@ -200,12 +202,12 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_repeated_registry_construction_does_not_leak(self):
         Note, _Memo = _note_models()
-        first = TrustsRegistry()
+        first = TrustsCompiler()
         first.register_permission_condition(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
         self.assertIsNotNone(first.get_permission_condition_record(Note, 'own'))
-        second = TrustsRegistry()
+        second = TrustsCompiler()
         self.assertIsNone(second.get_permission_condition_record(Note, 'own'))
         self.assertEqual(list(second.iter_permission_conditions()), [])
         third = ConditionRegistry()
@@ -214,17 +216,17 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_condition_registration_after_build_invokes_builder(self):
         Note, _Memo = _note_models()
         log = _BuilderLog()
-        registry = TrustsRegistry()
-        registry.build_registry()
+        registry = TrustsCompiler()
+        registry.build_compiled()
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
-        self.assertIs(registry.build_registry().conditions, registry.conditions)
+        self.assertIs(registry.build_compiled().conditions, registry.conditions)
 
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
-        handle = BackendHandle(
+        registry = TrustsCompiler()
+        handle = backend_handle(
             path='tests.backends.HostTrustModelBackend',
             registry=registry,
             compiler=object(),
@@ -235,7 +237,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
             registry.get_permission_condition_record(Note, 'own'), record,
         )
         self.assertEqual(len(log.calls), 1)
-        registry.build_registry()
+        registry.build_compiled()
         late = _BuilderLog()
         late_record = handle.add_named_filter(Note, 'late', late)
         self.assertEqual(len(late.calls), 1)
@@ -245,7 +247,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         log = _BuilderLog()
         registry.register_permission_condition(Note, 'spy', log)
         lookup = RegistryConditionLookup(registry)
@@ -279,7 +281,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             log = _BuilderLog(
                 lambda u, p, o: (u == o.owner) & (o.status != 'locked'),
             )
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             with self.assertNumQueries(0):
                 registry.register_permission_condition(Note, 'editable', log)
             self.assertEqual(len(log.calls), 1)
@@ -323,7 +325,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             Ticket._meta.permission_conditions,
             (('meta_own', ticket_meta_own),),
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             first = self._donate_meta_permission_conditions(registry, Ticket)
         self.assertTrue(first)
@@ -344,7 +346,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
 
     def test_core_registration_path_is_zero_sql_for_builder(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             registry.register_permission_condition(
                 Note, 'builder', lambda u, p, o: o.status != 'locked',
@@ -359,7 +361,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             )
             note = Note.objects.create(title='n', owner=alice)
             u, _p, o = condition_refs()
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             with self.assertRaises(AttributeError) as missing:
                 registry.compile_registered_condition_q(
                     Note, 'trusts_tests.change_note:missing', alice,
@@ -403,7 +405,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             )
             note = Note.objects.create(title='n', owner=alice, status='open')
             captured = alice
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             with self.assertNumQueries(0):
                 record = registry.register_permission_condition(
                     Note, 'owner_is', lambda u, p, o: o.owner == captured,
@@ -432,7 +434,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         Note, _Memo = _note_models()
         User = get_user_model()
         unsaved = User(username='ghost-16', email='ghost-16@example.com')
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertRaises(PermissionConditionError):
             registry.register_permission_condition(
                 Note, 'unsaved', lambda u, p, o: o.owner == unsaved,
@@ -462,7 +464,7 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
 
     def test_immutable_scalars_are_accepted(self):
         Note, _Memo = _note_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         record = registry.register_permission_condition(
             Note, 'open', lambda u, p, o: o.status == 'open',
         )
@@ -534,7 +536,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
     def test_check_permission_conditions_reads_handle_registry(self):
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         _store_expr(registry, Note, 'typo', u == o.nope)
 
         class _Handle(object):
@@ -545,12 +547,12 @@ class ConditionRegistryCheckTest(SimpleTestCase):
             def _configured_trusts_paths(self):
                 return ('tests.backends.HostTrustModelBackend',)
 
-            def configured_backend(self, path=None):
-                return _Handle(registry)
+            def owned_backend_paths(self):
+                return ('tests.backends.HostTrustModelBackend',)
 
         with patch(
             'trusts.apps.implementation_configs', return_value=(_Config(),),
-        ):
+        ), patch.dict(backend_registries, {HostTrustModelBackend: registry}):
             messages = check_permission_conditions(None)
         errors = [m for m in messages if m.id == CHECK_ID_INVALID_EXPR]
         self.assertTrue(any("'typo'" in m.msg for m in errors))
@@ -558,8 +560,8 @@ class ConditionRegistryCheckTest(SimpleTestCase):
     def test_two_owners_same_model_code_both_validated(self):
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
-        owner_a = TrustsRegistry()
-        owner_b = TrustsRegistry()
+        owner_a = TrustsCompiler()
+        owner_b = TrustsCompiler()
         owner_a.register_permission_condition(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
@@ -577,8 +579,8 @@ class ConditionRegistryCheckTest(SimpleTestCase):
             def _configured_trusts_paths(self):
                 return (self._path,)
 
-            def configured_backend(self, path=None):
-                return _Handle(self._store)
+            def owned_backend_paths(self):
+                return (self._path,)
 
         configs = (
             _Config(owner_a, 'tests.backends.HostTrustModelBackend'),
@@ -586,7 +588,9 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         )
         with patch(
             'trusts.apps.implementation_configs', return_value=configs,
-        ):
+        ), patch.dict(backend_registries, {
+            HostTrustModelBackend: owner_a, MixinOnlyBackend: owner_b,
+        }):
             live = list(iter_live_permission_conditions())
             messages = check_permission_conditions(None)
         own_rows = [

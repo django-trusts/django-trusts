@@ -21,11 +21,11 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
 from trusts.plan.aggregates import all_match, common_permissions
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 
 
 def _j1_models():
@@ -358,7 +358,7 @@ class _SplitCompiler(object):
 
 
 def _direct_handle(registry, path='tests.s5.direct'):
-    return BackendHandle(
+    return backend_handle(
         path=path, registry=registry, compiler=PlanQueryCompiler(),
     )
 
@@ -390,7 +390,7 @@ def _assert_no_historical_names(*models_):
 class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
     def test_j1_registers_forward_reverse_forward(self):
         Folder, Payload, Row, FolderGrant, _group = _j1_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(FolderGrant)
         record = registry.register(
             content=j.folder.rows.content,
@@ -410,7 +410,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         Holder, _owner, _tag, Item, Image, _meta, _extra, _profile, Grant, _w, _wg = (
             _d1_models()
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(Grant)
         item_rec = registry.register(
             content=j.holder.items, user=j.user, permission=j.permission,
@@ -432,7 +432,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         _holder, _owner, _tag, _item, Image, _meta, _extra, _profile, Grant, _w, _wg = (
             _d1o_models()
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(Grant)
         record = registry.register(
             content=j.holder.items.image, user=j.user, permission=j.permission,
@@ -447,7 +447,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             _holder, _owner, _tag, _item, Image, ImageMeta,
             _extra, _profile, Grant, _w, _wg,
         ) = factory()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(Grant)
         depth1 = registry.register(
             content=j.holder.items.image,
@@ -485,7 +485,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         Holder, _owner, _tag, Item, _image, _meta, _extra, _profile, _g, Wrapper, WrapperGrant = (
             _d1_models()
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(WrapperGrant)
         record = registry.register(
             content=j.wrapper.holder.items,
@@ -500,7 +500,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_direct_and_trailing_reverse_still_register(self):
         Folder, Payload, Row, FolderGrant, _group = _j1_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(FolderGrant)
         folder_rec = registry.register(
             content=j.folder, user=j.user, permission=j.permission,
@@ -523,7 +523,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             Grant, Wrapper, WrapperGrant,
         ) = _d2_models()
         _pair, PairGrant = _composite_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(Grant)
         first = registry.register(
             content=j.holder.items.image,
@@ -620,7 +620,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_same_root_same_terminal_via_alt_suffix_is_conflict(self):
         Folder, Payload, _row, FolderGrant, _group = _j1_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(FolderGrant)
         first = registry.register(
             content=j.folder.rows.content,
@@ -638,7 +638,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_user_and_permission_remain_direct(self):
         _folder, _payload, _row, FolderGrant, _group = _j1_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct|reverse'):
             registry.register(
@@ -656,7 +656,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_registration_executes_zero_queries(self):
         _folder, _payload, _row, FolderGrant, _group = _j1_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         j = Ref(FolderGrant)
         registry.register(
             content=j.folder.rows.content,
@@ -834,7 +834,7 @@ class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
             self.Row.objects.create(
                 folder=self.folder_b, content=payload, alt_content=self.pay_a1,
             )
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         j = Ref(self.FolderGrant)
         self.registry.register(
             content=j.folder.rows.content,
@@ -901,7 +901,7 @@ class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
                 holder=self.h_b, owner=self.owner, title='X%s' % i,
             )
             self.Image.objects.create(item=item, title='X%s' % i)
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         j = Ref(self.Grant)
         self.registry.register(
             content=j.holder.items.image, user=j.user, permission=j.permission,
@@ -960,7 +960,7 @@ class TrustsRegistryD1oProjectionTest(_TerminalProjectionMixin, TransactionTestC
         self.img_a1 = self.Image.objects.create(item=self.item_a1, title='A1')
         self.img_a2 = self.Image.objects.create(item=self.item_a2, title='A2')
         self.img_b1 = self.Image.objects.create(item=self.item_b1, title='B1')
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         j = Ref(self.Grant)
         self.registry.register(
             content=j.holder.items.image, user=j.user, permission=j.permission,
@@ -1039,7 +1039,7 @@ def _seed_depth2(self, factory, suffix, reverse_meta=True):
             meta = self.ImageMeta.objects.create(title='X%s' % i)
             image = self.Image.objects.create(title='X%s' % i, image=meta)
             self.Item.objects.create(holder=self.h_b, image=image)
-    self.registry = TrustsRegistry()
+    self.registry = TrustsCompiler()
     j = Ref(self.Grant)
     self.registry.register(
         content=j.holder.items.image.image,
@@ -1145,21 +1145,21 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
             self.Row.objects.create(
                 folder=self.folder_b, content=payload, alt_content=self.pay_a,
             )
-        self.direct = TrustsRegistry()
+        self.direct = TrustsCompiler()
         j = Ref(self.FolderGrant)
         self.direct.register(
             content=j.folder.rows.content,
             user=j.user,
             permission=j.permission,
         )
-        self.group = TrustsRegistry()
+        self.group = TrustsCompiler()
         k = Ref(self.FolderGroupGrant)
         self.group.register(
             content=k.folder.rows.content,
             user=k.user,
             permission=k.permission,
         )
-        self.handle = BackendHandle(
+        self.handle = backend_handle(
             path='tests.s5.split',
             registry=self.direct,
             compiler=_SplitCompiler(self.group),
@@ -1277,7 +1277,7 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(CodedHolder, CodedItem, CodedImage, CodedGrant):
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             j = Ref(CodedGrant)
             record = registry.register(
                 content=j.holder.items.image,

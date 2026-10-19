@@ -15,7 +15,9 @@ from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from tests.myapp.backends import DocumentBackend
+from trusts.backends import registries as backend_registries
+from trusts.compile.factory import TrustsCompiler
 
 
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -23,13 +25,13 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         super().setUp()
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
-        self.saved_registries = dict(self.contributor.registries)
-        self.live_registry = self.contributor.configured_backend().registry
+        self.saved_registries = dict(backend_registries)
+        self.live_registry = DocumentBackend().get_registry()
         self.saved_sentinel = self.contributor._document_grant_registry_id
 
     def tearDown(self):
-        self.contributor.registries.clear()
-        self.contributor.registries.update(self.saved_registries)
+        backend_registries.clear()
+        backend_registries.update(self.saved_registries)
         self.contributor._document_grant_registry_id = self.saved_sentinel
 
     def test_reenter_same_contributor_ready_is_noop(self):
@@ -42,22 +44,25 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertEqual(self.live_registry.records, before)
 
     def test_ready_does_not_replace_registry(self):
-        first = self.contributor.configured_backend().registry
+        first = DocumentBackend().get_registry()
         self.contributor.ready()
-        self.assertIs(self.contributor.configured_backend().registry, first)
+        self.assertIs(DocumentBackend().get_registry(), first)
 
     def test_new_registry_receives_declaration_again(self):
-        isolated = TrustsRegistry()
+        isolated = TrustsCompiler()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
         self.contributor._document_grant_registry_id = None
         with override_apps_ready(False, self.contributor.apps):
             self.contributor.ready()
-        self.assertIs(self.contributor._document_grant_registry_id, isolated)
+        self.assertIs(
+            self.contributor._document_grant_registry_id,
+            DocumentBackend().get_registry(),
+        )
         self.assertEqual(len(isolated.plan_for(Document).records), 1)
         self.assertIs(isolated.records[0].root, DocumentGrant)
 
     def test_conflicting_contribution_fails_closed_without_sentinel(self):
-        isolated = TrustsRegistry()
+        isolated = TrustsCompiler()
         j = Ref(DocumentGrant)
         isolated.register(
             content=j.document,
@@ -87,7 +92,7 @@ class IsolatedAppsDoesNotDonateDocumentContributionTest(
         from tests.apps import TestsConfig
         import tests as tests_module
 
-        live = apps.get_app_config('myapp').configured_backend().registry
+        live = DocumentBackend().get_registry()
         before = live.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps

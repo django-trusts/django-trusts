@@ -20,11 +20,11 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.plan.aggregates import _compile_common_permissions
 from trusts.compile.factory import RegisteredDelegation
 from trusts.plan.contents import _compile_granted
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts._permitted import permitted_queryset
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
@@ -32,9 +32,9 @@ from trusts.plan.users import lock_permitted_users_queryset
 
 
 def _handle(path='tests.core.issue266'):
-    return BackendHandle(
+    return backend_handle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=TrustsCompiler(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -54,11 +54,14 @@ class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
 
     handle = None
 
-    def _own_handle(self):
+    def _own_compiled(self):
         handle = type(self).handle
         if handle is None:
-            raise TrustsConfigurationError('pair document handle is unset')
-        return handle
+            raise TrustsConfigurationError('probe handle is unset')
+        compiled = handle.build_compiled()
+        compiled.compiler = handle.compiler
+        compiled.path = handle.path
+        return compiled
 
 
 def _document_host_handle():
@@ -93,7 +96,7 @@ def _listed(handle):
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue266._PairDocumentBackend',
     )), patch(
-        'trusts.apps._relationship_implementation_handles',
+        'trusts.apps._relationship_compiled_plans',
         return_value=(handle,),
     ):
         try:
@@ -219,8 +222,8 @@ class DelegationRegistrationTest(TestCase):
         self.assertEqual(record.sponsor_field, 'sponsor')
         self.assertEqual(record.content_field, 'document')
         self.assertIs(record.condition_permission_model, Permission)
-        self.assertEqual(handle.build_registry().records, ())
-        self.assertEqual(handle.build_registry().delegations, (record,))
+        self.assertEqual(handle.build_compiled().records, ())
+        self.assertEqual(handle.build_compiled().delegations, (record,))
 
     def test_one_argument_condition_is_row_only(self):
         handle = _handle()
@@ -323,8 +326,8 @@ class DelegationRegistrationTest(TestCase):
                             **extra,
                         )
                 self.assertEqual(calls, [])
-                self.assertEqual(handle.build_registry().records, ())
-                self.assertEqual(handle.build_registry().delegations, ())
+                self.assertEqual(handle.build_compiled().records, ())
+                self.assertEqual(handle.build_compiled().delegations, ())
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -804,7 +807,7 @@ class TwoRootDelegationTest(TransactionTestCase):
         self.assertIs(self.personal.content_model, self.Repository)
         self.assertIsNone(self.personal.condition)
         roots = [
-            record.root for record in self.handle.build_registry().delegations
+            record.root for record in self.handle.build_compiled().delegations
         ]
         self.assertEqual(
             roots, [self.PersonalDelegation, self.ApprovedDelegation],
@@ -1139,7 +1142,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             ('profile', 'personal_organization_ord', 'repositories'),
         )
         self.assertIs(self.record.content_model, self.Repository)
-        self.assertEqual(self.handle.build_registry().delegations, ())
+        self.assertEqual(self.handle.build_compiled().delegations, ())
         with _listed(self.handle):
             self.assertTrue(self.user.has_perm(self.code, self.own))
             self.assertEqual(
@@ -1304,8 +1307,8 @@ class ReverseOneToOneGrammarTest(TestCase):
                         'not a valid content terminal or gateway',
                     ):
                         handle.register(trust=trust, content=content, **extra)
-                self.assertEqual(handle.build_registry().records, ())
-                self.assertEqual(handle.build_registry().delegations, ())
+                self.assertEqual(handle.build_compiled().records, ())
+                self.assertEqual(handle.build_compiled().delegations, ())
 
     def test_two_prefix_chain_registers(self):
         (
@@ -1359,16 +1362,16 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'No delegated registration',
             ):
                 handle.registry.delegations_for_root(DocumentDelegation)
-        self.assertEqual(handle.build_registry().delegations, ())
+        self.assertEqual(handle.build_compiled().delegations, ())
 
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
-        self.assertEqual(handle.registry.build_registry().delegations, ())
+        self.assertEqual(handle.registry.build_compiled().delegations, ())
         with self.assertNumQueries(0):
             record = self._register(handle)
         self.assertEqual(handle.registry.delegations, (record,))
         self.assertEqual(
-            handle.registry.build_registry().delegations, (record,),
+            handle.registry.build_compiled().delegations, (record,),
         )
 
     def test_delegate_and_sponsor_must_share_a_principal_model(self):
@@ -1378,10 +1381,10 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'same principal model',
             ):
                 self._register(handle, sponsor='document')
-        self.assertEqual(handle.build_registry().delegations, ())
+        self.assertEqual(handle.build_compiled().delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         delegation = Ref(DocumentDelegation)
         grant = Ref(DocumentGrant)
         with self.assertNumQueries(0):
@@ -1403,7 +1406,7 @@ class DelegationRootGuardTest(TestCase):
                 TrustsConfigurationError, 'Duplicate delegated registration',
             ):
                 self._register(handle)
-        self.assertEqual(len(handle.build_registry().delegations), 1)
+        self.assertEqual(len(handle.build_compiled().delegations), 1)
 
     def test_same_root_same_content_terminal_remains_a_conflict(self):
         handle = _handle()
@@ -1418,14 +1421,14 @@ class DelegationRootGuardTest(TestCase):
                         relationship.delegate == relationship.sponsor
                     ),
                 )
-        self.assertEqual(len(handle.build_registry().delegations), 1)
+        self.assertEqual(len(handle.build_compiled().delegations), 1)
 
     def test_same_root_different_content_terminal_is_stored(self):
         handle = _handle()
         self._register(handle)
         second = self._register(handle, content='delegate')
         rows = handle.registry.delegations_for_root(DocumentDelegation)
-        self.assertEqual(rows, handle.build_registry().delegations)
+        self.assertEqual(rows, handle.build_compiled().delegations)
         self.assertEqual(len(rows), 2)
         self.assertIs(second.content_model, get_user_model())
         self.assertEqual(second.content_path, ('delegate',))
@@ -1466,7 +1469,7 @@ class DelegatedAuthorityLiveTest(TestCase):
             settings_override.enable()
             self.addCleanup(settings_override.disable)
             relationship_handles = patch(
-                'trusts.apps._relationship_implementation_handles',
+                'trusts.apps._relationship_compiled_plans',
                 return_value=(handle,),
             )
             relationship_handles.start()
@@ -1661,7 +1664,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=(
             'tests.core.test_issue266._PairDocumentBackend',
         )), patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(grant_handle, delegation_handle),
         ):
             self.assertTrue(self.delegate.has_perm(

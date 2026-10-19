@@ -32,17 +32,19 @@ from tests.backends import (
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import implementation_for_path
+from tests.myapp.backends import DocumentBackend
+from trusts.apps import _compiled_for_path, implementation_for_path
+from trusts.backends import registries as backend_registries
 from trusts.plan.aggregates import compiler_for_class
 from trusts.backends import TrustModelBackendMixin
 from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import (
     TrustsCompilerError,
     TrustsConfigurationError,
 )
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.plan.contents import granted
 import tests as tests_module
 
@@ -82,20 +84,25 @@ def _contribute_document(registry):
 
 
 def _evaluate(handle, queryset, user, permission):
-    plan = handle.build_registry().plan_for(
+    plan = handle.build_compiled().plan_for(
         queryset, user=user, permission=permission,
     )
     return handle.compiler.complete_exists(plan, queryset, user, permission)
 
 
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
-    def test_one_path_registry_alias_is_exact_store(self):
+    def test_one_path_compiled_is_per_class_registry(self):
         live = live_config()
-        handle = live.configured_backend()
+        handle = _compiled_for_path(HOST)
         self.assertEqual(handle.path, HOST)
-        self.assertIs(handle.registry, live.registry)
-        self.assertIs(live.registry, live.registries[HOST])
-        self.assertIsInstance(handle, BackendHandle)
+        self.assertIs(
+            HostTrustModelBackend().get_registry(),
+            backend_registries[HostTrustModelBackend],
+        )
+        self.assertEqual(
+            handle.records,
+            HostTrustModelBackend().get_registry().build_compiled().records,
+        )
         self.assertIs(handle.compiler, HostTrustModelBackend.query_compiler)
         self.assertIsInstance(handle.compiler, PlanQueryCompiler)
 
@@ -104,8 +111,11 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
             paths = live._configured_trusts_paths()
             self.assertEqual(paths, (HOST,))
-            self.assertIs(live.registry, live.registries[HOST])
-            handle = live.configured_backend()
+            self.assertIs(
+                HostTrustModelBackend().get_registry(),
+                backend_registries[HostTrustModelBackend],
+            )
+            handle = _compiled_for_path(HOST)
             self.assertEqual(handle.path, HOST)
 
     def test_same_class_alias_is_ambiguity_error(self):
@@ -115,14 +125,12 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
                 live._configured_trusts_paths()
             self.assertIn('multiple paths', str(ctx.exception))
             with self.assertRaises(TrustsConfigurationError):
-                live.configured_backend()
-            with self.assertRaises(TrustsConfigurationError):
-                live.registry
+                live.path_for_class(HostTrustModelBackend)
 
     def test_unconfigured_path_fails_loud(self):
         live = live_config()
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            live.configured_backend(MIXIN)
+            implementation_for_path(MIXIN)
         self.assertIn(MIXIN, str(ctx.exception))
         with self.assertRaises(TrustsConfigurationError):
             live.path_for_class(MixinOnlyBackend)
@@ -136,27 +144,24 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         )):
             self.assertEqual(live._configured_trusts_paths(), ())
             with self.assertRaises(TrustsConfigurationError):
-                live.registry
-            with self.assertRaises(TrustsConfigurationError):
-                live.configured_backend()
+                live.path_for_class(HostTrustModelBackend)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, DOCUMENT)):
-            # KernelHost owns only HOST, so the one-path alias still works.
-            self.assertIs(live.configured_backend().path, HOST)
-            handle_doc = live.configured_backend(DOCUMENT)
+            self.assertIs(_compiled_for_path(HOST).path, HOST)
+            handle_doc = _compiled_for_path(DOCUMENT)
             self.assertEqual(handle_doc.path, DOCUMENT)
-            self.assertIs(
-                handle_doc.registry,
-                implementation_for_path(DOCUMENT).registries[DOCUMENT],
+            self.assertEqual(
+                handle_doc.records,
+                DocumentBackend().get_registry().build_compiled().records,
             )
 
     def test_ready_does_not_replace_store_or_registry(self):
         live = live_config()
-        store = live.registries
-        first = live.registry
+        store = backend_registries
+        first = HostTrustModelBackend().get_registry()
         live.ready()
-        self.assertIs(live.registries, store)
-        self.assertIs(live.registry, first)
-        self.assertIs(live.registries[HOST], first)
+        self.assertIs(backend_registries, store)
+        self.assertIs(HostTrustModelBackend().get_registry(), first)
+        self.assertIs(backend_registries[HostTrustModelBackend], first)
 
     def test_compiler_is_class_owned_not_instance_state(self):
         first = HostTrustModelBackend()
@@ -189,22 +194,22 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 class IsolatedAppsPathStoreTest(SimpleTestCase):
     def test_isolate_apps_without_owner_does_not_donate(self):
         live = live_config()
-        before = live.registry.records
+        before = HostTrustModelBackend().get_registry().records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(
             getattr(contributor, '_trusts_tup_category_registry_id', None)
         )
-        self.assertEqual(live.registry.records, before)
+        self.assertEqual(HostTrustModelBackend().get_registry().records, before)
 
 
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_explicit_path_contribution_writes_one_registry(self):
         host = live_config()
         document = implementation_for_path(DOCUMENT)
-        self.assertTrue(document.registry.plan_for(Document).records)
-        self.assertFalse(host.registry.plan_for(Document).records)
+        self.assertTrue(DocumentBackend().get_registry().plan_for(Document).records)
+        self.assertFalse(HostTrustModelBackend().get_registry().plan_for(Document).records)
 
     def test_omitted_ambiguous_path_fails_before_writing(self):
         from tests.core.test_issue108 import HostImplConfig, _bind
@@ -215,25 +220,28 @@ class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 
         dual = _bind(DualImpl, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, MIXIN)):
-            with self.assertRaises(TrustsConfigurationError):
-                dual.registry
+            self.assertEqual(dual._configured_trusts_paths(), (HOST, MIXIN))
 
     def test_no_mixin_fan_out(self):
         live = live_config()
         with self.assertRaises(TrustsConfigurationError):
-            live.configured_backend(MIXIN)
-        self.assertNotIn(MIXIN, live.registries)
+            implementation_for_path(MIXIN)
+        mixin_registry = backend_registries.get(MixinOnlyBackend)
+        self.assertTrue(
+            mixin_registry is None
+            or not mixin_registry.build_compiled().plan_for(Document).records
+        )
 
 
 class _LiveRegistryRestoreMixin(object):
     def setUp(self):
         super().setUp()
         self.live = live_config()
-        self.saved_registries = dict(self.live.registries)
+        self.saved_registries = dict(backend_registries)
 
     def tearDown(self):
-        self.live.registries.clear()
-        self.live.registries.update(self.saved_registries)
+        backend_registries.clear()
+        backend_registries.update(self.saved_registries)
         super().tearDown()
 
 
@@ -277,9 +285,9 @@ class CompilerProtocolTest(
 
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        handle = BackendHandle(
+        handle = backend_handle(
             path=RAISING,
-            registry=TrustsRegistry(),
+            registry=TrustsCompiler(),
             compiler=RaisingCompilerBackend.query_compiler,
         )
         _contribute_document(handle.registry)
@@ -310,12 +318,12 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.change,
         )
-        self.host = live_config().configured_backend()
-        self.document = implementation_for_path(DOCUMENT).configured_backend()
+        self.host = _compiled_for_path(HOST)
+        self.document = _compiled_for_path(DOCUMENT)
 
     def test_grant_only_through_document_path(self):
-        self.assertFalse(self.host.build_registry().plan_for(Document).records)
-        self.assertTrue(self.document.build_registry().plan_for(Document).records)
+        self.assertFalse(self.host.build_compiled().plan_for(Document).records)
+        self.assertTrue(self.document.build_compiled().plan_for(Document).records)
         qs = Document.objects.all()
         pred_host = _evaluate(self.host, qs, self.alice, self.change)
         pred_doc = _evaluate(self.document, qs, self.alice, self.change)
@@ -334,9 +342,9 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         )
 
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
-        isolated = TrustsRegistry()
+        isolated = TrustsCompiler()
         _contribute_document(isolated)
-        extra = BackendHandle(
+        extra = backend_handle(
             path=MIXIN,
             registry=isolated,
             compiler=PlanQueryCompiler(),
@@ -360,9 +368,9 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
     def test_different_terminals_route_only_through_applicable_handles(self):
         from tests.models import Organization
 
-        self.assertTrue(self.document.build_registry().plan_for(Document).records)
-        self.assertFalse(self.document.build_registry().plan_for(Organization).records)
-        self.assertFalse(self.host.build_registry().plan_for(Document).records)
+        self.assertTrue(self.document.build_compiled().plan_for(Document).records)
+        self.assertFalse(self.document.build_compiled().plan_for(Organization).records)
+        self.assertFalse(self.host.build_compiled().plan_for(Document).records)
         self.assertEqual(
             _pks(Document.objects.authorized(self.alice, self.change)),
             {self.doc_a.pk},
@@ -376,22 +384,24 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
         live = live_config()
-        handle = BackendHandle(
+        handle = backend_handle(
             path=RAISING,
-            registry=TrustsRegistry(),
+            registry=TrustsCompiler(),
             compiler=RaisingCompilerBackend.query_compiler,
         )
         _contribute_document(handle.registry)
         with self.assertRaises(RuntimeError) as ctx:
             granted(
-                (live.configured_backend(), handle),
+                (_compiled_for_path(HOST), handle),
                 Document, User(), Permission(), kind='complete',
             )
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):
         live = live_config()
-        self.assertFalse(live.registry.plan_for(Document).records)
+        self.assertFalse(
+            HostTrustModelBackend().get_registry().plan_for(Document).records
+        )
         self.assertTrue(
-            implementation_for_path(DOCUMENT).registry.plan_for(Document).records
+            DocumentBackend().get_registry().plan_for(Document).records
         )

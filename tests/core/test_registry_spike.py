@@ -1,6 +1,6 @@
 """Spike: a registry built whole from lowered values.
 
-``TrustsRegistry`` stays the registration front end. ``Registry``
+``TrustsCompiler`` stays the registration front end. ``Registry``
 takes records, delegations, the shared condition store, stored user
 conditions, and the user override as data. It does not import
 ``trusts.core``. Core re-exports it as ``_FrozenRegistry``.
@@ -20,9 +20,9 @@ from trusts.compile.nodes import Along
 from trusts.plan.recursions import GrantReach
 from trusts.core import (
     Ref,
-    TrustsRegistry,
+    TrustsCompiler,
 )
-from trusts.plan.registry import Registry
+from trusts.plan.registry import CompiledPlan
 
 
 def _sql(expr, model):
@@ -32,7 +32,7 @@ def _sql(expr, model):
 
 
 def _built_from(registry):
-    return Registry(
+    return CompiledPlan(
         records=registry.records,
         delegations=registry.delegations,
         conditions=registry.conditions,
@@ -68,19 +68,19 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
                         or name.startswith('trusts.compile.'),
                         name,
                     )
-        self.assertIs(core._FrozenRegistry, Registry)
+        self.assertIs(core._FrozenRegistry, CompiledPlan)
         self.assertTrue(registry_module.__file__.endswith('registry.py'))
 
     def test_direct_trusts_registry_still_registers(self):
         Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         record = _register_document(registry, DocumentGrant)
         self.assertEqual(registry.records, (record,))
         self.assertIs(registry.plan_for(Document).records[0], record)
 
     def test_injected_plan_matches_live_registry(self):
         Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         _register_document(registry, DocumentGrant)
         built_registry = _built_from(registry)
         self.assertIs(built_registry.conditions, registry.conditions)
@@ -113,7 +113,7 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
 
     def test_injected_grant_reach_matches_along_plan(self):
         Folder, FolderGrant = _folder_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(FolderGrant)
         registry.register(
             content=root.folder,

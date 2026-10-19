@@ -15,30 +15,33 @@ from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.compile.factory import TrustsRegistry
+from tests.backends import HostTrustModelBackend
+from tests.myapp.backends import DocumentBackend
+from trusts.backends import SimpleRegistry, registries as backend_registries
+from trusts.compile.factory import TrustsCompiler
 
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_package_registry_is_created_in_init_not_replaced_by_ready(self):
         live = live_config()
         self.assertIsInstance(live, KernelHostConfig)
-        self.assertIsInstance(live.registry, TrustsRegistry)
-        first = live.registry
+        self.assertIsInstance(HostTrustModelBackend().get_registry(), SimpleRegistry)
+        first = HostTrustModelBackend().get_registry()
         live.ready()
-        self.assertIs(live.registry, first)
+        self.assertIs(HostTrustModelBackend().get_registry(), first)
 
     def test_reader_obtains_registry_via_app_config_not_package_root(self):
         import trusts
 
-        live = live_config().registry
-        self.assertIsInstance(live, TrustsRegistry)
+        live = HostTrustModelBackend().get_registry()
+        self.assertIsInstance(live, SimpleRegistry)
         self.assertIsNone(getattr(trusts, 'registry', None))
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
+        self.assertIsNone(getattr(trusts, 'TrustsCompiler', None))
         self.assertIsNone(getattr(trusts, 'RelationPlan', None))
 
     def test_isolated_core_registries_stay_independent(self):
-        live = live_config().registry
-        isolated = TrustsRegistry()
+        live = HostTrustModelBackend().get_registry()
+        isolated = TrustsCompiler()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
 
@@ -85,7 +88,7 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
 
         contributor = apps.get_app_config('myapp')
         self.assertIsInstance(contributor, DocumentConfig)
-        registry = contributor.configured_backend().registry
+        registry = DocumentBackend().get_registry()
         self.assertIs(contributor._document_grant_registry_id, registry)
         before = registry.records
         with patch.object(registry, 'register', wraps=registry.register) as register:
@@ -97,10 +100,12 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_host_ready_does_not_replace_or_donate_document(self):
         host = live_config()
         self.assertEqual(host._configured_trusts_paths(), (HOST_BACKEND,))
-        before = host.registry.records
+        before = HostTrustModelBackend().get_registry().records
         host.ready()
-        self.assertEqual(host.registry.records, before)
-        self.assertFalse(host.registry.plan_for(Document).records)
+        self.assertEqual(HostTrustModelBackend().get_registry().records, before)
+        self.assertFalse(
+            HostTrustModelBackend().get_registry().plan_for(Document).records
+        )
 
 
 @isolate_apps(
@@ -111,7 +116,7 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
 )
 class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
-        live = live_config().registry
+        live = HostTrustModelBackend().get_registry()
         before = live.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
@@ -119,4 +124,4 @@ class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
         self.assertIsNone(getattr(contributor, '_document_grant_registry_id', None))
         self.assertEqual(live.records, before)
-        self.assertNotIn(DOCUMENT_BACKEND, live_config().registries)
+        self.assertIsNot(backend_registries[DocumentBackend], live)

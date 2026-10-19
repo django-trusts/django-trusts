@@ -31,6 +31,7 @@ from trusts.plan.conditions import Eq as IrEq
 from trusts.plan.conditions import Ref as IrRef
 from trusts.compile.resolution import _resolve_path
 from trusts.compile.factory import (
+    PublicRegistration,
     RegisteredDelegation,
     RegisteredRelation,
     _normalize_public_condition,
@@ -47,16 +48,17 @@ from trusts.compile.nodes import (
     PermissionIn,
     Ref,
 )
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
+from trusts.backends import SimpleRegistry
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 
 
 def _handle(registry=None, path='tests.core.issue210'):
     if registry is None:
-        registry = TrustsRegistry()
-    return BackendHandle(
+        registry = TrustsCompiler()
+    return backend_handle(
         path=path,
         registry=registry,
         compiler=PlanQueryCompiler(),
@@ -85,7 +87,7 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
         self.assertIn('tests.core.test_issue210', PAIR_KERNEL_SUITE)
 
     def test_predicate_is_not_on_the_signature(self):
-        signature = inspect.signature(BackendHandle.register)
+        signature = inspect.signature(SimpleRegistry.register)
         self.assertNotIn('predicate', signature.parameters)
         handle = _handle()
         with self.assertRaises(TypeError):
@@ -96,10 +98,10 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
                 content='document',
                 predicate=lambda u, p, o: u == o.user,
             )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.build_compiled().records, ())
 
     def test_condition_is_contextually_typed_as_trust(self):
-        hints = get_type_hints(BackendHandle.register)
+        hints = get_type_hints(SimpleRegistry.register)
         trust_hint = hints['trust']
         type_args = get_args(trust_hint)
         self.assertIsInstance(type_args[0], TypeVar)
@@ -118,17 +120,14 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
             ([type_args[0]], object),
             [get_args(part) for part in callable_parts],
         )
-        self.assertEqual(
-            set(get_args(hints['return'])),
-            {RegisteredRelation, RegisteredDelegation},
-        )
+        self.assertIs(hints['return'], PublicRegistration)
 
 
 class RegisterConditionGrammarTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_org_equality_permission_ceiling_and_conjunction(self):
         TeamRepoGrant = _gh_models()[6]
-        expected = _register_team(TrustsRegistry(), TeamRepoGrant)
+        expected = _register_team(TrustsCompiler(), TeamRepoGrant)
 
         equality = _handle(path='tests.core.issue210-eq').register(
             trust=TeamRepoGrant,
@@ -137,7 +136,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
             content=lambda t: t.repository,
             condition=lambda t: t.team.organization == t.repository.organization,
         )
-        via_ref = TrustsRegistry()
+        via_ref = TrustsCompiler()
         t = Ref(TeamRepoGrant)
         expected_eq = via_ref.register(
             content=t.repository,
@@ -158,7 +157,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
                 t.team.permission_bundles.operations.contains(t.operation)
             ),
         )
-        via_ceil = TrustsRegistry()
+        via_ceil = TrustsCompiler()
         expected_ceil = via_ceil.register(
             content=t.repository,
             user=t.team.members,
@@ -184,7 +183,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_internal_registry_still_accepts_private_ir(self):
         TeamRepoGrant = _gh_models()[6]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         record = _register_team(registry, TeamRepoGrant)
         self.assertIsInstance(record.condition, All)
         self.assertEqual(registry.records, (record,))
@@ -213,7 +212,7 @@ class RegisterConditionOnceTest(TransactionTestCase):
             TeamRepoGrant.objects.create(
                 team=team, repository=repo, operation=read,
             )
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             handle = _handle(registry)
             builder = _CountCondition()
             record = handle.register(
@@ -309,7 +308,7 @@ class RegisterConditionRejectPublicIRTest(TestCase):
                             content='document',
                             condition=value,
                         )
-                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.build_compiled().records, ())
 
 
 class RegisterConditionFailClosedTest(TestCase):
@@ -392,7 +391,7 @@ class RegisterConditionFailClosedTest(TestCase):
                             content=lambda t: t.repository,
                             condition=builder,
                         )
-                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.build_compiled().records, ())
 
     def test_failed_condition_does_not_partially_mutate(self):
         handle = _handle()
@@ -405,12 +404,12 @@ class RegisterConditionFailClosedTest(TestCase):
                     content=lambda t: t.document,
                     condition=lambda t: t.user == t.not_a_field,
                 )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.build_compiled().records, ())
 
     def test_condition_invoked_on_register_after_build(self):
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         handle = _handle(registry)
-        registry.build_registry()
+        registry.build_compiled()
         calls = []
 
         def condition(trust):
@@ -447,7 +446,7 @@ class RegisterConditionFailClosedTest(TestCase):
 
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
     def test_string_and_lambda_paths_still_match(self):
-        expected = TrustsRegistry().register(
+        expected = TrustsCompiler().register(
             content=Ref(DocumentGrant).document,
             user=Ref(DocumentGrant).user,
             permission=Ref(DocumentGrant).permission,
@@ -474,7 +473,7 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
             _node_graph_models()
         )
-        via_ref = TrustsRegistry()
+        via_ref = TrustsCompiler()
         j = Ref(Grant)
         expected = via_ref.register(
             content=j.node,
@@ -494,18 +493,18 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         self.assertEqual(record.along.shape, 'S')
 
         right = _handle(path='tests.core.issue210-right')
-        self.assertEqual(right.build_registry().records, ())
+        self.assertEqual(right.build_compiled().records, ())
         left.add_named_filter(
             Document, 'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
         self.assertIsNotNone(
-            left.build_registry().get_permission_condition_record(
+            left.build_compiled().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )
         self.assertIsNone(
-            right.build_registry().get_permission_condition_record(
+            right.build_compiled().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )
@@ -557,7 +556,7 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
         self.TeamRepoGrant.objects.create(
             team=self.writers, repository=self.repo_a, operation=self.read,
         )
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         _register_direct(self.registry, self.AccountRepoGrant)
         handle = _handle(self.registry)
         handle.register(

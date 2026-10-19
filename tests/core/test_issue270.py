@@ -18,10 +18,11 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import implementation_for_path
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
+from trusts.apps import _compiled_for_path
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -360,9 +361,9 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                 )
 
     def test_unbound_condition_lookup_fails_before_the_principal(self):
-        registry = implementation_for_path(
-            DOCUMENT_BACKEND,
-        ).configured_backend().registry
+        from tests.myapp.backends import DocumentBackend
+
+        registry = DocumentBackend().get_registry()
         previous = registry.condition_lookup
         try:
             registry.set_condition_lookup(None)
@@ -438,9 +439,9 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
     def test_private_compiler_takes_explicit_handles(self):
         from trusts._permitted import permitted_queryset
 
-        handle = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+        handle = _compiled_for_path(DOCUMENT_BACKEND)
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(),
         ):
             with self.assertNumQueries(0):
@@ -502,9 +503,9 @@ def _extra_models():
 
 
 def _handle(path):
-    return BackendHandle(
+    return backend_handle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=TrustsCompiler(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -590,9 +591,9 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
         foreign.add_named_filter(
             Document, 'only_other_270', lambda u, p, o: o.confidential != True,
         )
-        primary = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+        primary = _compiled_for_path(DOCUMENT_BACKEND)
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(handle_a, handle_b),
         ):
             with self.assertNumQueries(0):
@@ -609,7 +610,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
                         conditions=('split_a_270', 'split_b_270'),
                     )
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(primary, foreign),
         ):
             with self.assertNumQueries(0):
@@ -619,7 +620,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
                     )
 
     def test_non_owner_grant_is_omitted_and_two_names_are_anded(self):
-        primary = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+        primary = _compiled_for_path(DOCUMENT_BACKEND)
         extra = _handle('tests.core.issue270-extra-grant')
         extra.register(
             trust=self.ExtraDocumentGrant,
@@ -651,7 +652,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
                 document=self.plain, user=self.alice, permission=self.change,
             )
             with patch(
-                'trusts.apps._relationship_implementation_handles',
+                'trusts.apps._relationship_compiled_plans',
                 return_value=(primary, extra),
             ):
                 self.assertEqual(
@@ -663,7 +664,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
                     {self.open_doc.pk},
                 )
             with patch(
-                'trusts.apps._relationship_implementation_handles',
+                'trusts.apps._relationship_compiled_plans',
                 return_value=(owned,),
             ):
                 self.assertEqual(
@@ -676,7 +677,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
                 )
 
     def test_custom_terminal_pk_collision_does_not_grant(self):
-        primary = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+        primary = _compiled_for_path(DOCUMENT_BACKEND)
         extra = _handle('tests.core.issue270-other-perm')
         extra.register(
             trust=self.OtherPermissionGrant,
@@ -695,7 +696,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
                 for handles in ((primary, extra), (extra, primary)):
                     with self.subTest(permission=type(permission).__name__, order=handles[0].path):
                         with patch(
-                            'trusts.apps._relationship_implementation_handles',
+                            'trusts.apps._relationship_compiled_plans',
                             return_value=handles,
                         ):
                             denied = self.docs.permitted(permission, self.bob)

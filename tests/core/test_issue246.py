@@ -22,11 +22,11 @@ from django.test.utils import isolate_apps
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.inspect.snapshot import (
     _load_policy_sql_document,
     render_policy_sql_bytes,
@@ -70,8 +70,8 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue246'):
     if registry is None:
-        registry = TrustsRegistry()
-    return BackendHandle(
+        registry = TrustsCompiler()
+    return backend_handle(
         path=path,
         registry=registry,
         compiler=PlanQueryCompiler(),
@@ -202,7 +202,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group=boom,
                 content=boom,
             )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'not both',
@@ -213,7 +213,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 permission=ref.paper,
                 group=ref.group,
             )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.build_compiled().records, ())
         self.assertEqual(registry.records, ())
 
     def test_one_of_permission_or_group_is_required(self):
@@ -229,13 +229,13 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             )
         with self.assertRaises(TypeError):
             handle.register(trust=Grant, user='group__user')
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, 'requires permission= or group=',
         ):
             registry.register(content=ref.paper, user=ref.group.user)
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.build_compiled().records, ())
         self.assertEqual(registry.records, ())
 
     def test_group_path_must_end_at_auth_group(self):
@@ -286,11 +286,11 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
                 group='group',
                 content='paper',
             )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.build_compiled().records, ())
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()
-        via_ref = TrustsRegistry()
+        via_ref = TrustsCompiler()
         ref = Ref(Grant)
         expected = via_ref.register(
             content=ref.paper,
@@ -435,7 +435,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         self.StationPaperGrant.objects.create(
             station=self.station, paper=self.paper_d,
         )
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         self.handle = _handle(self.registry)
         self.handle.register(
             trust=self.GroupPaperGrant,
@@ -477,7 +477,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
 
     def _backend(self):
         return patch.object(
-            self.backend, '_own_handle', return_value=self.handle,
+            self.backend, '_own_compiled', return_value=self.handle,
         )
 
     def test_explicit_group_feeds_group_and_ordinary_authorization(self):
@@ -535,7 +535,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             list(granted), [self.paper_a, self.paper_c, self.paper_d],
         )
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(self.handle,),
         ):
             listed = sorted(
@@ -589,7 +589,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
                 ),
             )
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(self.handle,),
         ):
             self.assertEqual(
@@ -752,7 +752,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         )
         grant = self.Grant.objects.create(group=self.editors, folder=self.folder)
         grant.grants.add(self.read)
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         self.handle = _handle(self.registry, path='tests.core.issue246-ceiling')
         self.handle.register(
             trust=self.Grant,
@@ -769,12 +769,12 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
 
     def _backend(self):
         return patch.object(
-            self.backend, '_own_handle', return_value=self.handle,
+            self.backend, '_own_compiled', return_value=self.handle,
         )
 
     def _handles(self):
         return patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(self.handle,),
         )
 
@@ -972,7 +972,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
 
     def _register_handles(self):
         self.local = _handle(
-            TrustsRegistry(), path='tests.core.issue246-matrix-local',
+            TrustsCompiler(), path='tests.core.issue246-matrix-local',
         )
         self.local.register(
             trust=self.LocalGrant,
@@ -982,7 +982,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             condition=lambda t: t.grants.contains(t.group.permissions),
         )
         self.roots = _handle(
-            TrustsRegistry(), path='tests.core.issue246-matrix-roots',
+            TrustsCompiler(), path='tests.core.issue246-matrix-roots',
         )
         self.roots.register(
             trust=self.LocalGrant,
@@ -999,7 +999,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             condition=lambda t: t.stamps.contains(t.group.permissions),
         )
         self.role = _handle(
-            TrustsRegistry(), path='tests.core.issue246-matrix-role',
+            TrustsCompiler(), path='tests.core.issue246-matrix-role',
         )
         self.role_record = self.role.register(
             trust=self.TrustGroupPermission,
@@ -1048,7 +1048,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         backend = _ProbeBackend()
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
-        with patch.object(backend, '_own_handle', return_value=handle):
+        with patch.object(backend, '_own_compiled', return_value=handle):
             for perm in granted:
                 code = _code(perm)
                 for label, target in (('instance', paper), ('queryset', one)):
@@ -1089,7 +1089,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
 
     def _authorized(self, handle, expectations):
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(handle,),
         ):
             for user, perm, expected in expectations:

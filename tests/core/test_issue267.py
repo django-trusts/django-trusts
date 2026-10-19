@@ -26,10 +26,10 @@ from django.test.utils import isolate_apps
 
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -48,11 +48,14 @@ from trusts.query import (
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     handle = None
 
-    def _own_handle(self):
+    def _own_compiled(self):
         handle = type(self).handle
         if handle is None:
             raise TrustsConfigurationError('probe handle is unset')
-        return handle
+        compiled = handle.build_compiled()
+        compiled.compiler = handle.compiler
+        compiled.path = handle.path
+        return compiled
 
 
 @contextmanager
@@ -61,7 +64,7 @@ def _installed(handle):
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue267._ListedBackend',
     )), patch(
-        'trusts.apps._relationship_implementation_handles',
+        'trusts.apps._relationship_compiled_plans',
         return_value=(handle,),
     ):
         try:
@@ -101,9 +104,9 @@ def _code(permission):
 
 
 def _handle(path):
-    return BackendHandle(
+    return backend_handle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=TrustsCompiler(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -283,7 +286,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                     with self.assertNumQueries(queries):
                         self.assertIs(self.owner.has_perm(code, obj), expected)
                     self.assertIs(
-                        self.handle.build_registry().has_permission(
+                        self.handle.build_compiled().has_permission(
                             self.owner, obj, permission,
                         ),
                         expected,
@@ -337,13 +340,13 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
                 [],
             )
             self.assertEqual(
-                list(self.handle.build_registry().filter_authorized(
+                list(self.handle.build_compiled().filter_authorized(
                     self.Team.objects.all(), self.owner, self.manage,
                 )),
                 [],
             )
             self.assertEqual(
-                list(self.handle.build_registry().filter_authorized(
+                list(self.handle.build_compiled().filter_authorized(
                     self.Widget.objects.all(), self.owner, self.read,
                 )),
                 [],
@@ -388,12 +391,12 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
     def test_custom_codename_stays_a_same_model_instance_grant(self):
         with _installed(self.handle):
             self.assertTrue(
-                self.handle.build_registry().has_permission(
+                self.handle.build_compiled().has_permission(
                     self.owner, self.specs, self.publish,
                 ),
             )
             self.assertFalse(
-                self.handle.build_registry().has_permission(
+                self.handle.build_compiled().has_permission(
                     self.owner, self.acme, self.publish,
                 ),
             )
@@ -445,17 +448,17 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         proxy = self.OrganizationProxy.objects.get(pk=self.acme.pk)
         with _installed(self.handle):
             self.assertTrue(
-                self.handle.build_registry().has_permission(
+                self.handle.build_compiled().has_permission(
                     self.owner, proxy, self.operate,
                 ),
             )
             self.assertFalse(
-                self.handle.build_registry().has_permission(
+                self.handle.build_compiled().has_permission(
                     self.owner, proxy, self.manage,
                 ),
             )
             self.assertFalse(
-                self.handle.build_registry().has_permission(
+                self.handle.build_compiled().has_permission(
                     self.owner, self.acme, self.operate,
                 ),
             )
@@ -692,7 +695,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
             repository=self.repo,
             operation=operation,
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             registry.register(
                 content=self._ref(self.OperationGrant).organization,
@@ -710,7 +713,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertTrue(
             registry.has_permission(self.owner, self.repo, operation),
         )
-        handle = BackendHandle(
+        handle = backend_handle(
             path='tests.core.issue267-operation',
             registry=registry,
             compiler=PlanQueryCompiler(),
@@ -742,7 +745,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
             repository=self.repo,
             permit=org_permit,
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         grant = self._ref(self.TypedGrant)
         registry.register(
             content=grant.organization,
@@ -762,7 +765,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertTrue(
             registry.has_permission(self.owner, self.repo, org_permit),
         )
-        handle = BackendHandle(
+        handle = backend_handle(
             path='tests.core.issue267-typed',
             registry=registry,
             compiler=PlanQueryCompiler(),
@@ -782,7 +785,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.DirectGrant.objects.create(
             user=self.owner, organization=self.org, permission=read,
         )
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         grant = self._ref(self.DirectGrant)
         registry.register(
             content=grant.organization,

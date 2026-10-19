@@ -65,7 +65,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     ]
     test.assertEqual(len(rows), 1)
     row = rows[0]
-    record = handle.build_registry().plan_for(content_model).records[0]
+    record = handle.build_compiled().plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
         _role_sentinel(record, 'user', 'default'),
@@ -210,7 +210,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                skip_is_active=False):
         sheets = list(self.Sheet.objects.all())
         with _listed(handle):
-            authorized = set(handle.build_registry().filter_authorized(
+            authorized = set(handle.build_compiled().filter_authorized(
                 self.Sheet.objects.all(), user, permission,
                 skip_is_active=skip_is_active,
             ).values_list('pk', flat=True))
@@ -315,7 +315,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, folder=root, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.build_registry().filter_authorized(
+                authorized = set(handle.build_compiled().filter_authorized(
                     Payload.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -414,7 +414,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 user=self.alice, office=office, permission=change,
             )
             with _listed(handle):
-                authorized = set(handle.build_registry().filter_authorized(
+                authorized = set(handle.build_compiled().filter_authorized(
                     AncSheet.objects.all(), self.alice, change,
                 ).values_list('pk', flat=True))
             self.assertEqual(
@@ -1227,7 +1227,7 @@ class AlongSurfaceAgreementTest(TransactionTestCase):
                 view(_request(self.alice), pk=self.past.pk)
 
     def test_trust_content_follows_along(self):
-        found = set(self.handle.build_registry().filter_authorized(
+        found = set(self.handle.build_compiled().filter_authorized(
             self.Trust.objects.all(), self.alice, self.change,
         ).values_list('pk', flat=True))
         self.assertEqual(found, {self.root.pk, self.child.pk})

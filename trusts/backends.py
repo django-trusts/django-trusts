@@ -542,7 +542,8 @@ class SimpleRegistry(object):
             self._lowered += 1
         compiled = self._compiler.build_compiled()
         if self._backend_class is not None:
-            compiled.compiler = compiler_for_class(self._backend_class)                 if _has_query_compiler(self._backend_class) else compiled.compiler
+            if _has_query_compiler(self._backend_class):
+                compiled.compiler = compiler_for_class(self._backend_class)
             paths = _listed_paths(self._backend_class)
             if paths:
                 compiled.path = paths[0]

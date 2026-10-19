@@ -8,14 +8,15 @@ from django.test import SimpleTestCase
 import trusts
 import trusts.inspect.checks as trusts_checks
 import trusts.core as core
+from tests.apps import backend_handle
+from trusts.backends import SimpleRegistry
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.relations import QueryCompiler
 from trusts.core import (
-    BackendHandle,
     PlanQueryCompiler,
     RelationPlan,
-    TrustsRegistry,
+    TrustsCompiler,
 )
 from trusts.plan.aggregates import _compiler_applies, any_plan_records
 
@@ -72,9 +73,9 @@ class CoreOrderedFoldDeletedTest(SimpleTestCase):
         for name in FOLD_NAMES:
             self.assertFalse(hasattr(core, name))
             self.assertNotIn(name, dir(core))
-        self.assertFalse(hasattr(BackendHandle, 'register_ordered_fold'))
-        self.assertFalse(hasattr(TrustsRegistry, 'register_strategy'))
-        self.assertFalse(hasattr(TrustsRegistry, 'strategies'))
+        self.assertFalse(hasattr(SimpleRegistry, 'register_ordered_fold'))
+        self.assertFalse(hasattr(TrustsCompiler, 'register_strategy'))
+        self.assertFalse(hasattr(TrustsCompiler, 'strategies'))
         fields = getattr(RelationPlan, '__dataclass_fields__', {})
         self.assertNotIn('strategy', fields)
 
@@ -122,9 +123,9 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
         self.assertTrue(compiler.applies(filled))
         self.assertTrue(_compiler_applies(compiler, filled))
 
-        empty_handle = BackendHandle(
+        empty_handle = backend_handle(
             path='tests.core.195-empty',
-            registry=TrustsRegistry(),
+            registry=TrustsCompiler(),
             compiler=compiler,
         )
         self.assertFalse(any_plan_records((empty_handle,), Document))

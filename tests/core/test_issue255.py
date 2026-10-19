@@ -36,10 +36,10 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.apps import implementation_for_path
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.inspect.snapshot import (
     _compile_queryset,
     _load_policy_sql_document,
@@ -237,19 +237,21 @@ def _assert_agrees(test, content, perm, candidates):
 
 @contextmanager
 def _document_registry():
-    config = implementation_for_path(DOCUMENT_BACKEND)
-    saved = dict(config.registries)
-    registry = TrustsRegistry()
-    config.registries[DOCUMENT_BACKEND] = registry
+    from tests.myapp.backends import DocumentBackend
+    from trusts.backends import registries as backend_registries
+
+    saved = dict(backend_registries)
+    registry = TrustsCompiler()
+    backend_registries[DocumentBackend] = registry
     try:
         yield registry
     finally:
-        config.registries.clear()
-        config.registries.update(saved)
+        backend_registries.clear()
+        backend_registries.update(saved)
 
 
 def _handle(registry):
-    return BackendHandle(
+    return backend_handle(
         path=DOCUMENT_BACKEND,
         registry=registry,
         compiler=PlanQueryCompiler(),
@@ -500,7 +502,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             content='node',
             along=('node__parent', 2),
         )
-        record = handle.build_registry().plan_for(UuidNode).records[0]
+        record = handle.build_compiled().plan_for(UuidNode).records[0]
         self.assertEqual(record.content_target, 'ident')
         self.assertNotEqual(
             record.content_target, UuidNode._meta.pk.attname,
@@ -547,7 +549,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        record = handle.build_registry().plan_for(Folder).records[0]
+        record = handle.build_compiled().plan_for(Folder).records[0]
         _sql, params = _compile_queryset(
             FolderGrant.objects.filter(folder__pk=5),
             'default',

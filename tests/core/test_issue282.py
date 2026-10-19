@@ -19,18 +19,18 @@ from django.test.utils import isolate_apps
 
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 
 
 def _handle(path='tests.core.issue282'):
-    return BackendHandle(
+    return backend_handle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=TrustsCompiler(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -53,11 +53,14 @@ def _permission(model, codename):
 class _PairBackend(TrustModelBackendMixin, ModelBackend):
     handle = None
 
-    def _own_handle(self):
+    def _own_compiled(self):
         handle = type(self).handle
         if handle is None:
-            raise TrustsConfigurationError('issue 282 handle is unset')
-        return handle
+            raise TrustsConfigurationError('probe handle is unset')
+        compiled = handle.build_compiled()
+        compiled.compiler = handle.compiler
+        compiled.path = handle.path
+        return compiled
 
 
 @contextmanager
@@ -66,7 +69,7 @@ def _listed(handle):
     with override_settings(AUTHENTICATION_BACKENDS=(
         'tests.core.test_issue282._PairBackend',
     )), patch(
-        'trusts.apps._relationship_implementation_handles',
+        'trusts.apps._relationship_compiled_plans',
         return_value=(handle,),
     ):
         try:

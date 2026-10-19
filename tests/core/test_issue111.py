@@ -17,7 +17,7 @@ from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import (
     TrustsImplementationConfig,
-    configured_implementation_handles,
+    configured_compiled_plans,
     implementation_configs,
     implementation_for_class,
     implementation_for_path,
@@ -129,11 +129,14 @@ class OwnerResolutionTest(SimpleTestCase):
     def test_live_host_owner_resolves(self):
         owner = live_config()
         self.assertIsInstance(owner, TrustsImplementationConfig)
-        handle = owner.configured_backend(HOST_BACKEND)
+        from trusts.apps import _compiled_for_path
+
+        handle = _compiled_for_path(HOST_BACKEND)
         self.assertEqual(handle.path, HOST_BACKEND)
         backend = HostTrustModelBackend()
-        self.assertIs(backend._trusts_config(), owner)
-        configured_implementation_handles()
+        self.assertIs(implementation_for_class(HostTrustModelBackend), owner)
+        self.assertIs(backend.get_registry(), HostTrustModelBackend().get_registry())
+        configured_compiled_plans()
         implementation_for_path(HOST_BACKEND)
         implementation_for_class(HostTrustModelBackend)
         self.assertIn(owner, implementation_configs())
@@ -142,7 +145,7 @@ class OwnerResolutionTest(SimpleTestCase):
         from trusts.plan.contents import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
-        handles = configured_implementation_handles()
+        handles = configured_compiled_plans()
         self.assertTrue(handles)
         self.assertEqual(handles[0].path, HOST_BACKEND)
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
@@ -152,8 +155,10 @@ class OwnerResolutionTest(SimpleTestCase):
         backend = MixinOnlyBackend()
         with patch('trusts.apps.implementation_configs', return_value=()):
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                backend._trusts_config()
+                implementation_for_class(MixinOnlyBackend)
             self.assertIn('no implementation owner', str(ctx.exception))
+            # The per-class registry itself needs no owner.
+            self.assertIsNotNone(backend.get_registry())
 
     def test_owner_present_resolves(self):
         owner = _bind(MixinImplConfig, ready=False)
@@ -164,4 +169,7 @@ class OwnerResolutionTest(SimpleTestCase):
                 'trusts.apps.implementation_configs',
                 return_value=(owner,),
             ):
-                self.assertIs(backend._trusts_config(), owner)
+                self.assertIs(
+                    implementation_for_class(MixinOnlyBackend, owner.apps),
+                    owner,
+                )

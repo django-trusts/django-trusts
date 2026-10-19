@@ -4,13 +4,13 @@
 (plus the scope-prefix variant filter_by_permitted_content), Q3
 permitted_users, and Q4 permissions_for (complete and group kinds),
 with production delegation semantics. The builder trio on
-``TrustsRegistry`` delegates to the built registry, so both surfaces
+``TrustsCompiler`` delegates to the built registry, so both surfaces
 agree. Where a production handle-based aggregate is the comparison
 (the handle is the subject there), SQL is compared literally;
 otherwise results are compared.
 
 No handle is passed to a registry question in this module: tests
-build the registry directly with ``build_registry()``.
+build the registry directly with ``build_compiled()``.
 """
 
 from django.contrib.auth import get_user_model
@@ -22,11 +22,11 @@ from django.test.utils import isolate_apps
 
 from tests.core.test_issue282 import _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.core import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
 from trusts.plan.contents import _compile_granted
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.registry import Question
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.rewrites import bind_once
@@ -137,7 +137,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         return Folder, Document, Grant, Share, GroupGrant
 
     def _registry(self, *, delegated=False, group=False):
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         grant = Ref(self.Grant)
         registry.register(
             content=grant.document, user=grant.user,
@@ -160,7 +160,7 @@ class RegistryQuestionsTest(TransactionTestCase):
     def _production_handle(self, registry):
         # Handle is the subject only for the production aggregates
         # compared below; registry questions never receive it.
-        return BackendHandle(
+        return backend_handle(
             path='tests.core.registry-questions', registry=registry,
             compiler=PlanQueryCompiler(),
         )
@@ -170,7 +170,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.Grant.objects.create(
             user=self.alice, document=self.doc_a, permission=self.read,
         )
-        built = registry.build_registry()
+        built = registry.build_compiled()
 
         # Q1
         self.assertTrue(built.has_permission(self.alice, self.doc_a, self.read))
@@ -232,14 +232,14 @@ class RegistryQuestionsTest(TransactionTestCase):
         )
         # Q2 variant: folders that are a proper prefix of a granted
         # document (content path folder -> documents).
-        prefix_registry = TrustsRegistry()
+        prefix_registry = TrustsCompiler()
         grant = Ref(self.Grant)
         prefix_registry.register(
             content=grant.folder.documents, user=grant.user,
             permission=grant.permission,
         )
         self.Grant.objects.filter(user=self.alice).update(folder=self.folder_a)
-        folders = prefix_registry.build_registry().filter_by_permitted_content(
+        folders = prefix_registry.build_compiled().filter_by_permitted_content(
             self.Folder.objects.all(), self.alice, self.read,
             content=self.Document,
         )
@@ -254,7 +254,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.Share.objects.create(
             delegate=self.bob, sponsor=self.alice, document=self.doc_a,
         )
-        built = registry.build_registry()
+        built = registry.build_compiled()
         handle = self._production_handle(registry)
 
         # Q1-Q4 for the delegate (old builder trio ignored delegations).
@@ -300,7 +300,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.Share.objects.create(
             delegate=self.bob, sponsor=self.alice, document=self.doc_b,
         )
-        built = registry.build_registry()
+        built = registry.build_compiled()
         self.assertFalse(built.has_permission(self.bob, self.doc_b, self.read))
 
     def test_walk_questions_order_descriptors_and_bound_answers(self):
@@ -313,7 +313,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.GroupGrant.objects.create(
             user=self.alice, document=self.doc_a, group=group,
         )
-        built = registry.build_registry()
+        built = registry.build_compiled()
         seen = []
 
         class _RecordingVisitor(object):
@@ -360,7 +360,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):
-        prefix_registry = TrustsRegistry()
+        prefix_registry = TrustsCompiler()
         grant = Ref(self.Grant)
         prefix_registry.register(
             content=grant.folder.documents, user=grant.user,
@@ -370,7 +370,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             user=self.alice, document=self.doc_a,
             folder=self.folder_a, permission=self.read,
         )
-        built = prefix_registry.build_registry()
+        built = prefix_registry.build_compiled()
         seen = []
 
         class _Visitor(object):
@@ -398,7 +398,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.Share.objects.create(
             delegate=self.bob, sponsor=self.alice, document=self.doc_b,
         )
-        built_delegated = delegated.build_registry()
+        built_delegated = delegated.build_compiled()
         seen2 = []
 
         class _Visitor2(object):
@@ -420,7 +420,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.GroupGrant.objects.create(
             user=self.alice, document=self.doc_a, group=group,
         )
-        built = registry.build_registry()
+        built = registry.build_compiled()
         self.assertEqual(
             _pks(built.permissions_for(self.alice, self.doc_a, kind='group')),
             {self.read.pk},
@@ -432,7 +432,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             list(built.permissions_for(self.bob, self.doc_a, kind='group')), [],
         )
 
-        empty = TrustsRegistry().build_registry()
+        empty = TrustsCompiler().build_compiled()
         self.assertFalse(empty.has_permission(self.alice, self.doc_a, self.read))
         self.assertEqual(list(empty.permissions_for(self.alice, self.doc_a)), [])
         self.assertEqual(

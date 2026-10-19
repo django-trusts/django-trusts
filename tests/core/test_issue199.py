@@ -173,7 +173,9 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        registry = implementation_for_path(DOCUMENT_BACKEND).configured_backend().registry
+        from tests.myapp.backends import DocumentBackend
+
+        registry = DocumentBackend().get_registry()
         previous = registry.condition_lookup
         qs = Document.objects.filter(pk=self.document.pk)
         try:
@@ -222,14 +224,21 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
 class ImplementationOwnershipReadyTest(TestCase):
     def test_owned_non_mixin_path_fails_at_ready_with_zero_sql(self):
         config = _bind(NonMixinOwnerConfig, ready=False)
-        self.assertEqual(config.registries, {})
+        from django.utils.module_loading import import_string
+
+        from trusts.backends import registries as backend_registries
+
+        class _NonMixin(object):
+            pass
+
+        before = dict(backend_registries)
         with override_settings(AUTHENTICATION_BACKENDS=(MODEL_BACKEND, HOST)):
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
                     config.ready()
         self.assertIn('not a TrustModelBackendMixin', str(ctx.exception))
         self.assertIn(MODEL_BACKEND, str(ctx.exception))
-        self.assertEqual(config.registries, {})
+        self.assertEqual(dict(backend_registries), before)
 
 
 class Issue199SuiteRegistrationTest(SimpleTestCase):

@@ -1,6 +1,6 @@
 """Pass 1: ``build_*`` methods return testable shapes without storing.
 
-``TrustsRegistry.build_relation``, ``build_delegation``, and
+``TrustsCompiler.build_relation``, ``build_delegation``, and
 ``build_public_registration`` are the pure shape-building halves of
 ``register``, ``register_delegation``, and ``_register_public``. The
 register methods own duplicate/rule checks and append the shapes.
@@ -20,7 +20,7 @@ from trusts.compile.factory import (
     RegisteredDelegation,
     RegisteredRelation,
 )
-from trusts.core import Ref, TrustsRegistry
+from trusts.core import Ref, TrustsCompiler
 from trusts.errors import TrustsConfigurationError
 
 
@@ -28,7 +28,7 @@ from trusts.errors import TrustsConfigurationError
 class BuildRelationTest(SimpleTestCase):
     def test_build_relation_returns_frozen_shape_without_storing(self):
         Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(DocumentGrant)
 
         built = registry.build_relation(
@@ -55,7 +55,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_equality_and_register_appends_same_shape(self):
         _Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(DocumentGrant)
         kwargs = dict(
             content=root.document, user=root.user,
@@ -71,7 +71,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_group_shape(self):
         Document, GroupGrant = _group_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(GroupGrant)
 
         built = registry.build_relation(
@@ -91,7 +91,7 @@ class BuildRelationTest(SimpleTestCase):
     def test_build_relation_rejects_bad_permission_source_and_roots(self):
         _Document, DocumentGrant = _document_models()
         _Other, OtherGrant = _other_grant_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(DocumentGrant)
 
         with self.assertRaises(TrustsConfigurationError):
@@ -110,9 +110,9 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_after_build_still_builds_and_registers(self):
         _Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(DocumentGrant)
-        registry.build_registry()
+        registry.build_compiled()
 
         built = registry.build_relation(
             content=root.document, user=root.user,
@@ -126,14 +126,14 @@ class BuildRelationTest(SimpleTestCase):
         )
         self.assertEqual(record, built)
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertEqual(registry.build_compiled().records, (record,))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class BuildDelegationTest(SimpleTestCase):
     def test_build_delegation_returns_shape_without_storing(self):
         Document, Share = _share_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(Share)
 
         built = registry.build_delegation(
@@ -155,7 +155,7 @@ class BuildDelegationTest(SimpleTestCase):
 
     def test_register_delegation_appends_shape_with_sponsor_rules(self):
         _Document, Share = _share_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(Share)
         kwargs = dict(
             content=root.document, delegate=root.delegate,
@@ -172,7 +172,7 @@ class BuildDelegationTest(SimpleTestCase):
 
     def test_build_delegation_rejects_mismatched_principals(self):
         _Document, Share = _share_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         root = Ref(Share)
 
         with self.assertRaises(TrustsConfigurationError):
@@ -187,7 +187,7 @@ class BuildDelegationTest(SimpleTestCase):
 class BuildPublicRegistrationTest(SimpleTestCase):
     def test_build_public_registration_ordinary_shape(self):
         _Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
 
         shape = registry.build_public_registration(
             trust=DocumentGrant, content='document', user='user',
@@ -220,7 +220,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 
     def test_build_public_registration_invokes_builder_once(self):
         _Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         calls = []
 
         def content_builder(trust):
@@ -240,7 +240,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
     def test_build_public_registration_group_and_delegated_shapes(self):
         _Document, GroupGrant = _group_models()
         _Doc2, Share = _share_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
 
         group_shape = registry.build_public_registration(
             trust=GroupGrant, content='document', user='user', group='group',
@@ -262,7 +262,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 
     def test_build_public_registration_rejects_mixed_modes(self):
         _Document, DocumentGrant = _document_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
 
         with self.assertRaises(TrustsConfigurationError):
             registry.build_public_registration(
@@ -364,3 +364,111 @@ def _other_grant_models():
             app_label = 'trusts_tests'
 
     return OtherDocument, OtherGrant
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class SimpleRegistryTest(SimpleTestCase):
+    def test_raw_storage_freeze_and_walk(self):
+        from trusts.backends import SimpleRegistry
+
+        Document, DocumentGrant = _document_models()
+        registry = SimpleRegistry()
+        self.assertFalse(registry.frozen)
+        registry.set_user_condition('staff', lambda u: u.is_staff)
+        self.assertIn('staff', registry.user_conditions)
+        shape = registry.register(
+            trust=DocumentGrant, user='user', permission='permission',
+            content='document',
+        )
+        self.assertIs(shape.trust, DocumentGrant)
+        self.assertEqual(list(registry.principles), [Document])
+        raw = registry.principles[Document][0]
+        self.assertEqual(raw['user'], 'user')
+        self.assertEqual(raw['content'], 'document')
+        with self.assertRaises(TrustsConfigurationError):
+            registry.set_user_condition('late', lambda u: u.is_staff)
+        registry.add_named_filter(
+            Document, 'titled', lambda u, p, o: o.title != '',
+        )
+        self.assertIn(Document, registry.named_filters)
+
+        class _Visitor(object):
+            def __init__(self):
+                self.names = []
+
+            def visit(self, question):
+                self.names.append(question.name)
+
+        visitor = _Visitor()
+        registry.freeze()
+        self.assertTrue(registry.frozen)
+        registry.walk(visitor)
+        self.assertIn('has_perm', visitor.names)
+        self.assertEqual(len(registry.records), 1)
+        self.assertEqual(registry.delegations, ())
+        plan = registry.plan_for(Document)
+        self.assertEqual(len(plan.records), 1)
+        self.assertIs(registry.conditions, registry._compiler.conditions)
+        self.assertIsNotNone(registry.condition_lookup)
+        self.assertIsNotNone(
+            registry.get_permission_condition_record(Document, 'titled')
+        )
+        self.assertEqual(
+            len(list(registry.iter_permission_conditions())), 1,
+        )
+        self.assertIsNotNone(registry._stored_user_conditions())
+        self.assertIn('staff', registry._known_skip_names())
+        self.assertIsNone(registry._user_override)
+        lookup = registry.condition_lookup
+        registry.set_condition_lookup(None)
+        self.assertIsNone(registry.condition_lookup)
+        registry.set_condition_lookup(lookup)
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register(
+                trust=DocumentGrant, user='user', permission='permission',
+                content='document',
+            )
+
+    def test_delegation_and_override_storage(self):
+        from django.contrib.auth import get_user_model
+
+        from trusts.backends import SimpleRegistry
+
+        Document, DocumentGrant = _document_models()
+
+        class DocumentDelegation(models.Model):
+            document = models.ForeignKey(Document, on_delete=models.CASCADE)
+            delegate = models.ForeignKey(
+                settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                related_name='+',
+            )
+            sponsor = models.ForeignKey(
+                settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                related_name='+',
+            )
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = SimpleRegistry()
+        registry.set_user_override('superuser', lambda u: u.is_superuser)
+        self.assertIn('superuser', registry.user_overrides)
+        registry.register(
+            trust=DocumentDelegation, delegate='delegate', sponsor='sponsor',
+            content='document',
+        )
+        self.assertEqual(list(registry.delegates), [Document])
+        self.assertEqual(len(registry.delegations), 1)
+        self.assertIsNotNone(registry._user_override)
+
+    def test_mixed_modes_rejected(self):
+        from trusts.backends import SimpleRegistry
+
+        _Document, DocumentGrant = _document_models()
+        registry = SimpleRegistry()
+        with self.assertRaises(TrustsConfigurationError):
+            registry.register(
+                trust=DocumentGrant, user='user', permission='permission',
+                content='document', delegate='user', sponsor='user',
+            )
+        self.assertEqual(registry.principles, {})

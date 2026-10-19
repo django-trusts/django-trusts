@@ -24,10 +24,10 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from trusts.plan.conditions import ModelIdentity
 from trusts.compile.nodes import _InquiryPermissionMatch
 from trusts.plan.recursions import _IdentInReach
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.inspect.snapshot import (
     CHECK_ID_POLICY_LOCK,
     CONVENTIONAL_LOCKFILE_NAME,
@@ -259,8 +259,8 @@ class FolderGrant(models.Model):
 
 def _handle(path, registry=None):
     if registry is None:
-        registry = TrustsRegistry()
-    return BackendHandle(
+        registry = TrustsCompiler()
+    return backend_handle(
         path=path,
         registry=registry,
         compiler=PlanQueryCompiler(),
@@ -684,7 +684,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        along_ids = _assign_ids(tuple(along.build_registry().records))
+        along_ids = _assign_ids(tuple(along.build_compiled().records))
         self.assertEqual(along_ids, [
             'documents__FolderGrant__folder__along_folder__parent_S_2',
         ])
@@ -752,7 +752,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_unsupported_family_fails_closed(self):
         with patch(
-            'trusts.apps._handle_authorization_family',
+            'trusts.apps._plan_authorization_family',
             return_value='ordered_fold',
         ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -793,7 +793,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             content='folder',
             along=('folder__parent', 2),
         )
-        record = handle.build_registry().plan_for(Folder).records[0]
+        record = handle.build_compiled().plan_for(Folder).records[0]
         handles = (handle,)
         content = {
             'model': 'documents.Folder',

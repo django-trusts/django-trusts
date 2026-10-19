@@ -21,8 +21,14 @@ class IsolatedOwnerConfig(TrustsImplementationConfig):
     trusts_backend_paths = (ZERO_BACKEND,)
 
     def ready(self):
+        from django.utils.module_loading import import_string
+
+        from trusts.backends import SimpleRegistry, registries
+
         for path in self.owned_backend_paths():
-            self._ensure(path)
+            cls = import_string(path)
+            if cls not in registries:
+                registries[cls] = SimpleRegistry(cls)
 
 
 def isolated_owner():
@@ -110,18 +116,18 @@ class TestsConfig(AppConfig):
         try:
             TrustUserPermission = self.apps.get_model('trusts', 'TrustUserPermission')
             from tests.models import Category, TestGroupJunction, Ticket
-            from trusts.compile.nodes import Ref
         except (LookupError, ImportError):
             return
 
         # Exact handle. With one Trusts path this is the unique registry
         # (``config.registry is handle.registry``). With several, omission
         # fails before writing.
-        try:
-            backend = config.configured_backend()
-        except TrustsConfigurationError:
+        from django.utils.module_loading import import_string
+
+        paths = config._configured_trusts_paths()
+        if len(paths) != 1:
             return
-        registry = backend.registry
+        registry = import_string(paths[0])().get_registry()
 
         # Instance-local sentinels: one per contribution, identity
         # comparison only, set only after register() succeeds. Never
@@ -130,33 +136,35 @@ class TestsConfig(AppConfig):
         # contribution's sentinel.
         donated_category = getattr(self, '_trusts_tup_category_registry_id', None)
         if donated_category is not registry:
-            j = Ref(TrustUserPermission)
             rev = Category._meta.get_field('trust').remote_field.get_accessor_name()
             registry.register(
-                content=getattr(j.trust, rev),
-                user=j.entity,
-                permission=j.permission,
+                trust=TrustUserPermission,
+                content='trust__%s' % rev,
+                user='entity',
+                permission='permission',
             )
             self._trusts_tup_category_registry_id = registry
 
         donated_ticket = getattr(self, '_trusts_tup_ticket_registry_id', None)
         if donated_ticket is not registry:
-            j = Ref(TrustUserPermission)
             rev = Ticket._meta.get_field('trust').remote_field.get_accessor_name()
             registry.register(
-                content=getattr(j.trust, rev),
-                user=j.entity,
-                permission=j.permission,
+                trust=TrustUserPermission,
+                content='trust__%s' % rev,
+                user='entity',
+                permission='permission',
             )
             self._trusts_tup_ticket_registry_id = registry
 
         donated_group = getattr(self, '_trusts_tup_group_registry_id', None)
         if donated_group is not registry:
-            j = Ref(TrustUserPermission)
+            rev = TestGroupJunction._meta.get_field('trust').remote_field.get_accessor_name()
+            content_name = junction_content_field(TestGroupJunction).name
             registry.register(
-                content=junction_group_content_ref(j, TestGroupJunction),
-                user=j.entity,
-                permission=j.permission,
+                trust=TrustUserPermission,
+                content='trust__%s__%s' % (rev, content_name),
+                user='entity',
+                permission='permission',
             )
             self._trusts_tup_group_registry_id = registry
 
@@ -183,16 +191,33 @@ def override_apps_ready(ready, apps_registry=None):
 
 
 def isolate_live_registry(config, registry, path=None):
-    """Swap a standalone registry into the live store directly.
+    """Bind a standalone registry for one backend class (test isolation).
 
-    Test isolation only. Not a host contributor route. This writes
-    the path-scoped dict directly, bypassing the one-path check in
-    the public ``registry`` setter.
+    Test isolation only. Not a host contributor route. This writes the
+    per-backend-class ``registries`` dict in ``trusts.backends``.
     """
+    from django.utils.module_loading import import_string
+
+    from trusts.backends import registries
+
     if path is None:
         paths = config._configured_trusts_paths()
         path = paths[0]
-    config.registries[path] = registry
+    cls = import_string(path)
+    from trusts.backends import SimpleRegistry
+    from trusts.compile.factory import TrustsCompiler
+
+    if isinstance(registry, TrustsCompiler):
+        wrapper = SimpleRegistry(cls)
+        wrapper._compiler = registry
+        registries[cls] = wrapper
+        return wrapper
+    if getattr(registry, '_backend_class', None) is None:
+        try:
+            registry._backend_class = cls
+        except Exception:
+            pass
+    registries[cls] = registry
     return registry
 
 
@@ -203,12 +228,16 @@ def install_writable_registry(config, path, contribute=None):
     supported handle read after ``Apps.ready``. The live store is not a
     public contributor API.
     """
-    from trusts.compile.factory import TrustsRegistry
+    
+    from django.utils.module_loading import import_string
 
-    registry = TrustsRegistry()
+    from trusts.backends import registries
+    from trusts.compile.factory import TrustsCompiler
+
+    registry = TrustsCompiler()
     if contribute is not None:
         contribute(registry)
-    config.registries[path] = registry
+    registries[import_string(path)] = registry
     return registry
 
 
@@ -244,7 +273,11 @@ def apply_zero_trust_donation(config):
         cls = import_string(path)
         if not issubclass(cls, TrustModelBackend):
             continue
-        registry = config._ensure(path)
+        from trusts.backends import registries as backend_registries
+        from trusts.compile.factory import TrustsCompiler
+
+        registry = TrustsCompiler()
+        backend_registries[cls] = registry
         register_zero_relations(registry)
         ids = dict(getattr(config, '_trusts_tup_trust_registry_ids', None) or {})
         ids[path] = registry
@@ -256,11 +289,49 @@ def apply_zero_trust_donation(config):
 
 def clone_writable_registry(registry):
     """Copy records onto a new writable registry for test isolation."""
-    from trusts.compile.factory import TrustsRegistry
-
-    cloned = TrustsRegistry()
+    
+    cloned = TrustsCompiler()
     cloned._by_root = {
         root: list(rows) for root, rows in registry._by_root.items()
     }
     cloned._order = list(registry._order)
     return cloned
+
+
+def backend_handle(path, registry, compiler):
+    """Test-only compiled-plan namespace replacing the deleted handle.
+
+    Returns a namespace with ``path`` / ``registry`` / ``compiler``,
+    ``register`` and ``add_named_filter`` forwarding to the registry's
+    public registration, and ``build_compiled()`` building (or passing
+    through) the query-time plan.
+    """
+    from types import SimpleNamespace
+
+    def register(**kwargs):
+        public = getattr(registry, '_register_public', None)
+        if callable(public):
+            return public(**kwargs)
+        return registry.register(**kwargs)
+
+    def add_named_filter(model, code, predicate):
+        fn = getattr(registry, 'register_permission_condition', None)
+        if callable(fn) and type(registry).__name__ != 'SimpleRegistry':
+            return fn(model, code, predicate)
+        return registry.add_named_filter(model, code, predicate)
+
+    def build_compiled():
+        if registry is None:
+            return None
+        build = getattr(registry, 'build_compiled', None)
+        return build() if callable(build) else registry
+
+    handle = SimpleNamespace(
+        path=path, registry=registry, compiler=compiler,
+        register=register, add_named_filter=add_named_filter,
+        build_compiled=build_compiled,
+    )
+    handle.historical_fallback = bool(
+        getattr(compiler, 'historical_fallback', False)
+    )
+    return handle

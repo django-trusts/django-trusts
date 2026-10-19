@@ -31,9 +31,9 @@ from django.utils.translation import gettext_lazy
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 
 
 PERM = 'trusts_tests.change_note'
@@ -47,8 +47,11 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         super().__init__()
         self._bound_handle = handle
 
-    def _own_handle(self):
-        return self._bound_handle
+    def _own_compiled(self):
+        compiled = self._bound_handle.build_compiled()
+        compiled.compiler = self._bound_handle.compiler
+        compiled.path = self._bound_handle.path
+        return compiled
 
 
 class _BuilderLog(object):
@@ -113,9 +116,9 @@ def _note_models():
 
 
 def _handle(note_grant):
-    handle = BackendHandle(
+    handle = backend_handle(
         path='tests.core.issue203',
-        registry=TrustsRegistry(),
+        registry=TrustsCompiler(),
         compiler=PlanQueryCompiler(),
     )
     handle.register(

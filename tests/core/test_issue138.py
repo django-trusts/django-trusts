@@ -17,10 +17,10 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.decorators import (
     _declared_authorization_guards,
     authorization_required,
@@ -288,10 +288,12 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
 
     def test_ready_still_owns_the_document_plan(self):
         owner = implementation_for_path(DOCUMENT_BACKEND)
-        handle = owner.configured_backend()
-        self.assertTrue(handle.build_registry().records)
+        from trusts.apps import _compiled_for_path
+
+        handle = _compiled_for_path(DOCUMENT_BACKEND)
+        self.assertTrue(handle.build_compiled().records)
         self.assertIsNotNone(
-            handle.build_registry().get_permission_condition_record(
+            handle.build_compiled().get_permission_condition_record(
                 Document, 'non_confidential',
             ),
         )
@@ -311,13 +313,15 @@ def _tables(*model_classes):
 
 
 def _document_backend():
-    return implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+    from trusts.apps import _compiled_for_path
+
+    return _compiled_for_path(DOCUMENT_BACKEND)
 
 
 def _extra_handle(path='tests.core.issue138-extra'):
-    return BackendHandle(
+    return backend_handle(
         path=path,
-        registry=TrustsRegistry(),
+        registry=TrustsCompiler(),
         compiler=PlanQueryCompiler(),
     )
 
@@ -421,7 +425,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def _assert_both_orders(self, primary, extra, view, pk, expect_ok):
         for handles in ((primary, extra), (extra, primary)):
             with patch(
-                'trusts.apps.configured_implementation_handles',
+                'trusts.apps.configured_compiled_plans',
                 return_value=handles,
             ):
                 if expect_ok:
@@ -487,7 +491,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
             )
             for handles in ((primary, extra), (extra, primary)):
                 with patch(
-                    'trusts.apps.configured_implementation_handles',
+                    'trusts.apps.configured_compiled_plans',
                     return_value=handles,
                 ):
                     with self.assertRaises(PermissionDenied):
@@ -522,7 +526,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
             return 'no'
 
         with patch(
-            'trusts.apps.configured_implementation_handles',
+            'trusts.apps.configured_compiled_plans',
             return_value=(handle_a, handle_b),
         ):
             messages = self._e008_messages('split_a_138', 'split_b_138')
@@ -558,7 +562,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
             return 'no'
 
         with patch(
-            'trusts.apps.configured_implementation_handles',
+            'trusts.apps.configured_compiled_plans',
             return_value=(primary, extra),
         ):
             messages = self._e008_messages('only_other_138')

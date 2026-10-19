@@ -20,8 +20,8 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
-from trusts.plan.registry import Registry
+from trusts.compile.factory import TrustsCompiler
+from trusts.plan.registry import CompiledPlan
 
 
 def _projection_models():
@@ -157,7 +157,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _registry(self, *grants):
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         for grant in grants or (self.DocumentGrant,):
             _register(registry, grant)
         return registry
@@ -408,11 +408,11 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             document=self.doc_a, user=self.alice, permission=self.read,
         )
         # Pass 4: the builder trio delegates to the built registry, so
-        # the shared plan builder is Registry.plan_for. Each of
+        # the shared plan builder is CompiledPlan.plan_for. Each of
         # the three projections builds exactly one plan through it.
         with patch.object(
-            Registry, 'plan_for', autospec=True,
-            wraps=Registry.plan_for,
+            CompiledPlan, 'plan_for', autospec=True,
+            wraps=CompiledPlan.plan_for,
         ) as plan_for:
             list(registry.permissions_for(self.alice, self.doc_a))
             registry.has_permission(self.alice, self.doc_a, self.read)
@@ -466,7 +466,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         )
 
     def test_custom_user_terminal_works_through_registered_metadata(self):
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         _register(
             registry,
             self.AccountGrant,
@@ -515,7 +515,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
 
     def test_package_surface_does_not_reexport_registry(self):
         import trusts
-        self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
+        self.assertIsNone(getattr(trusts, 'TrustsCompiler', None))
         self.assertIsNone(getattr(trusts, 'RelationPlan', None))
 
     def test_core_module_has_no_historical_import_or_global(self):
@@ -569,7 +569,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
 
     def test_instances_are_isolated(self):
         left = self._registry()
-        right = TrustsRegistry()
+        right = TrustsCompiler()
         self.assertEqual(len(left.records), 1)
         self.assertEqual(right.records, ())
         self.DocumentGrant.objects.create(
@@ -632,7 +632,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(SlugDocument, ActionCode, SlugGrant):
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             _register(registry, SlugGrant)
             doc_alpha = SlugDocument.objects.create(slug='alpha', title='A')
             doc_beta = SlugDocument.objects.create(slug='beta', title='B')
@@ -701,7 +701,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(OptionalGrant):
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             _register(registry, OptionalGrant)
             OptionalGrant.objects.create(
                 document=self.doc_a, user=self.alice, permission=self.read,

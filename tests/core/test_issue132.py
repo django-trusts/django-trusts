@@ -22,10 +22,10 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import configured_implementation_handles, implementation_for_path
-from trusts.plan.handles import BackendHandle
+from trusts.apps import configured_compiled_plans, implementation_for_path
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.query import AuthorizedQuerySet
 
 
@@ -44,9 +44,9 @@ def _change_document():
 
 def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
-    handle = BackendHandle(
+    handle = backend_handle(
         path='tests.core.issue132-extra',
-        registry=TrustsRegistry(),
+        registry=TrustsCompiler(),
         compiler=PlanQueryCompiler(),
     )
     handle.register(
@@ -76,10 +76,10 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
             permission=self.change,
         )
         self.report = Repository.objects.create(name='unregistered')
-        self.host_handle = live_config().configured_backend()
-        self.document_handle = implementation_for_path(
-            DOCUMENT_BACKEND,
-        ).configured_backend()
+        from trusts.apps import _compiled_for_path
+
+        self.host_handle = _compiled_for_path(HOST_BACKEND)
+        self.document_handle = _compiled_for_path(DOCUMENT_BACKEND)
         self.host_backend = HostTrustModelBackend()
         self.document_backend = DocumentBackend()
 
@@ -116,14 +116,14 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
     def test_unregistered_content_is_rejected_before_sql(self):
         self.assertTrue(self.alice.has_perm(PERM, self.document))
         self.assertIn(PERM, self.alice.get_all_permissions(self.document))
-        handles = configured_implementation_handles()
+        handles = configured_compiled_plans()
         self.assertGreaterEqual(len(handles), 2)
         extra = _extra_handle()
 
         with self.assertNumQueries(0):
             self._assert_public_deny()
             with patch.object(
-                self.document_backend, '_own_handle', return_value=extra,
+                self.document_backend, '_own_compiled', return_value=extra,
             ):
                 self.assertFalse(
                     self.document_backend.has_perm(
@@ -135,7 +135,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
                 (extra, self.host_handle, self.document_handle),
             ):
                 with patch(
-                    'trusts.apps.configured_implementation_handles',
+                    'trusts.apps.configured_compiled_plans',
                     return_value=bundled,
                 ):
                     qs = Repository.objects.authorized(

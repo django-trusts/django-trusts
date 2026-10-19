@@ -24,14 +24,14 @@ from django.test.utils import isolate_apps
 
 from trusts.compile.nodes import permission_in
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import (
     PlanQueryCompiler,
     RelationPlan,
 )
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import all_match, common_permissions, instance_match
 from trusts.query import AuthorizedManager
@@ -327,7 +327,7 @@ class LongPathRegistrationTest(TestCase):
         models_ = _long_path_models()
         Placement = models_[-1]
         Artifact = models_[-2]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         with self.assertNumQueries(0):
             direct = _direct_ceiling(registry, Placement)
             clustered = _cluster_ceiling(registry, Placement)
@@ -351,9 +351,9 @@ class LongPathRegistrationTest(TestCase):
     def test_handle_string_paths_match_ref_registration(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        via_ref = TrustsRegistry()
-        via_handle = TrustsRegistry()
-        handle = BackendHandle(
+        via_ref = TrustsCompiler()
+        via_handle = TrustsCompiler()
+        handle = backend_handle(
             path='tests.core.longpath',
             registry=via_handle,
             compiler=PlanQueryCompiler(),
@@ -388,7 +388,7 @@ class LongPathRegistrationTest(TestCase):
     def test_exact_duplicate_rejects_and_leaves_store_unchanged(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         first = _cluster_ceiling(registry, Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
@@ -398,7 +398,7 @@ class LongPathRegistrationTest(TestCase):
     def test_different_bindings_still_conflict(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         first = _cluster_ceiling(registry, Placement)
         p = Ref(Placement)
         with self.assertNumQueries(0):
@@ -416,7 +416,7 @@ class LongPathRegistrationTest(TestCase):
     def test_wrong_terminal_malformed_and_gfk_fail_closed(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(
@@ -490,7 +490,7 @@ class LongPathRegistrationTest(TestCase):
             _Actor, _Token, _Hall, Cluster, _Through, _Building, _Floor,
             _Wing, Artifact, Placement,
         ) = _colliding_to_field_models()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(
@@ -555,7 +555,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
             artifact=self.artifact, actor=self.actor, alt_actor=self.stranger,
             token=self.read, wing=self.wing,
         )
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         _direct_ceiling(self.registry, self.Placement)
         _cluster_ceiling(self.registry, self.Placement)
 
@@ -563,7 +563,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        return (BackendHandle(
+        return (backend_handle(
             path='issue18',
             registry=self.registry,
             compiler=PlanQueryCompiler(),
@@ -580,7 +580,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
                 )
             )
         with patch(
-            'trusts.apps.configured_implementation_handles',
+            'trusts.apps.configured_compiled_plans',
             return_value=self._handles(),
         ):
             with self.assertNumQueries(1):
@@ -788,17 +788,17 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.Title.objects.create(
             folder=self.folder, owner=self.owner, token=self.read,
         )
-        self.membership = TrustsRegistry()
+        self.membership = TrustsCompiler()
         s = Ref(self.Seat)
         self.membership.register(
             content=s.folder, user=s.desk.holders, permission=s.token,
         )
-        self.trustee = TrustsRegistry()
+        self.trustee = TrustsCompiler()
         t = Ref(self.Title)
         self.trustee.register(
             content=t.folder, user=t.owner, permission=t.token,
         )
-        self.mixed = TrustsRegistry()
+        self.mixed = TrustsCompiler()
         s = Ref(self.Seat)
         t = Ref(self.Title)
         self.mixed.register(
@@ -813,7 +813,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handle(self, registry):
-        return BackendHandle(
+        return backend_handle(
             path='issue18-group',
             registry=registry,
             compiler=self.compiler,
@@ -940,14 +940,14 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.NodeGrant.objects.create(
             node=self.parent, holder=self.holder, token=self.add,
         )
-        self.registry = TrustsRegistry()
+        self.registry = TrustsCompiler()
         g = Ref(self.NodeGrant)
         self.registry.register(
             content=g.node.children,
             user=g.holder,
             permission=g.token,
         )
-        self.handle = BackendHandle(
+        self.handle = backend_handle(
             path='issue18-prefix',
             registry=self.registry,
             compiler=PlanQueryCompiler(),
@@ -983,12 +983,12 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         )
 
     def test_terminal_only_same_model_is_none(self):
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         g = Ref(self.NodeGrant)
         registry.register(
             content=g.node, user=g.holder, permission=g.token,
         )
-        handle = BackendHandle(
+        handle = backend_handle(
             path='issue18-terminal',
             registry=registry,
             compiler=PlanQueryCompiler(),

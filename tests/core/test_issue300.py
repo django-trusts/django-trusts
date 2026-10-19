@@ -32,10 +32,10 @@ from trusts.plan.rewrites import (
     trusts_bind_once,
 )
 from trusts.plan.walk import _render_reach_sql
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
@@ -498,8 +498,8 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             )
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
-            registry = TrustsRegistry()
-            handle = BackendHandle(
+            registry = TrustsCompiler()
+            handle = backend_handle(
                 path='tests.annotation.a',
                 registry=registry,
                 compiler=PlanQueryCompiler(),
@@ -514,11 +514,11 @@ class Issue300UserAnnotationTest(TransactionTestCase):
                 a=Value(1, output_field=CharField()),
             )
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                plain = handle.build_registry().filter_authorized(
+                plain = handle.build_compiled().filter_authorized(
                     candidates, user, permission,
                 )
                 plain_values = list(plain.values_list('a', flat=True))
-            bound = handle.build_registry().filter_authorized(
+            bound = handle.build_compiled().filter_authorized(
                 candidates, user, permission,
             )
             bound_values = list(bound.values_list('a', flat=True))
@@ -576,8 +576,8 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             RetargetGrant.objects.create(
                 node=node, user=user, permission=permission,
             )
-            registry = TrustsRegistry()
-            handle = BackendHandle(
+            registry = TrustsCompiler()
+            handle = backend_handle(
                 path='tests.along.retarget',
                 registry=registry,
                 compiler=PlanQueryCompiler(),
@@ -594,12 +594,12 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                 'trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth,
             ):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                    plain = handle.build_registry().filter_authorized(
+                    plain = handle.build_compiled().filter_authorized(
                         candidates, user, permission,
                     )
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
-                    plain_has = handle.build_registry().has_permission(
+                    plain_has = handle.build_compiled().has_permission(
                         user, node, permission,
                     )
                     plain_doc = _load_policy_sql_document(
@@ -607,18 +607,18 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                     )
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
-                    bound = handle.build_registry().filter_authorized(
+                    bound = handle.build_compiled().filter_authorized(
                         candidates, user, permission,
                     )
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
-                    bound_has = handle.build_registry().has_permission(
+                    bound_has = handle.build_compiled().has_permission(
                         user, node, permission,
                     )
                     bound_doc = _load_policy_sql_document(
                         render_policy_sql_bytes(handles=[handle]),
                     )
-                    list(handle.build_registry().filter_authorized(
+                    list(handle.build_compiled().filter_authorized(
                         candidates, user, permission,
                     ))
                     render_policy_sql_bytes(handles=[handle])
@@ -686,9 +686,9 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
         for enabled in (True, False):
             with self.subTest(TRUSTS_SQL_BIND_ONCE=enabled):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=enabled):
-                    handle = BackendHandle(
+                    handle = backend_handle(
                         path='documents.backends.ReviewBackend',
-                        registry=TrustsRegistry(),
+                        registry=TrustsCompiler(),
                         compiler=PlanQueryCompiler(),
                     )
                     handle.register(
@@ -706,7 +706,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']
                     named = content['named_filters'][0]
-                    records = handle.build_registry().plan_for(ReviewDocument).records
+                    records = handle.build_compiled().plan_for(ReviewDocument).records
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(
                         records[0], 'permission', 'default',

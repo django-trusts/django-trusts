@@ -23,11 +23,11 @@ from django.test.utils import isolate_apps
 
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.inspect.snapshot import (
     _load_policy_sql_document,
     render_policy_sql_bytes,
@@ -44,11 +44,14 @@ class _ListedBackend(TrustModelBackendMixin, ModelBackend):
 
     handle = None
 
-    def _own_handle(self):
+    def _own_compiled(self):
         handle = type(self).handle
         if handle is None:
             raise TrustsConfigurationError('probe handle is unset')
-        return handle
+        compiled = handle.build_compiled()
+        compiled.compiler = handle.compiler
+        compiled.path = handle.path
+        return compiled
 
 
 @contextmanager
@@ -100,8 +103,8 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue263'):
     if registry is None:
-        registry = TrustsRegistry()
-    return BackendHandle(
+        registry = TrustsCompiler()
+    return backend_handle(
         path=path,
         registry=registry,
         compiler=PlanQueryCompiler(),
@@ -203,7 +206,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
         User = get_user_model()
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         team = Ref(Team)
         access = Ref(Access)
 
@@ -271,7 +274,7 @@ class PermissionCollectionRegistrationTest(TestCase):
 
         link = Ref(DeskLink)
         with self.assertNumQueries(0):
-            two_hops = TrustsRegistry().register(
+            two_hops = TrustsCompiler().register(
                 content=link.repository,
                 user=link.desk.team.members,
                 permission=link.desk.team.permissions,
@@ -292,12 +295,12 @@ class PermissionCollectionRegistrationTest(TestCase):
         direct_ref = Ref(DirectGrant)
         group_ref = Ref(GroupGrant)
         with self.assertNumQueries(0):
-            direct = TrustsRegistry().register(
+            direct = TrustsCompiler().register(
                 content=direct_ref.repository,
                 user=direct_ref.user,
                 permission=direct_ref.permission,
             )
-            grouped = TrustsRegistry().register(
+            grouped = TrustsCompiler().register(
                 content=group_ref.repository,
                 user=group_ref.group.user,
                 group=group_ref.group,
@@ -322,7 +325,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Team = models_['Team']
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
-        kept = TrustsRegistry()
+        kept = TrustsCompiler()
         team = Ref(Team)
         with self.assertNumQueries(0):
             existing = kept.register(
@@ -461,7 +464,7 @@ class PermissionCollectionRegistrationTest(TestCase):
 
     def test_duplicate_collection_registration_does_not_mutate(self):
         Team = _collection_models()['Team']
-        registry = TrustsRegistry()
+        registry = TrustsCompiler()
         team = Ref(Team)
         with self.assertNumQueries(0):
             first = registry.register(
@@ -550,7 +553,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         )
         self.Access.objects.create(team=self.writers, repository=self.spec)
         self.org_handle = _handle(
-            TrustsRegistry(), path='tests.core.issue263-org',
+            TrustsCompiler(), path='tests.core.issue263-org',
         )
         self.org_handle.register(
             trust=self.Team,
@@ -559,7 +562,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             content='organization__repositories',
         )
         self.access_handle = _handle(
-            TrustsRegistry(), path='tests.core.issue263-access',
+            TrustsCompiler(), path='tests.core.issue263-access',
         )
         self.access_handle.register(
             trust=self.Access,
@@ -568,7 +571,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             content='repository',
         )
         self.classic = _handle(
-            TrustsRegistry(), path='tests.core.issue263-classic',
+            TrustsCompiler(), path='tests.core.issue263-classic',
         )
         self.classic.register(
             trust=self.DirectGrant,
@@ -598,7 +601,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
 
     def _authorized(self, handle, user, permission, *, skip_is_active=False):
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(handle,),
         ):
             return list(
@@ -651,20 +654,20 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
                 self.assertFalse(user.has_perm(self.read_code, self.secret))
 
             self.assertTrue(
-                handle.build_registry().has_permission(self.alice, self.spec, self.read),
+                handle.build_compiled().has_permission(self.alice, self.spec, self.read),
             )
             self.assertTrue(
-                handle.build_registry().has_permission(
+                handle.build_compiled().has_permission(
                     self.alice, self.notes, self.change,
                 ),
             )
             self.assertFalse(
-                handle.build_registry().has_permission(
+                handle.build_compiled().has_permission(
                     self.alice, self.spec, self.delete,
                 ),
             )
             self.assertFalse(
-                handle.build_registry().has_permission(self.bob, self.spec, self.read),
+                handle.build_compiled().has_permission(self.bob, self.spec, self.read),
             )
 
             read_users = self.spec.get_permitted_users(self.read)
@@ -740,7 +743,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
 
     def _authorized_qs(self, handle, user, permission):
         with patch(
-            'trusts.apps._relationship_implementation_handles',
+            'trusts.apps._relationship_compiled_plans',
             return_value=(handle,),
         ):
             return self.Repository.objects.authorized(user, permission)
@@ -785,7 +788,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self._authorized(handle, self.bob, self.delete),
             [],
         )
-        enumerated = list(handle.build_registry().permissions_for(self.alice, self.spec))
+        enumerated = list(handle.build_compiled().permissions_for(self.alice, self.spec))
         self.assertEqual(
             {_code(row) for row in enumerated},
             {self.read_code, self.change_code},
@@ -834,7 +837,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self.assertTrue(self.alice.has_perm(self.add_code, self.spec))
             self.assertFalse(self.bob.has_perm(self.add_code, self.spec))
             self.assertTrue(
-                handle.build_registry().has_permission(
+                handle.build_compiled().has_permission(
                     self.alice, self.secret, self.read,
                 ),
             )

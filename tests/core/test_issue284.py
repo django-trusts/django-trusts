@@ -24,11 +24,11 @@ from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.contents import filter_by_permitted_content
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.query import (
     AuthorizedQuerySet,
     PermittedQuerySet,
@@ -55,9 +55,15 @@ def _pks(queryset):
 
 
 class _Handle(object):
+    path = ''
+
     def __init__(self, registry):
         self.registry = registry
         self.compiler = PlanQueryCompiler()
+
+    def build_compiled(self):
+        build = getattr(self.registry, 'build_compiled', None)
+        return build() if callable(build) else self.registry
 
 
 class Issue284SuiteRegistrationTest(TestCase):
@@ -354,7 +360,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 folder=folder, user=inactive, permission=read,
             )
 
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             grant = Ref(NoteGrant)
             registry.register(
                 content=grant.note, user=grant.user, permission=grant.permission,
@@ -394,7 +400,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 {note.pk},
             )
 
-            account_registry = TrustsRegistry()
+            account_registry = TrustsCompiler()
             account_grant = Ref(AccountGrant)
             account_registry.register(
                 content=account_grant.note,
@@ -422,7 +428,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             )
             self.assertIn('is_active', str(skipped.query))
 
-            scope_registry = TrustsRegistry()
+            scope_registry = TrustsCompiler()
             scope_grant = Ref(FolderGrant)
             scope_registry.register(
                 content=scope_grant.folder.rows.note,
@@ -553,7 +559,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
 
-            registry = TrustsRegistry()
+            registry = TrustsCompiler()
             grant = Ref(LocalUserGrant)
             registry.register(
                 content=grant.note,
@@ -564,7 +570,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                 _pks(registry.permissions_for(visible, note)), {read.pk},
             )
             self.assertTrue(registry.has_permission(visible, note, read))
-            scope_registry = TrustsRegistry()
+            scope_registry = TrustsCompiler()
             scope_grant = Ref(FolderGrant)
             scope_registry.register(
                 content=scope_grant.folder.identity_rows.note,
@@ -641,11 +647,14 @@ class _AcceptanceBackend(TrustModelBackendMixin, ModelBackend):
 
     handle = None
 
-    def _own_handle(self):
+    def _own_compiled(self):
         handle = type(self).handle
         if handle is None:
             raise TrustsConfigurationError('acceptance handle is unset')
-        return handle
+        compiled = handle.build_compiled()
+        compiled.compiler = handle.compiler
+        compiled.path = getattr(handle, 'path', '')
+        return compiled
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -743,9 +752,9 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                 sponsor=self.sponsor,
             )
             self.relationship.allowed_permissions.add(self.read)
-            self.handle = BackendHandle(
+            self.handle = backend_handle(
                 path='tests.core.test_issue284._AcceptanceBackend',
-                registry=TrustsRegistry(),
+                registry=TrustsCompiler(),
                 compiler=PlanQueryCompiler(),
             )
             self.handle.register(
@@ -782,7 +791,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             ))
             self._settings.enable()
             self._handles = patch(
-                'trusts.apps._relationship_implementation_handles',
+                'trusts.apps._relationship_compiled_plans',
                 return_value=(self.handle,),
             )
             self._handles.start()

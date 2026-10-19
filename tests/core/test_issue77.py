@@ -14,12 +14,12 @@ from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import implementation_for_path
+from trusts.apps import _compiled_for_path, implementation_for_path
 from trusts.plan.aggregates import common_permissions, compiler_for_class
-from trusts.plan.handles import BackendHandle
+from tests.apps import backend_handle
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsCompilerError
-from trusts.compile.factory import TrustsRegistry
+from trusts.compile.factory import TrustsCompiler
 from trusts.plan.contents import granted
 from tests.backends import MissingCompilerBackend
 
@@ -52,9 +52,9 @@ def _contribute_document(registry):
 class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
-        handle = BackendHandle(
+        handle = backend_handle(
             path='tests.backends.RaisingCompilerBackend',
-            registry=TrustsRegistry(),
+            registry=TrustsCompiler(),
             compiler=RaisingCompilerBackend.query_compiler,
         )
         _contribute_document(handle.registry)
@@ -71,23 +71,23 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
     def test_unconfigured_and_ambiguous_path_fail_loud(self):
         live = live_config()
         with self.assertRaises(Exception):
-            live.configured_backend('tests.backends.MixinOnlyBackend')
+            implementation_for_path('tests.backends.MixinOnlyBackend')
 
 
 class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
     def test_document_grant_is_not_inherited_by_host(self):
-        host = live_config().configured_backend()
-        document = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
-        self.assertFalse(host.build_registry().plan_for(Document).records)
-        self.assertTrue(document.build_registry().plan_for(Document).records)
+        host = _compiled_for_path('tests.backends.HostTrustModelBackend')
+        document = _compiled_for_path(DOCUMENT_BACKEND)
+        self.assertFalse(host.build_compiled().plan_for(Document).records)
+        self.assertTrue(document.build_compiled().plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
-        mixin = BackendHandle(
+        mixin = backend_handle(
             path='tests.backends.MixinOnlyBackend',
-            registry=TrustsRegistry(),
+            registry=TrustsCompiler(),
             compiler=PlanQueryCompiler(),
         )
-        self.assertFalse(mixin.build_registry().plan_for(Document).records)
+        self.assertFalse(mixin.build_compiled().plan_for(Document).records)
 
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
@@ -100,8 +100,8 @@ class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(
             document=self.doc, user=self.alice, permission=self.change,
         )
-        self.host = live_config().configured_backend()
-        self.document = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+        self.host = _compiled_for_path('tests.backends.HostTrustModelBackend')
+        self.document = _compiled_for_path(DOCUMENT_BACKEND)
 
     def test_coordinator_one_sql_noncoordinator_zero(self):
         qs = Document.objects.all()
@@ -128,10 +128,10 @@ class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(
             document=self.doc, user=self.alice, permission=self.change,
         )
-        self.handle = implementation_for_path(DOCUMENT_BACKEND).configured_backend()
+        self.handle = _compiled_for_path(DOCUMENT_BACKEND)
 
     def test_plan_and_handle_common_permissions_are_one_sql(self):
-        plan = self.handle.build_registry().plan_for(self.doc, user=self.alice)
+        plan = self.handle.build_compiled().plan_for(self.doc, user=self.alice)
         with self.assertNumQueries(1):
             codes = set(
                 plan.common_permissions(self.alice, self.doc).values_list(
