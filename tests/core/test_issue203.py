@@ -51,9 +51,17 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
 
     def __init__(self, handle):
         super().__init__()
-        from trusts.backends import registries
+        from trusts.apps import catalogs
+        from trusts.compile.catalogs import Catalog
 
-        registries[type(self)] = handle.registry
+        cls = type(self)
+        catalogs[cls] = Catalog(
+            cls=cls,
+            path='tests.core.issue203',
+            family='relationship',
+            compiler=self.query_compiler,
+            factory=handle.registry,
+        )
 
 
 class _BuilderLog(object):

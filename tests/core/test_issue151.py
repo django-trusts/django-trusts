@@ -275,7 +275,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         backend = DocumentBackend()
         document = Document(title='probe')
         user = get_user_model()(username='probe-151')
-        record, extra_q = backend._condition_overlay(
+        record, extra_q = backend._get_or_create_catalog()._condition_overlay(
             'myapp.change_document:missing', document, user,
         )
         self.assertIsNone(record)
@@ -290,7 +290,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         try:
             registry.condition_lookup = None
             with self.assertRaises(AttributeError):
-                backend._condition_overlay(
+                backend._get_or_create_catalog()._condition_overlay(
                     'myapp.change_document:non_confidential',
                     document,
                     user,

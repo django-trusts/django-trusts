@@ -1,197 +1,134 @@
+"""Front over one factory and the registry it builds. Not a second store."""
+
+from django.contrib.auth.models import Permission
+from django.db.models import QuerySet, Subquery
+
 from trusts.compile.factory import RegistryFactory
+from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     evaluate_registered_expression,
     permission_has_condition,
 )
-
-"""
-    Catalog is an instance created for a backend class.
-    Every object created inside / under trace back to a single backend class.
-    So, getting a handle is not needed.
-
-    CLARITY (sketch, not implementation) -- what this class is meant to be:
-
-    (a) Owner, not a second store: ``Catalog`` is the per-backend-class
-        owner of the encapsulated compile/plan step, living in
-        ``trusts/compile/``. It holds the ``RegistryFactory``, builds and
-        caches the lowered registry as private data (``catalog.registry``),
-        and owns the query compiler. It does NOT invent a second store;
-        nothing lowered lives directly on the Catalog except via that
-        built registry.
-    (b) What is inside, via its built registry: ``records`` (tuple of
-        ``RegisteredRelation``), ``delegations`` (tuple of
-        ``RegisteredDelegation``), ``conditions`` (``ConditionRegistry``),
-        and ``user_conditions`` / ``user_override``. ``RelationPlan``s are
-        built on demand from the records; they are not stored.
-    (c) Two modes only -- Catalog constructs, it never executes for the
-        caller: ``has_perm()`` -> get_qs from Catalog -> execute it
-        (``qs.exists()`` -> ``bool``) and return the result; and
-        ``User.with_perm()`` -> get_qs from Catalog -> return the qs
-        unevaluated. Execution/return is the caller's choice.
-    (d) Vocabulary: "entries" means those lowered records/delegations a
-        Catalog holds. The answer to one inquiry is NOT an entry; it is
-        a ``PreparedInquiry`` (see below).
-
-    Compiler ownership: the compiler arrives at construction -- passed
-    from the backend class's ``query_compiler`` into the Catalog /
-    ``RegistryFactory`` constructor (and on to the built registry).
-    A ``Catalog`` class attribute is NOT the customization surface; the
-    class attribute in this sketch is a placeholder only.
-"""
-class Catalog(object):
-    # Placeholder only -- see module note on compiler ownership above.
-    query_compiler = PlanQueryCompiler()
-
-    def __init__(path=path, family=family, cls=cls):
-        self.cls = cls # backend's class
-        self.path = path
-        self.family = family
-        self.factory = RegistryFactory()
-
-    def build():
-        _get_or_create_registry()
-
-    def get_record_adapter(self):
-        """Adapter ``Recorder.play`` calls. Methods forward to this factory."""
-        return _RecordAdapter(self.factory)
-
-    def prepare_has_perm(self, user_obj, permext, obj=None, **skip_flags) -> PreparedInquiry:
-        # @TODO: convert to return PreparedInquiry (inquiry answer, not a stored entry)
-
-        registry = self._get_or_create_registry()
-        if not registry.applies(registry.plan_for(obj, user=user_obj)):
-            return False
-        record, extra_q = self._condition_overlay(
-            permext, obj, user_obj, registry=registry,
-        )
-        applabel, modelname, action, _cond = utils.parse_perm_code(permext)
-        perm = '%s.%s_%s' % (applabel, action, modelname)
-        if permission_has_condition(permext) and record is None:
-            return False
-        if isinstance(obj, QuerySet):
-            positive = self._collection_has_perm(
-                user_obj, perm, obj, extra_q=extra_q,
-                skipped=inquiry.values, registry=registry,
-            )
-        else:
-            positive = self._instance_has_perm(
-                user_obj, perm, obj, extra_q=extra_q,
-                skipped=inquiry.values, registry=registry,
-            )
-        if not positive:
-            return False
-        if record is None or extra_q is not None:
-            return True
-        return self.permission_condition_met(record, user_obj, perm, obj)
-
-        # @TODO: Implement prepare_* -> PreparedInquiry for the inquiries,
-        # in this order (stage 1 is has_perm only; the rest migrate later
-        # by the same prepare pattern, not in the same run):
-        #   1. has_perm (this method)
-        #   2. permissions_for / get_all_permissions + get_group_permissions
-        #   3. permitted_users / permitted_users_predicate
-        #   4. filter_authorized / permitted content
-        # there should be only two shape of permission inqury, eg,
-        #   has_perm() -> get_qs from Catalog -> execute it and return result
-        #   User.with_perm() -> get_qs from Catalog -> return qs
-        # So, return PreparedInquiry() for all of them, and let backend choose what to do.
-        # If non-qs result is known without executing the qs, or fail-safe == False, then set result.
-        # caller's responsiblity to check qs first.
-        #
-        # OPEN execute() shape question: the inquiries do not share one
-        # result shape -- has_perm wants a bool (qs.exists()), the
-        # permissions_for family materializes a set of codes, and the
-        # permitted-users predicate returns a Q or None. PreparedInquiry
-        # .execute() as sketched only fits the bool shape; the other
-        # shapes must be resolved explicitly, not folded into execute().
-        # A preset result also needs a sentinel distinct from None:
-        # None cannot mean "no preset", because False / an empty set
-        # are legitimate preset answers.
-        #
-        # move all code that need /compile /plan into here
-
-    def permission_condition_met(self, record, user_obj, perm, obj):
-        if record.expr is None:
-            model = obj.model if isinstance(obj, QuerySet) else getattr(obj, '__class__', obj)
-            raise PermissionConditionError(
-                'Permission condition on %s is unbound.'
-                % getattr(getattr(model, '_meta', None), 'label', model)
-            )
-        if isinstance(obj, QuerySet):
-            objs = obj.all()
-            model = obj.model
-        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
-            objs = obj
-            model = None
-        else:
-            objs = [obj]
-            model = obj.__class__
-
-        # @TODO: implement me
-        return PreparedInquiry(model=model, result=None, qs= ...)
-        """
-        all([
-            evaluate_registered_expression(
-                record.expr, user_obj, perm, o, model=model or o.__class__
-            )
-            for o in objs
-        ])
-        """
-
-    def _get_or_create_registry():
-        if self.registry == None:
-            self.registry = factory.build_registry()
-        return self.registry
-
+from trusts.utils import parse_perm_code
+_NO_PRESET = object()  # not None: False and empty answers are real
 
 class PreparedInquiry(object):
-    """One inquiry's answer envelope: (model, result, qs).
-
-    Not a stored registration -- do not confuse with the Catalog's
-    entries (its lowered records/delegations).
-    """
-
-    def __init__(model=model, result=result, qs=qs):
+    def __init__(self, model, result=_NO_PRESET, qs=None):
         self.model = model
         self.result = result
         self.qs = qs
-        ## qs and result is mutual exclusive. One of them is none
 
-    def get_qs():
-        return self.qs
+    def execute(self):
+        if self.result is not _NO_PRESET:
+            return self.result
+        return bool(self.qs.exists())
 
-    def get_model():
-        return self.model
+class Catalog(object):
+    def __init__(self, *, cls, path, family, compiler, factory=None,
+                 registry=None):
+        self.cls = cls
+        self.path = path
+        self.family = family
+        self._replay = factory is None
+        self.factory = factory if factory is not None else RegistryFactory(
+            compiler=compiler, path=path, family=family,
+        )
+        self._registry = registry
 
-    def execute():
-        # Sketch only: a QuerySet has no .execute(); the bool mode is
-        # qs.exists(). See the OPEN execute() shape note in Catalog.
-        if (result != None):
-            return result
-        return self.qs.execute()
+    @property
+    def registry(self):
+        return self._registry
 
+    def build(self, recorder):
+        if self._registry is not None:
+            return self._registry
+        recorder.freeze()
+        if self._replay:
+            recorder.play(self.get_record_adapter())
+        self._registry = self.factory.build_registry()
+        return self._registry
 
-# CLARITY: this _RecordAdapter duplicates the adapter already in
-# trusts/compile/factory.py. Implementation must reuse factory's
-# adapter and delete this duplicate; do not keep two adapters.
-class _RecordAdapter(object):
-    """Visitor ``Recorder.play`` drives. Forwards to this factory's public API."""
+    def get_record_adapter(self):
+        return self.factory.get_record_adapter()
 
-    def __init__(self, factory):
-        self.factory = factory
+    def prepare_has_perm(self, user_obj, permext, obj, *, skipped, sponsors):
+        registry = self.registry
+        model = _content_model(obj)
+        if not registry.applies(registry.plan_for(obj, user=user_obj)):
+            return PreparedInquiry(model, result=False)
+        record, extra_q = self._condition_overlay(permext, obj, user_obj)
+        applabel, modelname, action, _cond = parse_perm_code(permext)
+        perm = '%s.%s_%s' % (applabel, action, modelname)
+        if permission_has_condition(permext) and record is None:
+            return PreparedInquiry(model, result=False)
+        held = registry.has_permission(
+            user_obj, obj, _permission_binding(perm, model),
+            extra_q=extra_q, sponsors=_registries(sponsors),
+            permission_model=Permission,
+            skipped=dict(skipped) if isinstance(skipped, dict) else {},
+        )
+        if not held:
+            return PreparedInquiry(model, result=False)
+        if record is None or extra_q is not None:
+            return PreparedInquiry(model, result=True)
+        return self.permission_condition_met(record, user_obj, perm, obj)
 
-    def register_principal(self, **kwargs):
-        return self.factory.register(**kwargs)
+    def permission_condition_met(self, record, user_obj, perm, obj):
+        model = _content_model(obj)
+        if record.expr is None:
+            label = getattr(getattr(model, '_meta', None), 'label', model)
+            raise PermissionConditionError(
+                'Permission condition on %s is unbound.' % label
+            )
+        if isinstance(obj, QuerySet):
+            objs, model = obj.all(), obj.model
+        elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes)):
+            objs, model = obj, None
+        else:
+            objs = [obj]
+        met = all(
+            evaluate_registered_expression(
+                record.expr, user_obj, perm, item,
+                model=model or item.__class__,
+            )
+            for item in objs
+        )
+        return PreparedInquiry(model, result=bool(met))
 
-    def register_delegate(self, **kwargs):
-        return self.factory.register_delegation(**kwargs)
+    def _condition_overlay(self, permext, obj, user_obj):
+        if not permission_has_condition(permext):
+            return None, None
+        applabel, modelname, _action, cond = parse_perm_code(permext)
+        model = _content_model(obj)
+        lookup = getattr(self.registry, 'condition_lookup', None)
+        if lookup is None:
+            if isinstance(obj, QuerySet):
+                return None, None
+            raise AttributeError(
+                'Permission condition code "%s" is not associate with model "%s_%s"'
+                % (cond, applabel, modelname)
+            )
+        record = lookup.record_for(model, cond)
+        if record is None or not isinstance(obj, QuerySet):
+            return record, None
+        return record, lookup.compile_q(obj.model, permext, user_obj)
 
-    def add_named_filter(self, model, code, predicate):
-        return self.factory.register_permission_condition(model, code, predicate)
+def _content_model(obj):
+    return obj.model if isinstance(obj, QuerySet) else obj.__class__
 
-    def set_user_condition(self, name, expr, on='*'):
-        return self.factory.set_user_condition(name, expr, on=on)
+def _registries(sponsors):
+    return tuple(
+        sponsor.registry for sponsor in sponsors if sponsor.registry is not None
+    )
 
-    def set_user_override(self, name, expr, on='user'):
-        return self.factory.set_user_override(name, expr, on=on)
-
+def _permission_binding(perm, model):
+    if isinstance(perm, Permission):
+        return perm
+    applabel, modelname, action, _cond = parse_perm_code(perm)
+    return Subquery(
+        Permission.objects.filter(
+            codename='%s_%s' % (action, modelname),
+            content_type__app_label=applabel.lower(),
+            content_type__model=modelname,
+        ).values('pk')[:1]
+    )

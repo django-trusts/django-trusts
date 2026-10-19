@@ -18,7 +18,9 @@ from django.db.utils import OperationalError
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import forget_models, isolate_live_registry, live_config
+from tests.apps import (
+    forget_models, isolate_live_registry, live_config, restore_isolated_catalogs,
+)
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import (
     _format_policy_sql,
@@ -1441,6 +1443,7 @@ class _LiveRegistryRestoreMixin(object):
         self.saved = dict(self.live.registries)
 
     def tearDown(self):
+        restore_isolated_catalogs(self.live)
         self.live.registries.clear()
         self.live.registries.update(self.saved)
         super().tearDown()

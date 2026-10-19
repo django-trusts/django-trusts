@@ -23,7 +23,8 @@ from django.db.models import F, Model, Q, QuerySet
 
 from trusts.utils import parse_perm_code
 from trusts.plan.rewrites import bind_once
-from trusts.backends import TrustModelBackendMixin, _permission_binding
+from trusts.backends import TrustModelBackendMixin
+from trusts.compile.catalogs import _permission_binding
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.handles import registry_of
@@ -432,7 +433,8 @@ def _named_filter_q(backend, content, perm, singular, user_model):
     a singular object check that returns false. Construction reads only
     values already loaded on ``content``.
     """
-    record, _extra = backend._condition_overlay(perm, content, None)
+    catalog = backend._get_or_create_catalog()
+    record, _extra = catalog._condition_overlay(perm, content, None)
     if record is None:
         return None
     expr = getattr(record, 'expr', None)

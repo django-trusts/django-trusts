@@ -1,50 +1,29 @@
 """Generic Trusts backend mixin.
 
-``TrustModelBackendMixin`` lives only here. Core does not ship
-``TrustModelBackend`` or ``HistoricalGroupQueryCompiler``. Registration
-is a per-class ``Recorder``. ``ready()`` freezes it, replays it through
-``RegistryFactory``, and stores the built object on ``registries[cls]``.
-``get_registry()`` returns the recorder.
+Registration is a per-class ``Recorder``. ``ready()`` stores a
+``Catalog`` on ``catalogs[cls]`` and, when ``registries[cls]`` is
+empty, that catalog's built registry.
 """
 
 from django.contrib.auth import get_backends
 from django.contrib.auth.models import Permission
-from django.db.models import Model, QuerySet, Subquery
+from django.db.models import Model, QuerySet
 
 import trusts.apps as trusts_apps
 from trusts.apps import (
+    catalogs,
     implementation_configs,
     implementation_for_class,
     listed_backend_class,
     recorders,
     registries,
 )
-from trusts.errors import (
-    PermissionConditionError,
-    TrustsConfigurationError,
-)
+from trusts.compile.catalogs import Catalog
+from trusts.compile.factory import RegistryFactory
+from trusts.errors import TrustsConfigurationError
 import trusts.inspect.checks  # noqa: F401
 from trusts.plan.handles import registry_of
 from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
-from trusts import utils
-
-
-def _permission_binding(perm, model):
-    """Unevaluated Permission pk for ``perm`` (instance or dotted code).
-
-    Unknown codes become an empty subquery and match nothing. This is
-    permission identity in SQL, not a second authorization source.
-    """
-    if isinstance(perm, Permission):
-        return perm
-    applabel, modelname, action, _cond = utils.parse_perm_code(perm)
-    return Subquery(
-        Permission.objects.filter(
-            codename='%s_%s' % (action, modelname),
-            content_type__app_label=applabel.lower(),
-            content_type__model=modelname,
-        ).values('pk')[:1]
-    )
 
 
 def _perm_codes(permission_qs):
@@ -63,15 +42,8 @@ def _canonical_path(cls):
 class TrustModelBackendMixin(object):
     """Object-permission backend. One recorder and one built registry per class."""
 
+    query_compiler = PlanQueryCompiler()
     family = 'relationship'
-
-    @staticmethod
-    def _get_class(obj):
-        if isinstance(obj, QuerySet):
-            klass = obj.model
-        else:
-            klass = obj.__class__
-        return klass
 
     def __init__(self):
         cls = type(self)
@@ -91,43 +63,42 @@ class TrustModelBackendMixin(object):
             self.recorder = recorders[cls]
         return recorders[cls]
 
+    def ready(self):
+        return self._get_or_create_catalog()
 
-    def ready(self) -> None:
-        self._get_or_create_catalog()
-
-    def _get_or_create_catalog() -> Catalog:
-        """Freeze the class recorder and publish ``catalogs[cls]``.
-
-        Idempotent once this class is sealed. A later replacement of
-        ``catalogs[cls]`` (test isolation) is left in place.
-        """
+    def _get_or_create_catalog(self):
+        """Keep a replaced catalog. Build it once, then leave it."""
         cls = type(self)
         recorder = recorders.get(cls)
         if recorder is None:
             recorder = Recorder()
             recorders[cls] = recorder
             self.recorder = recorder
-        if recorder.frozen and cls in catalogs:
-            return catalogs[cls]
-        recorder.freeze()
-
-        catalog = Catalog(path=_canonical_path(cls), family=getattr(cls, 'family', 'relationship'))
-        recorder.play(catalog.get_record_adapter())
-        catalog.build()
+        catalog = catalogs.get(cls)
+        if catalog is not None and recorder.frozen and catalog.registry is not None:
+            registries.setdefault(cls, catalog.registry)
+            return catalog
+        if catalog is None:
+            catalog = Catalog(
+                cls=cls,
+                path=_canonical_path(cls),
+                family=getattr(cls, 'family', 'relationship'),
+                compiler=self.query_compiler,
+            )
+        catalog.build(recorder)
         catalogs[cls] = catalog
-
+        registries.setdefault(cls, catalog.registry)
         return catalog
+
+    def _built_registry(self):
+        return self._get_or_create_catalog().registry
 
     @property
     def registry(self):
         """Built registry for this class. Seals on first read."""
-        return self._answered_registry()
+        return self._built_registry()
 
     def get_group_permissions(self, user_obj, obj=None, **skip_flags):
-        """
-        Returns a set of permission strings that this user has through his/her
-        groups.
-        """
         return self._listed_permissions(
             user_obj, obj, skip_flags, kind='group',
         )
@@ -138,42 +109,19 @@ class TrustModelBackendMixin(object):
         )
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
-        """Object check for one permission string.
-
-        The string uses the historical codename split to choose the row.
-        When that row is an ``auth.Permission``, a content-type mismatch
-        with ``obj`` is ``False``. Another permission terminal stays
-        primary-key identity inside the plan. ``skip_<name>`` is a bound
-        parameter on that registered user condition.
-        Django's ``user.has_perm`` does not forward these keywords.
-        """
-
+        """Object check. The catalog prepares the answer; this executes it."""
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return False
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
-
         catalog = self._get_or_create_catalog()
-
-        prepared = catalog.prepare_has_perm(user_obj, permext, obj, **skip_flags)
-        return prepared.execute()
-
-    # @TODO: move other permission inquires entry to this backend
-    # follow the same pattern as has_perm. check things, then obtain a PreparedInquiry from catalog
-    # the permission inquiry decide to return the qs or execute it.
-    # backend is becoming a thin object that keep the register() via Recorder, and forward the
-    # eval to Catalog. everything /compile or /plan created by this backend directly or directly
-    # always belong to a single backend cls, so no handle is needed. the backend should not have
-    # any information that /compile or /plan needs after they are built. all the information
-    #  /compile or /plan needed are passed to them at __init__, built, or catalog.prepare_xyz call
-    #
-    # CLARITY (stage 1): Catalog + has_perm only (above). The other
-    # inquiries migrate later, one by one, by the same prepare pattern;
-    # they are listed in trusts/compile/catalogs.py. The backend keeps
-    # register() via Recorder and otherwise forwards. In the end state
-    # there is no BackendHandle, and catalogs[cls] is the built-catalog
-    # store, beside recorders[cls] (one per backend class).
+        entry = catalog.prepare_has_perm(
+            user_obj, permext, obj,
+            skipped=inquiry.values,
+            sponsors=self._sponsor_catalogs(catalog),
+        )
+        return entry.execute()
 
     def singular_permission_accepted(self, perm):
         """True when object ``has_perm`` treats ``perm`` as one permission row.
@@ -195,7 +143,7 @@ class TrustModelBackendMixin(object):
         eligible grants outside that walk. ``skipped`` is the bound
         ``skip_<name>`` parameter map.
         """
-        registry = self._answered_registry()
+        registry = self._built_registry()
         if registry is None:
             return None
         return registry.permitted_users_predicate(
@@ -203,6 +151,26 @@ class TrustModelBackendMixin(object):
             sponsors=self._sponsor_registries(),
             skipped=skipped, backend=self,
         )
+
+    def _sponsor_catalogs(self, own):
+        own_path = _canonical_path(type(self))
+        sponsors = []
+        for handle in trusts_apps._relationship_implementation_handles():
+            if getattr(handle, 'path', None) == own_path:
+                continue
+            cls = listed_backend_class(getattr(handle, 'path', '') or '')
+            if not isinstance(cls, type):
+                continue
+            catalog = catalogs.get(cls)
+            if catalog is None:
+                for candidate in get_backends():
+                    if type(candidate) is cls:
+                        catalog = candidate._get_or_create_catalog()
+                        break
+            if catalog is None or catalog is own:
+                continue
+            sponsors.append(catalog)
+        return tuple(sponsors)
 
     def _sponsor_registries(self):
         """Built registries of other relationship-family paths."""
@@ -225,14 +193,14 @@ class TrustModelBackendMixin(object):
     def _skip_inquiry(self, user_obj, skip_flags):
         return bind_checked_user(
             user_obj, skip_flags=skip_flags,
-            registry=self._answered_registry,
+            registry=self._built_registry,
         )
 
     def _listed_permissions(self, user_obj, obj, skip_flags, *, kind, cache=False):
         inquiry = self._skip_inquiry(user_obj, skip_flags)
         if obj is None or inquiry.denied:
             return set()
-        registry = self._answered_registry()
+        registry = self._built_registry()
         if cache:
             self._ensure_perm_cache(user_obj)
         if isinstance(obj, QuerySet) or isinstance(obj, Model):
@@ -243,7 +211,7 @@ class TrustModelBackendMixin(object):
         return set()
 
     def _path_permissions(self, user_obj, obj, *, kind, skipped=(), registry=None):
-        registry = self._answered_registry() if registry is None else registry
+        registry = self._built_registry() if registry is None else registry
         if registry is None:
             return set()
         qs = registry.permissions_for(
@@ -254,66 +222,6 @@ class TrustModelBackendMixin(object):
         if qs is None or qs == ():
             return set()
         return _perm_codes(qs)
-
-    def _bound_condition_lookup(self, obj, *, registry=None):
-        """Bound lookup, or ``None`` when the built registry unbinds it."""
-        if registry is None:
-            registry = self._answered_registry()
-        if registry is None:
-            return None
-        return getattr(registry, 'condition_lookup', None)
-
-    def _condition_overlay(self, permext, obj, user_obj, *, registry=None):
-        """``(record, extra_q)`` for a ``:condition`` suffix.
-
-        A missing name is ``(None, None)``. An unbound lookup on an
-        instance raises. QuerySet IR compiles to an AND overlay.
-        """
-        if not permission_has_condition(permext):
-            return None, None
-        applabel, modelname, action, cond = utils.parse_perm_code(permext)
-        model = self._get_class(obj)
-        lookup = self._bound_condition_lookup(obj, registry=registry)
-        if lookup is None:
-            if isinstance(obj, QuerySet):
-                return None, None
-            raise AttributeError(
-                'Permission condition code "%s" is not associate with model "%s_%s"'
-                % (cond, applabel, modelname)
-            )
-        record = lookup.record_for(model, cond)
-        if record is None:
-            return None, None
-        extra_q = None
-        if isinstance(obj, QuerySet):
-            extra_q = lookup.compile_q(obj.model, permext, user_obj)
-        return record, extra_q
-
-    def _collection_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                             skipped=(), registry=None):
-        registry = self._answered_registry() if registry is None else registry
-        if registry is None:
-            return False
-        binding = _permission_binding(perm, obj.model)
-        return registry.has_permission(
-            user_obj, obj, binding, extra_q=extra_q,
-            sponsors=self._sponsor_registries(),
-            permission_model=Permission,
-            skipped=dict(skipped) if isinstance(skipped, dict) else {},
-        )
-
-    def _instance_has_perm(self, user_obj, perm, obj, extra_q=None, *,
-                           skipped=(), registry=None):
-        registry = self._answered_registry() if registry is None else registry
-        if registry is None:
-            return False
-        binding = _permission_binding(perm, obj.__class__)
-        return registry.has_permission(
-            user_obj, obj, binding, extra_q=extra_q,
-            sponsors=self._sponsor_registries(),
-            permission_model=Permission,
-            skipped=dict(skipped) if isinstance(skipped, dict) else {},
-        )
 
     def _ensure_perm_cache(self, user_obj):
         """Documented ``_trust_perm_cache`` attribute; not an auth source."""
