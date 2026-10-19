@@ -138,12 +138,13 @@ class TrustsImplementationConfig(DjangoAppConfig):
             )
         cls = listed_backend_class(path)
         if path in self.registries:
-            compiler = compiler_for_class(cls) if isinstance(cls, type) else None
+            if isinstance(cls, type):
+                compiler_for_class(cls)
             registry = self.registries[path]
         else:
             registry = _sealed_registry(path, cls)
-            compiler = compiler_for_class(cls)
-        return BackendHandle(path=path, registry=registry, compiler=compiler)
+            compiler_for_class(cls)
+        return BackendHandle(path=path, registry=registry)
 
     def configured_handles(self):
         return tuple(

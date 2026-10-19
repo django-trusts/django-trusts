@@ -418,7 +418,7 @@ class UserOverrideTest(TransactionTestCase):
             self.assertIn('is_superuser', str(without.query))
 
             handle = BackendHandle(
-                'user-override', registry, PlanQueryCompiler(),
+                'user-override', registry,
             )
 
             def holds(user):
@@ -562,7 +562,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 ),
             )
             staff_handle = BackendHandle(
-                'user-target-staff', staff_registry, PlanQueryCompiler(),
+                'user-target-staff', staff_registry,
             )
             TargetLink.objects.create(
                 note=note, delegate=staff_delegate, sponsor=plain,
@@ -584,7 +584,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 ),
             )
             sponsor_handle = BackendHandle(
-                'user-target-sponsor', sponsor_registry, PlanQueryCompiler(),
+                'user-target-sponsor', sponsor_registry,
             )
             TargetLink.objects.all().delete()
             TargetLink.objects.create(
@@ -622,7 +622,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 ),
             )
             user_handle = BackendHandle(
-                'user-target-active-user', user_active, PlanQueryCompiler(),
+                'user-target-active-user', user_active,
             )
             TargetLink.objects.all().delete()
             TargetLink.objects.create(
@@ -636,7 +636,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 ),
             )
             sponsor_active_handle = BackendHandle(
-                'user-target-active-sponsor', sponsor_active, PlanQueryCompiler(),
+                'user-target-active-sponsor', sponsor_active,
             )
             self.assertTrue(holds(sponsor_active_handle, inactive))
             self.assertFalse(holds(sponsor_active_handle, actor))
@@ -646,7 +646,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 ),
             )
             both_handle = BackendHandle(
-                'user-target-active-both', both_active, PlanQueryCompiler(),
+                'user-target-active-both', both_active,
             )
             self.assertFalse(holds(both_handle, actor))
             self.assertFalse(holds(both_handle, inactive))
@@ -660,7 +660,7 @@ class UserConditionTargetTest(TransactionTestCase):
                 lambda registry: registry.set_user_condition('is_active', None),
             )
             removed_handle = BackendHandle(
-                'user-target-removed', removed, PlanQueryCompiler(),
+                'user-target-removed', removed,
             )
             self.assertTrue(holds(removed_handle, inactive))
             self.assertTrue(holds(removed_handle, actor))
@@ -1402,7 +1402,7 @@ class StaffPrefixFilterTest(TransactionTestCase):
                 permission=grant.permission,
             )
             handle = BackendHandle(
-                'staff-prefix', registry, PlanQueryCompiler(),
+                'staff-prefix', registry,
             )
             denied = filter_by_permitted_content(
                 Scope.objects.all(), plain, read,
@@ -1759,7 +1759,7 @@ class SuperuserPrefixFilterTest(TransactionTestCase):
                     permission=grant.permission,
                 )
                 handle = BackendHandle(
-                    'super-prefix', registry, PlanQueryCompiler(),
+                    'super-prefix', registry,
                 )
                 chosen = filter_by_permitted_content(
                     PrefixScope.objects.all(), user, read,
@@ -1834,7 +1834,7 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             registry = RegistryFactory()
             isolate_live_registry(config, registry, DOCUMENT_BACKEND)
             handle = BackendHandle(
-                DOCUMENT_BACKEND, registry, PlanQueryCompiler(),
+                DOCUMENT_BACKEND, registry,
             )
             handle.registry.register_public(
                 trust=PlainNoteGrant,
@@ -2074,7 +2074,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             self.assertNotIn('is_active', forward_sql)
 
             handle = BackendHandle(
-                'columnless', registry, PlanQueryCompiler(),
+                'columnless', registry,
             )
             predicate = granted((handle,), note, delegate, permission)
             self.assertIsNotNone(predicate)

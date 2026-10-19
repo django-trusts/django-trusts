@@ -162,7 +162,6 @@ class RegistryQuestionsTest(TransactionTestCase):
         # compared below; registry questions never receive it.
         return BackendHandle(
             path='tests.core.registry-questions', registry=registry,
-            compiler=PlanQueryCompiler(),
         )
 
     def test_q1_to_q4_ordinary_sql_matches_production(self):
@@ -281,9 +280,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             sponsor_handles=(handle,),
         )
         self.assertEqual(
-            str(built.permissions_for(
-                self.bob, self.doc_a, compiler=handle.compiler,
-            ).query),
+            str(built.permissions_for(self.bob, self.doc_a).query),
             str(production_permissions.query),
         )
         self.assertEqual(

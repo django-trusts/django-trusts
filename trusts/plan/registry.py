@@ -19,9 +19,9 @@ from trusts.commons import (
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import (
-    PlanQueryCompiler,
     RelationPlan,
     _candidate_model,
+    answering_compiler,
     bind_checked_user,
 )
 from trusts.plan.standards import (
@@ -188,9 +188,6 @@ class Registry(object):
 
     # -- question helpers ------------------------------------------------
 
-    def _picked_compiler(self, compiler):
-        return PlanQueryCompiler() if compiler is None else compiler
-
     @staticmethod
     def _as_registry(value):
         if value is None or isinstance(value, Registry):
@@ -198,25 +195,25 @@ class Registry(object):
         build = getattr(value, 'build_registry', None)
         return build() if callable(build) else value
 
-    def _route(self, compiler=None):
-        return (self, self._picked_compiler(compiler))
-
-    def _sponsor_routes(self, sponsors, compiler=None):
+    def _with_sponsors(self, sponsors):
+        """This registry, then each other sponsor registry, once."""
         routes = []
         seen = set()
-        chosen = self._picked_compiler(compiler)
-        for sponsor in sponsors or ():
+        for sponsor in (self,) + tuple(sponsors or ()):
             registry = self._as_registry(sponsor)
             if registry is None or id(registry) in seen:
                 continue
             seen.add(id(registry))
-            routes.append((registry, chosen))
+            routes.append(registry)
         return tuple(routes)
 
-    def _all_routes(self, sponsors, compiler=None):
-        return (self._route(compiler),) + self._sponsor_routes(
-            sponsors, compiler,
-        )
+    def applies(self, plan):
+        """Whether this registry's compiler will compile ``plan``."""
+        compiler = answering_compiler(self)
+        applies = getattr(compiler, 'applies', None)
+        if callable(applies):
+            return bool(applies(plan))
+        return bool(getattr(plan, 'records', None))
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
         if skip_flags:
@@ -231,26 +228,25 @@ class Registry(object):
 
     # -- the four canonical questions -----------------------------------
     # Production semantics live in plan.contents / plan.aggregates /
-    # plan.users; these methods only retarget those implementations
-    # from a handle to this registry (synthetic handle carrying the
-    # caller's compiler, PlanQueryCompiler by default). ``sponsors``
-    # is a tuple of other built registries whose ordinary records may
-    # satisfy this registry's delegations; this registry is always its
-    # own first sponsor. ``None`` is never returned: inapplicable is
-    # False / empty queryset / () as each question requires.
+    # plan.users. These methods call them on this registry. The
+    # compiler is the one stored here (``PlanQueryCompiler`` when
+    # none was stored). ``sponsors`` are other registries whose
+    # ordinary records may satisfy this registry's delegations; this
+    # registry is always its own first sponsor. ``None`` is never
+    # returned: inapplicable is False / empty queryset / () as each
+    # question requires.
 
     def has_permission(self, user, content, permission, *, sponsors=(),
-                       compiler=None, extra_q=None, permission_model=None,
+                       extra_q=None, permission_model=None,
                        skipped=None, **skip_flags):
         """Q1: does ``user`` hold ``permission`` on ``content``?
 
         ``content`` is one instance (instance check) or a QuerySet
-        (every row must hold). Delegations via sponsors are included,
-        unlike the old builder trio which ignored them. An explicit
-        ``compiler`` (the backend's) is honoured through the production
-        aggregates; with no compiler, the ordinary path is the plan's
-        own projection so non-PK permission targets correlate exactly
-        as before.
+        (every row must hold). Delegations via sponsors are included.
+        With no compiler stored, an ordinary instance uses the plan's
+        own projection so non-PK permission targets correlate exactly.
+        A stored compiler, a QuerySet, an overlay, or a delegation
+        uses that compiler's SQL.
         """
         from django.db.models import Model
 
@@ -260,13 +256,14 @@ class Registry(object):
         if isinstance(permission, Model):
             permission = _require_instance(permission, 'permission')
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
+        sponsors = self._with_sponsors(sponsors)
         if isinstance(content, QuerySet):
             if denied:
                 return False
             matched = all_match(
-                (self._route(compiler=compiler),), content, user, permission,
+                (self,), content, user, permission,
                 kind='complete', extra_q=extra_q,
-                sponsor_handles=self._all_routes(sponsors, compiler=compiler),
+                sponsor_handles=sponsors,
                 permission_model=permission_model, skipped=values,
             )
             return False if matched is None else bool(matched)
@@ -277,20 +274,20 @@ class Registry(object):
             content, user=user,
             permission=permission if isinstance(permission, Model) else None,
         )
-        if compiler is None and extra_q is None and not plan.delegations:
+        if self.compiler is None and extra_q is None and not plan.delegations:
             return plan.has_permission(
                 user, content, permission, skipped=values,
             )
         matched = instance_match(
-            self._route(compiler=compiler), content, user, permission,
+            self, content, user, permission,
             kind='complete', extra_q=extra_q,
-            sponsor_handles=self._all_routes(sponsors, compiler=compiler),
+            sponsor_handles=sponsors,
             permission_model=permission_model, skipped=values,
         )
         return False if matched is None else bool(matched)
 
     def filter_authorized(self, queryset, user, permission, *, sponsors=(),
-                          compiler=None, skipped=None, **skip_flags):
+                          skipped=None, **skip_flags):
         """Q2: rows of ``queryset`` ``user`` may access for ``permission``."""
         from trusts.plan.contents import _compile_granted
         from trusts.plan.rewrites import bind_once
@@ -305,14 +302,14 @@ class Registry(object):
         if denied:
             return queryset.none()
         plan = self.plan_for(queryset, user=user, permission=permission)
-        if compiler is None and not plan.delegations:
+        if self.compiler is None and not plan.delegations:
             return plan.filter_content(
                 queryset, user, permission, skipped=values,
             )
         granted_q = _compile_granted(
-            (self._route(compiler=compiler),), queryset, user, permission,
+            (self,), queryset, user, permission,
             kind='complete',
-            sponsor_handles=self._all_routes(sponsors, compiler=compiler),
+            sponsor_handles=self._with_sponsors(sponsors),
             skipped=values,
         )
         if granted_q is None:
@@ -320,7 +317,7 @@ class Registry(object):
         return bind_once(queryset.filter(granted_q).distinct())
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
-                                    content, sponsors=(), compiler=None,
+                                    content, sponsors=(),
                                     skipped=None, **skip_flags):
         """Q2 variant: scope rows that are a proper prefix of ``content``."""
         from trusts.plan.contents import _compile_permitted_content_queryset
@@ -335,24 +332,23 @@ class Registry(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        own = self._route(compiler=compiler)
+        sponsors = self._with_sponsors(sponsors)
         return _compile_permitted_content_queryset(
-            queryset, user, permission, content=content, handles=(own,),
-            sponsor_handles=(own,) + self._sponsor_routes(sponsors, compiler=compiler),
+            queryset, user, permission, content=content, handles=(self,),
+            sponsor_handles=sponsors,
             skipped=values,
         )
 
     def permissions_for(self, user, content, *, kind='complete', sponsors=(),
-                        compiler=None, skipped=None, **skip_flags):
+                        skipped=None, **skip_flags):
         """Q4: permission rows ``user`` holds on ``content`` (QS or ()).
 
         ``kind='group'`` is the group variant used by
         ``get_group_permissions``; ``'complete'`` is ``get_all_permissions``.
-        A single instance with no delegations and no explicit compiler
+        A single instance with no delegations and no stored compiler
         uses the plan's own projection (exact non-PK target
-        correlation); QuerySet candidates, group kind, delegations, and
-        explicit compilers use the production common-permissions
-        aggregate, which is the backend's existing semantics.
+        correlation). QuerySet candidates, group kind, delegations,
+        and a stored compiler use the common-permissions aggregate.
         """
         from trusts.plan.aggregates import _compile_common_permissions
 
@@ -364,14 +360,14 @@ class Registry(object):
                 return ()
             return plan.permission_model._default_manager.none()
         if (
-            compiler is None and kind == 'complete'
+            self.compiler is None and kind == 'complete'
             and not isinstance(content, QuerySet)
             and not plan.delegations
         ):
             return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
-            (self._route(compiler=compiler),), content, user, kind=kind,
-            sponsor_handles=self._all_routes(sponsors, compiler=compiler),
+            (self,), content, user, kind=kind,
+            sponsor_handles=self._with_sponsors(sponsors),
             skipped=values,
         )
         if qs is None:
@@ -394,7 +390,7 @@ class Registry(object):
         """
         from trusts.plan.users import permitted_users_predicate_for_registry
 
-        sponsor_handles = self._all_routes(sponsors)
+        sponsor_handles = self._with_sponsors(sponsors)
         return permitted_users_predicate_for_registry(
             self, content, perm, sponsor_handles=sponsor_handles,
             skipped=skipped, backend=backend,

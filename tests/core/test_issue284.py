@@ -738,7 +738,6 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.handle = BackendHandle(
                 path='tests.core.test_issue284._AcceptanceBackend',
                 registry=RegistryFactory(),
-                compiler=PlanQueryCompiler(),
             )
             self.handle.registry.register_public(
                 trust=Grant,

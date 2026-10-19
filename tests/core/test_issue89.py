@@ -298,23 +298,19 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
     def test_none_duck_and_fresh_builds(self):
         none_handle = BackendHandle(
             path='tests.core.no-registry', registry=None,
-            compiler=PlanQueryCompiler(),
         )
         self.assertIsNone(none_handle.registry)
 
         duck = object()
         duck_handle = BackendHandle(
-            path='tests.core.duck', registry=duck, compiler=object(),
+            path='tests.core.duck', registry=duck,
         )
         self.assertIs(duck_handle.registry, duck)
-        self.assertFalse(
-            getattr(duck_handle.compiler, 'historical_fallback', False),
-        )
+        self.assertNotIn('compiler', BackendHandle.__dataclass_fields__)
 
         registry = RegistryFactory()
         handle = BackendHandle(
             path='tests.core.builder', registry=registry,
-            compiler=PlanQueryCompiler(),
         )
         first = handle.registry.build_registry()
         second = handle.registry.build_registry()

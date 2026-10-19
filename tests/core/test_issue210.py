@@ -59,7 +59,6 @@ def _handle(registry=None, path='tests.core.issue210'):
     return BackendHandle(
         path=path,
         registry=registry,
-        compiler=PlanQueryCompiler(),
     )
 
 

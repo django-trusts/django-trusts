@@ -69,11 +69,9 @@ class RecordingConfig(TrustsImplementationConfig):
         self.created_paths = getattr(self, 'created_paths', ()) + (path,)
         return RecordingRegistry()
 
-    def _create_handle(self, path, registry, compiler):
+    def _create_handle(self, path, registry):
         self.handle_paths = getattr(self, 'handle_paths', ()) + (path,)
-        return RecordingHandle(
-            path=path, registry=registry, compiler=compiler,
-        )
+        return RecordingHandle(path=path, registry=registry)
 
 
 class _NeverAppliesCompiler(PlanQueryCompiler):
@@ -167,7 +165,6 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         handle = BackendHandle(
             path=MIXIN,
             registry=RegistryFactory(),
-            compiler=PlanQueryCompiler(),
         )
         self.assertEqual(_handle_authorization_family(handle), 'relationship')
         self.assertEqual(_relationship_family_handles((handle,)), (handle,))
@@ -193,7 +190,6 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_handle = BackendHandle(
             path=MIXIN,
             registry=self.fold_registry,
-            compiler=PlanQueryCompiler(),
         )
         self.fold_handle.registry.register_public(
             trust=DocumentAltGrant,
@@ -351,22 +347,24 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
 
     def test_inapplicable_compiler_is_zero_sql(self):
         handle = implementation_for_path(DOCUMENT).configured_backend()
-        silent = BackendHandle(
-            path=handle.path,
-            registry=handle.registry,
-            compiler=_NeverAppliesCompiler(),
-        )
+        registry = handle.registry
+        previous = registry.compiler
+        registry.compiler = _NeverAppliesCompiler()
+        silent = BackendHandle(path=handle.path, registry=registry)
         from tests.apps import bound_handle
 
-        with bound_handle(self.backend, silent):
-            with self.assertNumQueries(0):
-                self.assertFalse(
-                    self.backend.has_perm(self.alice, PERM, self.doc),
-                )
-                self.assertEqual(
-                    self.backend.get_all_permissions(self.alice, self.doc),
-                    set(),
-                )
+        try:
+            with bound_handle(self.backend, silent):
+                with self.assertNumQueries(0):
+                    self.assertFalse(
+                        self.backend.has_perm(self.alice, PERM, self.doc),
+                    )
+                    self.assertEqual(
+                        self.backend.get_all_permissions(self.alice, self.doc),
+                        set(),
+                    )
+        finally:
+            registry.compiler = previous
 
     def test_relationship_applies_keeps_live_grant(self):
         with self.assertNumQueries(1):

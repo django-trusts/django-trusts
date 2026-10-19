@@ -359,7 +359,7 @@ class _SplitCompiler(object):
 
 def _direct_handle(registry, path='tests.s5.direct'):
     return BackendHandle(
-        path=path, registry=registry, compiler=PlanQueryCompiler(),
+        path=path, registry=registry,
     )
 
 
@@ -1159,10 +1159,10 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
             user=k.user,
             permission=k.permission,
         )
+        self.direct.compiler = _SplitCompiler(self.group)
         self.handle = BackendHandle(
             path='tests.s5.split',
             registry=self.direct,
-            compiler=_SplitCompiler(self.group),
         )
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.read,

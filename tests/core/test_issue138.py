@@ -318,7 +318,6 @@ def _extra_handle(path='tests.core.issue138-extra'):
     return BackendHandle(
         path=path,
         registry=RegistryFactory(),
-        compiler=PlanQueryCompiler(),
     )
 
 

@@ -505,7 +505,6 @@ def _handle(path):
     return BackendHandle(
         path=path,
         registry=RegistryFactory(),
-        compiler=PlanQueryCompiler(),
     )
 
 

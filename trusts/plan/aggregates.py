@@ -16,7 +16,7 @@ from django.db.models import Count, Exists, OuterRef, Q
 from trusts.plan.rewrites import bind_once
 from trusts.commons import _require_instance
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.plan.handles import pair
+from trusts.plan.handles import registry_of
 from trusts.plan.contents import (
     _apply_checked_user,
     _as_q,
@@ -34,6 +34,7 @@ from trusts.plan.delegations import (
 from trusts.plan.relations import (
     _candidate_model,
     _or_q,
+    answering_compiler,
     bind_checked_user,
     candidate_queryset,
 )
@@ -64,7 +65,7 @@ def any_plan_records(handles, content):
     declaration.
     """
     for handle in handles:
-        registry, _compiler = pair(handle)
+        registry = registry_of(handle)
         plan = registry.plan_for(content)
         if plan.records or plan.delegations:
             return True
@@ -142,7 +143,8 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     permission_model = None
     applicable = False
     for handle in handles:
-        registry, compiler = pair(handle)
+        registry = registry_of(handle)
+        compiler = answering_compiler(registry)
         plan = registry.plan_for(candidates, user=user)
         if not _compiler_applies(compiler, plan):
             continue
@@ -250,9 +252,10 @@ def _anonymous_common_permissions(handles, candidates):
     permission_model = None
     applicable = False
     for handle in handles:
-        registry, compiler = pair(handle)
+        registry = registry_of(handle)
         if registry is None:
             continue
+        compiler = answering_compiler(registry)
         plan = registry.plan_for(candidates)
         if not _compiler_applies(compiler, plan):
             continue

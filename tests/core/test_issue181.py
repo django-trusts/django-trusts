@@ -179,7 +179,6 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         BackendHandle(
             path=MIXIN,
             registry=alt_registry,
-            compiler=PlanQueryCompiler(),
         ).registry.register_public(
             trust=DocumentAltGrant,
             user='user',
