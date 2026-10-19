@@ -21,4 +21,4 @@ class BackendHandle:
 def pair(entry):
     if isinstance(entry, tuple):
         return entry
-    return entry.registry, entry.compiler
+    return entry.registry, getattr(entry, 'compiler', None)

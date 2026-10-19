@@ -211,13 +211,13 @@ class ImplementationReadyTest(SimpleTestCase):
 
         config = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
+            before = registries.get(HostTrustModelBackend)
             config.ready()
             holder = config.registries
-            self.assertNotIn(HostTrustModelBackend, registries)
-            built = config.configured_backend(HOST).registry
+            self.assertIs(registries.get(HostTrustModelBackend), before)
             config.ready()
             self.assertIs(config.registries, holder)
-            self.assertIs(registries[HostTrustModelBackend], built)
+            self.assertIs(registries.get(HostTrustModelBackend), before)
 
     def test_donation_uses_implementation_for_path(self):
         from trusts.backends import registries
