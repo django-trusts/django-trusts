@@ -87,7 +87,7 @@ class Registry(object):
     ):
         self.records = tuple(records)
         self.delegations = tuple(delegations)
-        # Born with a compiler. Callers do not assign one later.
+        self._project = compiler is None
         self._compiler = PlanQueryCompiler() if compiler is None else compiler
         self.path = path
         self.family = family
@@ -236,8 +236,8 @@ class Registry(object):
     # -- the four canonical questions -----------------------------------
     # Production semantics live in plan.contents / plan.aggregates /
     # plan.users. These methods call them on this registry. The
-    # compiler is the one stored here (``PlanQueryCompiler`` when
-    # none was stored). ``sponsors`` are other registries whose
+    # compiler is bound here. Omission stores ``PlanQueryCompiler``
+    # and projects simple questions. ``sponsors`` are other registries whose
     # ordinary records may satisfy this registry's delegations; this
     # registry is always its own first sponsor. ``None`` is never
     # returned: inapplicable is False / empty queryset / () as each
@@ -274,6 +274,14 @@ class Registry(object):
         content = _require_instance(content, 'content')
         if denied:
             return False
+        if (self._project and extra_q is None
+                and isinstance(permission, Model)):
+            plan = self.plan_for(
+                content, user=user,
+                permission=permission if isinstance(permission, Model) else None,
+            )
+            if not plan.delegations:
+                return plan.has_permission(user, content, permission, skipped=values)
         matched = instance_match(
             self, content, user, permission,
             kind='complete', extra_q=extra_q,
@@ -297,6 +305,10 @@ class Registry(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
+        if self._project:
+            plan = self.plan_for(queryset, user=user, permission=permission)
+            if not plan.delegations:
+                return plan.filter_content(queryset, user, permission, skipped=values)
         granted_q = _compile_granted(
             (self,), queryset, user, permission,
             kind='complete',
@@ -347,6 +359,9 @@ class Registry(object):
             if not (plan.records or plan.delegations) or plan.permission_model is None:
                 return ()
             return plan.permission_model._default_manager.none()
+        if (self._project and kind == 'complete'
+                and not isinstance(content, QuerySet) and not plan.delegations):
+            return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
             (self,), content, user, kind=kind,
             sponsor_handles=self._with_sponsors(sponsors),
