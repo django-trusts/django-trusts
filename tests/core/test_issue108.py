@@ -206,13 +206,15 @@ class ImplementationReadyTest(SimpleTestCase):
         self.assertIn('multiple implementation owners', str(ctx.exception))
 
     def test_ready_is_idempotent_and_does_not_replace_registries(self):
+        from tests.backends import HostTrustModelBackend
         from trusts.backends import registries
 
         config = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
             config.ready()
             holder = config.registries
-            built = registries[HostTrustModelBackend]
+            self.assertNotIn(HostTrustModelBackend, registries)
+            built = config.configured_backend(HOST).registry
             config.ready()
             self.assertIs(config.registries, holder)
             self.assertIs(registries[HostTrustModelBackend], built)

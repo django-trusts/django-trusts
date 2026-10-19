@@ -86,12 +86,12 @@ class ReadmeExampleAuthorizationTest(TestCase):
         from trusts.backends import registries
 
         self.assertIs(handle.registry, registries[DocumentBackend])
-        self.assertTrue(handle.build_registry().records)
+        self.assertTrue(handle.registry.build_registry().records)
         self.assertIs(
-            handle.build_registry().records[0].content_model,
+            handle.registry.build_registry().records[0].content_model,
             Document,
         )
-        record = handle.build_registry().get_permission_condition_record(
+        record = handle.registry.build_registry().get_permission_condition_record(
             Document, 'non_confidential',
         )
         self.assertIsNotNone(record)

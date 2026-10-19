@@ -160,7 +160,7 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
             handle = config.configured_backend(HOST)
             self.assertIs(handle.registry, registries[HostTrustModelBackend])
             self.assertIs(
-                handle.build_registry(), registries[HostTrustModelBackend],
+                handle.registry.build_registry(), registries[HostTrustModelBackend],
             )
 
     def test_unowned_handle_defaults_to_relationship_family(self):
@@ -195,7 +195,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             registry=self.fold_registry,
             compiler=PlanQueryCompiler(),
         )
-        self.fold_handle.register(
+        self.fold_handle.registry.register_public(
             trust=DocumentAltGrant,
             user='user',
             permission='permission',
@@ -385,8 +385,8 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         try:
             handle = live.configured_backend()
             self.assertIs(handle.registry, isolated)
-            first_build = handle.build_registry()
-            second_build = handle.build_registry()
+            first_build = handle.registry.build_registry()
+            second_build = handle.registry.build_registry()
             self.assertIsNot(first_build, second_build)
             self.assertEqual(first_build.records, second_build.records)
             from tests.myapp.models import DocumentGrant
@@ -395,7 +395,7 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
             isolated.register(
                 content=j.document, user=j.user, permission=j.permission,
             )
-            self.assertEqual(handle.build_registry().records, isolated.records)
+            self.assertEqual(handle.registry.build_registry().records, isolated.records)
         finally:
             if saved is None:
                 registries.pop(HostTrustModelBackend, None)

@@ -16,6 +16,7 @@ from django.db.models import Count, Exists, OuterRef, Q
 from trusts.plan.rewrites import bind_once
 from trusts.commons import _require_instance
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.plan.handles import pair
 from trusts.plan.contents import (
     _apply_checked_user,
     _as_q,
@@ -63,7 +64,8 @@ def any_plan_records(handles, content):
     declaration.
     """
     for handle in handles:
-        plan = handle.registry.plan_for(content)
+        registry, _compiler = pair(handle)
+        plan = registry.plan_for(content)
         if plan.records or plan.delegations:
             return True
     return False
@@ -140,8 +142,9 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     permission_model = None
     applicable = False
     for handle in handles:
-        plan = handle.registry.plan_for(candidates, user=user)
-        if not _compiler_applies(handle.compiler, plan):
+        registry, compiler = pair(handle)
+        plan = registry.plan_for(candidates, user=user)
+        if not _compiler_applies(compiler, plan):
             continue
         applicable = True
         if plan.permission_model is not None:
@@ -157,9 +160,9 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
                     )
                 )
         if kind == 'complete':
-            fn = handle.compiler.complete_exists
+            fn = compiler.complete_exists
         else:
-            fn = handle.compiler.group_exists
+            fn = compiler.group_exists
         part = _as_q(fn(plan, qs, user, perm_expr))
         delegated = None
         if kind == 'complete' and getattr(plan, 'delegations', None):
@@ -247,11 +250,11 @@ def _anonymous_common_permissions(handles, candidates):
     permission_model = None
     applicable = False
     for handle in handles:
-        registry = getattr(handle, 'registry', None)
+        registry, compiler = pair(handle)
         if registry is None:
             continue
         plan = registry.plan_for(candidates)
-        if not _compiler_applies(getattr(handle, 'compiler', None), plan):
+        if not _compiler_applies(compiler, plan):
             continue
         if not plan.records and not plan.delegations:
             continue

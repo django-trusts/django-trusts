@@ -230,14 +230,14 @@ class ConditionRegistryShapeTest(SimpleTestCase):
             compiler=object(),
         )
         log = _BuilderLog()
-        record = handle.add_named_filter(Note, 'own', log)
+        record = handle.registry.register_permission_condition(Note, 'own', log)
         self.assertIs(
             registry.get_permission_condition_record(Note, 'own'), record,
         )
         self.assertEqual(len(log.calls), 1)
         registry.build_registry()
         late = _BuilderLog()
-        late_record = handle.add_named_filter(Note, 'late', late)
+        late_record = handle.registry.register_permission_condition(Note, 'late', late)
         self.assertEqual(len(late.calls), 1)
         self.assertIs(
             registry.get_permission_condition_record(Note, 'late'), late_record,

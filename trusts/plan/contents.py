@@ -33,6 +33,7 @@ from trusts.plan.recursions import (
     _KeyedReach,
     _PrefixInForwardWalk,
 )
+from trusts.plan.handles import pair
 from trusts.plan.relations import (
     _bound_permission_identity,
     _candidate_model,
@@ -50,11 +51,12 @@ def _as_q(predicate):
 
 
 def _plan_for_permission(handle, candidates, user, permission):
+    registry, _compiler = pair(handle)
     if isinstance(permission, Model):
-        return handle.registry.plan_for(
+        return registry.plan_for(
             candidates, user=user, permission=permission,
         )
-    return handle.registry.plan_for(candidates, user=user)
+    return registry.plan_for(candidates, user=user)
 
 
 def _relationship_handles(handles):
@@ -96,11 +98,12 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
     content_identity = _candidate_model(candidates)
     sponsor_records = None
     for handle in handles:
+        _registry, compiler = pair(handle)
         plan = _plan_for_permission(handle, candidates, user, permission)
         if kind == 'complete':
-            fn = handle.compiler.complete_exists
+            fn = compiler.complete_exists
         else:
-            fn = handle.compiler.group_exists
+            fn = compiler.group_exists
         part = _as_q(fn(plan, candidates, user, permission))
         delegated = None
         if kind == 'complete' and getattr(plan, 'delegations', None):
@@ -483,7 +486,8 @@ def _ordinary_records(handles, content, permission_model=None):
     """Applicable ordinary records across relationship handles."""
     records = []
     for handle in handles:
-        plan = handle.registry.plan_for(content)
+        registry, _compiler = pair(handle)
+        plan = registry.plan_for(content)
         for record in plan.records:
             if (
                 permission_model is not None

@@ -18,6 +18,7 @@ from django.db.models import Subquery
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _ordinary_records, granted
+from trusts.plan.handles import pair
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.plan.relations import bind_checked_user
 
@@ -151,7 +152,8 @@ def _auth_permission_plan(handle, candidates, user, handles):
     its integer FK to ``auth_permission.pk`` and could grant on a colliding
     id. Those plans are omitted from this string and instance guard.
     """
-    plan = handle.registry.plan_for(candidates, user=user)
+    registry, _compiler = pair(handle)
+    plan = registry.plan_for(candidates, user=user)
     if not _plan_is_auth_permission(
         plan, _ordinary_records(handles, candidates),
     ):
@@ -161,7 +163,7 @@ def _auth_permission_plan(handle, candidates, user, handles):
 
 def _auth_permission_plan_for_model(handle, model, handles):
     """Zero-SQL applicable auth.Permission plan for this content model."""
-    registry = getattr(handle, 'registry', None)
+    registry, _compiler = pair(handle)
     plan_for = getattr(registry, 'plan_for', None)
     if not callable(plan_for):
         return None
@@ -175,7 +177,8 @@ def _backend_has_selected_conditions(handle, model, conditions):
     """True when this handle registers every selected name with a queryable expr."""
     if not conditions:
         return True
-    lookup = getattr(getattr(handle, 'registry', None), 'condition_lookup', None)
+    registry, _compiler = pair(handle)
+    lookup = getattr(registry, 'condition_lookup', None)
     if lookup is None:
         return False
     record_for = getattr(lookup, 'record_for', None)
@@ -229,7 +232,8 @@ def _assert_authorization_preflight(handles, model, conditions, *, api):
 
 def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
     """Compose this backend's selected names, or None if any name is missing."""
-    lookup = getattr(handle.registry, 'condition_lookup', None)
+    registry, _compiler = pair(handle)
+    lookup = getattr(registry, 'condition_lookup', None)
     if lookup is None:
         return None
     extra_q = None

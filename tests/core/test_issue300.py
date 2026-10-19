@@ -504,7 +504,7 @@ class Issue300UserAnnotationTest(TransactionTestCase):
                 registry=registry,
                 compiler=PlanQueryCompiler(),
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=NoteGrant,
                 user='user',
                 permission='permission',
@@ -514,11 +514,11 @@ class Issue300UserAnnotationTest(TransactionTestCase):
                 a=Value(1, output_field=CharField()),
             )
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                plain = handle.build_registry().filter_authorized(
+                plain = handle.registry.build_registry().filter_authorized(
                     candidates, user, permission,
                 )
                 plain_values = list(plain.values_list('a', flat=True))
-            bound = handle.build_registry().filter_authorized(
+            bound = handle.registry.build_registry().filter_authorized(
                 candidates, user, permission,
             )
             bound_values = list(bound.values_list('a', flat=True))
@@ -582,7 +582,7 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                 registry=registry,
                 compiler=PlanQueryCompiler(),
             )
-            handle.register(
+            handle.registry.register_public(
                 trust=RetargetGrant,
                 user='user',
                 permission='permission',
@@ -594,12 +594,12 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                 'trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth,
             ):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
-                    plain = handle.build_registry().filter_authorized(
+                    plain = handle.registry.build_registry().filter_authorized(
                         candidates, user, permission,
                     )
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
-                    plain_has = handle.build_registry().has_permission(
+                    plain_has = handle.registry.build_registry().has_permission(
                         user, node, permission,
                     )
                     plain_doc = _load_policy_sql_document(
@@ -607,18 +607,18 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                     )
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
-                    bound = handle.build_registry().filter_authorized(
+                    bound = handle.registry.build_registry().filter_authorized(
                         candidates, user, permission,
                     )
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
-                    bound_has = handle.build_registry().has_permission(
+                    bound_has = handle.registry.build_registry().has_permission(
                         user, node, permission,
                     )
                     bound_doc = _load_policy_sql_document(
                         render_policy_sql_bytes(handles=[handle]),
                     )
-                    list(handle.build_registry().filter_authorized(
+                    list(handle.registry.build_registry().filter_authorized(
                         candidates, user, permission,
                     ))
                     render_policy_sql_bytes(handles=[handle])
@@ -691,13 +691,13 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                         registry=RegistryFactory(),
                         compiler=PlanQueryCompiler(),
                     )
-                    handle.register(
+                    handle.registry.register_public(
                         trust=ReviewGrant,
                         user='user',
                         permission='permission',
                         content='document',
                     )
-                    handle.add_named_filter(
+                    handle.registry.register_permission_condition(
                         ReviewDocument, 'published', _published,
                     )
                     document = _load_policy_sql_document(
@@ -706,7 +706,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']
                     named = content['named_filters'][0]
-                    records = handle.build_registry().plan_for(ReviewDocument).records
+                    records = handle.registry.build_registry().plan_for(ReviewDocument).records
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(
                         records[0], 'permission', 'default',

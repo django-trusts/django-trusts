@@ -123,7 +123,7 @@ def _handle(note_grant):
         registry=RegistryFactory(),
         compiler=PlanQueryCompiler(),
     )
-    handle.register(
+    handle.registry.register_public(
         trust=note_grant,
         user='user',
         permission='permission',
@@ -152,7 +152,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
     def _reject(self, code, builder, needle):
         with self.assertNumQueries(0):
             with self.assertRaises(PermissionConditionError) as ctx:
-                self.handle.add_named_filter(self.Note, code, builder)
+                self.handle.registry.register_permission_condition(self.Note, code, builder)
         self.assertIn(needle, str(ctx.exception))
 
     def _cannot_authorize(self, *codes):
@@ -299,7 +299,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
         User = get_user_model()
         log = _BuilderLog(lambda u, p, o: o.confidential != True)
         with self.assertNumQueries(0):
-            self.handle.add_named_filter(self.Note, 'open', log)
+            self.handle.registry.register_permission_condition(self.Note, 'open', log)
         self.assertEqual(len(log.calls), 1)
 
         with _tables(self.Tag, self.Note, self.NoteGrant):
@@ -326,13 +326,13 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
 
             with self.assertNumQueries(0):
                 with self.assertRaises(PermissionConditionError):
-                    self.handle.add_named_filter(
+                    self.handle.registry.register_permission_condition(
                         self.Note,
                         'open',
                         lambda u, p, o: o.title == Decimal('1.5'),
                     )
                 with self.assertRaises(PermissionConditionError):
-                    self.handle.add_named_filter(
+                    self.handle.registry.register_permission_condition(
                         self.Note,
                         'partial_203',
                         lambda u, p, o: o.owner == self.Note.objects,
@@ -358,40 +358,40 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             lambda u, p, o: (u == o.owner) & (o.confidential != True),
         )
         with self.assertNumQueries(0):
-            self.handle.add_named_filter(self.Note, 'open', log)
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(self.Note, 'open', log)
+            self.handle.registry.register_permission_condition(
                 self.Note, 'titled', lambda u, p, o: o.title != 'secret',
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note, 'owned', lambda u, p, o: u == o.owner,
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note,
                 'amount_ok',
                 lambda u, p, o: o.amount == Decimal('1.50'),
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note, 'token_ok', lambda u, p, o: o.token == uuid4(),
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note,
                 'date_ok',
                 lambda u, p, o: o.published == date(2026, 1, 1),
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note, 'time_ok', lambda u, p, o: o.opens == time(12, 0),
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note,
                 'datetime_ok',
                 lambda u, p, o: o.published_at == datetime(2026, 1, 1),
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note,
                 'duration_ok',
                 lambda u, p, o: o.duration == timedelta(days=1),
             )
-            self.handle.add_named_filter(
+            self.handle.registry.register_permission_condition(
                 self.Note, 'blob_ok', lambda u, p, o: o.blob == b'x',
             )
         self.assertEqual(len(log.calls), 1)

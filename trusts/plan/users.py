@@ -26,6 +26,7 @@ from trusts.plan.rewrites import bind_once
 from trusts.backends import TrustModelBackendMixin, _permission_binding
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
+from trusts.plan.handles import pair
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.commons import _object_memory_value, _user_lookup
 from trusts.plan.aggregates import _delegated_user_exists
@@ -135,8 +136,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
     sponsors are other built registries and the overlay comes from
     this registry's condition lookup). ``backend=None`` uses the
     mixin default singular-permission acceptance (auth.Permission).
-    Sponsor records are read through ``handle.registry`` for every
-    sponsor handle, exactly as the production path does.
+    Sponsor records are each sponsor registry's ordinary rows.
     """
     # A builder registry answers plan_for by building; a built
     # registry answers directly. Both expose plan_for.
@@ -208,7 +208,8 @@ def lock_permitted_users_queryset(handle, content, permission, *, handles=None):
     is the permission-row sentinel, classified as ``permission.<target>``.
     Content is classified as ``content.<target>``.
     """
-    plan = handle.registry.plan_for(content)
+    registry, _compiler = pair(handle)
+    plan = registry.plan_for(content)
     if not plan.records and not plan.delegations:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'

@@ -18,7 +18,6 @@ from trusts.commons import (
     _concrete_model, _content_model, _require_instance, _resolved_hop,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.handles import BackendHandle
 from trusts.plan.relations import (
     PlanQueryCompiler,
     RelationPlan,
@@ -158,10 +157,7 @@ class Registry(object):
             user_override_q=override,
         )
 
-    # -- compatibility surface used by handle-based callers -------------
-    # ``TrustsRegistry`` (the builder) exposes these names; built
-    # registries must too, because Zero and the snapshot read them off
-    # ``handle.registry`` / a built registry interchangeably.
+    # -- names the builder exposes; a built registry exposes them too --
 
     def build_registry(self):
         """Return ``self``: a built registry is already query-time data."""
@@ -192,11 +188,8 @@ class Registry(object):
 
     # -- question helpers ------------------------------------------------
 
-    def _handle(self, compiler=None):
-        return BackendHandle(
-            path='', registry=self,
-            compiler=compiler if compiler is not None else PlanQueryCompiler(),
-        )
+    def _picked_compiler(self, compiler):
+        return PlanQueryCompiler() if compiler is None else compiler
 
     @staticmethod
     def _as_registry(value):
@@ -205,28 +198,24 @@ class Registry(object):
         build = getattr(value, 'build_registry', None)
         return build() if callable(build) else value
 
-    def _sponsor_handles(self, sponsors, compiler=None):
-        handles = []
+    def _route(self, compiler=None):
+        return (self, self._picked_compiler(compiler))
+
+    def _sponsor_routes(self, sponsors, compiler=None):
+        routes = []
         seen = set()
+        chosen = self._picked_compiler(compiler)
         for sponsor in sponsors or ():
             registry = self._as_registry(sponsor)
             if registry is None or id(registry) in seen:
                 continue
             seen.add(id(registry))
-            if isinstance(registry, Registry):
-                handles.append(registry._handle(compiler=compiler))
-            else:
-                # Duck-typed registry (fake in tests): keep it as the
-                # handle's registry so its plan_for/records are used.
-                handles.append(BackendHandle(
-                    path='', registry=registry,
-                    compiler=compiler if compiler is not None else PlanQueryCompiler(),
-                ))
-        return tuple(handles)
+            routes.append((registry, chosen))
+        return tuple(routes)
 
-    def _all_handles(self, sponsors, compiler=None):
-        return (self._handle(compiler=compiler),) + self._sponsor_handles(
-            sponsors, compiler=compiler,
+    def _all_routes(self, sponsors, compiler=None):
+        return (self._route(compiler),) + self._sponsor_routes(
+            sponsors, compiler,
         )
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
@@ -275,9 +264,9 @@ class Registry(object):
             if denied:
                 return False
             matched = all_match(
-                (self._handle(compiler=compiler),), content, user, permission,
+                (self._route(compiler=compiler),), content, user, permission,
                 kind='complete', extra_q=extra_q,
-                sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+                sponsor_handles=self._all_routes(sponsors, compiler=compiler),
                 permission_model=permission_model, skipped=values,
             )
             return False if matched is None else bool(matched)
@@ -293,9 +282,9 @@ class Registry(object):
                 user, content, permission, skipped=values,
             )
         matched = instance_match(
-            self._handle(compiler=compiler), content, user, permission,
+            self._route(compiler=compiler), content, user, permission,
             kind='complete', extra_q=extra_q,
-            sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+            sponsor_handles=self._all_routes(sponsors, compiler=compiler),
             permission_model=permission_model, skipped=values,
         )
         return False if matched is None else bool(matched)
@@ -321,9 +310,9 @@ class Registry(object):
                 queryset, user, permission, skipped=values,
             )
         granted_q = _compile_granted(
-            (self._handle(compiler=compiler),), queryset, user, permission,
+            (self._route(compiler=compiler),), queryset, user, permission,
             kind='complete',
-            sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+            sponsor_handles=self._all_routes(sponsors, compiler=compiler),
             skipped=values,
         )
         if granted_q is None:
@@ -346,10 +335,10 @@ class Registry(object):
         denied, values = self._resolve_skipped(user, skip_flags, skipped)
         if denied:
             return queryset.none()
-        own = self._handle(compiler=compiler)
+        own = self._route(compiler=compiler)
         return _compile_permitted_content_queryset(
             queryset, user, permission, content=content, handles=(own,),
-            sponsor_handles=(own,) + self._sponsor_handles(sponsors, compiler=compiler),
+            sponsor_handles=(own,) + self._sponsor_routes(sponsors, compiler=compiler),
             skipped=values,
         )
 
@@ -381,8 +370,8 @@ class Registry(object):
         ):
             return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
-            (self._handle(compiler=compiler),), content, user, kind=kind,
-            sponsor_handles=self._all_handles(sponsors, compiler=compiler),
+            (self._route(compiler=compiler),), content, user, kind=kind,
+            sponsor_handles=self._all_routes(sponsors, compiler=compiler),
             skipped=values,
         )
         if qs is None:
@@ -405,7 +394,7 @@ class Registry(object):
         """
         from trusts.plan.users import permitted_users_predicate_for_registry
 
-        sponsor_handles = self._all_handles(sponsors)
+        sponsor_handles = self._all_routes(sponsors)
         return permitted_users_predicate_for_registry(
             self, content, perm, sponsor_handles=sponsor_handles,
             skipped=skipped, backend=backend,

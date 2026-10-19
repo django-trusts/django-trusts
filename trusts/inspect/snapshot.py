@@ -42,6 +42,7 @@ from django.db.models.lookups import Lookup
 from trusts.commons import _resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.handles import BackendHandle
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.inspect.format import _format_policy_sql
 from trusts.inspect.yaml import (
@@ -246,29 +247,20 @@ _REGISTRY_MISSING = object()
 
 
 def _built_registry(value):
-    """Built registry for a handle or registry, or ``None``.
-
-    A handle builds through its own ``build_registry()`` when it has
-    one; a registry itself builds (or is returned) the same way.
-    ``None`` is preserved so the caller keeps its present-but-broken
-    error, rather than silently skipping an unconfigured backend.
-    """
+    """Built registry for a configured path or a registry, or ``None``."""
     if value is None:
         return None
     registry = getattr(value, 'registry', _REGISTRY_MISSING)
-    if registry is not _REGISTRY_MISSING:
-        if registry is None:
-            return None
-        # Only a handle's own build_registry() decides: BackendHandle
-        # builds a builder, returns a built registry as-is, and passes
-        # a duck registry without build_registry through untouched.
-        # A handle with no build_registry (duck views in tests) keeps
-        # its registry object exactly, including attribute overrides
-        # a delegated build_registry() on that registry would lose.
-        build_handle = getattr(value, 'build_registry', None)
-        return build_handle() if callable(build_handle) else registry
+    if registry is _REGISTRY_MISSING:
+        build = getattr(value, 'build_registry', None)
+        return build() if callable(build) else value
+    if registry is None:
+        return None
+    if isinstance(value, BackendHandle):
+        build = getattr(registry, 'build_registry', None)
+        return build() if callable(build) else registry
     build = getattr(value, 'build_registry', None)
-    return build() if callable(build) else value
+    return build() if callable(build) else registry
 
 
 def _render_handle(handle, cache=None):
@@ -290,7 +282,6 @@ def _render_handle(handle, cache=None):
     elif getattr(handle, 'registry', _REGISTRY_MISSING) is _REGISTRY_MISSING and not hasattr(handle, 'path'):
         rendered = handle
     else:
-        from trusts.plan.handles import BackendHandle
         from trusts.plan.relations import PlanQueryCompiler
 
         compiler = getattr(handle, 'compiler', None)
@@ -931,11 +922,13 @@ def _policy_classifier_records(records, delegations, handles, model):
     selected = list(records)
     seen = {id(record) for record in selected}
     for candidate_handle in handles:
-        # Candidates may be built registries (the snapshot walk) or
-        # handles carrying one; either answers plan_for directly.
-        registry = getattr(candidate_handle, 'registry', None)
-        if registry is None:
-            registry = candidate_handle
+        # A route pair, a configured path, or a built registry.
+        if isinstance(candidate_handle, tuple):
+            registry = candidate_handle[0]
+        else:
+            registry = getattr(candidate_handle, 'registry', None)
+            if registry is None:
+                registry = candidate_handle
         if not hasattr(registry, 'plan_for'):
             continue
         plan = registry.plan_for(model)

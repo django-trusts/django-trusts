@@ -85,21 +85,21 @@ class RegisterConditionSurfaceTest(SimpleTestCase):
         self.assertIn('tests.core.test_issue210', PAIR_KERNEL_SUITE)
 
     def test_predicate_is_not_on_the_signature(self):
-        signature = inspect.signature(BackendHandle.register)
+        signature = inspect.signature(RegistryFactory.register_public)
         self.assertNotIn('predicate', signature.parameters)
         handle = _handle()
         with self.assertRaises(TypeError):
-            handle.register(
+            handle.registry.register_public(
                 trust=DocumentGrant,
                 user='user',
                 permission='permission',
                 content='document',
                 predicate=lambda u, p, o: u == o.user,
             )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.registry.build_registry().records, ())
 
     def test_condition_is_contextually_typed_as_trust(self):
-        hints = get_type_hints(BackendHandle.register)
+        hints = get_type_hints(RegistryFactory.register_public)
         trust_hint = hints['trust']
         type_args = get_args(trust_hint)
         self.assertIsInstance(type_args[0], TypeVar)
@@ -130,7 +130,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
         TeamRepoGrant = _gh_models()[6]
         expected = _register_team(RegistryFactory(), TeamRepoGrant)
 
-        equality = _handle(path='tests.core.issue210-eq').register(
+        equality = _handle(path='tests.core.issue210-eq').registry.register_public(
             trust=TeamRepoGrant,
             user=lambda t: t.team.members,
             permission=lambda t: t.operation,
@@ -149,7 +149,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
         self.assertIsInstance(equality.condition, Equal)
         self.assertFalse(callable(equality.condition))
 
-        ceiling = _handle(path='tests.core.issue210-in').register(
+        ceiling = _handle(path='tests.core.issue210-in').registry.register_public(
             trust=TeamRepoGrant,
             user='team__members',
             permission='operation',
@@ -169,7 +169,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
         self.assertIsInstance(ceiling.condition, PermissionIn)
         self.assertFalse(callable(ceiling.condition))
 
-        conjunction = _handle(path='tests.core.issue210-and').register(
+        conjunction = _handle(path='tests.core.issue210-and').registry.register_public(
             trust=TeamRepoGrant,
             user=lambda t: t.team.members,
             permission='operation',
@@ -216,7 +216,7 @@ class RegisterConditionOnceTest(TransactionTestCase):
             registry = RegistryFactory()
             handle = _handle(registry)
             builder = _CountCondition()
-            record = handle.register(
+            record = handle.registry.register_public(
                 trust=TeamRepoGrant,
                 user=lambda t: t.team.members,
                 permission=lambda t: t.operation,
@@ -268,7 +268,7 @@ class RegisterConditionRejectPublicIRTest(TestCase):
 
         probe = Probe()
         handle = _handle()
-        record = handle.register(
+        record = handle.registry.register_public(
             trust=DocumentGrant,
             user='user',
             permission='permission',
@@ -302,14 +302,14 @@ class RegisterConditionRejectPublicIRTest(TestCase):
             with self.subTest(name=name):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TypeError):
-                        handle.register(
+                        handle.registry.register_public(
                             trust=DocumentGrant,
                             user='user',
                             permission='permission',
                             content='document',
                             condition=value,
                         )
-                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.registry.build_registry().records, ())
 
 
 class RegisterConditionFailClosedTest(TestCase):
@@ -323,7 +323,7 @@ class RegisterConditionFailClosedTest(TestCase):
             return _team_condition(trust)
 
         first = _handle(path='tests.core.issue210-capture')
-        first.register(
+        first.registry.register_public(
             trust=TeamRepoGrant,
             user=lambda t: t.team.members,
             permission=lambda t: t.operation,
@@ -385,27 +385,27 @@ class RegisterConditionFailClosedTest(TestCase):
             with self.subTest(name=name):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
-                        handle.register(
+                        handle.registry.register_public(
                             trust=TeamRepoGrant,
                             user=lambda t: t.team.members,
                             permission=lambda t: t.operation,
                             content=lambda t: t.repository,
                             condition=builder,
                         )
-                self.assertEqual(handle.build_registry().records, ())
+                self.assertEqual(handle.registry.build_registry().records, ())
 
     def test_failed_condition_does_not_partially_mutate(self):
         handle = _handle()
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
-                handle.register(
+                handle.registry.register_public(
                     trust=DocumentGrant,
                     user=lambda t: t.user,
                     permission=lambda t: t.permission,
                     content=lambda t: t.document,
                     condition=lambda t: t.user == t.not_a_field,
                 )
-        self.assertEqual(handle.build_registry().records, ())
+        self.assertEqual(handle.registry.build_registry().records, ())
 
     def test_condition_invoked_on_register_after_build(self):
         registry = RegistryFactory()
@@ -430,7 +430,7 @@ class RegisterConditionFailClosedTest(TestCase):
                         'trusts.compile.factory._normalize_public_condition',
                         wraps=_normalize_public_condition,
                     ) as normalize:
-                        record = handle.register(
+                        record = handle.registry.register_public(
                             trust=DocumentGrant,
                             user='user',
                             permission='permission',
@@ -452,13 +452,13 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
             user=Ref(DocumentGrant).user,
             permission=Ref(DocumentGrant).permission,
         )
-        strings = _handle(path='tests.core.issue210-strings').register(
+        strings = _handle(path='tests.core.issue210-strings').registry.register_public(
             trust=DocumentGrant,
             user='user',
             permission='permission',
             content='document',
         )
-        builders = _handle(path='tests.core.issue210-builders').register(
+        builders = _handle(path='tests.core.issue210-builders').registry.register_public(
             trust=DocumentGrant,
             user=lambda t: t.user,
             permission=lambda t: t.permission,
@@ -483,7 +483,7 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
             along=Along(j.node.parent, bound=8),
         )
         left = _handle(path='tests.core.issue210-left')
-        record = left.register(
+        record = left.registry.register_public(
             trust=Grant,
             user=lambda t: t.user,
             permission='permission',
@@ -494,18 +494,18 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
         self.assertEqual(record.along.shape, 'S')
 
         right = _handle(path='tests.core.issue210-right')
-        self.assertEqual(right.build_registry().records, ())
-        left.add_named_filter(
+        self.assertEqual(right.registry.build_registry().records, ())
+        left.registry.register_permission_condition(
             Document, 'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
         self.assertIsNotNone(
-            left.build_registry().get_permission_condition_record(
+            left.registry.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )
         self.assertIsNone(
-            right.build_registry().get_permission_condition_record(
+            right.registry.build_registry().get_permission_condition_record(
                 Document, 'non_confidential',
             )
         )
@@ -560,7 +560,7 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
         self.registry = RegistryFactory()
         _register_direct(self.registry, self.AccountRepoGrant)
         handle = _handle(self.registry)
-        handle.register(
+        handle.registry.register_public(
             trust=self.TeamRepoGrant,
             user=lambda t: t.team.members,
             permission=lambda t: t.operation,

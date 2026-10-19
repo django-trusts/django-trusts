@@ -212,13 +212,13 @@ class PermissionCollectionRegistrationTest(TestCase):
                 user=access.team.members,
                 permission=access.team.permissions,
             )
-            strings = _handle().register(
+            strings = _handle().registry.register_public(
                 trust=Team,
                 user='members',
                 permission='permissions',
                 content='organization__repositories',
             )
-            calls = _handle(path='tests.core.issue263-call').register(
+            calls = _handle(path='tests.core.issue263-call').registry.register_public(
                 trust=Access,
                 user=lambda row: row.team.members,
                 permission=lambda row: row.team.permissions,
@@ -546,7 +546,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self.org_handle = _handle(
             RegistryFactory(), path='tests.core.issue263-org',
         )
-        self.org_handle.register(
+        self.org_handle.registry.register_public(
             trust=self.Team,
             user='members',
             permission='permissions',
@@ -555,7 +555,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self.access_handle = _handle(
             RegistryFactory(), path='tests.core.issue263-access',
         )
-        self.access_handle.register(
+        self.access_handle.registry.register_public(
             trust=self.Access,
             user='team__members',
             permission='team__permissions',
@@ -564,13 +564,13 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self.classic = _handle(
             RegistryFactory(), path='tests.core.issue263-classic',
         )
-        self.classic.register(
+        self.classic.registry.register_public(
             trust=self.DirectGrant,
             user='user',
             permission='permission',
             content='repository',
         )
-        self.classic.register(
+        self.classic.registry.register_public(
             trust=self.GroupGrant,
             user='group__user',
             group='group',
@@ -645,20 +645,20 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
                 self.assertFalse(user.has_perm(self.read_code, self.secret))
 
             self.assertTrue(
-                handle.build_registry().has_permission(self.alice, self.spec, self.read),
+                handle.registry.build_registry().has_permission(self.alice, self.spec, self.read),
             )
             self.assertTrue(
-                handle.build_registry().has_permission(
+                handle.registry.build_registry().has_permission(
                     self.alice, self.notes, self.change,
                 ),
             )
             self.assertFalse(
-                handle.build_registry().has_permission(
+                handle.registry.build_registry().has_permission(
                     self.alice, self.spec, self.delete,
                 ),
             )
             self.assertFalse(
-                handle.build_registry().has_permission(self.bob, self.spec, self.read),
+                handle.registry.build_registry().has_permission(self.bob, self.spec, self.read),
             )
 
             read_users = self.spec.get_permitted_users(self.read)
@@ -779,7 +779,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self._authorized(handle, self.bob, self.delete),
             [],
         )
-        enumerated = list(handle.build_registry().permissions_for(self.alice, self.spec))
+        enumerated = list(handle.registry.build_registry().permissions_for(self.alice, self.spec))
         self.assertEqual(
             {_code(row) for row in enumerated},
             {self.read_code, self.change_code},
@@ -828,7 +828,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
             self.assertTrue(self.alice.has_perm(self.add_code, self.spec))
             self.assertFalse(self.bob.has_perm(self.add_code, self.spec))
             self.assertTrue(
-                handle.build_registry().has_permission(
+                handle.registry.build_registry().has_permission(
                     self.alice, self.secret, self.read,
                 ),
             )

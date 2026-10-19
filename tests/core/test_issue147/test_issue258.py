@@ -494,7 +494,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
     def test_unpreparable_primary_key_fails_before_a_document(self):
         content, grant = _pk_pair('RejectDoc', _RejectingField())
         handle = _handle('documents.backends.RejectDocBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=grant,
             user='user',
             permission='permission',
@@ -510,7 +510,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
     def test_json_primary_key_is_a_call_input(self):
         content, grant = _pk_pair('JsonDoc', models.JSONField())
         handle = _handle('documents.backends.JsonDocBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=grant,
             user='user',
             permission='permission',
@@ -548,7 +548,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
                 app_label = 'documents'
 
         handle = _handle('documents.backends.GroupQueryBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=GroupGrant,
             user='group__user',
             group='group',
@@ -590,11 +590,11 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         def differs(user, permission, obj):
             return obj.label != 'nope'
 
-        handle.add_named_filter(ConstantDocument, 'both', both)
-        handle.add_named_filter(ConstantDocument, 'either', either)
-        handle.add_named_filter(ConstantDocument, 'owner', owner)
-        handle.add_named_filter(ConstantDocument, 'username', username)
-        handle.add_named_filter(ConstantDocument, 'differs', differs)
+        handle.registry.register_permission_condition(ConstantDocument, 'both', both)
+        handle.registry.register_permission_condition(ConstantDocument, 'either', either)
+        handle.registry.register_permission_condition(ConstantDocument, 'owner', owner)
+        handle.registry.register_permission_condition(ConstantDocument, 'username', username)
+        handle.registry.register_permission_condition(ConstantDocument, 'differs', differs)
         first = render_policy_sql_bytes(handles=[handle])
         second = render_policy_sql_bytes(handles=[handle])
         self.assertEqual(first, second)
@@ -624,7 +624,7 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
         self.assertIn('NOT', filters[prefix + 'differs']['sql'])
 
         same = _handle('documents.backends.SameFieldBackend')
-        same.add_named_filter(
+        same.registry.register_permission_condition(
             ConstantDocument, 'same_label',
             lambda user, permission, obj: obj.label == obj.label,
         )
@@ -672,13 +672,13 @@ class PolicyLockFilterShapeTest(SimpleTestCase):
                 app_label = 'documents'
 
         handle = _handle('documents.backends.SplitTargetBackend')
-        handle.register(
+        handle.registry.register_public(
             trust=GrantById,
             user='user',
             permission='permission',
             content='document',
         )
-        handle.register(
+        handle.registry.register_public(
             trust=GrantByCode,
             user='user',
             permission='permission',
@@ -744,7 +744,7 @@ def math_sign(value):
 def _has_perm_content_token(name, field):
     content, grant = _pk_pair(name, field)
     handle = _handle('documents.backends.%sBackend' % name)
-    handle.register(
+    handle.registry.register_public(
         trust=grant,
         user='user',
         permission='permission',

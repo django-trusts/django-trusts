@@ -218,9 +218,9 @@ def main() -> int:
         raise SystemExit('installed wheel missing trusts/py.typed')
     if hasattr(BackendHandle, 'register_relationship'):
         raise SystemExit('library wheel still exposes register_relationship')
-    assert_register_signature(BackendHandle.register)
+    assert_register_signature(RegistryFactory.register_public)
     print('py.typed present')
-    print('register contextual typing', BackendHandle.register)
+    print('register contextual typing', RegistryFactory.register_public)
 
     from django.apps import apps as django_apps
 
