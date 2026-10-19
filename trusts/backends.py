@@ -9,6 +9,7 @@ from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
 from trusts.errors import PermissionConditionError
+from trusts.compile.factory import RegistryFactory
 from trusts.plan.conditions import (
     evaluate_registered_expression,
     permission_has_condition,
@@ -17,7 +18,7 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.aggregates import _compiler_applies
 from trusts import utils
 
-
+recorders = {}
 registries = {}
 
 def _permission_binding(perm, model):
@@ -48,6 +49,9 @@ def _perm_codes(permission_qs):
 
 
 class TrustModelBackendMixin(object):
+    recoder
+    registry
+
     query_compiler = PlanQueryCompiler()
 
     @staticmethod
@@ -60,25 +64,25 @@ class TrustModelBackendMixin(object):
 
     def __init__(self):
         cls = type(self)
-        if cls in registries:
-            return registries[self]
-        registries[cls] = SimpleRegistry()
+        if cls in recorders:
+            self.recorder = recorders[cls]
+        else:
+            self.recorder = Recorder()
+            recorders[cls] = self.recorder
 
     def get_registry():
-        return registry
+        return recorder
 
     def ready():
         cls = type(self)
-        registry = registries[cls]
+        recorder = recorders[cls]
 
-        registry.freeze()
+        recorder.freeze()
 
-        registry.walk(query_compiler.get_visitor())
+        factory = RegistryFactory()
+        recorder.play(factory.get_record_adapter())
+        self.registry = factory.build_registry()
 
-    def _trusts_config(self):
-        from trusts.apps import implementation_for_class
-
-        return implementation_for_class(type(self), required=True)
 
     def _own_handle(self):
         config = self._trusts_config()
@@ -373,7 +377,7 @@ class TrustModelBackendMixin(object):
             skipped=skipped, backend=self,
         )
 
-class SimpleRegistry(object):
+class Recorder(object):
     user_conditions = {}
     user_overrides = {}
     principles = {}
@@ -398,9 +402,9 @@ class SimpleRegistry(object):
 
             # walk the models, make sure path or lambda is valid, raise otherwise
 
-            if self.principles[content_model] is None:
-                self.principles[content_model] = []
-            self.principles[content_model] = {k: kwargs[k] for k in ("trust", "user", "permission", "content", "condition") if k in kwargs}
+            if self.principals[content_model] is None:
+                self.principals[content_model] = []
+            self.principals[content_model] = {k: kwargs[k] for k in ("trust", "user", "permission", "content", "condition") if k in kwargs}
         else:
             # TODO: make sure args has all expected ones and none of the principles ones
 
@@ -415,10 +419,10 @@ class SimpleRegistry(object):
     def freeze():
         frozen = True
 
-    def walk(visitor):
+    def play(visitor):
         # TODO: call visitor.visit_user ...
 
-        for princple in principles:
-            visitor.vist_princple(**dict(princple))
+        for principal in principals:
+            visitor.register_principal(**dict(princple))
 
         # TODO: do the same for delegates, then named_filters

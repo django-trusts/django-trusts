@@ -971,7 +971,7 @@ def _bind_public_along(root, along):
     path, bound = along
     return Along(_public_ref(root, path, 'along'), bound)
 
-class TrustsRegistry(object):
+class RegistryFactory(object):
     """Instantiable registry of permission-bearing relation declarations.
 
     Create a new instance per isolated context. There is no process-global
@@ -1031,6 +1031,18 @@ class TrustsRegistry(object):
                 'no partial bind.'
             )
         self._condition_lookup = lookup
+
+    def get_record_adapter():
+        class RecorderAdapter(factory):
+            def __init__():
+                self.factory = factory
+            def register_delegate(**kwargs):
+                # @TODO: implement me
+                # self.factory.register_delegate()
+                pass
+
+            # @TODO: implement other recorder call
+        return RecorderAdapter(self)
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
