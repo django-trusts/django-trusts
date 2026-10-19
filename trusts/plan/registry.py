@@ -195,23 +195,15 @@ class Registry(object):
 
     # -- question helpers ------------------------------------------------
 
-    @staticmethod
-    def _as_registry(value):
-        if value is None or isinstance(value, Registry):
-            return value
-        build = getattr(value, 'build_registry', None)
-        return build() if callable(build) else value
-
     def _with_family_registries(self, family_registries):
         """This registry, then each other family registry, once."""
         routes = []
         seen = set()
         for other in (self,) + tuple(family_registries or ()):
-            registry = self._as_registry(other)
-            if registry is None or id(registry) in seen:
+            if other is None or id(other) in seen:
                 continue
-            seen.add(id(registry))
-            routes.append(registry)
+            seen.add(id(other))
+            routes.append(other)
         return tuple(routes)
 
     def applies(self, plan):
@@ -220,7 +212,7 @@ class Registry(object):
         applies = getattr(compiler, 'applies', None)
         if callable(applies):
             return bool(applies(plan))
-        return bool(getattr(plan, 'records', None))
+        return bool(plan.records)
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
         if skip_flags:
@@ -233,7 +225,15 @@ class Registry(object):
             return False, skipped
         return False, {}
 
-    # Questions call plan.contents / plan.aggregates / plan.users.
+    # -- the four canonical questions -----------------------------------
+    # Production semantics live in plan.contents / plan.aggregates /
+    # plan.users. These methods call them on this registry. The
+    # compiler is bound here. Omission stores ``PlanQueryCompiler``
+    # and projects simple questions. ``family_registries`` are other
+    # registries whose ordinary records may satisfy this registry's
+    # delegations; this registry is always included first. ``None`` is
+    # never returned: inapplicable is False / empty queryset / () as
+    # each question requires.
 
     def has_permission(self, user, content, permission, *, family_registries=(),
                        extra_q=None, permission_model=None,
@@ -329,7 +329,7 @@ class Registry(object):
             return queryset.none()
         family_registries = self._with_family_registries(family_registries)
         return _compile_permitted_content_queryset(
-            queryset, user, permission, content=content, handles=(self,),
+            queryset, user, permission, content=content, registries=(self,),
             family_registries=family_registries,
             skipped=values,
         )
@@ -369,20 +369,21 @@ class Registry(object):
     common_permissions = permissions_for
 
     def permitted_users_predicate(self, content, perm, *, family_registries=(),
-                                  skipped=(), backend=None):
+                                  skipped=(), condition_lookup=None,
+                                  accepts_permission=None):
         """Q3 predicate: ``Q`` over candidate users, or ``None``.
 
-        ``backend`` is only the Django adapter that owns the
-        ``:condition`` overlay / singular-permission acceptance when
-        called from ``TrustModelBackendMixin``; standalone calls use
-        the auth.Permission default.
+        ``condition_lookup`` defaults to this registry's lookup.
+        ``accepts_permission`` is the singular-permission callable;
+        omitted means ``auth.Permission``.
         """
         from trusts.plan.users import permitted_users_predicate_for_registry
 
         family_registries = self._with_family_registries(family_registries)
         return permitted_users_predicate_for_registry(
             self, content, perm, family_registries=family_registries,
-            skipped=skipped, backend=backend,
+            skipped=skipped, condition_lookup=condition_lookup,
+            accepts_permission=accepts_permission,
         )
 
     def permitted_users(self, content, perm, *, family_registries=(), **skip_flags):
@@ -410,7 +411,18 @@ class Registry(object):
             user_model._default_manager.filter(predicate).distinct()
         )
 
-    # ``walk_questions`` calls ``visit`` once per question, in document order.
+    # -- walking every possible question ------------------------------
+    # ``registry.walk_questions(visitor)``. The visitor supplies one
+    # ``visit(question)`` method, called once per :class:`Question`
+    # descriptor in document order (content groups in first-registration
+    # order, questions in policy-document order within a group). The
+    # return value of each ``visit`` call is collected and returned as a
+    # tuple in the same order; a visitor may return ``None`` for a
+    # question it omits (for example an empty prefix statement).
+    # ``family_registries`` are other registries whose ordinary records
+    # may satisfy this registry's delegations; they are pre-bound into
+    # each descriptor's question callable, never passed to the visitor
+    # separately.
 
     def _content_groups(self):
         """``(content_model, records, delegations)`` in document order."""

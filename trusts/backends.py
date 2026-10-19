@@ -2,9 +2,10 @@
 
 Registration is a per-class ``Recorder``. ``ready()`` compiles every
 configured class, then stores ``catalogs[cls]`` with that class's
-family registries fixed. An inquiry reads the stored catalog and calls
-``ready()`` only when the class is missing. ``registries[cls]`` receives
-the built registry when the key is empty.
+family registries fixed. Peers are fixed at that first sweep. A class
+compiled after the sweep is not a supported production path, and
+earlier peer tuples are not rewritten. Registration closes when the
+catalog is built.
 """
 
 from django.contrib.auth import get_backends
@@ -17,13 +18,15 @@ from trusts.apps import (
     implementation_for_class,
     listed_backend_class,
     recorders,
-    registries,
 )
 from trusts.compile.catalogs import Catalog
 from trusts.compile.factory import RegistryFactory
 from trusts.errors import TrustsConfigurationError
+from trusts.inspect.commands import install_policy_commands
 import trusts.inspect.checks  # noqa: F401
 from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
+
+install_policy_commands()
 
 
 class TrustModelBackendMixin(object):
@@ -99,7 +102,9 @@ class TrustModelBackendMixin(object):
         return catalog.registry.permitted_users_predicate(
             content, perm,
             family_registries=catalog.family_registries,
-            skipped=skipped, backend=self,
+            skipped=skipped,
+            condition_lookup=catalog.registry.condition_lookup,
+            accepts_permission=self.singular_permission_accepted,
         )
 
     def _trusts_config(self):
@@ -152,15 +157,14 @@ class Recorder(object):
         self.user_conditions = []
         self.user_overrides = []
         self._rows = []
-        self._principals = []
-        self._delegations = []
+        self._factory = RegistryFactory()
         self.frozen = False
 
     def register(self, *, trust, content, user=None, permission=None,
                  group=None, delegate=None, sponsor=None, condition=None,
                  along=None):
         self._open()
-        shape = RegistryFactory().build_public_registration(
+        shape = self._factory.build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
@@ -171,12 +175,9 @@ class Recorder(object):
                 'sponsor': shape.sponsor, 'condition': shape.condition,
                 'along': shape.along,
             }
-            built = RegistryFactory().build_delegation(**payload)
-            self._reject_known_delegation(built)
-            record = self._rules_factory().register_delegation(**payload)
+            record = self._factory.register_delegation(**payload)
             self.delegates.setdefault(record.content_model, []).append(payload)
             self._rows.append(('delegate', record.content_model, payload))
-            self._delegations.append(record)
             return record
         payload = {
             'content': shape.content, 'user': shape.user,
@@ -186,32 +187,27 @@ class Recorder(object):
             payload['group'] = shape.group
         else:
             payload['permission'] = shape.permission
-        built = RegistryFactory().build_relation(**payload)
-        self._reject_known_principal(built)
-        record = self._rules_factory().register(**payload)
+        record = self._factory.register(**payload)
         self.principals.setdefault(record.content_model, []).append(payload)
         self._rows.append(('principal', record.content_model, payload))
-        self._principals.append(record)
         return record
 
     def add_named_filter(self, model, code, predicate):
         self._open()
         once = _Once(predicate)
-        record = RegistryFactory().register_permission_condition(model, code, once)
+        record = self._factory.register_permission_condition(model, code, once)
         self.named_filters.append((model, code, once))
         return record
 
     def set_user_condition(self, name, expr, on='*'):
         self._open()
-        self._rules_before_rows()
-        result = self._rules_factory().set_user_condition(name, expr, on=on)
+        result = self._factory.set_user_condition(name, expr, on=on)
         self.user_conditions.append((name, expr, on))
         return result
 
     def set_user_override(self, name, expr, on='user'):
         self._open()
-        self._rules_before_rows()
-        result = self._rules_factory().set_user_override(name, expr, on=on)
+        result = self._factory.set_user_override(name, expr, on=on)
         self.user_overrides.append((name, expr, on))
         return result
 
@@ -236,70 +232,6 @@ class Recorder(object):
             raise TrustsConfigurationError(
                 'register refused: this recorder is frozen.'
             )
-
-    def _rules_before_rows(self):
-        if self._rows:
-            raise TrustsConfigurationError(
-                'Set user conditions and the user override before '
-                'register() or register_delegation().'
-            )
-
-    def _rules_factory(self):
-        factory = RegistryFactory()
-        for name, expr, on in self.user_conditions:
-            factory.set_user_condition(name, expr, on=on)
-        for name, expr, on in self.user_overrides:
-            factory.set_user_override(name, expr, on=on)
-        return factory
-
-    def _reject_known_principal(self, record):
-        for existing in self._principals:
-            if existing.root is not record.root:
-                continue
-            if existing == record:
-                raise TrustsConfigurationError(
-                    'Duplicate registration for %s.' % record.root._meta.label
-                )
-            if existing.content_model is not record.content_model:
-                continue
-            if (
-                _same_terminal_bindings(existing, record)
-                and existing.condition != record.condition
-            ):
-                continue
-            raise TrustsConfigurationError(
-                'Conflicting registration for %s content terminal '
-                '%s: existing %r, new %r.'
-                % (
-                    record.root._meta.label,
-                    record.content_model._meta.label,
-                    existing,
-                    record,
-                )
-            )
-
-    def _reject_known_delegation(self, record):
-        same_root = [
-            existing for existing in self._delegations
-            if existing.root is record.root
-        ]
-        if record in same_root:
-            raise TrustsConfigurationError(
-                'Duplicate delegated registration for %s.'
-                % record.root._meta.label
-            )
-        for existing in same_root:
-            if existing.content_model is record.content_model:
-                raise TrustsConfigurationError(
-                    'Conflicting delegated registration for %s content '
-                    'terminal %s: existing %r, new %r.'
-                    % (
-                        record.root._meta.label,
-                        record.content_model._meta.label,
-                        existing,
-                        record,
-                    )
-                )
 
 
 class _Once(object):
@@ -352,23 +284,6 @@ def _sponsorship_family(cls):
     return config._authorization_family
 
 
-def _same_terminal_bindings(existing, record):
-    return (
-        existing.content_path == record.content_path
-        and existing.content_model is record.content_model
-        and existing.content_target == record.content_target
-        and existing.user_path == record.user_path
-        and existing.user_model is record.user_model
-        and existing.user_target == record.user_target
-        and existing.permission_path == record.permission_path
-        and existing.permission_model is record.permission_model
-        and existing.permission_target == record.permission_target
-        and existing.along == record.along
-        and existing.via_group == record.via_group
-        and existing.group_path == record.group_path
-    )
-
-
 def _materialize_configured_catalogs(extra):
     """Compile every missing class, then fix each catalog's family registries."""
     backends = list(get_backends())
@@ -415,6 +330,3 @@ def _materialize_configured_catalogs(extra):
             cls=cls, path=path, family=family,
             factory=factory, registry=registry, family_registries=peers,
         )
-    for backend in chosen:
-        cls = type(backend)
-        registries.setdefault(cls, catalogs[cls].registry)

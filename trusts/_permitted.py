@@ -2,7 +2,7 @@
 
 The view decorator keeps pk coercion, HTTP statuses, and ``trusts.E008``
 bookkeeping. This module is the
-shared preflight and grant. ``handles`` is an explicit private input so
+shared preflight and grant. ``registries`` is an explicit private input so
 another package can supply its own later. Runtime ``.permitted()`` calls
 are not recorded for ``trusts.E008``.
 """
@@ -18,7 +18,6 @@ from django.db.models import Subquery
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _ordinary_records, granted
-from trusts.plan.handles import registry_of
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.plan.relations import bind_checked_user
 
@@ -135,7 +134,7 @@ def _plan_is_auth_permission(plan, sponsor_records=()):
         and permission_model._meta.concrete_model is Permission
     ):
         return True
-    for delegation in getattr(plan, 'delegations', ()) or ():
+    for delegation in plan.delegations:
         for ordinary in sponsor_records:
             if not _sponsor_record_matches(ordinary, delegation):
                 continue
@@ -144,7 +143,7 @@ def _plan_is_auth_permission(plan, sponsor_records=()):
     return False
 
 
-def _auth_permission_plan(handle, candidates, user, handles):
+def _auth_permission_plan(registry, candidates, user, registries):
     """Applicable plan only when the permission terminal is auth.Permission.
 
     ``granted()`` does not pass a Subquery into ``plan_for(..., permission=)``.
@@ -152,49 +151,40 @@ def _auth_permission_plan(handle, candidates, user, handles):
     its integer FK to ``auth_permission.pk`` and could grant on a colliding
     id. Those plans are omitted from this string and instance guard.
     """
-    registry = registry_of(handle)
     plan = registry.plan_for(candidates, user=user)
     if not _plan_is_auth_permission(
-        plan, _ordinary_records(handles, candidates),
+        plan, _ordinary_records(registries, candidates),
     ):
         return None
     return plan
 
 
-def _auth_permission_plan_for_model(handle, model, handles):
+def _auth_permission_plan_for_model(registry, model, registries):
     """Zero-SQL applicable auth.Permission plan for this content model."""
-    registry = registry_of(handle)
-    plan_for = getattr(registry, 'plan_for', None)
-    if not callable(plan_for):
-        return None
-    plan = plan_for(model)
-    if not _plan_is_auth_permission(plan, _ordinary_records(handles, model)):
+    plan = registry.plan_for(model)
+    if not _plan_is_auth_permission(plan, _ordinary_records(registries, model)):
         return None
     return plan
 
 
-def _backend_has_selected_conditions(handle, model, conditions):
-    """True when this handle registers every selected name with a queryable expr."""
+def _backend_has_selected_conditions(registry, model, conditions):
+    """True when this registry registers every selected name with a queryable expr."""
     if not conditions:
         return True
-    registry = registry_of(handle)
-    lookup = getattr(registry, 'condition_lookup', None)
+    lookup = registry.condition_lookup
     if lookup is None:
         return False
-    record_for = getattr(lookup, 'record_for', None)
-    if not callable(record_for):
-        return False
     for name in conditions:
-        record = record_for(model, name)
-        if record is None or getattr(record, 'expr', None) is None:
+        record = lookup.record_for(model, name)
+        if record is None or record.expr is None:
             return False
     return True
 
 
-def _authorization_preflight_state(handles, model, conditions):
+def _authorization_preflight_state(registries, model, conditions):
     """Return ``(participating, complete)`` with zero SQL.
 
-    ``participating`` is True when at least one handle has an applicable
+    ``participating`` is True when at least one registry has an applicable
     ``auth.Permission`` plan for ``model``. ``complete`` is True when one
     of those backends also owns every selected name as a queryable
     condition (the same rule as ``trusts.E008``). A grant query must not
@@ -203,19 +193,19 @@ def _authorization_preflight_state(handles, model, conditions):
     ``authorization_required``.
     """
     participating = False
-    for handle in handles:
-        if _auth_permission_plan_for_model(handle, model, handles) is None:
+    for registry in registries:
+        if _auth_permission_plan_for_model(registry, model, registries) is None:
             continue
         participating = True
-        if _backend_has_selected_conditions(handle, model, conditions):
+        if _backend_has_selected_conditions(registry, model, conditions):
             return True, True
     return participating, False
 
 
-def _assert_authorization_preflight(handles, model, conditions, *, api):
+def _assert_authorization_preflight(registries, model, conditions, *, api):
     """Fail closed on unsupported or incomplete guard configuration."""
     participating, complete = _authorization_preflight_state(
-        handles, model, conditions,
+        registries, model, conditions,
     )
     if participating and complete:
         return
@@ -230,10 +220,9 @@ def _assert_authorization_preflight(handles, model, conditions, *, api):
     )
 
 
-def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
+def _overlay_for_backend(registry, model, permission, conditions, user, *, api):
     """Compose this backend's selected names, or None if any name is missing."""
-    registry = registry_of(handle)
-    lookup = getattr(registry, 'condition_lookup', None)
+    lookup = registry.condition_lookup
     if lookup is None:
         return None
     extra_q = None
@@ -241,7 +230,7 @@ def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
         record = lookup.record_for(model, name)
         if record is None:
             return None
-        if getattr(record, 'expr', None) is None:
+        if record.expr is None:
             raise TrustsConfigurationError(
                 '%s condition %r on %s is unsupported.'
                 % (api, name, model._meta.label)
@@ -251,7 +240,7 @@ def _overlay_for_backend(handle, model, permission, conditions, user, *, api):
     return extra_q
 
 
-def _authorization_grant_q(handles, candidates, user, model, permission,
+def _authorization_grant_q(registries, candidates, user, model, permission,
                            conditions, binding, *, api,
                            skipped=()):
     """OR each auth-Permission backend's grant composed with its own names.
@@ -264,19 +253,19 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
     """
     parts = []
     complete = 0
-    for handle in handles:
-        if _auth_permission_plan(handle, candidates, user, handles) is None:
+    for registry in registries:
+        if _auth_permission_plan(registry, candidates, user, registries) is None:
             continue
         if conditions:
             overlay = _overlay_for_backend(
-                handle, model, permission, conditions, user, api=api,
+                registry, model, permission, conditions, user, api=api,
             )
             if overlay is None:
                 continue
             complete += 1
             part = granted(
-                (handle,), candidates, user, binding, kind='complete',
-                family_registries=handles,
+                (registry,), candidates, user, binding, kind='complete',
+                family_registries=registries,
                 permission_model=Permission,
                 skipped=skipped,
             )
@@ -285,8 +274,8 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
             parts.append(part & overlay)
             continue
         part = granted(
-            (handle,), candidates, user, binding, kind='complete',
-            family_registries=handles,
+            (registry,), candidates, user, binding, kind='complete',
+            family_registries=registries,
             permission_model=Permission,
             skipped=skipped,
         )
@@ -305,12 +294,12 @@ def _authorization_grant_q(handles, candidates, user, model, permission,
     return reduce(or_, parts)
 
 
-def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
+def permitted_queryset(queryset, permission, user, conditions=(), *, registries,
                        **skip_flags):
     """Lazy filtered queryset of rows ``user`` may access.
 
-    ``handles`` selects the backends. Core passes relationship-family
-    implementation handles. Input and configuration are validated before
+    ``registries`` selects the backends. Core passes relationship-family
+    built registries. Input and configuration are validated before
     the anonymous denial, and before SQL. A well-formed
     permission for another content type is an empty queryset. This call
     does not register a ``trusts.E008`` guard and does not copy Django's
@@ -320,15 +309,15 @@ def permitted_queryset(queryset, permission, user, conditions=(), *, handles,
     normalized = _normalize_permitted_permission(permission, api='permitted')
     conditions = _guard_conditions(conditions, api='permitted')
     _assert_authorization_preflight(
-        handles, model, conditions, api='permitted',
+        registries, model, conditions, api='permitted',
     )
     inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, handles=handles)
+        user, skip_flags=skip_flags, registries=registries)
     if inquiry.denied:
         return queryset.none()
     skipped = inquiry.values
     granted_q = _authorization_grant_q(
-        handles,
+        registries,
         queryset,
         user,
         model,

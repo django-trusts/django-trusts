@@ -13,12 +13,6 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.aggregates import any_plan_records
 
 
-class _Handle(object):
-    def __init__(self, registry):
-        self.registry = registry
-        self.compiler = object()
-
-
 def _contribute_document(registry):
     j = Ref(DocumentGrant)
     registry.register(
@@ -33,12 +27,10 @@ class AnyPlanRecordsGateRuleTest(SimpleTestCase):
         empty = RegistryFactory()
         filled = RegistryFactory()
         _contribute_document(filled)
-        unused = _Handle(empty)
-        supporting = _Handle(filled)
         self.assertFalse(any_plan_records((), Document))
-        self.assertFalse(any_plan_records((unused,), Document))
-        self.assertTrue(any_plan_records((unused, supporting), Document))
-        self.assertTrue(any_plan_records((supporting, unused), Document))
-        self.assertTrue(any_plan_records((supporting,), Document))
-        self.assertFalse(any_plan_records((supporting,), Organization))
-        self.assertFalse(any_plan_records((supporting,), Group))
+        self.assertFalse(any_plan_records((empty,), Document))
+        self.assertTrue(any_plan_records((empty, filled), Document))
+        self.assertTrue(any_plan_records((filled, empty), Document))
+        self.assertTrue(any_plan_records((filled,), Document))
+        self.assertFalse(any_plan_records((filled,), Organization))
+        self.assertFalse(any_plan_records((filled,), Group))

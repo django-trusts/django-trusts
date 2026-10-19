@@ -194,33 +194,33 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn('does not enable', errors[0].msg)
 
-    def test_handle_check_and_ready_do_not_raise_on_invalid_expr(self):
+    def test_catalog_check_does_not_raise_on_invalid_expr(self):
+        from tests.apps import override_catalog
+        from tests.backends import HostTrustModelBackend
+
         Note = _note_model()
         u, _p, o = condition_refs()
         registry = RegistryFactory()
         _store_expr(registry, Note, 'typo', u == o.nope)
 
-        class _Handle(object):
-            def __init__(self, store):
-                self.registry = store
-
         class _Config(object):
             def _configured_trusts_paths(self):
                 return ('tests.backends.HostTrustModelBackend',)
 
-            def configured_backend(self, path=None):
-                return _Handle(registry)
-
             def ready(self):
                 return None
 
-        with patch(
-            'trusts.apps.implementation_configs', return_value=(_Config(),),
+        with override_catalog(
+            HostTrustModelBackend, registry,
+            'tests.backends.HostTrustModelBackend',
         ):
-            _Config().ready()
-            errors = _messages_with_id(
-                check_permission_conditions(None), CHECK_ID_INVALID_EXPR,
-            )
+            with patch(
+                'trusts.apps.implementation_configs', return_value=(_Config(),),
+            ):
+                _Config().ready()
+                errors = _messages_with_id(
+                    check_permission_conditions(None), CHECK_ID_INVALID_EXPR,
+                )
         self.assertTrue(any("'typo'" in m.msg for m in errors))
 
     def test_handle_after_build_invokes_builder(self):
@@ -245,29 +245,28 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         self.assertNotIn(CHECK_ID_INVALID_EXPR, output)
         self.assertNotIn(CHECK_ID_OBSOLETE_CALLBACK_SETTING, output)
 
-    def test_manage_py_check_reports_invalid_registration_via_handle(self):
+    def test_manage_py_check_reports_invalid_registration_via_catalog(self):
+        from tests.apps import override_catalog
+        from tests.backends import HostTrustModelBackend
         from tests.myapp.models import Document
 
         u, _p, o = condition_refs()
         registry = RegistryFactory()
         _store_expr(registry, Document, 'typo-29', u == o.nope)
 
-        class _Handle(object):
-            def __init__(self, store):
-                self.registry = store
-
         class _Config(object):
             def _configured_trusts_paths(self):
                 return ('tests.backends.HostTrustModelBackend',)
 
-            def configured_backend(self, path=None):
-                return _Handle(registry)
-
-        with patch(
-            'trusts.apps.implementation_configs', return_value=(_Config(),),
+        with override_catalog(
+            HostTrustModelBackend, registry,
+            'tests.backends.HostTrustModelBackend',
         ):
-            with self.assertRaises(SystemCheckError) as ctx:
-                call_command('check')
+            with patch(
+                'trusts.apps.implementation_configs', return_value=(_Config(),),
+            ):
+                with self.assertRaises(SystemCheckError) as ctx:
+                    call_command('check')
         self.assertIn(CHECK_ID_INVALID_EXPR, str(ctx.exception))
         self.assertIn('typo-29', str(ctx.exception))
 

@@ -1,7 +1,7 @@
 """Private condition IR and compiler (issue #4 V1 / #142 Stage B).
 
 This module is not an application-facing import. Register named
-conditions as builders on ``BackendHandle.add_named_filter``.
+conditions as builders on the recorder's ``add_named_filter``.
 ``from trusts.conditions import Expr`` must fail.
 
 A callable argument to condition registration is a **builder**: Core
@@ -17,9 +17,9 @@ registration path issues zero SQL (symbolic refs plus ``_meta``).
 Prebuilt ``Expr`` trees are not accepted at register.
 
 Permission-condition records live on an instantiable
-``ConditionRegistry`` (also exposed on each ``TrustsRegistry`` and
-``BackendHandle.add_named_filter``). There is no
-process-global store: each implementation handle owns its own records
+``ConditionRegistry`` (also exposed on each built registry and the
+recorder's ``add_named_filter``). There is no
+process-global store: each implementation registry owns its own records
 so owners cannot share or overwrite each other.
 
 V1 grammar: principal/object field refs and relationship traversal

@@ -10,77 +10,46 @@ are TypeError. Registration stays open after a build. Dual backends stay
 isolated. Internal ``RegistryFactory.register(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
 """
-
 from unittest.mock import patch
-
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
-
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.resolution import _resolve_path
-from trusts.compile.factory import (
-    _public_path_segments,
-    _validate_condition,
-)
-from trusts.compile.nodes import (
-    Along,
-    permission_in,
-)
-from trusts.compile.nodes import (
-    All,
-    Equal,
-    Ref,
-)
-from trusts.plan.handles import BackendHandle
+from trusts.compile.factory import _public_path_segments, _validate_condition
+from trusts.compile.nodes import Along, permission_in
+from trusts.compile.nodes import All, Equal, Ref
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 
-
 def _handle(registry=None, path='tests.core.handle-a'):
     if registry is None:
         registry = RegistryFactory()
-    return BackendHandle(
-        path=path,
-        registry=registry,
-    )
-
+    return [registry, setattr(registry, 'path', path)][0]
 
 class HandleRegisterSurfaceTest(SimpleTestCase):
+
     def test_register_is_the_public_donation_verb(self):
         handle = _handle()
-        self.assertFalse(hasattr(BackendHandle, 'register'))
-        self.assertFalse(hasattr(BackendHandle, 'add_named_filter'))
-        self.assertFalse(hasattr(BackendHandle, 'register_relationship'))
-        self.assertFalse(hasattr(BackendHandle, 'register_permission_condition'))
-        self.assertFalse(hasattr(BackendHandle, 'register_ordered_fold'))
-        self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
-        self.assertFalse(hasattr(handle, 'register'))
-        self.assertTrue(callable(handle.registry.register_public))
-        self.assertTrue(callable(handle.registry.register_permission_condition))
+        import trusts.core as core
+        self.assertFalse(hasattr(core, 'BackendHandle'))
+        self.assertTrue(callable(handle.register))
+        self.assertTrue(callable(handle.register_public))
+        self.assertTrue(callable(handle.register_permission_condition))
         self.assertFalse(hasattr(handle, 'register_relationship'))
-        self.assertFalse(hasattr(handle, 'register_permission_condition'))
+        self.assertTrue(callable(handle.register_permission_condition))
         self.assertFalse(hasattr(handle, 'register_ordered_fold'))
         self.assertFalse(hasattr(handle, 'register_strategy'))
-        self.assertTrue(hasattr(handle.registry, 'register'))
-        self.assertFalse(hasattr(handle.registry, 'register_strategy'))
-        self.assertFalse(hasattr(handle.registry, 'strategies'))
+        self.assertTrue(hasattr(handle, 'register'))
+        self.assertFalse(hasattr(handle, 'register_strategy'))
+        self.assertFalse(hasattr(handle, 'strategies'))
 
     def test_string_register_matches_internal_ref_record(self):
         via_ref = RegistryFactory()
         j = Ref(DocumentGrant)
-        expected = via_ref.register(
-            content=j.document,
-            user=j.user,
-            permission=j.permission,
-        )
+        expected = via_ref.register(content=j.document, user=j.user, permission=j.permission)
         handle = _handle()
-        record = handle.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
+        record = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(record, expected)
         self.assertIs(record.content_model, Document)
         self.assertEqual(record.user_path, ('user',))
@@ -90,131 +59,54 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         handle = _handle()
         j = Ref(DocumentGrant)
         with self.assertRaises(TypeError):
-            handle.registry.register_public(
-                trust=j,
-                user='user',
-                permission='permission',
-                content='document',
-            )
+            handle.register_public(trust=j, user='user', permission='permission', content='document')
         with self.assertRaises(TypeError):
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user=j.user,
-                permission='permission',
-                content='document',
-            )
+            handle.register_public(trust=DocumentGrant, user=j.user, permission='permission', content='document')
         with self.assertRaises(TypeError):
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user='user',
-                permission=j.permission,
-                content='document',
-            )
+            handle.register_public(trust=DocumentGrant, user='user', permission=j.permission, content='document')
         with self.assertRaises(TypeError):
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user='user',
-                permission='permission',
-                content=j.document,
-            )
+            handle.register_public(trust=DocumentGrant, user='user', permission='permission', content=j.document)
         with self.assertRaises(TypeError):
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user='user',
-                permission='permission',
-                content='document',
-                condition=Equal(j.user, j.permission),
-            )
+            handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', condition=Equal(j.user, j.permission))
         with self.assertRaises(TypeError):
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user='user',
-                permission='permission',
-                content='document',
-                along=Along(j.document, 8),
-            )
-        self.assertEqual(handle.registry.build_registry().records, ())
+            handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', along=Along(j.document, 8))
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_invalid_public_path_grammar_is_rejected(self):
         handle = _handle()
-        for path in (
-            '',
-            '__user',
-            'user__',
-            'folder.documents',
-            'team____members',
-            1,
-            None,
-            ['user'],
-        ):
+        for path in ('', '__user', 'user__', 'folder.documents', 'team____members', 1, None, ['user']):
             with self.subTest(path=path):
                 with self.assertRaises(TrustsConfigurationError):
-                    handle.registry.register_public(
-                        trust=DocumentGrant,
-                        user=path,
-                        permission='permission',
-                        content='document',
-                    )
-        self.assertEqual(handle.registry.build_registry().records, ())
+                    handle.register_public(trust=DocumentGrant, user=path, permission='permission', content='document')
+        self.assertEqual(handle.build_registry().records, ())
 
     def test_string_condition_is_not_legal_on_bare_registry(self):
         registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
-            registry.register(
-                content=j.document,
-                user=j.user,
-                permission=j.permission,
-                condition=Equal('user', 'permission'),
-            )
+            registry.register(content=j.document, user=j.user, permission=j.permission, condition=Equal('user', 'permission'))
         self.assertEqual(registry.records, ())
 
     def test_duplicate_and_conflict_leave_store_unchanged(self):
         handle = _handle()
-        first = handle.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user='user',
-                permission='permission',
-                content='document',
-            )
-        self.assertEqual(handle.registry.build_registry().records, (first,))
-        with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user='permission',
-                permission='user',
-                content='document',
-            )
-        self.assertEqual(handle.registry.build_registry().records, (first,))
-
+        first = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
+            handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(handle.build_registry().records, (first,))
+        with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
+            handle.register_public(trust=DocumentGrant, user='permission', permission='user', content='document')
+        self.assertEqual(handle.build_registry().records, (first,))
 
 class HandleAfterBuildOrderTest(SimpleTestCase):
+
     def test_register_after_build_resolves_paths(self):
         registry = RegistryFactory()
         handle = _handle(registry)
         self.assertEqual(registry.build_registry().records, ())
-        with patch(
-            'trusts.compile.factory._public_path_segments',
-            wraps=_public_path_segments,
-        ) as segments:
+        with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
             with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
-                with patch(
-                    'trusts.compile.factory._validate_condition',
-                    wraps=_validate_condition,
-                ) as validate:
-                    record = handle.registry.register_public(
-                        trust=DocumentGrant,
-                        user='user',
-                        permission='permission',
-                        content='document',
-                    )
+                with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
+                    record = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         segments.assert_called()
         resolve.assert_called()
         validate.assert_called()
@@ -226,92 +118,53 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
         handle = _handle(registry)
         registry.build_registry()
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            handle.registry.register_public(
-                trust=DocumentGrant,
-                user='',
-                permission='permission',
-                content='document',
-            )
+            handle.register_public(trust=DocumentGrant, user='', permission='permission', content='document')
         self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, ())
 
-
 class HandleIsolationTest(SimpleTestCase):
+
     def test_dual_handle_string_register_does_not_leak(self):
         left = _handle(path='tests.core.handle-left')
         right = _handle(path='tests.core.handle-right')
-        left.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        self.assertEqual(len(left.registry.build_registry().records), 1)
-        self.assertEqual(right.registry.build_registry().records, ())
-        right.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        self.assertEqual(len(left.registry.build_registry().records), 1)
-        self.assertEqual(len(right.registry.build_registry().records), 1)
-        self.assertIsNot(left.registry.build_registry().records[0], right.registry.build_registry().records[0])
-        self.assertEqual(left.registry.build_registry().records[0], right.registry.build_registry().records[0])
-
+        left.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(right.build_registry().records, ())
+        right.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(len(right.build_registry().records), 1)
+        self.assertIsNot(left.build_registry().records[0], right.build_registry().records[0])
+        self.assertEqual(left.build_registry().records[0], right.build_registry().records[0])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class HandleConditionAndAlongTest(SimpleTestCase):
+
     def test_string_condition_tree_matches_ref_registration(self):
         from tests.core.test_issue98 import _gh_models, _register_team
-
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
         via_ref = RegistryFactory()
         expected = _register_team(via_ref, TeamRepoGrant)
         handle = _handle()
-        record = handle.registry.register_public(
-            trust=TeamRepoGrant,
-            user='team__members',
-            permission='operation',
-            content='repository',
-            condition=lambda t: (
-                t.team.permission_bundles.operations.contains(t.operation)
-                & (t.team.organization == t.repository.organization)
-            ),
-        )
+        record = handle.register_public(trust=TeamRepoGrant, user='team__members', permission='operation', content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
         self.assertEqual(record, expected)
         self.assertEqual(record.user_path, ('team', 'members'))
         self.assertEqual(record.user_field, 'team__members')
 
     def test_along_tuple_matches_internal_along(self):
         from tests.core.test_issue92 import _node_graph_models
-
-        _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
-            _node_graph_models()
-        )
+        _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
         via_ref = RegistryFactory()
         j = Ref(Grant)
-        expected = via_ref.register(
-            content=j.node,
-            user=j.user,
-            permission=j.permission,
-            along=Along(j.node.parent, bound=8),
-        )
+        expected = via_ref.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
         handle = _handle()
-        record = handle.registry.register_public(
-            trust=Grant,
-            user='user',
-            permission='permission',
-            content='node',
-            along=('node__parent', 8),
-        )
+        record = handle.register_public(trust=Grant, user='user', permission='permission', content='node', along=('node__parent', 8))
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
         self.assertEqual(record.along.bound, 8)
 
-
 class _PredicateLog:
+
     def __init__(self, impl=None):
         self.impl = impl or (lambda u, p, o: o.confidential != True)
         self.calls = []
@@ -320,37 +173,24 @@ class _PredicateLog:
         self.calls.append((u, p, o))
         return self.impl(u, p, o)
 
-
 class CMethodsPublicSurfaceTest(SimpleTestCase):
+
     def test_two_public_methods_and_no_ordered_fold(self):
         backend = _handle()
-        self.assertTrue(callable(backend.registry.register_public))
-        self.assertTrue(callable(backend.registry.register_permission_condition))
+        self.assertTrue(callable(backend.register_public))
+        self.assertTrue(callable(backend.register_permission_condition))
         self.assertFalse(hasattr(backend, 'register_relationship'))
-        self.assertFalse(hasattr(backend, 'register_permission_condition'))
         self.assertFalse(hasattr(backend, 'register_ordered_fold'))
         self.assertFalse(hasattr(backend, 'register_strategy'))
-        self.assertFalse(hasattr(BackendHandle, 'register'))
-        self.assertFalse(hasattr(BackendHandle, 'register_relationship'))
-        self.assertFalse(hasattr(BackendHandle, 'register_permission_condition'))
-        self.assertFalse(hasattr(BackendHandle, 'register_ordered_fold'))
-        self.assertFalse(hasattr(BackendHandle, 'register_strategy'))
+        import trusts.core as core
+        self.assertFalse(hasattr(core, 'BackendHandle'))
 
     def test_register_matches_internal_ref_record(self):
         via_ref = RegistryFactory()
         j = Ref(DocumentGrant)
-        expected = via_ref.register(
-            content=j.document,
-            user=j.user,
-            permission=j.permission,
-        )
+        expected = via_ref.register(content=j.document, user=j.user, permission=j.permission)
         backend = _handle()
-        record = backend.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
+        record = backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(record, expected)
         self.assertIs(record.content_model, Document)
         self.assertEqual(record.user_path, ('user',))
@@ -359,180 +199,100 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
     def test_wrong_family_keywords_are_type_error(self):
         backend = _handle()
         with self.assertRaises(TypeError):
-            backend.registry.register_public(
-                trust=DocumentGrant,
-                user='user',
-                permission='permission',
-                content='document',
-                strategy=object(),
-            )
-        self.assertEqual(backend.registry.build_registry().records, ())
+            backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', strategy=object())
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_incomplete_signatures_are_type_error(self):
         backend = _handle()
         with self.assertRaises(TypeError):
-            backend.registry.register_public(trust=DocumentGrant, user='user')
+            backend.register_public(trust=DocumentGrant, user='user')
         with self.assertRaises(TypeError):
-            backend.registry.register_permission_condition(Document, 'non_confidential')
-        self.assertEqual(backend.registry.build_registry().records, ())
+            backend.register_permission_condition(Document, 'non_confidential')
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_register_ref_is_type_error(self):
         backend = _handle()
         j = Ref(DocumentGrant)
         with self.assertRaises(TypeError):
-            backend.registry.register_public(
-                trust=j, user='user', permission='permission', content='document',
-            )
-        self.assertEqual(backend.registry.build_registry().records, ())
+            backend.register_public(trust=j, user='user', permission='permission', content='document')
+        self.assertEqual(backend.build_registry().records, ())
 
     def test_duplicate_relationship_leaves_store_unchanged(self):
         backend = _handle()
-        first = backend.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            backend.registry.register_public(
-                trust=DocumentGrant,
-                user='user',
-                permission='permission',
-                content='document',
-            )
-        self.assertEqual(backend.registry.build_registry().records, (first,))
-
+        first = backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
+            backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(backend.build_registry().records, (first,))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class CMethodsRelationshipLongPathTest(SimpleTestCase):
+
     def test_long_relationship_path_matches_internal_ref(self):
         from tests.core.test_issue98 import _gh_models, _register_team
-
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
         via_ref = RegistryFactory()
         expected = _register_team(via_ref, TeamRepoGrant)
         backend = _handle()
-        record = backend.registry.register_public(
-            trust=TeamRepoGrant,
-            user='team__members',
-            permission='operation',
-            content='repository',
-            condition=lambda t: (
-                t.team.permission_bundles.operations.contains(t.operation)
-                & (t.team.organization == t.repository.organization)
-            ),
-        )
+        record = backend.register_public(trust=TeamRepoGrant, user='team__members', permission='operation', content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
         self.assertEqual(record, expected)
         self.assertEqual(record.user_path, ('team', 'members'))
         self.assertEqual(record.user_field, 'team__members')
 
     def test_along_tuple_on_register(self):
         from tests.core.test_issue92 import _node_graph_models
-
-        _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = (
-            _node_graph_models()
-        )
+        _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
         via_ref = RegistryFactory()
         j = Ref(Grant)
-        expected = via_ref.register(
-            content=j.node,
-            user=j.user,
-            permission=j.permission,
-            along=Along(j.node.parent, bound=8),
-        )
+        expected = via_ref.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
         backend = _handle()
-        record = backend.registry.register_public(
-            trust=Grant,
-            user='user',
-            permission='permission',
-            content='node',
-            along=('node__parent', 8),
-        )
+        record = backend.register_public(trust=Grant, user='user', permission='permission', content='node', along=('node__parent', 8))
         self.assertEqual(record, expected)
         self.assertEqual(record.along.shape, 'S')
         self.assertEqual(record.along.bound, 8)
 
 class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
+
     def test_predicate_runs_once_at_registration(self):
         backend = _handle()
         log = _PredicateLog()
-        record = backend.registry.register_permission_condition(Document, 'non_confidential', log)
+        record = backend.register_permission_condition(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
-        self.assertIs(
-            backend.registry.build_registry().get_permission_condition_record(
-                Document, 'non_confidential',
-            ),
-            record,
-        )
+        self.assertIs(backend.build_registry().get_permission_condition_record(Document, 'non_confidential'), record)
         self.assertEqual(len(log.calls), 1)
 
     def test_non_callable_predicate_is_rejected(self):
         backend = _handle()
         with self.assertRaises(TypeError):
-            backend.registry.register_permission_condition(
-                Document, 'non_confidential', 'not-a-predicate',
-            )
-        self.assertIsNone(
-            backend.registry.build_registry().get_permission_condition_record(
-                Document, 'non_confidential',
-            ),
-        )
-
+            backend.register_permission_condition(Document, 'non_confidential', 'not-a-predicate')
+        self.assertIsNone(backend.build_registry().get_permission_condition_record(Document, 'non_confidential'))
 
 class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
+
     def test_relationship_and_filter_register_after_build(self):
         registry = RegistryFactory()
         backend = _handle(registry)
         registry.build_registry()
         log = _PredicateLog()
-        with patch(
-            'trusts.compile.factory._public_path_segments',
-            wraps=_public_path_segments,
-        ) as segments:
+        with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
             with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
-                with patch(
-                    'trusts.compile.factory._validate_condition',
-                    wraps=_validate_condition,
-                ) as validate:
-                    record = backend.registry.register_public(
-                        trust=DocumentGrant,
-                        user='user',
-                        permission='permission',
-                        content='document',
-                    )
-                    named_record = backend.registry.register_permission_condition(
-                        Document, 'non_confidential', log,
-                    )
+                with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
+                    record = backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+                    named_record = backend.register_permission_condition(Document, 'non_confidential', log)
         segments.assert_called()
         resolve.assert_called()
         validate.assert_called()
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(registry.records, (record,))
         self.assertEqual(registry.build_registry().records, (record,))
-        self.assertIs(
-            registry.get_permission_condition_record(
-                Document, 'non_confidential',
-            ),
-            named_record,
-        )
+        self.assertIs(registry.get_permission_condition_record(Document, 'non_confidential'), named_record)
 
     def test_dual_backend_relationship_does_not_leak(self):
         left = _handle(path='tests.core.cmethods-left')
         right = _handle(path='tests.core.cmethods-right')
-        left.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        self.assertEqual(len(left.registry.build_registry().records), 1)
-        self.assertEqual(right.registry.build_registry().records, ())
-        right.registry.register_public(
-            trust=DocumentGrant,
-            user='user',
-            permission='permission',
-            content='document',
-        )
-        self.assertEqual(len(left.registry.build_registry().records), 1)
-        self.assertEqual(len(right.registry.build_registry().records), 1)
+        left.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(right.build_registry().records, ())
+        right.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(len(left.build_registry().records), 1)
+        self.assertEqual(len(right.build_registry().records), 1)

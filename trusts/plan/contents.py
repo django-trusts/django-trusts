@@ -33,7 +33,7 @@ from trusts.plan.recursions import (
     _KeyedReach,
     _PrefixInForwardWalk,
 )
-from trusts.plan.handles import registry_of
+import trusts.apps as trusts_apps
 from trusts.plan.relations import (
     _bound_permission_identity,
     _candidate_model,
@@ -52,7 +52,6 @@ def _as_q(predicate):
 
 
 def _plan_for_permission(registry, candidates, user, permission):
-    registry = registry_of(registry)
     if isinstance(permission, Model):
         return registry.plan_for(
             candidates, user=user, permission=permission,
@@ -60,10 +59,12 @@ def _plan_for_permission(registry, candidates, user, permission):
     return registry.plan_for(candidates, user=user)
 
 
-def _relationship_handles(handles):
-    from trusts.apps import _relationship_family_handles
-
-    return _relationship_family_handles(handles)
+def _relationship_registries(registries):
+    """Keep registries whose catalog family is relationship."""
+    return tuple(
+        registry for registry in registries
+        if registry.family == 'relationship'
+    )
 
 
 def _apply_checked_user(grant, plan, user, values, permission, content_identity,
@@ -82,24 +83,25 @@ def _apply_checked_user(grant, plan, user, values, permission, content_identity,
     ).predicate
 
 
-def _compile_granted(handles, candidates, user, permission, *, kind='complete',
+def _compile_granted(registries, candidates, user, permission, *, kind='complete',
                      family_registries=None, permission_model=None,
                      skipped=()):
     """OR ordinary predicates and one-level delegated predicates.
 
-    ``handles`` owns the direct and delegation branches being projected.
+    ``registries`` owns the direct and delegation branches being projected.
     ``family_registries`` supplies the complete ordinary-authority union inside
-    each delegation branch and defaults to the same handles.
+    each delegation branch and defaults to the same registries.
     """
-    handles = tuple(handles)
-    family_registries = handles if family_registries is None else tuple(family_registries)
+    registries = tuple(registries)
+    family_registries = (
+        registries if family_registries is None else tuple(family_registries)
+    )
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     parts = []
     content_identity = _candidate_model(candidates)
     sponsor_records = None
-    for handle in handles:
-        registry = registry_of(handle)
+    for registry in registries:
         compiler = answering_compiler(registry)
         plan = _plan_for_permission(registry, candidates, user, permission)
         if kind == 'complete':
@@ -108,7 +110,7 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
             fn = compiler.group_exists
         part = _as_q(fn(plan, candidates, user, permission))
         delegated = None
-        if kind == 'complete' and getattr(plan, 'delegations', None):
+        if kind == 'complete' and plan.delegations:
             if sponsor_records is None:
                 sponsor_records = _ordinary_records(
                     family_registries, candidates, permission_model,
@@ -131,16 +133,30 @@ def _compile_granted(handles, candidates, user, permission, *, kind='complete',
     return reduce(or_, parts)
 
 
-def granted(handles, candidates, user, permission, *, kind='complete',
+def granted(registries, candidates, user, permission, *, kind='complete',
             family_registries=None, permission_model=None,
             skipped=()):
-    """OR each applicable relationship-family handle's predicate."""
-    participating = _relationship_handles(handles)
+    """OR each applicable relationship-family registry's complete (or group) predicate.
+
+    Core-owned aggregate: fold-family registries are omitted. Noun-blind
+    among relationship registries: this builder does not know Trust, Group,
+    Guardian, or ceiling. A valid compiler returning ``None`` is
+    inapplicable and is omitted. Compiler exceptions propagate. An empty
+    result is ``None`` so the caller may use the transitional undeclared
+    fallback.
+
+    ``permission`` may be a permission instance or an unevaluated lookup
+    (``Subquery`` / ``OuterRef``). Expressions are not passed to
+    ``plan_for``; the plan is selected by content and user terminals.
+
+    Only relationship-family registries participate.
+    """
+    participating = _relationship_registries(registries)
     return _compile_granted(
         participating, candidates, user, permission, kind=kind,
         family_registries=(
             participating if family_registries is None
-            else _relationship_handles(family_registries)
+            else _relationship_registries(family_registries)
         ),
         permission_model=permission_model,
         skipped=skipped,
@@ -333,25 +349,25 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 
 
 def _compile_permitted_content_queryset(
-    queryset, user, permission, *, content, handles, family_registries,
+    queryset, user, permission, *, content, registries, family_registries,
     skipped=(),
 ):
-    """Compile the permitted-content queryset for resolved handles.
+    """Compile the permitted-content queryset for resolved registries.
 
-    ``handles`` owns the ordinary and delegation branches being listed.
+    ``registries`` owns the ordinary and delegation branches being listed.
     ``family_registries`` supplies the ordinary grants a delegation may
-    use. Callers resolve relationship handles and apply the inactive-user
+    use. Callers resolve relationship registries and apply the inactive-user
     gate before this helper runs.
     """
-    handles = tuple(handles)
+    registries = tuple(registries)
     family_registries = tuple(family_registries)
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
     content_identity = _candidate_model(content)
-    for handle in handles:
-        plan = _plan_for_permission(handle, content, user, permission)
-        if getattr(plan, 'content_identity', None) is not None:
+    for registry in registries:
+        plan = _plan_for_permission(registry, content, user, permission)
+        if plan.content_identity is not None:
             content_identity = plan.content_identity
         plan_parts = []
         for record in plan.records:
@@ -362,7 +378,7 @@ def _compile_permitted_content_queryset(
                     record, lookup, target_attname, user, permission,
                     content_identity,
                 ))
-        if getattr(plan, 'delegations', None):
+        if plan.delegations:
             plan_parts.extend(_delegated_prefix_predicates(
                 tuple(plan.delegations),
                 _ordinary_records(
@@ -392,36 +408,70 @@ def _compile_permitted_content_queryset(
     return bind_once(queryset.filter(granted_q).distinct())
 
 
-def filter_by_permitted_content(queryset, user, permission, *, content, handles=None,
-                                **skip_flags):
-    """Rows of a proper content-path prefix that the grant reaches."""
+def filter_by_permitted_content(queryset, user, permission, *, content,
+                                registries=None, **skip_flags):
+    """Filter scope-model rows that appear as a proper prefix of ``content``.
+
+    Fail closed unless ``queryset.model`` is a proper prefix node of some
+    applicable record's ``content_path`` whose content terminal is
+    ``content``. Compile ``EXISTS`` of root rows correlated to
+    ``OuterRef`` of that hop's resolved target field (the related
+    ``attname`` from ``get_path_info()``, which need not be ``pk``) at
+    that node, bind user + permission from the same record, and OR
+    applicable records.
+
+    An ``along=`` registration uses the same bounded ``WITH RECURSIVE``
+    walk as the forward check. A prefix at the walk site is kept when
+    its identity is in that walk. A later proper prefix is kept when it
+    hangs off a walk-site row in the walk. A one-level delegation
+    contributes a prefix only when the delegation and the sponsor's
+    ordinary permission both reach it. A second delegation level does
+    not. A delegated ``along=`` whose content suffix is longer than one
+    reverse hop raises ``TrustsConfigurationError``.
+
+    ``queryset.model`` equal to the content terminal is allowed when a
+    proper prefix hop of that same model exists (self-referential
+    trees). A terminal-only path has no proper prefix, so the same-model
+    queryset still returns ``none()``. Unknown terminal, empty registries,
+    or a scope model not on the path also return ``none()``.
+    ``permission`` must be a model instance. Construction of a
+    fail-closed result issues zero SQL; SQL runs only when a compiled
+    predicate is evaluated. Default and explicit registry lists include
+    relationship-family registries only.
+
+    Noun-blind: this builder does not import or name Zero schema models
+    and does not use a compiler's historical group
+    OR. Explicit ``group=`` records participate through the same prefix
+    correlation. Membership shape is not a group.
+    """
     if not isinstance(queryset, QuerySet):
         raise TrustsConfigurationError(
             'filter_by_permitted_content requires a QuerySet, not %r.'
             % (queryset,)
         )
-    if handles is None:
-        from trusts.apps import _relationship_implementation_handles
-        handles = _relationship_implementation_handles()
+    if registries is None:
+        registries = trusts_apps.relationship_registries()
     else:
-        handles = _relationship_handles(handles)
+        registries = _relationship_registries(registries)
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
-    inquiry = bind_checked_user(user, skip_flags=skip_flags, handles=handles)
-    if not handles or inquiry.denied:
+    inquiry = bind_checked_user(
+        user, skip_flags=skip_flags, registries=registries,
+    )
+    if not registries or inquiry.denied:
         return queryset.none()
     skipped = inquiry.values
     return _compile_permitted_content_queryset(
-        queryset, user, permission, content=content, handles=handles,
-        family_registries=handles,
+        queryset, user, permission, content=content, registries=registries,
+        family_registries=registries,
         skipped=skipped,
     )
 
 
-def filter_authorized_scopes(queryset, user, permission, *, content, handles=None,
-                             **skip_flags):
+def filter_authorized_scopes(queryset, user, permission, *, content,
+                             registries=None, **skip_flags):
     return filter_by_permitted_content(
-        queryset, user, permission, content=content, handles=handles,
+        queryset, user, permission, content=content, registries=registries,
         **skip_flags,
     )
 
@@ -433,11 +483,10 @@ def _shift_outer_ref(value):
     return value
 
 
-def _ordinary_records(handles, content, permission_model=None):
-    """Applicable ordinary records across relationship handles."""
+def _ordinary_records(registries, content, permission_model=None):
+    """Applicable ordinary records across relationship registries."""
     records = []
-    for handle in handles:
-        registry = registry_of(handle)
+    for registry in registries:
         plan = registry.plan_for(content)
         for record in plan.records:
             if (

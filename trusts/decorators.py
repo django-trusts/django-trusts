@@ -11,6 +11,8 @@ from trusts._permitted import (
     _guard_permission_string,
     _permission_binding,
 )
+import trusts.apps as trusts_apps
+from trusts.plan.relations import bind_checked_user
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
 
@@ -69,10 +71,8 @@ def _coerce_pk(model, raw):
 def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
     from django.apps import apps as django_apps
-    from trusts.apps import _relationship_implementation_handles
-    from trusts.plan.relations import bind_checked_user
 
-    handles = _relationship_implementation_handles()
+    registries = trusts_apps.relationship_registries()
 
     user = getattr(request, 'user', None)
     raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None
@@ -86,11 +86,11 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
             'are ready.'
         )
     _assert_authorization_preflight(
-        handles, model, conditions, api='authorization_required',
+        registries, model, conditions, api='authorization_required',
     )
 
     inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, handles=handles)
+        user, skip_flags=skip_flags, registries=registries)
     if inquiry.denied:
         raise PermissionDenied
     skipped = inquiry.values
@@ -99,7 +99,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
     app_label, codename = permission.split('.', 1)
     binding = _permission_binding(model, app_label, codename)
     granted_q = _authorization_grant_q(
-        handles,
+        registries,
         candidates,
         user,
         model,
@@ -136,7 +136,7 @@ def authorization_required(model, permission, conditions=(), **skip_flags):
     terminal is ``django.contrib.auth.models.Permission`` participate.
     Each of those backends composes its own grant with its own selected
     names before the backends are OR'd; backend order does not change
-    the result. Only relationship-family implementation handles
+    the result. Only relationship-family built registries
     participate. Does not use Django backend OR, ``user.has_perm``, or
     the legacy ``permission_required`` / ``P`` / ``K`` / ``G`` / ``O``
     surface. Django's object-level ``user.has_perm`` OR across

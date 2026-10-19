@@ -1,6 +1,6 @@
 """Multi-handle authorization aggregates.
 
-These combine several handles. Single-handle grants stay in
+These combine several registries. Single-registry grants stay in
 ``trusts.plan.contents``. This module may import other ``plan`` modules,
 ``commons``, and ``errors``. It does not import ``trusts.core``,
 ``trusts.compile``, ``trusts.backends``, or ``trusts.apps``.
@@ -16,7 +16,6 @@ from django.db.models import Count, Exists, OuterRef, Q
 from trusts.plan.rewrites import bind_once
 from trusts.commons import _require_instance
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.plan.handles import registry_of
 from trusts.plan.contents import (
     _apply_checked_user,
     _as_q,
@@ -25,7 +24,7 @@ from trusts.plan.contents import (
     _delegation_reaches,
     _delegation_sponsor_q,
     _ordinary_records,
-    _relationship_handles,
+    _relationship_registries,
 )
 from trusts.plan.delegations import (
     _compatible_sponsor_records,
@@ -52,20 +51,19 @@ def compiler_for_class(cls):
     return compiler
 
 
-def any_plan_records(handles, content):
-    """True when any handle registry declares an ordinary or delegated plan.
+def any_plan_records(registries, content):
+    """True when any registry declares an ordinary or delegated plan.
 
     Aggregate **support** gate across configured Trusts paths. A
-    declaration on one path establishes that the content terminal is
+    declaration on one registry establishes that the content terminal is
     known; it does not compile a grant and does not authorize through
-    another path's compiler. Empty ``handles`` is False. Does not
+    another registry's compiler. Empty ``registries`` is False. Does not
     consult ``historical_fallback`` or historical model names.
     Construction issues no SQL. Relationship records only; a
     non-relationship plan on another family is not a Core support
     declaration.
     """
-    for handle in handles:
-        registry = registry_of(handle)
+    for registry in registries:
         plan = registry.plan_for(content)
         if plan.records or plan.delegations:
             return True
@@ -77,21 +75,21 @@ def _compiler_applies(compiler, plan):
     applies = getattr(compiler, 'applies', None)
     if callable(applies):
         return bool(applies(plan))
-    return bool(getattr(plan, 'records', None))
+    return bool(plan.records)
 
 
-def all_match(handles, candidates, user, permission, *, kind='complete',
+def all_match(registries, candidates, user, permission, *, kind='complete',
               extra_q=None, family_registries=None, permission_model=None,
               skipped=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
-    One SQL. ``None`` when no handle applies so the caller may use the
+    One SQL. ``None`` when no registry applies so the caller may use the
     undeclared fallback. ``extra_q`` is an optional overlay (AND); it
-    never creates a grant. Every supplied handle participates.
+    never creates a grant. Every supplied registry participates.
     """
-    handles = tuple(handles)
+    registries = tuple(registries)
     granted_q = _compile_granted(
-        handles, candidates, user, permission, kind=kind,
+        registries, candidates, user, permission, kind=kind,
         family_registries=family_registries,
         permission_model=permission_model,
         skipped=skipped,
@@ -108,16 +106,16 @@ def all_match(handles, candidates, user, permission, *, kind='complete',
     return stats['total'] > 0 and stats['lacking'] == 0
 
 
-def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=None,
+def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=None,
                    family_registries=None, permission_model=None,
                    skipped=()):
-    """One grant EXISTS for ``obj`` through ``handle`` only.
+    """One grant EXISTS for ``obj`` through ``registry`` only.
 
-    ``None`` when the handle is inapplicable. ``extra_q`` is an optional
+    ``None`` when the registry is inapplicable. ``extra_q`` is an optional
     overlay (AND); it never creates a grant.
     """
     granted_q = _compile_granted(
-        (handle,), obj, user, permission, kind=kind,
+        (registry,), obj, user, permission, kind=kind,
         family_registries=family_registries,
         permission_model=permission_model,
         skipped=skipped,
@@ -131,19 +129,20 @@ def instance_match(handle, obj, user, permission, *, kind='complete', extra_q=No
     ).filter(granted_q)).exists()
 
 
-def _compile_common_permissions(handles, candidates, user, *, kind='complete',
+def _compile_common_permissions(registries, candidates, user, *, kind='complete',
                                 family_registries=None,
                                 skipped=()):
-    """Permission queryset for the given handles. No family filter."""
+    """Permission queryset for the given registries. No family filter."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
-    handles = tuple(handles)
-    family_registries = handles if family_registries is None else tuple(family_registries)
+    registries = tuple(registries)
+    family_registries = (
+        registries if family_registries is None else tuple(family_registries)
+    )
     parts = []
     permission_model = None
     applicable = False
-    for handle in handles:
-        registry = registry_of(handle)
+    for registry in registries:
         compiler = answering_compiler(registry)
         plan = registry.plan_for(candidates, user=user)
         if not _compiler_applies(compiler, plan):
@@ -167,7 +166,7 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
             fn = compiler.group_exists
         part = _as_q(fn(plan, qs, user, perm_expr))
         delegated = None
-        if kind == 'complete' and getattr(plan, 'delegations', None):
+        if kind == 'complete' and plan.delegations:
             sponsor_records = _ordinary_records(family_registries, candidates)
             compatible_records = _compatible_sponsor_records(
                 plan.delegations, sponsor_records,
@@ -215,12 +214,24 @@ def _compile_common_permissions(handles, candidates, user, *, kind='complete',
     ).distinct())
 
 
-def common_permissions(handles, candidates, user, *, kind='complete',
+def common_permissions(registries, candidates, user, *, kind='complete',
                        **skip_flags):
-    """Permission rows held on every candidate. Fold-family handles are omitted."""
-    participating = _relationship_handles(handles)
+    """Permission queryset held on every candidate via the aggregate proof.
+
+    Core-owned aggregate: fold-family registries are omitted. One SQL when
+    evaluated. ``None`` when no remaining registry applies so the caller
+    may use the undeclared fallback. Uses nested ``OuterRef`` so the permission
+    identity is the outer permission row, not the candidate.
+    Applicability is ``compiler.applies(plan)``. Only relationship-family
+    registries participate.
+    ``RelationPlan.common_permissions`` is not this function.
+    ``skip_<name>`` is a bound parameter on the registered rules.
+    Anonymous, unauthenticated, and ``None`` are an empty queryset when
+    a registry applies, and ``None`` only when no registry applies.
+    """
+    participating = _relationship_registries(registries)
     inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, handles=participating)
+        user, skip_flags=skip_flags, registries=participating)
     if inquiry.denied:
         return _anonymous_common_permissions(participating, candidates)
     return _compile_common_permissions(
@@ -230,16 +241,15 @@ def common_permissions(handles, candidates, user, *, kind='complete',
     )
 
 
-def _anonymous_common_permissions(handles, candidates):
+def _anonymous_common_permissions(registries, candidates):
     """Empty permission queryset for an inquiry denied before SQL.
 
-    ``None`` stays the undeclared-fallback signal when no handle applies.
-    An applicable handle does not compile a grant for this user.
+    ``None`` stays the undeclared-fallback signal when no registry applies.
+    An applicable registry does not compile a grant for this user.
     """
     permission_model = None
     applicable = False
-    for handle in handles:
-        registry = registry_of(handle)
+    for registry in registries:
         if registry is None:
             continue
         compiler = answering_compiler(registry)

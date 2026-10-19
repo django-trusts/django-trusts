@@ -12,7 +12,7 @@ from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
 
 import tests as tests_module
-from tests.apps import TestsConfig, live_config
+from tests.apps import configured_catalog, TestsConfig, live_config
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from trusts.apps import (
@@ -207,31 +207,31 @@ class ImplementationReadyTest(SimpleTestCase):
 
     def test_ready_is_idempotent_and_does_not_replace_registries(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.backends import registries
+        from trusts.apps import catalogs
 
         config = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            before = registries.get(HostTrustModelBackend)
+            before = catalogs.get(HostTrustModelBackend)
             config.ready()
-            holder = config.registries
-            self.assertIs(registries.get(HostTrustModelBackend), before)
+            self.assertIs(catalogs.get(HostTrustModelBackend), before)
             config.ready()
-            self.assertIs(config.registries, holder)
-            self.assertIs(registries.get(HostTrustModelBackend), before)
+            self.assertIs(catalogs.get(HostTrustModelBackend), before)
+            self.assertFalse(hasattr(config, 'registries'))
 
     def test_donation_uses_implementation_for_path(self):
-        from trusts.backends import registries
+        from tests.backends import HostTrustModelBackend
+        from trusts.apps import catalogs
 
         config = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
             config.ready()
             owner = implementation_for_path(HOST, config.apps)
             self.assertIs(owner, config)
-            handle = owner.configured_backend(HOST)
-            self.assertIs(handle.registry, registries[HostTrustModelBackend])
+            catalog = configured_catalog(owner, HOST)
+            self.assertIs(catalog, catalogs[HostTrustModelBackend])
             self.assertEqual(
-                handle.registry.records,
-                registries[HostTrustModelBackend].records,
+                catalog.registry.records,
+                catalogs[HostTrustModelBackend].registry.records,
             )
 
 
@@ -243,7 +243,7 @@ class MixinOwnerResolveTest(SimpleTestCase):
             self.assertIn('no implementation owner', str(ctx.exception))
 
     def test_owner_present_resolves(self):
-        from trusts.backends import registries
+        from trusts.apps import catalogs
 
         owner = _bind(HostImplConfig, ready=False)
         with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
@@ -254,10 +254,10 @@ class MixinOwnerResolveTest(SimpleTestCase):
             ):
                 config = implementation_for_class(HostTrustModelBackend)
                 self.assertIs(config, owner)
-                handle = owner.configured_backend(HOST)
-                self.assertEqual(handle.path, HOST)
+                catalog = configured_catalog(owner, HOST)
+                self.assertEqual(catalog.path, HOST)
                 self.assertIs(
-                    handle.registry, registries[HostTrustModelBackend],
+                    catalog, catalogs[HostTrustModelBackend],
                 )
 
     def test_duplicate_owner_fails_without_fallback(self):
@@ -290,11 +290,12 @@ class MixinOwnerResolveTest(SimpleTestCase):
 )
 class IsolatedImplementationStoreTest(SimpleTestCase):
     def test_implementation_registry_does_not_touch_live_owner(self):
+        from tests.backends import HostTrustModelBackend
+        from trusts.apps import catalogs
+
         live = live_config()
-        before = dict(live.registries)
-        before_records = {
-            path: registry.records for path, registry in before.items()
-        }
+        before = catalogs[HostTrustModelBackend]
+        before_records = before.registry.records
         impl = _bind(HostImplConfig, ready=False)
         impl.apps = self.isolated_apps
         contributor = TestsConfig('tests', tests_module)
@@ -304,19 +305,18 @@ class IsolatedImplementationStoreTest(SimpleTestCase):
             view = _AppsView([impl], ready=False)
             impl.apps = view
             impl.ready()
-            self.assertNotIn(HOST, impl.registries)
-        self.assertEqual(
-            {path: registry.records for path, registry in live.registries.items()},
-            before_records,
-        )
-        for path, registry in before.items():
-            self.assertIs(live.registries[path], registry)
+            self.assertFalse(hasattr(impl, 'registries'))
+        self.assertIs(catalogs[HostTrustModelBackend], before)
+        self.assertEqual(before.registry.records, before_records)
 
     def test_isolate_apps_without_implementation_does_not_donate(self):
-        live = live_config()
-        before = live.registry.records
+        from tests.backends import HostTrustModelBackend
+        from trusts.apps import catalogs
+
+        live = catalogs[HostTrustModelBackend].registry
+        before = live.records
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
         impl = HostImplConfig('tests', tests_module)
         impl.apps = self.isolated_apps
         self.assertEqual(implementation_configs(self.isolated_apps), ())
-        self.assertEqual(live.registry.records, before)
+        self.assertEqual(live.records, before)
