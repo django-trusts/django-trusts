@@ -38,6 +38,17 @@ def _perm_codes(permission_qs):
 def _canonical_path(cls):
     return '%s.%s' % (cls.__module__, cls.__qualname__)
 
+def _catalog_for_path(path):
+    cls = listed_backend_class(path)
+    if not isinstance(cls, type):
+        return None
+    catalog = catalogs.get(cls)
+    if catalog is not None:
+        return catalog
+    for candidate in get_backends():
+        if type(candidate) is cls:
+            return candidate._get_or_create_catalog()
+    return None
 
 class TrustModelBackendMixin(object):
     """Object-permission backend. One recorder and one built registry per class."""
@@ -124,25 +135,11 @@ class TrustModelBackendMixin(object):
         return entry.execute()
 
     def singular_permission_accepted(self, perm):
-        """True when object ``has_perm`` treats ``perm`` as one permission row.
-
-        The mixin default accepts ``auth.Permission`` only. Agreement
-        with ``user.has_perm`` uses ``permission.user_perm_str``. Another
-        permission-terminal model is accepted only when a backend
-        overrides this and ``permitted_users_predicate``.
-        """
+        """``auth.Permission`` only, unless a backend overrides this."""
         return isinstance(perm, Permission)
 
     def permitted_users_predicate(self, content, perm, *, skipped=()):
-        """``Q`` over candidate users, or ``None`` when this path does not apply.
-
-        ``None`` contributes no grant. It is not an empty-queryset
-        fallback for a path that cannot be reversed. An ``Along``
-        registration derives walk-site identities from the bound content,
-        walks the inverse graph once without the outer user, and joins
-        eligible grants outside that walk. ``skipped`` is the bound
-        ``skip_<name>`` parameter map.
-        """
+        """``Q`` over candidate users, or ``None`` when this path does not apply."""
         registry = self._built_registry()
         if registry is None:
             return None
@@ -156,18 +153,21 @@ class TrustModelBackendMixin(object):
         own_path = _canonical_path(type(self))
         sponsors = []
         for handle in trusts_apps._relationship_implementation_handles():
-            if getattr(handle, 'path', None) == own_path:
+            path = getattr(handle, 'path', None) or ''
+            if path == own_path:
                 continue
-            cls = listed_backend_class(getattr(handle, 'path', '') or '')
-            if not isinstance(cls, type):
+            registry = registry_of(handle)
+            if registry is None or registry is own.factory or registry is own.registry:
                 continue
-            catalog = catalogs.get(cls)
+            catalog = _catalog_for_path(path)
             if catalog is None:
-                for candidate in get_backends():
-                    if type(candidate) is cls:
-                        catalog = candidate._get_or_create_catalog()
-                        break
-            if catalog is None or catalog is own:
+                build = getattr(registry, 'build_registry', None)
+                built = build() if callable(build) else registry
+                catalog = Catalog(
+                    cls=type(self), path=path, family=self.family,
+                    compiler=self.query_compiler, registry=built,
+                )
+            if catalog is own or catalog in sponsors:
                 continue
             sponsors.append(catalog)
         return tuple(sponsors)
