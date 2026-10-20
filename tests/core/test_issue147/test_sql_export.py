@@ -1,4 +1,4 @@
-from tests.apps import render_configured_policy, as_catalog
+from tests.apps import render_configured_policy
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 import datetime
 import json
@@ -26,6 +26,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, _Symbol, _classify_compiled, _compile_get_all_permissions, _compile_get_permitted_users, _compile_has_perm, _compile_content_grant, _const_from_json, _json_const, _presented_const, _sentinel, _assign_ids, _load_policy_sql_document, _render_condition, _sql_row, _symbol_for_new_param, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
+from trusts.compile.catalogs import Catalog
 GOLDEN_SQLITE = Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
 GOLDEN_CONSTANTS = Path(__file__).with_name('golden_condition_constants_sqlite.yaml').read_bytes()
 GOLDEN_ALONG = Path(__file__).with_name('golden_along_sqlite.yaml').read_bytes()
@@ -417,7 +418,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(cond_ids, ['documents__DocumentPermission__document__cond', 'documents__DocumentPermission__document__cond__2'])
         along = _handle('documents.backends.FolderBackend')
         along.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        along_ids = _assign_ids(tuple(as_catalog(along).records))
+        along_ids = _assign_ids(tuple(Catalog(cls=type(along), path=along.path, family=along.family, registry=along.build_registry()).records))
         self.assertEqual(along_ids, ['documents__FolderGrant__folder__along_folder__parent_S_2'])
         for trust_id in cond_ids + along_ids:
             self.assertNotIn('.', trust_id)
@@ -487,7 +488,6 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_along_forward_lockfile_is_portable_recursive_sql(self):
         handle = _handle('documents.backends.FolderAlongBackend')
         handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        from trusts.compile.catalogs import Catalog
         built = handle.build_registry()
         subject = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=built)
         record = built.plan_for(Folder).records[0]
