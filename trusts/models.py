@@ -1,10 +1,21 @@
 # Inert library module. Do not list 'trusts' in INSTALLED_APPS.
 # This file defines no Model subclasses. Canonical models live in Zero.
 
+from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
 from trusts.apps import catalog_for_model
+from trusts.compile.catalogs import (
+    assert_authorization_preflight,
+    authorization_grant_q,
+    codename_binding,
+    compile_permitted_users,
+    guard_conditions,
+    guard_permission_string,
+)
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.relations import bind_checked_user, known_skip_names
+from trusts.plan.rewrites import bind_once
 
 
 class AuthorizedQuerySet(QuerySet):
@@ -31,11 +42,6 @@ class AuthorizedQuerySet(QuerySet):
     """
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
-        # Catalog imports stay in the method. Module import must not need
-        # the app registry or the swappable user model.
-        from trusts.plan.relations import bind_checked_user, known_skip_names
-        from trusts.plan.rewrites import bind_once
-
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
@@ -103,14 +109,6 @@ class PermittedQuerySetMixin:
         active-superuser shortcut. A listed backend with no catalog
         contributes nothing.
         """
-        from trusts.compile.catalogs import (
-            assert_authorization_preflight,
-            authorization_grant_q,
-            guard_conditions,
-        )
-        from trusts.plan.relations import bind_checked_user, known_skip_names
-        from trusts.plan.rewrites import bind_once
-
         model = self.model
         normalized = _normalize_permitted_permission(permission, api='permitted')
         conditions = guard_conditions(conditions, api='permitted')
@@ -155,9 +153,6 @@ class PermittedUsersMixin:
     """
 
     def get_permitted_users(self, perm, **skip_flags):
-        # Catalog import stays in the method so model import needs no registry.
-        from trusts.compile.catalogs import compile_permitted_users
-
         return compile_permitted_users(self, perm, **skip_flags)
 
 
@@ -174,8 +169,6 @@ class PermittedUsersManagerMixin:
     """
 
     def permitted(self, content, perm, **skip_flags):
-        from trusts.compile.catalogs import compile_permitted_users
-
         return compile_permitted_users(
             content, perm, user_queryset=self.get_queryset(), **skip_flags,
         )
@@ -187,9 +180,6 @@ AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)
 
 def _normalize_permitted_permission(permission, *, api):
     """String or saved ``auth.Permission``. Does not read ``content_type``."""
-    from django.contrib.auth.models import Permission
-    from trusts.compile.catalogs import guard_permission_string
-
     if isinstance(permission, str):
         app_label, codename = guard_permission_string(permission, api=api)
         return ('string', app_label, codename, permission)
@@ -218,8 +208,6 @@ def _normalize_permitted_permission(permission, *, api):
 
 
 def _permitted_binding(model, normalized):
-    from trusts.compile.catalogs import codename_binding
-
     if normalized[0] == 'string':
         return codename_binding(model, normalized[1], normalized[2])
     return normalized[1]

@@ -27,6 +27,7 @@ from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
 from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
+from trusts.apps import installed_user_model
 from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
@@ -90,7 +91,6 @@ def bind_once(queryset, *also, user_model=_USER_MODEL_OMITTED):
     that original queryset, not a mix of bound and plain SQL.
     """
     if user_model is _USER_MODEL_OMITTED:
-        from trusts.apps import installed_user_model
         user_model = installed_user_model()
     if not trusts_bind_once():
         return _pack(queryset, also)
