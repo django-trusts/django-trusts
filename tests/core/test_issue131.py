@@ -281,7 +281,7 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(registry.records, (record,))
         self.assertEqual(built_catalog(registry).records, (record,))
-        self.assertIs(registry.get_permission_condition_record(Document, 'non_confidential'), named_record)
+        self.assertIs(registry.conditions.get_permission_condition_record(Document, 'non_confidential'), named_record)
 
     def test_dual_backend_relationship_does_not_leak(self):
         left = _handle(path='tests.core.cmethods-left')

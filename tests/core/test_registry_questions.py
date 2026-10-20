@@ -21,7 +21,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
 from trusts.plan.contents import _compile_granted
-from trusts.plan.registry import Question
+from trusts.compile.catalogs import Question
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.rewrites import bind_once
 from tests.support import built_catalog

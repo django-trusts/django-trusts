@@ -275,28 +275,6 @@ class RegistryFactory(object):
             model, cond_code, condition,
         )
 
-    def get_permission_condition_record(self, model, cond_code):
-        """Return this instance's record for ``(model, cond_code)``, or ``None``."""
-        return self.conditions.get_permission_condition_record(
-            model, cond_code,
-        )
-
-    def iter_permission_conditions(self):
-        """Yield ``(model, cond_code, record)`` registered on this instance."""
-        return self.conditions.iter_permission_conditions()
-
-    def compile_registered_condition_q(self, model, perm, user):
-        """Compile a registered ``:condition`` to ``Q`` from this instance."""
-        return self.conditions.compile_registered_condition_q(
-            model, perm, user,
-        )
-
-    def evaluate_permission_condition(self, model, cond_code, user, perm, obj):
-        """Evaluate a registered condition from this instance against ``obj``."""
-        return self.conditions.evaluate_permission_condition(
-            model, cond_code, user, perm, obj,
-        )
-
     def user_conditions(self):
         """Effective user conditions.
 
@@ -398,28 +376,6 @@ class RegistryFactory(object):
     @property
     def delegations(self):
         return tuple(self._delegation_order)
-
-    def records_for_root(self, root):
-        """Insertion-ordered records registered for ``root``.
-
-        Raises ``TrustsConfigurationError`` when the root is absent.
-        """
-        try:
-            return tuple(self._by_root[root])
-        except KeyError:
-            raise TrustsConfigurationError(
-                'No registration for %r.' % (getattr(root, '__name__', root),)
-            )
-
-    def delegations_for_root(self, root):
-        """Insertion-ordered delegated records registered for ``root``."""
-        try:
-            return tuple(self._delegations_by_root[root])
-        except KeyError:
-            raise TrustsConfigurationError(
-                'No delegated registration for %r.'
-                % (getattr(root, '__name__', root),)
-            )
 
     @staticmethod
     def build_delegation(*, content, delegate, sponsor, condition=None,

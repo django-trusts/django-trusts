@@ -277,10 +277,10 @@ class NamedConditionCompilationTest(TransactionTestCase):
         self.assertIs(registry.filter_lookup, lookup)
         self.assertIs(
             built.get_permission_condition_record(Note, 'owned'),
-            registry.get_permission_condition_record(Note, 'owned'),
+            registry.conditions.get_permission_condition_record(Note, 'owned'),
         )
         self.assertIsNotNone(
-            registry.get_permission_condition_record(Note, 'owned'),
+            registry.conditions.get_permission_condition_record(Note, 'owned'),
         )
 
     def test_core_only_named_condition_compiles_through_supported_calls(self):
@@ -306,22 +306,22 @@ class NamedConditionCompilationTest(TransactionTestCase):
             self.assertIsNotNone(record)
             self.assertIs(
                 record,
-                registry.get_permission_condition_record(Note, 'owned'),
+                registry.conditions.get_permission_condition_record(Note, 'owned'),
             )
             perm = 'trusts_tests.change_note:owned'
             compiled = lookup.compile_q(Note, perm, alice)
-            stored = registry.compile_registered_condition_q(Note, perm, alice)
+            stored = registry.conditions.compile_registered_condition_q(Note, perm, alice)
             self.assertEqual(str(compiled), str(stored))
             listed = set(Note.objects.filter(compiled).values_list('pk', flat=True))
             self.assertEqual(listed, {keep.pk})
             self.assertNotIn(drop.pk, listed)
             self.assertTrue(
-                registry.evaluate_permission_condition(
+                registry.conditions.evaluate_permission_condition(
                     Note, 'owned', alice, 'trusts_tests.change_note', keep,
                 )
             )
             self.assertFalse(
-                registry.evaluate_permission_condition(
+                registry.conditions.evaluate_permission_condition(
                     Note, 'owned', alice, 'trusts_tests.change_note', drop,
                 )
             )
@@ -338,7 +338,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
             lookup = registry.filter_lookup
             self.assertIsNone(lookup.record_for(Note, 'missing'))
             with self.assertRaises(AttributeError) as missing:
-                registry.compile_registered_condition_q(
+                registry.conditions.compile_registered_condition_q(
                     Note, 'trusts_tests.change_note:missing', alice,
                 )
             self.assertIn('missing', str(missing.exception))
@@ -347,20 +347,20 @@ class NamedConditionCompilationTest(TransactionTestCase):
                     Note, 'typo', 'not-a-builder',
                 )
             self.assertIsNone(
-                registry.get_permission_condition_record(Note, 'typo'),
+                registry.conditions.get_permission_condition_record(Note, 'typo'),
             )
             with self.assertRaises(PermissionConditionError):
                 registry.register_permission_condition(
                     Note, 'typo', lambda u, p, o: u == o.nope,
                 )
             self.assertIsNone(
-                registry.get_permission_condition_record(Note, 'typo'),
+                registry.conditions.get_permission_condition_record(Note, 'typo'),
             )
             registry.conditions._records[(Note._meta.label, 'empty')] = (
                 ConditionRecord(model=Note)
             )
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.evaluate_permission_condition(
+                registry.conditions.evaluate_permission_condition(
                     Note, 'empty', alice, 'trusts_tests.change_note', note,
                 )
             self.assertIn('unbound', str(unbound.exception))

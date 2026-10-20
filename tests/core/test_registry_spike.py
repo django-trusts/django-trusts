@@ -4,9 +4,6 @@
 returns the shape. ``built_catalog`` asks that shape.
 """
 
-import ast
-from pathlib import Path
-
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -29,23 +26,6 @@ def _sql(expr, model):
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class RegistryInjectionSpikeTest(SimpleTestCase):
-    def test_registry_module_does_not_import_compile(self):
-        import trusts.plan.registry as registry_module
-
-        tree = ast.parse(Path(registry_module.__file__).read_text())
-        imported = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported.append(node.module)
-        for name in imported:
-            self.assertFalse(
-                name == 'trusts.compile' or name.startswith('trusts.compile.'),
-                name,
-            )
-        self.assertTrue(registry_module.__file__.endswith('registry.py'))
-
     def test_direct_trusts_registry_still_registers(self):
         Document, DocumentGrant = _document_models()
         registry = RegistryFactory()

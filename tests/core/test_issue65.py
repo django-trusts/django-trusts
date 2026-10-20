@@ -131,24 +131,13 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
         self.assertEqual(registry.records, (folder_rec, document_rec))
         self.assertEqual(
-            registry.records_for_root(FolderGrant),
+            tuple(row for row in registry.records if row.root is FolderGrant),
             (folder_rec, document_rec),
         )
         plan_folder = built_catalog(registry).plan_for(Folder)
         plan_document = built_catalog(registry).plan_for(Document)
         self.assertEqual(plan_folder.records, (folder_rec,))
         self.assertEqual(plan_document.records, (document_rec,))
-
-    def test_records_for_root_raises_when_absent(self):
-        Folder, _document, FolderGrant, DocumentPermit = _folder_models()
-        registry = RegistryFactory()
-        with self.assertRaisesRegex(TrustsConfigurationError, r'No registration'):
-            registry.records_for_root(FolderGrant)
-        j = Ref(FolderGrant)
-        registry.register(content=j.folder, user=j.user, permission=j.permission)
-        with self.assertRaisesRegex(TrustsConfigurationError, r'No registration'):
-            registry.records_for_root(DocumentPermit)
-        self.assertFalse(hasattr(registry, 'get'))
 
     def test_global_insertion_order_with_interleaved_roots(self):
         Folder, Document, FolderGrant, DocumentPermit = _folder_models()
@@ -165,8 +154,14 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             content=j.folder.documents, user=j.user, permission=j.permission,
         )
         self.assertEqual(registry.records, (first, second, third))
-        self.assertEqual(registry.records_for_root(FolderGrant), (first, third))
-        self.assertEqual(registry.records_for_root(DocumentPermit), (second,))
+        self.assertEqual(
+            tuple(row for row in registry.records if row.root is FolderGrant),
+            (first, third),
+        )
+        self.assertEqual(
+            tuple(row for row in registry.records if row.root is DocumentPermit),
+            (second,),
+        )
         self.assertEqual(built_catalog(registry).plan_for(Document).records, (second, third))
 
     def test_exact_duplicate_raises_without_mutating_records(self):
