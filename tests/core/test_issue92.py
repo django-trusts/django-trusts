@@ -1042,7 +1042,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
             def __getitem__(self, alias):
                 return mapping[alias]
-        with patch('django.db.connections', _Conns()):
+        with patch('trusts.inspect.checks.connections', _Conns()):
             messages = check_along_renderer(None, databases=['default', 'other', 'also'])
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 2)
@@ -1068,7 +1068,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
             def __getitem__(self, alias):
                 return Maria()
-        with patch('django.db.connections', _Conns()):
+        with patch('trusts.inspect.checks.connections', _Conns()):
             messages = check_along_renderer(None, databases=['maria'])
         errors = [m for m in messages if m.id == CHECK_ID_ALONG_RENDERER]
         self.assertEqual(len(errors), 1)

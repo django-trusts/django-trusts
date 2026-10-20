@@ -23,9 +23,10 @@ def isolated_owner():
 def built_registries(items):
     """Build factories for a direct ``granted`` / filter call.
 
-    A factory is built now. A catalog or a registry is returned as
-    itself. ``None`` and other objects pass through so a caller can
-    still prove a missing registry fails closed.
+    A factory is built now. A catalog is unwrapped to its built
+    registry. A registry is returned as itself. ``None`` and other
+    objects pass through so a caller can still prove a missing
+    registry fails closed.
     """
     from trusts.compile.catalogs import Catalog
     from trusts.compile.factory import RegistryFactory
@@ -37,7 +38,9 @@ def built_registries(items):
         items = (items,)
     built = []
     for item in items:
-        if item is None or isinstance(item, (Registry, Catalog)):
+        if isinstance(item, Catalog):
+            built.append(item.policy())
+        elif item is None or isinstance(item, Registry):
             built.append(item)
         elif isinstance(item, RegistryFactory):
             built.append(item.build_registry())

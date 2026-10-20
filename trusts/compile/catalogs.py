@@ -190,8 +190,9 @@ class Catalog(object):
         )
         if inquiry.denied:
             return set()
-        qs = self.permissions_for(
+        qs = self._registry.permissions_for(
             user_obj, obj, kind=kind,
+            family_registries=self.family_registries,
             skipped=dict(inquiry.values) if isinstance(inquiry.values, dict) else {},
         )
         if qs is None or qs == ():

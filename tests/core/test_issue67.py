@@ -74,10 +74,10 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
         recorder = DocumentBackend().get_registry()
         built = configured_catalog(DOCUMENT_BACKEND)
         self.assertTrue(recorder.frozen)
-        before = built.records
+        before = built.policy().records
         contributor.ready()
-        self.assertEqual(built.records, before)
-        self.assertTrue(built.plan_for(Document).records)
+        self.assertEqual(built.policy().records, before)
+        self.assertTrue(built.policy().plan_for(Document).records)
 
     def test_host_ready_does_not_replace_or_donate_document(self):
         host = live_config()

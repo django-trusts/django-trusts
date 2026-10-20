@@ -522,13 +522,13 @@ class PolicyLockSentinelTest(SimpleTestCase):
 
     def test_missing_grant_or_permission_query_fails_closed(self):
         handle = _document_handle('documents.backends.MissingQueryBackend')
-        with patch('trusts.plan.contents._compile_granted', return_value=None):
+        with patch('trusts.inspect.snapshot._compile_granted', return_value=None):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(registries=[(handle).build_registry()])
         self.assertIn('no grant', str(ctx.exception))
 
         with patch(
-            'trusts.plan.aggregates._compile_common_permissions',
+            'trusts.inspect.snapshot._compile_common_permissions',
             return_value=None,
         ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -560,7 +560,7 @@ class PolicyLockSentinelTest(SimpleTestCase):
             )
 
         with patch(
-            'trusts.plan.aggregates._compile_common_permissions', hide_group,
+            'trusts.inspect.snapshot._compile_common_permissions', hide_group,
         ):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 render_policy_sql_bytes(registries=[(handle).build_registry()])

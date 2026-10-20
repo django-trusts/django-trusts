@@ -161,7 +161,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
         self.assertEqual(backend.get_all_permissions(object(), None), set())
         self.assertEqual(backend.get_group_permissions(object(), None), set())
         host = configured_catalog(HOST)
-        self.assertIs(host.user_model, get_user_model())
+        self.assertIs(host.policy().user_model, get_user_model())
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST, MIXIN)):
             found = configured_catalogs()
         self.assertEqual(found, (host,))
@@ -196,21 +196,21 @@ class MixinCatalogResolveTest(SimpleTestCase):
 class IsolatedImplementationStoreTest(SimpleTestCase):
     def test_implementation_registry_does_not_touch_live_owner(self):
         before = catalogs[HostTrustModelBackend]
-        before_records = before.records
+        before_records = before.policy().records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         config = live_config()
         config.ready()
         self.assertIs(catalogs[HostTrustModelBackend], before)
-        self.assertEqual(before.records, before_records)
+        self.assertEqual(before.policy().records, before_records)
         self.assertFalse(hasattr(config, 'registries'))
 
     def test_isolate_apps_without_implementation_does_not_donate(self):
         live = catalogs[HostTrustModelBackend]
-        before = live.records
+        before = live.policy().records
         self.assertFalse(self.isolated_apps.is_installed('trusts'))
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
-        self.assertEqual(live.records, before)
+        self.assertEqual(live.policy().records, before)
