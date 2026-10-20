@@ -67,8 +67,8 @@ class CatalogShape(object):
     ``primary``; the built-in rule uses ``primary`` when the subject has
     a concrete boolean ``is_active`` and ``absent`` otherwise.
     ``override_q`` is the override compiled against the catalog user
-    model, or ``None``. ``plans`` is the build-time ``(key, RelationPlan)``
-    table. ``compiler is None`` means the default compiler.
+    model, or ``None``. ``plans`` maps keys to plans; ``None`` is the
+    default. ``compiler is None`` means the default compiler.
     """
 
     records: tuple
@@ -83,7 +83,7 @@ class CatalogShape(object):
     user_model: object
     user_rules: tuple
     override_q: object
-    plans: tuple
+    plans: dict
 
 
 @dataclass(frozen=True)
@@ -117,12 +117,7 @@ class Question(object):
 
 
 class Catalog(object):
-    """Answers one backend class from the shape the sweep built.
-
-    Callers outside the backend obtain this object from
-    ``TrustModelBackendMixin.get_catalog()``. Rule and override fragments
-    are on the shape. Nothing here compiles them again.
-    """
+    """Answers from the shape ``Compiler.compile`` stored on the config."""
 
     def __init__(self, shape, *, user_model):
         self.path = shape.path
@@ -141,19 +136,16 @@ class Catalog(object):
         self.user_rules = shape.user_rules
         self.override_q = shape.override_q
         self.plans = shape.plans
-        self._plans = dict(shape.plans)
 
     def plan_for(self, content, *, user=None, permission=None):
-        """Look up ``(content, user, permission)``. A miss is not stored."""
+        """Look up ``(content, user, permission)``. A miss is the default."""
         resolved = content_model(content)
         principal = None if user is None else concrete_model(
             require_instance(user, 'user'))
         terminal = None if permission is None else concrete_model(
             require_instance(permission, 'permission'))
         key = (resolved, principal, terminal)
-        plan = self._plans[key] if key in self._plans else relation_plan(
-            self.records, self.delegations, *key, self.user_model,
-            self.user_conditions, self.user_rules, self.override_q)
+        plan = self.plans.get(key, self.plans[None])
         return replace(plan, content_identity=_candidate_model(content))
 
     def compile_registered_condition_q(self, model, perm, user):
@@ -665,35 +657,6 @@ def relation_plan(records, delegations, content, user, permission,
         records=chosen, delegations=bridges, permission_model=plan_permission,
         content_identity=content, user_rules=rules, user_rules_closed=closed,
         user_override_q=override, user_model=catalog_user)
-
-
-def plan_table(records, delegations, catalog_user, user_conditions,
-               user_rules, override_q):
-    """One plan per key the stored rows can select, in first-seen order."""
-    users, perms, order = {}, {}, []
-    observed = [
-        (record.content_model, record.user_model, record.permission_model)
-        for record in records]
-    observed.extend(
-        (record.content_model, record.delegate_model, None)
-        for record in delegations)
-    for content, user, perm in observed:
-        seen = users.get(content)
-        if seen is None:
-            order.append(content)
-            users[content] = seen = []
-            perms[content] = []
-        if user not in seen:
-            seen.append(user)
-        if perm is not None and perm not in perms[content]:
-            perms[content].append(perm)
-    return tuple(
-        ((content, user, perm), relation_plan(
-            records, delegations, content, user, perm, catalog_user,
-            user_conditions, user_rules, override_q))
-        for content in order
-        for user in (None, *users[content])
-        for perm in (None, *perms[content]))
 
 
 class PreparedInquiry(object):

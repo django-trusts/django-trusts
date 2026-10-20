@@ -362,10 +362,10 @@ class PlanTableBuildTest(SimpleTestCase):
             for terminal in (None, Permission)
         )
         self.assertEqual(
-            tuple(key for key, _plan in catalog.plans),
+            tuple(key for key in catalog.plans if key is not None),
             paper_keys + note_keys,
         )
-        stored = dict(catalog.plans)
+        stored = catalog.plans
         self.assertIs(stored[(Paper, User, None)].records[0], grant)
         self.assertEqual(stored[(Paper, User, None)].delegations, ())
         self.assertIs(stored[(Paper, User, None)].permission_model, Permission)
@@ -405,13 +405,13 @@ class PlanTableBuildTest(SimpleTestCase):
         self.assertIs(stored[(Paper, None, None)].content_identity, Paper)
 
         stranger = Group(name='unregistered')
-        before = dict(catalog._plans)
+        before = dict(catalog.plans)
         missed = catalog.plan_for(Paper, user=stranger)
-        self.assertEqual(catalog._plans, before)
+        self.assertEqual(catalog.plans, before)
         self.assertIsInstance(missed, RelationPlan)
         self.assertEqual(missed.records, ())
         self.assertEqual(missed.delegations, ())
-        self.assertEqual(missed.user_rules, catalog.user_rules[1])
+        self.assertEqual(missed.user_rules, catalog.plans[None].user_rules)
         self.assertIs(missed.user_model, User)
         self.assertIs(missed.content_identity, Paper)
 
