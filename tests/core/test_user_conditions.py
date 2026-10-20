@@ -32,9 +32,6 @@ urlpatterns = [path('admin/', admin.site.urls)]
 
 def _permission(model, codename):
     ct = ContentType.objects.get_for_model(model)
-    suffix = '_' + ct.model
-    if not codename.endswith(suffix):
-        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -90,7 +87,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
             inactive.is_superuser = True
             inactive.save(update_fields=['is_active', 'is_superuser'])
             note = Note.objects.create(title='n')
-            read = _permission(Note, 'read_note_user_condition')
+            read = _permission(Note, 'read_note_user_condition_note')
             Grant.objects.create(note=note, user=alice, permission=read)
             Grant.objects.create(note=note, user=inactive, permission=read)
             registry = RegistryFactory(user_model=get_user_model())
@@ -169,7 +166,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             inactive.is_active = False
             inactive.save(update_fields=['is_active'])
             note = Note.objects.create(title='n')
-            read = _permission(Note, 'read_note_plan_fragment')
+            read = _permission(Note, 'read_note_plan_fragment_note')
             for holder in (plain, staff, inactive):
                 Grant.objects.create(note=note, user=holder, permission=read)
             grant = Ref(Grant)
@@ -263,8 +260,8 @@ class UserOverrideTest(TransactionTestCase):
             inactive.save(update_fields=['is_active'])
             delegate = User.objects.create_user('over-delegate', password='x')
             note = Note.objects.create(title='n')
-            read = _permission(Note, 'read_note_user_override')
-            other = _permission(User, 'view_user_override_other')
+            read = _permission(Note, 'read_note_user_override_note')
+            other = _permission(User, 'view_user_override_other_user')
             Grant.objects.create(note=note, user=holder, permission=read)
             Link.objects.create(note=note, delegate=delegate, sponsor=superuser)
             registry = RegistryFactory(user_model=get_user_model())
@@ -374,7 +371,7 @@ class UserConditionTargetTest(TransactionTestCase):
             inactive.is_active = False
             inactive.save(update_fields=['is_active'])
             note = TargetNote.objects.create(title='n')
-            read = _permission(TargetNote, 'read_target_note')
+            read = _permission(TargetNote, 'read_target_note_targetnote')
             for user in (staff, plain, superuser, inactive):
                 TargetGrant.objects.create(note=note, user=user, permission=read)
             grant = Ref(TargetGrant)
@@ -635,7 +632,7 @@ class SkipKeywordTest(TransactionTestCase):
             User = get_user_model()
             alice = User.objects.create_user('skip-alice', password='x')
             note = SkipNote.objects.create(title='n')
-            read = _permission(SkipNote, 'read_note_skip_keyword')
+            read = _permission(SkipNote, 'read_note_skip_keyword_skipnote')
             SkipGrant.objects.create(note=note, user=alice, permission=read)
             registry = RegistryFactory(user_model=get_user_model())
             registry.set_user_condition('staff', lambda u: u.is_superuser)
@@ -680,7 +677,7 @@ class SkipKeywordTest(TransactionTestCase):
             inactive.is_active = False
             inactive.save(update_fields=['is_active'])
             note = UnknownNote.objects.create(title='n')
-            read = _permission(UnknownNote, 'read_note_unknown_skip')
+            read = _permission(UnknownNote, 'read_note_unknown_skip_unknownnote')
             UnknownGrant.objects.create(note=note, user=alice, permission=read)
             registry = RegistryFactory(user_model=get_user_model())
             grant = Ref(UnknownGrant)
@@ -735,7 +732,7 @@ class SkipKeywordTest(TransactionTestCase):
             superuser.is_staff = False
             superuser.save(update_fields=['is_superuser', 'is_staff'])
             note = OverrideNote.objects.create(title='n')
-            read = _permission(OverrideNote, 'read_note_override_skip')
+            read = _permission(OverrideNote, 'read_note_override_skip_overridenote')
             registry = RegistryFactory(user_model=get_user_model())
             registry.set_user_override('superuser', lambda u: u.is_superuser)
             registry.set_user_override('staff', lambda u: u.is_staff)
@@ -962,7 +959,7 @@ class StaffPrefixFilterTest(TransactionTestCase):
             scope = Scope.objects.create(title='s')
             payload = Payload.objects.create(title='p')
             Row.objects.create(scope=scope, content=payload)
-            read = _permission(Payload, 'read_payload_staff')
+            read = _permission(Payload, 'read_payload_staff_payload')
             Grant.objects.create(scope=scope, user=plain, permission=read)
             Grant.objects.create(scope=scope, user=staff, permission=read)
             registry = RegistryFactory(user_model=get_user_model())
@@ -1229,7 +1226,7 @@ class SuperuserPrefixFilterTest(TransactionTestCase):
             scope = PrefixScope.objects.create(title='s')
             payload = PrefixPayload.objects.create(title='p')
             PrefixRow.objects.create(scope=scope, content=payload)
-            read = _permission(PrefixPayload, 'read_payload_super')
+            read = _permission(PrefixPayload, 'read_payload_super_prefixpayload')
             PrefixGrant.objects.create(scope=scope, user=dormant, permission=read)
             PrefixGrant.objects.create(scope=scope, user=peer, permission=read)
 
@@ -1411,7 +1408,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             delegate = user_model.objects.create(username='columnless-delegate', password='x')
             outsider = user_model.objects.create(username='columnless-outsider', password='x')
             note = note_model.objects.create(title='columnless')
-            permission = _permission(note_model, 'change_columnlessnote')
+            permission = _permission(note_model, 'change_columnlessnote_opennote')
             grant_model.objects.create(user=holder, note=note, permission=permission)
             grant_model.objects.create(user=sponsor, note=note, permission=permission)
             link_model.objects.create(note=note, delegate=delegate, sponsor=sponsor)

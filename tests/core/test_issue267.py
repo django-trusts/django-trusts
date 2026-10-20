@@ -68,9 +68,6 @@ def _tables(*model_classes):
 
 def _perm(model, codename, *, proxy=False):
     ct = ContentType.objects.get_for_model(model, for_concrete_model=not proxy)
-    suffix = '_' + ct.model
-    if not codename.endswith(suffix):
-        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -171,7 +168,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         self.admin = _perm(self.Repository, 'admin_repository')
         publish_type = ContentType.objects.get_for_model(self.Repository, for_concrete_model=False)
         self.publish, _created = Permission.objects.get_or_create(content_type=publish_type, codename='can_publish', defaults={'name': 'can_publish'})
-        self.operate = _perm(self.OrganizationProxy, 'operate_organization', proxy=True)
+        self.operate = _perm(self.OrganizationProxy, 'operate_organization_organizationproxy', proxy=True)
         self.manage_code = _code(self.manage)
         self.read_code = _code(self.read)
         self.publish_code = _code(self.publish)

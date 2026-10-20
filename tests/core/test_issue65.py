@@ -100,9 +100,6 @@ def _perm(codename, model=None):
         ct = ContentType.objects.get_for_model(
             model, for_concrete_model=False,
         )
-    suffix = '_' + ct.model
-    if not codename.endswith(suffix):
-        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(
         content_type=ct,
         codename=codename,
@@ -735,9 +732,9 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
 
             alice = User.objects.create_user(username='alice-tf', password='x')
             bob = User.objects.create_user(username='bob-tf', password='x')
-            read_folder = _perm('read_coded_folder', CodedFolder)
-            read = _perm('read_coded_document', CodedDocument)
-            write = _perm('write_coded_document', CodedDocument)
+            read_folder = _perm('read_coded_folder_codedfolder', CodedFolder)
+            read = _perm('read_coded_document_codeddocument', CodedDocument)
+            write = _perm('write_coded_document_codeddocument', CodedDocument)
             folder_alpha = CodedFolder.objects.create(code='alpha', title='A')
             folder_beta = CodedFolder.objects.create(code='beta', title='B')
             self.assertNotEqual(folder_alpha.pk, 'alpha')

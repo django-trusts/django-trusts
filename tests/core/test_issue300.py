@@ -447,10 +447,7 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
         with _model_tables(RetargetNode, RetargetGrant):
             user = User.objects.create_user(username='along-cap-300', password='x')
             content_type, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='retargetnode')
-            codename = 'read_retarget'
-            if not codename.endswith('_' + content_type.model):
-                codename = codename + '_' + content_type.model
-            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename=codename, defaults={'name': codename})
+            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget_retargetnode', defaults={'name': 'read_retarget_retargetnode'})
             node = RetargetNode.objects.create()
             RetargetGrant.objects.create(node=node, user=user, permission=permission)
             registry = RegistryFactory()

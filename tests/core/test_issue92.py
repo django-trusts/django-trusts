@@ -53,9 +53,6 @@ def _perm(codename, model=None):
         ct, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='node')
     else:
         ct = ContentType.objects.get_for_model(model, for_concrete_model=False)
-    suffix = '_' + ct.model
-    if not codename.endswith(suffix):
-        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -336,12 +333,12 @@ class AlongIdentityRejectionTest(SimpleTestCase):
 
 class _AlongProjectionMixin(object):
 
-    def _users(self, suffix):
+    def _users(self, suffix, read_codename, write_codename):
         User = get_user_model()
         self.alice = User.objects.create_user(username='alice-%s' % suffix, password='x')
         self.bob = User.objects.create_user(username='bob-%s' % suffix, password='x')
-        self.read = _perm('read_%s' % suffix)
-        self.write = _perm('write_%s' % suffix)
+        self.read = _perm(read_codename)
+        self.write = _perm(write_codename)
 
     def _assert_projections(self, registry, Model, granted_rows, denied_rows):
         handle = _direct_handle(registry)
@@ -382,7 +379,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Node, self.Payload, self.Row, self.Item, self.Image, self.ImageMeta, self.Portrait, self.Link, self.Grant, self.Permit = _node_graph_models()
         self._cm = _tables(self.Node, self.Payload, self.Row, self.Item, self.Image, self.ImageMeta, self.Portrait, self.Link, self.Grant, self.Permit)
         self._cm.__enter__()
-        self._users('along')
+        self._users('along', 'read_along_node', 'write_along_node')
 
     def tearDown(self):
         self._cm.__exit__(None, None, None)
@@ -709,7 +706,7 @@ class AlongShapeAndGraphTest(_AlongProjectionMixin, TransactionTestCase):
         self.Row.objects.create(node=folder_b, content=pay_shared)
         read_image = _perm('read_suffix_image', self.Image)
         write_image = _perm('write_suffix_image', self.Image)
-        read_meta = _perm('read_suffix_meta', self.ImageMeta)
+        read_meta = _perm('read_suffix_meta_imagemeta', self.ImageMeta)
         read_port = _perm('read_suffix_portrait', self.Portrait)
         read_pay = _perm('read_suffix_payload', self.Payload)
         write_pay = _perm('write_suffix_payload', self.Payload)
@@ -827,9 +824,9 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 app_label = 'trusts_tests'
         with _tables(CodedNode, CodedItem, CodedGrant, UuidNode, UuidGrant):
             alice = User.objects.create_user(username='alice-id', password='x')
-            read = _perm('read_id92', CodedNode)
-            read_item = _perm('read_id92_item', CodedItem)
-            read_uuid = _perm('read_id92_uuid', UuidNode)
+            read = _perm('read_id92_codednode', CodedNode)
+            read_item = _perm('read_id92_item_codeditem', CodedItem)
+            read_uuid = _perm('read_id92_uuid_uuidnode', UuidNode)
             a = CodedNode.objects.create(code='alpha')
             b = CodedNode.objects.create(code='beta', parent=a)
             other = CodedNode.objects.create(code='omega')
@@ -882,7 +879,7 @@ class AlongToFieldAndUuidTest(_AlongProjectionMixin, TransactionTestCase):
                 app_label = 'trusts_tests'
         with _tables(CodedNode, CodedGrant):
             alice = User.objects.create_user(username='alice-c92', password='x')
-            read = _perm('read_c92', CodedNode)
+            read = _perm('read_c92_codednode', CodedNode)
             root = CodedNode.objects.create(code='root')
             mid = CodedNode.objects.create(code='mid', parent=root)
             leaf = CodedNode.objects.create(code='leaf', parent=mid)
@@ -921,7 +918,7 @@ class AlongRuntimeGateTest(TransactionTestCase):
                 app_label = 'trusts_tests'
         with _tables(Node, NodeGrant):
             alice = User.objects.create_user(username='alice-gate', password='x')
-            read = _perm('read_gate')
+            read = _perm('read_gate_node')
             node = Node.objects.create()
             NodeGrant.objects.create(node=node, user=alice, permission=read)
             registry = RegistryFactory()
