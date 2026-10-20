@@ -58,8 +58,8 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
     def test_document_grant_is_not_inherited_by_host(self):
         host = configured_catalog(HOST_BACKEND)
         document = configured_catalog(DOCUMENT_BACKEND)
-        self.assertFalse(host.plan_for(Document).records)
-        self.assertTrue(document.plan_for(Document).records)
+        self.assertFalse(host.policy().plan_for(Document).records)
+        self.assertTrue(document.policy().plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
         mixin = RegistryFactory(path='tests.backends.MixinOnlyBackend')
@@ -98,7 +98,7 @@ class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
         self.handle = configured_catalog(DOCUMENT_BACKEND)
 
     def test_plan_and_handle_common_permissions_are_one_sql(self):
-        plan = self.handle.plan_for(self.doc, user=self.alice)
+        plan = self.handle.policy().plan_for(self.doc, user=self.alice)
         with self.assertNumQueries(1):
             codes = set(plan.common_permissions(self.alice, self.doc).values_list('codename', flat=True))
         self.assertIn('change_document', codes)

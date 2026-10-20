@@ -172,8 +172,8 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registries=built_registries((self.fold_handle,)))
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
-            from trusts.query import _relationship_catalogs
-            listed = _relationship_catalogs()
+            from trusts.query import relationship_catalogs
+            listed = relationship_catalogs()
             self.assertIn(catalogs[DocumentBackend], listed)
             self.assertNotIn(catalogs[MixinOnlyBackend], listed)
             self.assertEqual(catalogs[MixinOnlyBackend].path, MIXIN)

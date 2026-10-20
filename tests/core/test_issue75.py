@@ -125,8 +125,8 @@ class IsolatedAppsPathStoreTest(SimpleTestCase):
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_explicit_path_contribution_writes_one_registry(self):
-        self.assertTrue(configured_catalog(DOCUMENT).plan_for(Document).records)
-        self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
+        self.assertTrue(configured_catalog(DOCUMENT).policy().plan_for(Document).records)
+        self.assertFalse(configured_catalog(HOST).policy().plan_for(Document).records)
 
     def test_omitted_ambiguous_path_fails_before_writing(self):
         with self.assertRaises(TrustsConfigurationError):
@@ -264,5 +264,5 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):
-        self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
-        self.assertTrue(configured_catalog(DOCUMENT).plan_for(Document).records)
+        self.assertFalse(configured_catalog(HOST).policy().plan_for(Document).records)
+        self.assertTrue(configured_catalog(DOCUMENT).policy().plan_for(Document).records)
