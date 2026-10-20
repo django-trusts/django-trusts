@@ -7,6 +7,14 @@ from django.db.models import options as model_options
 
 import trusts.plan.standards as standards
 
+# Populate imports this module before any models.
+if 'permission_conditions' not in model_options.DEFAULT_NAMES:
+    _names = model_options.DEFAULT_NAMES
+    if isinstance(_names, tuple):
+        model_options.DEFAULT_NAMES = _names + ('permission_conditions',)
+    else:
+        _names.append('permission_conditions')
+
 
 class TrustsImplementationConfig(django.apps.AppConfig):
     """One sweep after other apps have registered on their recorders.
@@ -29,21 +37,9 @@ class TrustsImplementationConfig(django.apps.AppConfig):
         import trusts.inspect.checks  # noqa: F401
 
         install_policy_commands()
-        _ensure_permission_conditions_option()
         model = get_user_model()
         standards.user_model = model
         build_configured_catalogs(
             tuple(settings.AUTHENTICATION_BACKENDS),
             model,
         )
-
-
-def _ensure_permission_conditions_option():
-    """Register ``Meta.permission_conditions`` once, from ``ready``."""
-    names = model_options.DEFAULT_NAMES
-    if 'permission_conditions' in names:
-        return
-    if isinstance(names, tuple):
-        model_options.DEFAULT_NAMES = names + ('permission_conditions',)
-    else:
-        names.append('permission_conditions')

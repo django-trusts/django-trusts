@@ -3,9 +3,8 @@
 The kernel settings mark ``myapp`` and ``trusts_tests`` as unmigrated.
 Django syncs those apps before ``auth`` migrations, and PostgreSQL and
 MySQL then reject the foreign key to ``auth_user``. These jobs only need
-``auth``, the kernel host, and the trusts app. ``ready`` registers
-``Meta.permission_conditions`` before ``isolate_apps`` imports
-``tests.models``.
+``auth``, the kernel host, and the trusts app. Importing that app
+registers ``Meta.permission_conditions`` before models load.
 """
 
 import os
