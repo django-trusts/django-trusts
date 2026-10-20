@@ -33,9 +33,6 @@ PERM = 'myapp.change_document'
 
 def _permission(model, codename):
     ct = ContentType.objects.get_for_model(model)
-    suffix = '_' + ct.model
-    if not codename.endswith(suffix):
-        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -217,7 +214,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             inactive = User.objects.create_user('inactive-reg-284', password='x')
             inactive.is_active = False
             inactive.save(update_fields=['is_active'])
-            read = _permission(Note, 'read_note_284')
+            read = _permission(Note, 'read_note_284_note')
             note = Note.objects.create(title='n')
             folder = Folder.objects.create(title='f')
             Row.objects.create(folder=folder, note=note)
@@ -322,7 +319,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             for model in models_:
                 editor.create_model(model)
         try:
-            read = _permission(Note, 'read_note_identity_284')
+            read = _permission(Note, 'read_note_identity_284_note')
             note = Note.objects.create(title='n')
             folder = Folder.objects.create(title='f')
             Row.objects.create(folder=folder, note=note)

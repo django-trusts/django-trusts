@@ -252,9 +252,6 @@ def _perm(codename, model=None):
         ct, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='payload')
     else:
         ct = ContentType.objects.get_for_model(model, for_concrete_model=False)
-    suffix = '_' + ct.model
-    if not codename.endswith(suffix):
-        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename=codename, defaults={'name': codename})
     return permission
 
@@ -457,12 +454,12 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 class _TerminalProjectionMixin(object):
     """Shared object / queryset / enumeration / all-match assertions."""
 
-    def _users(self, suffix, content_model=None):
+    def _users(self, suffix, read_codename, write_codename, content_model=None):
         User = get_user_model()
         self.alice = User.objects.create_user(username='alice-%s' % suffix, password='x')
         self.bob = User.objects.create_user(username='bob-%s' % suffix, password='x')
-        self.read = _perm('read_%s' % suffix, content_model)
-        self.write = _perm('write_%s' % suffix, content_model)
+        self.read = _perm(read_codename, content_model)
+        self.write = _perm(write_codename, content_model)
 
     def _assert_terminal(self, registry, Model, granted, sibling, other):
         handle = _direct_handle(registry)
@@ -508,7 +505,7 @@ class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         self.Folder, self.Payload, self.Row, self.FolderGrant, self.FolderGroupGrant = _j1_models()
         self._table_cm = _tables(self.Folder, self.Payload, self.Row, self.FolderGrant, self.FolderGroupGrant)
         self._table_cm.__enter__()
-        self._users('j1')
+        self._users('j1', 'read_j1_payload', 'write_j1_payload')
         self.folder_a = self.Folder.objects.create(title='A')
         self.folder_b = self.Folder.objects.create(title='B')
         self.pay_a1 = self.Payload.objects.create(title='A1')
@@ -544,7 +541,7 @@ class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         owner = _owner
         self._table_cm = _tables(self.Holder, owner, _tag, self.Item, self.Image, self.Grant)
         self._table_cm.__enter__()
-        self._users('d1', self.Image)
+        self._users('d1', 'read_d1_image', 'write_d1_image', self.Image)
         self.owner = owner.objects.create(name='o')
         self.h_a = self.Holder.objects.create(title='A')
         self.h_b = self.Holder.objects.create(title='B')
@@ -578,7 +575,7 @@ class TrustsRegistryD1oProjectionTest(_TerminalProjectionMixin, TransactionTestC
         self.Holder, owner, _tag, self.Item, self.Image, _meta, _extra, _profile, self.Grant, _w, _wg = _d1o_models()
         self._table_cm = _tables(self.Holder, owner, _tag, self.Item, self.Image, self.Grant)
         self._table_cm.__enter__()
-        self._users('d1o', self.Image)
+        self._users('d1o', 'read_d1o_image', 'write_d1o_image', self.Image)
         self.owner = owner.objects.create(name='o')
         self.h_a = self.Holder.objects.create(title='A')
         self.h_b = self.Holder.objects.create(title='B')
@@ -607,7 +604,7 @@ def _seed_depth2(self, factory, suffix, reverse_meta=True):
     table_models = [self.Holder, owner, tag, self.Item, self.Image, self.ImageMeta, self.Grant]
     self._table_cm = _tables(*table_models)
     self._table_cm.__enter__()
-    self._users(suffix, self.ImageMeta)
+    self._users(suffix, 'read_%s_imagemeta' % suffix, 'write_%s_imagemeta' % suffix, self.ImageMeta)
     self.h_a = self.Holder.objects.create(title='A')
     self.h_b = self.Holder.objects.create(title='B')
     if reverse_meta:
@@ -699,7 +696,7 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         User = get_user_model()
         self.alice = User.objects.create_user(username='alice-split', password='x')
         self.carol = User.objects.create_user(username='carol-split', password='x')
-        self.read = _perm('read_split')
+        self.read = _perm('read_split_payload')
         self.folder_a = self.Folder.objects.create(title='A')
         self.folder_b = self.Folder.objects.create(title='B')
         self.pay_a = self.Payload.objects.create(title='A')
@@ -790,8 +787,8 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
             self.assertNotEqual(record.content_target, 'code')
             alice = User.objects.create_user(username='alice-tf83', password='x')
             bob = User.objects.create_user(username='bob-tf83', password='x')
-            read = _perm('read_coded83', CodedImage)
-            write = _perm('write_coded83', CodedImage)
+            read = _perm('read_coded83_codedimage', CodedImage)
+            write = _perm('write_coded83_codedimage', CodedImage)
             holder_a = CodedHolder.objects.create(code='alpha', title='A')
             holder_b = CodedHolder.objects.create(code='beta', title='B')
             self.assertNotEqual(holder_a.pk, 'alpha')
