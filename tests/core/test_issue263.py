@@ -26,7 +26,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import render_configured_policy, listed_relationship, built_registries
+from tests.apps import render_configured_policy, listed_relationship, built_registries, as_catalog
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
@@ -461,7 +461,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._assert_unique(rows, [self.spec])
         self._assert_unique(self._authorized(handle, self.alice, self.change), [self.spec])
         self._assert_unique(self._authorized(handle, self.bob, self.delete), [])
-        enumerated = list(handle.build_registry().permissions_for(self.alice, self.spec))
+        enumerated = list(as_catalog(handle).permissions_for(self.alice, self.spec))
         self.assertEqual({_code(row) for row in enumerated}, {self.read_code, self.change_code})
         self.assertEqual(len(enumerated), 2)
 

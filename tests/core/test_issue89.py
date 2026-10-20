@@ -17,8 +17,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
 from tests.apps import (
-    configured_catalog, empty_catalogs, live_config, override_apps_ready,
-    sweep_listed_backends,
+    as_catalog, configured_catalog, empty_catalogs, live_config,
+    override_apps_ready, sweep_listed_backends,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -50,12 +50,12 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertTrue(apps.ready)
         first = RegistryFactory()
         second = RegistryFactory()
-        self.assertEqual(first.build_registry().records, ())
+        self.assertEqual(as_catalog(first).records, ())
         _contribute_document(second)
-        self.assertEqual(len(second.build_registry().plan_for(Document).records), 1)
+        self.assertEqual(len(as_catalog(second).plan_for(Document).records), 1)
         _contribute_document(first)
         self.assertEqual(len(first.records), 1)
-        self.assertEqual(first.build_registry().records, first.records)
+        self.assertEqual(as_catalog(first).records, first.records)
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
@@ -72,7 +72,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 registry.register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
         self.assertEqual(registry.records, before)
-        self.assertIs(registry.build_registry().plan_for(Document).records[0], before[0])
+        self.assertIs(as_catalog(registry).plan_for(Document).records[0], before[0])
 
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
@@ -88,16 +88,16 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
                 registry.register(**kwargs)
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, before)
-        self.assertEqual(len(registry.build_registry().plan_for(Document).records), 1)
+        self.assertEqual(len(as_catalog(registry).plan_for(Document).records), 1)
 
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
         registry = RegistryFactory()
         _contribute_document(registry)
-        before = registry.build_registry().plan_for(Document)
+        before = as_catalog(registry).plan_for(Document)
         registry.build_registry()
-        plan = registry.build_registry().plan_for(Document)
+        plan = as_catalog(registry).plan_for(Document)
         self.assertEqual(plan.records, before.records)
         user = get_user_model()(pk=1)
         permission = Permission(pk=1)
@@ -250,5 +250,5 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
         _contribute_document(registry)
-        self.assertEqual(handle.build_registry().records, registry.records)
+        self.assertEqual(as_catalog(handle).records, registry.records)
         self.assertEqual(first.records, ())

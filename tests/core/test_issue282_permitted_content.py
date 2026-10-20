@@ -18,7 +18,7 @@ from django.test.utils import isolate_apps
 
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from tests.apps import render_configured_policy, scoped_permitted_content as filter_by_permitted_content
+from tests.apps import render_configured_policy, scoped_permitted_content as filter_by_permitted_content, as_catalog
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.aggregates import common_permissions
 from trusts.decorators import authorization_required
@@ -67,7 +67,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
     ]
     test.assertEqual(len(rows), 1)
     row = rows[0]
-    record = handle.build_registry().plan_for(content_model).records[0]
+    record = as_catalog(handle).plan_for(content_model).records[0]
     queryset = filter_by_permitted_content(
         prefix_model._default_manager.all(),
         _role_sentinel(record, 'user', 'default'),

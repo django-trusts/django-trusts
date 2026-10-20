@@ -5,6 +5,22 @@ from django.apps import AppConfig
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
+def as_catalog(subject):
+    """Catalog front over a factory or a registry a test already built."""
+    from trusts.compile.catalogs import Catalog
+    from trusts.plan.registry import Registry
+
+    registry = subject if isinstance(subject, Registry) else subject.build_registry()
+    path = getattr(subject, 'path', '') or getattr(registry, 'path', '') or ''
+    family = getattr(subject, 'family', None) or registry.family
+    return Catalog(
+        cls=type(subject),
+        path=path,
+        family=family,
+        registry=registry,
+    )
+
+
 def built_registries(items):
     """Build factories for a direct ``granted`` / filter call.
 

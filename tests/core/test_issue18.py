@@ -20,7 +20,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from trusts.compile.nodes import permission_in
-from tests.apps import scoped_permitted_content as filter_by_permitted_content
+from tests.apps import scoped_permitted_content as filter_by_permitted_content, as_catalog
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -377,7 +377,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
         with listed_relationship(built_registries(self._handles())):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Artifact.objects.filter(pk=obj.pk).authorized(principal, token))
-        enumerated = {row.pk for row in self.registry.build_registry().permissions_for(principal, obj)}
+        enumerated = {row.pk for row in as_catalog(self.registry).permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -412,7 +412,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.hall.badges.add(self.read)
         with self.assertNumQueries(0):
             qs = self.registry.build_registry().filter_authorized(self.Artifact.objects.all(), self.actor, self.read)
-            enumerated = self.registry.build_registry().permissions_for(self.actor, self.artifact)
+            enumerated = as_catalog(self.registry).permissions_for(self.actor, self.artifact)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
@@ -542,7 +542,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
 
     def test_membership_user_hop_is_not_a_group_slice(self):
         handle = self._handle(self.membership)
-        plan = self.membership.build_registry().plan_for(self.folder, user=self.member, permission=self.read)
+        plan = as_catalog(self.membership).plan_for(self.folder, user=self.member, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('desk', 'holders'))
         self.assertFalse(plan.records[0].via_group)
         with self.assertNumQueries(0):
@@ -555,7 +555,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
 
     def test_fk_user_hop_is_not_group_slice(self):
         handle = self._handle(self.trustee)
-        plan = self.trustee.build_registry().plan_for(self.folder, user=self.owner, permission=self.read)
+        plan = as_catalog(self.trustee).plan_for(self.folder, user=self.owner, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('owner',))
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.owner, self.read))
@@ -638,6 +638,6 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         with self.assertNumQueries(1):
             self.assertEqual(_pks(self.registry.build_registry().filter_authorized(self.Node.objects.all(), self.holder, self.add)), {self.child.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(self.registry.build_registry().permissions_for(self.holder, self.child)), {self.add.pk})
+            self.assertEqual(_pks(as_catalog(self.registry).permissions_for(self.holder, self.child)), {self.add.pk})
         with self.assertNumQueries(1):
             self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registries=built_registries((self.handle,)))), {self.parent.pk})
