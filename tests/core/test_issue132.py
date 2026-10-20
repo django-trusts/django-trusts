@@ -30,6 +30,7 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import RegistryFactory
 from trusts.query import AuthorizedQuerySet
+from trusts.backends import TrustModelBackendMixin
 PERM = 'myapp.change_document'
 
 def _change_document():
@@ -42,7 +43,7 @@ def _replay_listed(path):
     from django.utils.module_loading import import_string
 
     cls = import_string(path)
-    factory = RegistryFactory(
+    factory = RegistryFactory(cls=TrustModelBackendMixin, 
         path=path,
         family=cls.family,
         compiler=cls.query_compiler,
@@ -52,7 +53,7 @@ def _replay_listed(path):
 
 def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
-    handle = RegistryFactory(path='tests.core.issue132-extra')
+    handle = RegistryFactory(cls=TrustModelBackendMixin, path='tests.core.issue132-extra')
     handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
     handle.register_permission_condition(Repository, 'always', lambda u, p, o: o.name != '')
     return handle

@@ -15,7 +15,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import TrustsImplementationConfig
-from trusts.backends import catalogs
+from trusts.backends import TrustModelBackendMixin, catalogs
 from trusts.plan.contents import relationship_family
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
@@ -108,7 +108,7 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertIsInstance(catalog.records, tuple)
 
     def test_unowned_factory_defaults_to_relationship_family(self):
-        built = built_catalog(RegistryFactory(path=MIXIN))
+        built = built_catalog(RegistryFactory(cls=TrustModelBackendMixin, path=MIXIN))
         self.assertEqual(built.family, 'relationship')
         self.assertEqual(relationship_family((built,)), (built,))
 
@@ -124,7 +124,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(document=self.rel_doc, user=self.alice, permission=self.change)
         DocumentAltGrant.objects.create(document=self.fold_doc, user=self.alice, permission=self.change)
         self.rel_handle = catalogs[DocumentBackend]
-        self.fold_registry = RegistryFactory(path=MIXIN, family='ordered_fold')
+        self.fold_registry = RegistryFactory(cls=TrustModelBackendMixin, path=MIXIN, family='ordered_fold')
         self.fold_handle = self.fold_registry
         self.fold_handle.register_public(trust=DocumentAltGrant, user='user', permission='permission', content='document')
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
@@ -210,6 +210,7 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         import trusts.plan.standards as standards
 
         factory = RegistryFactory(
+            cls=TrustModelBackendMixin,
             compiler=_NeverAppliesCompiler(),
             path=DOCUMENT_BACKEND,
             family=DocumentBackend.family,
@@ -229,13 +230,13 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_standalone_factory_rebuilds_and_a_published_registry_does_not(self):
         from tests.backends import HostTrustModelBackend
-        isolated = RegistryFactory()
+        isolated = RegistryFactory(cls=TrustModelBackendMixin)
         first_build = built_catalog(isolated)
         second_build = built_catalog(isolated)
         self.assertIsNot(first_build, second_build)
         from tests.myapp.models import DocumentGrant
         from trusts.compile.nodes import Ref
-        fresh = RegistryFactory()
+        fresh = RegistryFactory(cls=TrustModelBackendMixin)
         j = Ref(DocumentGrant)
         fresh.register(content=j.document, user=j.user, permission=j.permission)
         self.assertEqual(built_catalog(fresh).records, fresh.records)

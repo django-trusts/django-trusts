@@ -2,6 +2,7 @@
 
 Category ``.permitted()`` runtime stays on Zero ``tests/legacy/``.
 """
+from trusts.backends import TrustModelBackendMixin
 
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
@@ -48,7 +49,7 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         from tests.backends import HostTrustModelBackend
 
         live = catalogs[HostTrustModelBackend]
-        isolated = RegistryFactory()
+        isolated = RegistryFactory(cls=TrustModelBackendMixin)
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
 

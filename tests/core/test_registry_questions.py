@@ -9,6 +9,7 @@ handle-based aggregate is the comparison
 (the handle is the subject there), SQL is compared literally;
 otherwise results are compared.
 """
+from trusts.backends import TrustModelBackendMixin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
@@ -108,7 +109,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         return (Folder, Document, Grant, Share, GroupGrant)
 
     def _registry(self, *, delegated=False, group=False):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         grant = Ref(self.Grant)
         registry.register(content=grant.document, user=grant.user, permission=grant.permission)
         if delegated:
@@ -144,7 +145,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk})
         code = '%s.%s' % (self.read.content_type.app_label, self.read.codename)
         self.assertEqual(_pks(built.permitted_users(self.doc_a, code)), {self.alice.pk})
-        prefix_registry = RegistryFactory()
+        prefix_registry = RegistryFactory(cls=TrustModelBackendMixin)
         grant = Ref(self.Grant)
         prefix_registry.register(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.filter(user=self.alice).update(folder=self.folder_a)
@@ -204,7 +205,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):
-        prefix_registry = RegistryFactory()
+        prefix_registry = RegistryFactory(cls=TrustModelBackendMixin)
         grant = Ref(self.Grant)
         prefix_registry.register(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.create(user=self.alice, document=self.doc_a, folder=self.folder_a, permission=self.read)
@@ -246,7 +247,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a, kind='group')), {self.read.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(list(built.permissions_for(self.bob, self.doc_a, kind='group')), [])
-        empty_factory = RegistryFactory(user_model=self.User)
+        empty_factory = RegistryFactory(cls=TrustModelBackendMixin, user_model=self.User)
         empty = built_catalog(empty_factory)
         self.assertFalse(empty.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertEqual(list(empty.permissions_for(self.alice, self.doc_a)), [])

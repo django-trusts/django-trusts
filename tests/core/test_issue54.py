@@ -2,6 +2,7 @@
 
 Zero-owned pair/live Trust proofs stay on ``tests/legacy/test_issue54.py``.
 """
+from trusts.backends import TrustModelBackendMixin
 
 from contextlib import contextmanager
 from unittest.mock import Mock, patch
@@ -147,7 +148,7 @@ class KernelConfigTest(SimpleTestCase):
 
 class ConditionLookupBindTest(TestCase):
     def test_build_freezes_one_lookup_at_zero_sql(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertNumQueries(0):
             shape = registry.build()
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
@@ -169,7 +170,7 @@ class ConditionLookupBindTest(TestCase):
             called.append((user, perm, obj))
             return obj.title == 'keep'
 
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertNumQueries(0):
             record = registry.register_permission_condition(
                 Document, 'named', builder,
@@ -345,7 +346,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.add,
         )
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         _register_payload(registry, self.FolderGrant)
         self.handle = registry
 
@@ -386,7 +387,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
             self._filter(
                 self.Folder.objects.all(), content=self.Other, registry=built_catalog(self.handle),
             ),
-            self._filter(self.Folder.objects.all(), registry=built_catalog(RegistryFactory(family='ordered_fold'))),
+            self._filter(self.Folder.objects.all(), registry=built_catalog(RegistryFactory(cls=TrustModelBackendMixin, family='ordered_fold'))),
             self._filter(
                 self.Other.objects.all(), content=self.Payload, registry=built_catalog(self.handle),
             ),
@@ -544,7 +545,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(Scope, Payload, Row, Grant):
-            registry = RegistryFactory()
+            registry = RegistryFactory(cls=TrustModelBackendMixin)
             j = Ref(Grant)
             record = registry.register(
                 content=j.scope.rows.content,

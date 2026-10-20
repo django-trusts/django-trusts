@@ -5,6 +5,7 @@ requester path that ends in one membership hop. Isolated GH-shaped
 models use the accepted registration spelling without a consumer-local
 dialect. No historical Trusts types required.
 """
+from trusts.backends import TrustModelBackendMixin
 from contextlib import contextmanager
 from unittest.mock import patch
 from django.db import connection, models
@@ -158,7 +159,7 @@ class ClosedPredicateRegistrationTest(TestCase):
 
     def test_accepted_gh_team_mapping_registers_with_zero_sql(self):
         _Account, _Organization, _Team, _Operation, _Bundle, Repository, TeamRepoGrant, _Direct = _gh_models()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertNumQueries(0):
             record = _register_team(registry, TeamRepoGrant)
         self.assertEqual(len(registry.records), 1)
@@ -174,7 +175,7 @@ class ClosedPredicateRegistrationTest(TestCase):
     def test_untyped_condition_still_rejected_with_zero_sql(self):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         t = Ref(TeamRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'not supported'):
@@ -204,7 +205,7 @@ class ClosedPredicateRegistrationTest(TestCase):
 
     def test_incompatible_equal_and_permission_in_paths_rejected(self):
         Account, _Organization, _Team, _Operation, _Bundle, _Repository, TeamRepoGrant, _Direct = _gh_models()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         t = Ref(TeamRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'same model'):
@@ -216,7 +217,7 @@ class ClosedPredicateRegistrationTest(TestCase):
 
     def test_equal_rejects_mismatched_to_field_targets_with_zero_sql(self):
         Holder, Site, Document, Action, SiteGrant = _to_field_models(match=False)
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertNumQueries(0):
             site_a = Site(slug='acme', code='x1')
             site_b = Site(slug='other', code='acme')
@@ -234,7 +235,7 @@ class ClosedPredicateRegistrationTest(TestCase):
 
     def test_equal_matching_to_field_registers_with_zero_sql(self):
         _Holder, _Site, Document, _Action, SiteGrant = _to_field_models(match=True)
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertNumQueries(0):
             record = _register_site_grant(registry, SiteGrant)
         self.assertEqual(len(registry.records), 1)
@@ -245,7 +246,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
         AccountRepoGrant = _models[7]
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         t = Ref(TeamRepoGrant)
         d = Ref(AccountRepoGrant)
         with self.assertNumQueries(0):
@@ -267,7 +268,7 @@ class ClosedPredicateRegistrationTest(TestCase):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
         AccountRepoGrant = _models[7]
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         t = Ref(TeamRepoGrant)
         d = Ref(AccountRepoGrant)
         with self.assertNumQueries(0):
@@ -278,7 +279,7 @@ class ClosedPredicateRegistrationTest(TestCase):
     def test_direct_user_hop_still_registers(self):
         _models = _gh_models()
         AccountRepoGrant = _models[7]
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         with self.assertNumQueries(0):
             record = _register_direct(registry, AccountRepoGrant)
         self.assertEqual(record.user_path, ('account',))
@@ -287,7 +288,7 @@ class ClosedPredicateRegistrationTest(TestCase):
     def test_condition_none_still_accepted(self):
         _models = _gh_models()
         AccountRepoGrant = _models[7]
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         d = Ref(AccountRepoGrant)
         record = registry.register(content=d.repository, user=d.account, permission=d.operation, condition=None)
         self.assertIsNone(record.condition)
@@ -329,7 +330,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self.repo_other = self.Repository.objects.create(organization=self.org_b, title='repo-other')
         self.TeamRepoGrant.objects.create(team=self.writers, repository=self.repo_a, operation=self.read)
         self.AccountRepoGrant.objects.create(account=self.collaborator, repository=self.repo_b, operation=self.write)
-        self.registry = RegistryFactory()
+        self.registry = RegistryFactory(cls=TrustModelBackendMixin)
         _register_direct(self.registry, self.AccountRepoGrant)
         _register_team(self.registry, self.TeamRepoGrant)
 
@@ -421,7 +422,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self.assertIn('teamrepogrant', sql)
 
     def test_unregistered_content_fails_closed(self):
-        empty = RegistryFactory()
+        empty = RegistryFactory(cls=TrustModelBackendMixin)
         self.assertFalse(built_catalog(empty).has_permission(self.member, self.repo_a, self.read))
         missing = built_catalog(empty).filter_authorized(self.Repository.objects.all(), self.member, self.read)
         self.assertEqual(list(missing), [])
@@ -442,7 +443,7 @@ class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):
         self.doc_other = self.Document.objects.create(title='split')
         self.SiteGrant.objects.create(holder=self.holder, document=self.doc_same, action=self.read, left=self.site_a, right=self.site_a)
         self.SiteGrant.objects.create(holder=self.holder, document=self.doc_other, action=self.read, left=self.site_a, right=self.site_b)
-        self.registry = RegistryFactory()
+        self.registry = RegistryFactory(cls=TrustModelBackendMixin)
         _register_site_grant(self.registry, self.SiteGrant)
 
     def tearDown(self):

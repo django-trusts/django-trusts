@@ -34,6 +34,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 
 from tests.support import override_catalog
+from trusts.backends import TrustModelBackendMixin
 
 
 def _store_expr(registry, model, code, expr):
@@ -76,7 +77,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_prebuilt_expr_is_type_error_before_mutation(self):
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         expr = u == o.not_a_field
         with self.assertRaises(TypeError):
             registry.register_permission_condition(Note, 'missing', expr)
@@ -98,7 +99,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_builder_validates_at_register_when_models_are_ready(self):
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         record = registry.register_permission_condition(
             Note, 'deferred_own', lambda u, p, o: u == o.owner,
         )
@@ -128,7 +129,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_multiple_dynamic_errors_are_aggregated(self):
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         _store_expr(registry, Note, 'typo', u == o.nope)
         _store_expr(registry, Note, 'types', o.status == 1)
         errors = _messages_with_id(
@@ -145,7 +146,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_builder_is_invoked_once_with_symbolic_refs(self):
         Note = _note_model()
         log = _BuilderLog()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         record = registry.register_permission_condition(Note, 'spy', log)
         self.assertEqual(len(log.calls), 1)
         u, p, o = log.calls[0]
@@ -166,7 +167,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
     def test_builder_exception_and_non_predicate_fail_at_register(self):
         Note = _note_model()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
 
         def exploding(u, p, o):
             raise RuntimeError('builder boom')
@@ -201,7 +202,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         _store_expr(registry, Note, 'typo', u == o.nope)
 
         with override_catalog(
@@ -215,7 +216,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
     def test_handle_after_build_invokes_builder(self):
         Note = _note_model()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         log = _BuilderLog()
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
@@ -239,7 +240,7 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         from tests.myapp.models import Document
 
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         _store_expr(registry, Document, 'typo-29', u == o.nope)
 
         with override_catalog(

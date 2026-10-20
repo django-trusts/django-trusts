@@ -27,11 +27,12 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from tests.support import built_catalog
+from trusts.backends import TrustModelBackendMixin
 ROOT = Path(__file__).resolve().parents[2]
 
 def _handle(registry=None, path='tests.core.issue207'):
     if registry is None:
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
     registry.path = path
     return registry
 
@@ -181,7 +182,7 @@ class RegisterWheelSignatureTest(SimpleTestCase):
 class RegisterNormalizeTest(SimpleTestCase):
 
     def test_strings_callables_and_mixed_normalize_equivalently(self):
-        via_ref = RegistryFactory()
+        via_ref = RegistryFactory(cls=TrustModelBackendMixin)
         expected = via_ref.register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
         strings = _handle(path='tests.core.issue207-strings').register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         callables = _handle(path='tests.core.issue207-callables').register_public(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document)
@@ -195,7 +196,7 @@ class RegisterNormalizeTest(SimpleTestCase):
         from tests.core.test_issue98 import _gh_models, _register_team
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        expected = _register_team(RegistryFactory(), TeamRepoGrant)
+        expected = _register_team(RegistryFactory(cls=TrustModelBackendMixin), TeamRepoGrant)
         record = _handle().register_public(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
         mixed = _handle(path='tests.core.issue207-m2m-mixed').register_public(trust=TeamRepoGrant, user='team__members', permission=lambda t: t.operation, content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
         self.assertEqual(record, expected)
@@ -206,7 +207,7 @@ class RegisterNormalizeTest(SimpleTestCase):
     def test_along_and_builders_match_internal_ref(self):
         from tests.core.test_issue92 import _node_graph_models
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
-        via_ref = RegistryFactory()
+        via_ref = RegistryFactory(cls=TrustModelBackendMixin)
         j = Ref(Grant)
         expected = via_ref.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
         record = _handle().register_public(trust=Grant, user=lambda t: t.user, permission='permission', content=lambda t: t.node, along=('node__parent', 8))
@@ -227,7 +228,7 @@ class RegisterOnceAtRegistrationTest(TestCase):
     def test_builders_run_once_and_never_during_projections(self):
         if 'myapp_document' not in connection.introspection.table_names():
             self.skipTest('myapp tables exist only on the kernel host')
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         handle = _handle(registry)
         user = _Count('user')
         permission = _Count('permission')
@@ -277,7 +278,7 @@ class RegisterFailClosedTest(TestCase):
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_register_after_build_invokes_builder(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         handle = _handle(registry)
         calls = []
 

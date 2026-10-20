@@ -27,10 +27,11 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from tests.support import built_catalog
+from trusts.backends import TrustModelBackendMixin
 
 def _handle(registry=None, path='tests.core.issue210'):
     if registry is None:
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
     registry.path = path
     return registry
 
@@ -79,16 +80,16 @@ class RegisterConditionGrammarTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_org_equality_permission_ceiling_and_conjunction(self):
         TeamRepoGrant = _gh_models()[6]
-        expected = _register_team(RegistryFactory(), TeamRepoGrant)
+        expected = _register_team(RegistryFactory(cls=TrustModelBackendMixin), TeamRepoGrant)
         equality = _handle(path='tests.core.issue210-eq').register_public(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=lambda t: t.team.organization == t.repository.organization)
-        via_ref = RegistryFactory()
+        via_ref = RegistryFactory(cls=TrustModelBackendMixin)
         t = Ref(TeamRepoGrant)
         expected_eq = via_ref.register(content=t.repository, user=t.team.members, permission=t.operation, condition=Equal(t.team.organization, t.repository.organization))
         self.assertEqual(equality, expected_eq)
         self.assertIsInstance(equality.condition, Equal)
         self.assertFalse(callable(equality.condition))
         ceiling = _handle(path='tests.core.issue210-in').register_public(trust=TeamRepoGrant, user='team__members', permission='operation', content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation))
-        via_ceil = RegistryFactory()
+        via_ceil = RegistryFactory(cls=TrustModelBackendMixin)
         expected_ceil = via_ceil.register(content=t.repository, user=t.team.members, permission=t.operation, condition=permission_in(t.team.permission_bundles.operations))
         self.assertEqual(ceiling, expected_ceil)
         self.assertIsInstance(ceiling.condition, PermissionIn)
@@ -102,7 +103,7 @@ class RegisterConditionGrammarTest(SimpleTestCase):
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
     def test_internal_registry_still_accepts_private_ir(self):
         TeamRepoGrant = _gh_models()[6]
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         record = _register_team(registry, TeamRepoGrant)
         self.assertIsInstance(record.condition, All)
         self.assertEqual(registry.records, (record,))
@@ -123,7 +124,7 @@ class RegisterConditionOnceTest(TransactionTestCase):
             bundle.operations.add(read)
             repo = Repository.objects.create(organization=org, title='once')
             TeamRepoGrant.objects.create(team=team, repository=repo, operation=read)
-            registry = RegistryFactory()
+            registry = RegistryFactory(cls=TrustModelBackendMixin)
             handle = _handle(registry)
             builder = _CountCondition()
             record = handle.register_public(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=builder)
@@ -216,7 +217,7 @@ class RegisterConditionFailClosedTest(TestCase):
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_condition_invoked_on_register_after_build(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         handle = _handle(registry)
         calls = []
 
@@ -232,7 +233,7 @@ class RegisterConditionFailClosedTest(TestCase):
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
 
     def test_string_and_lambda_paths_still_match(self):
-        expected = RegistryFactory().register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
+        expected = RegistryFactory(cls=TrustModelBackendMixin).register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
         strings = _handle(path='tests.core.issue210-strings').register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         builders = _handle(path='tests.core.issue210-builders').register_public(trust=DocumentGrant, user=lambda t: t.user, permission=lambda t: t.permission, content=lambda t: t.document)
         self.assertEqual(strings, expected)
@@ -242,7 +243,7 @@ class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
     def test_along_named_filter_and_isolation_unchanged(self):
         from tests.core.test_issue92 import _node_graph_models
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
-        via_ref = RegistryFactory()
+        via_ref = RegistryFactory(cls=TrustModelBackendMixin)
         j = Ref(Grant)
         expected = via_ref.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
         left = _handle(path='tests.core.issue210-left')
@@ -274,7 +275,7 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
         self.repo_a = self.Repository.objects.create(organization=self.org_a, title='repo-a')
         self.repo_other = self.Repository.objects.create(organization=self.org_b, title='repo-other')
         self.TeamRepoGrant.objects.create(team=self.writers, repository=self.repo_a, operation=self.read)
-        self.registry = RegistryFactory()
+        self.registry = RegistryFactory(cls=TrustModelBackendMixin)
         _register_direct(self.registry, self.AccountRepoGrant)
         handle = _handle(self.registry)
         handle.register_public(trust=self.TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=_team_condition)

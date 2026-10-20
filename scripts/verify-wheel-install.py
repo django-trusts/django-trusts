@@ -308,7 +308,7 @@ def main() -> int:
     print('filter_by_permitted_content', filter_by_permitted_content)
     from trusts.plan.conditions import FrozenConditionLookup
     print('FrozenConditionLookup', FrozenConditionLookup)
-    standalone = RegistryFactory()
+    standalone = RegistryFactory(cls=TrustModelBackendMixin)
     shape = standalone.build()
     bound = shape.filter_lookup
     if not isinstance(bound, FrozenConditionLookup):

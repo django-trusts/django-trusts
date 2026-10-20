@@ -73,7 +73,7 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         self.assertTrue(callable(filter_by_permitted_content))
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(issubclass(AuthorizedManager, object))
-        registry = RegistryFactory()
+        registry = RegistryFactory(cls=TrustModelBackendMixin)
         self.assertEqual(registry.records, ())
         self.assertIsNotNone(Ref)
 

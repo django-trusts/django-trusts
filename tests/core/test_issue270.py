@@ -22,6 +22,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.query import AuthorizedManager, AuthorizedQuerySet, PermittedManager, PermittedQuerySet, PermittedQuerySetMixin
 from trusts import query as query_mod
+from trusts.backends import TrustModelBackendMixin
 
 def _request(user):
     request = HttpRequest()
@@ -323,13 +324,13 @@ def _extra_models():
     return (ExtraDocumentGrant, OtherPermission, OtherPermissionGrant)
 
 def _handle(path):
-    return RegistryFactory(path=path)
+    return RegistryFactory(cls=TrustModelBackendMixin, path=path)
 
 def _document_factory():
     """Replay the document recorder onto a factory this test owns."""
     from tests.myapp.backends import DocumentBackend
 
-    factory = RegistryFactory(
+    factory = RegistryFactory(cls=TrustModelBackendMixin, 
         path=DOCUMENT_BACKEND,
         family=DocumentBackend.family,
         compiler=DocumentBackend.query_compiler,
