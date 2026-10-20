@@ -11,14 +11,14 @@ from django.db import connection, models
 from django.http import HttpRequest
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import path, reverse
-from tests.apps import render_configured_policy, configured_catalog, built_registries
+from tests.support import render_configured_policy, configured_catalog, built_registries
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.rewrites import bind_once
-from tests.apps import scoped_permitted_content as filter_by_permitted_content
+from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError

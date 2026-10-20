@@ -1,4 +1,4 @@
-from tests.apps import configured_catalog
+from tests.support import configured_catalog
 """#151 C1: construct-time self-bind of Core's private condition lookup.
 
 Library-only proofs. Applications register builders; they do not import
@@ -255,7 +255,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         ))
 
     def test_explicit_unbind_fail_closes_named_condition_overlay(self):
-        from tests.apps import unbound_named_filters
+        from tests.support import unbound_named_filters
 
         backend = DocumentBackend()
         document = Document(title='unbind')

@@ -11,7 +11,13 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.test import TestCase, override_settings
-from tests.apps import listed_relationship, configured_catalog, live_config, built_registries, replay_recorder
+from tests.support import (
+    listed_relationship,
+    configured_catalog,
+    live_config,
+    built_registries,
+    replay_recorder,
+)
 from tests.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
 from tests.gh_permissions.models import Repository
@@ -91,7 +97,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         extra = _extra_handle()
         with self.assertNumQueries(0):
             self._assert_public_deny()
-            from tests.apps import bound_handle
+            from tests.support import bound_handle
             from trusts.backends import catalogs
             from trusts.compile.catalogs import Catalog
             cls = type(self.document_backend)

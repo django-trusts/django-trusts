@@ -7,8 +7,11 @@ from django.apps import apps
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import (
-    configured_catalog, isolate_live_registry, live_config, override_apps_ready,
+from tests.support import (
+    configured_catalog,
+    isolate_live_registry,
+    live_config,
+    override_apps_ready,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig

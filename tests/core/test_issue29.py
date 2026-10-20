@@ -33,6 +33,8 @@ from trusts.plan.conditions import (
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 
+from tests.support import override_catalog
+
 
 def _store_expr(registry, model, code, expr):
     store = getattr(registry, 'conditions', registry)
@@ -195,7 +197,6 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertIn('does not enable', errors[0].msg)
 
     def test_catalog_check_does_not_raise_on_invalid_expr(self):
-        from tests.apps import override_catalog
         from tests.backends import HostTrustModelBackend
 
         Note = _note_model()
@@ -234,7 +235,6 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         self.assertNotIn(CHECK_ID_OBSOLETE_CALLBACK_SETTING, output)
 
     def test_manage_py_check_reports_invalid_registration_via_catalog(self):
-        from tests.apps import override_catalog
         from tests.backends import HostTrustModelBackend
         from tests.myapp.models import Document
 

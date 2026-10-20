@@ -27,7 +27,7 @@ from trusts.plan.contents import _compile_granted
 from trusts.plan.registry import Question
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.rewrites import bind_once
-from tests.apps import built_registries
+from tests.support import built_registries
 from trusts.compile.catalogs import Catalog
 
 

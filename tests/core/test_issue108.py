@@ -10,8 +10,8 @@ from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
 
 import tests as tests_module
-from tests.apps import (
-    TestsConfig,
+from tests.apps import TestsConfig
+from tests.support import (
     configured_catalog,
     empty_catalogs,
     live_config,

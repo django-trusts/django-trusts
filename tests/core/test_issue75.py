@@ -12,7 +12,17 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
-from tests.apps import configured_catalog, TestsConfig, install_writable_registry, isolate_live_registry, live_config, override_apps_ready, built_registries
+from tests.apps import TestsConfig
+from tests.support import (
+    configured_catalog,
+    install_writable_registry,
+    isolate_live_registry,
+    live_config,
+    override_apps_ready,
+    built_registries,
+    empty_catalogs,
+    sweep_listed_backends,
+)
 from tests.backends import HostTrustModelBackend, MalformedCompilerBackend, MixinOnlyBackend, MissingCompilerBackend, RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
@@ -63,7 +73,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_dedupe(self):
-        from tests.apps import empty_catalogs, sweep_listed_backends
         with empty_catalogs():
             with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -72,7 +81,6 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertEqual(configured_catalog(HOST).path, HOST)
 
     def test_same_class_alias_is_ambiguity_error(self):
-        from tests.apps import empty_catalogs, sweep_listed_backends
         with empty_catalogs():
             with override_settings(AUTHENTICATION_BACKENDS=(HOST, ALIASED)):
                 with self.assertRaises(TrustsConfigurationError) as ctx:

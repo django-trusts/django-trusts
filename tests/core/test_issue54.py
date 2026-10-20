@@ -15,7 +15,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import (
+from tests.support import (
     built_registries,
     listed_relationship,
     live_config,
