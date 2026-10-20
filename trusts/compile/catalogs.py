@@ -13,6 +13,7 @@ from trusts.backends import TrustModelBackendMixin, configured_catalogs
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.aggregates import (
     _compile_common_permissions,
+    _delegated_user_exists,
     all_match,
     instance_match,
 )
@@ -26,6 +27,7 @@ from trusts.plan.conditions import (
     permission_has_condition,
 )
 from trusts.plan.contents import (
+    _as_q,
     _compile_granted,
     _compile_permitted_content_queryset,
     _ordinary_records,
@@ -49,9 +51,11 @@ from trusts.plan.relations import (
 from trusts.plan.rewrites import bind_once
 from trusts.plan.standards import builtin_user_conditions, field_state
 from trusts.plan.users import (
+    _named_filter_q,
+    _permission_binding_for_plan,
     _plan_user_model,
+    _reverse_checked,
     assert_persisted_principal,
-    permitted_users_predicate_for_registry,
 )
 import trusts.plan.standards as standards
 
@@ -139,7 +143,7 @@ class Catalog(object):
         self.records = shape.records
         self.delegations = shape.delegations
         self._project = shape.compiler is None
-        self._compiler = (
+        self.compiler = (
             PlanQueryCompiler() if shape.compiler is None else shape.compiler
         )
         self.user_model = shape.user_model
@@ -154,11 +158,6 @@ class Catalog(object):
         )
         self._user_rules = shape.user_rules
         self._override_q = shape.override_q
-
-    @property
-    def compiler(self):
-        """Compiler bound at construction."""
-        return self._compiler
 
     def plan_for(self, content, *, user=None, permission=None):
         """Select the terminal plan for ``content``.
@@ -344,11 +343,51 @@ class Catalog(object):
         ``accepts_permission`` is the singular-permission callable;
         omitted means ``auth.Permission``.
         """
-        return permitted_users_predicate_for_registry(
-            self, content, perm, skipped=skipped,
-            filter_lookup=filter_lookup,
-            accepts_permission=accepts_permission,
+        plan = self.plan_for(content)
+        if not plan.records and not plan.delegations:
+            return None
+        if filter_lookup is None:
+            filter_lookup = self.filter_lookup
+        binding, condition = _permission_binding_for_plan(
+            accepts_permission, content, perm, plan,
         )
+        exists = plan.user_exists(content, binding) if plan.records else None
+        if plan.delegations:
+            permission_model = (
+                binding._meta.concrete_model
+                if isinstance(binding, Model) else Permission
+            )
+            sponsor_records = _ordinary_records(
+                self, content, permission_model,
+            )
+            delegated = _delegated_user_exists(
+                plan.delegations, sponsor_records, content, binding,
+                content_identity=plan.content_identity,
+                skipped=skipped,
+            )
+            if delegated is not None:
+                exists = (
+                    delegated if exists is None else (_as_q(exists) | delegated)
+                )
+        user_model = _plan_user_model(plan, content)
+        permission_model = plan.permission_model
+        if permission_model is None and not isinstance(binding, Model):
+            permission_model = Permission
+        predicate = _reverse_checked(
+            plan, exists, user_model, binding, content, skipped,
+            permission_model,
+        )
+        if predicate is None:
+            return None
+        if condition:
+            overlay = _named_filter_q(
+                filter_lookup, content, condition[1], condition[0], user_model,
+            )
+            if overlay is None:
+                return None
+            if overlay is not True:
+                predicate &= overlay
+        return predicate
 
     def permitted_users(self, content, perm, **skip_flags):
         """Q3: lazy user queryset permitted on ``content`` for ``perm``."""
@@ -367,7 +406,7 @@ class Catalog(object):
             else:
                 raise TrustsConfigurationError(
                     'permitted_users has no registered user model and this '
-                    'registry was built without user_model.'
+                    'catalog was built without user_model.'
                 )
             return user_model._default_manager.none()
         user_model = _plan_user_model(plan, content)
@@ -922,29 +961,29 @@ def _plan_is_auth_permission(plan, sponsor_records=()):
     return False
 
 
-def _auth_permission_plan(registry, candidates, user):
+def _auth_permission_plan(catalog, candidates, user):
     """Applicable plan only when the permission terminal is auth.Permission."""
-    plan = registry.plan_for(candidates, user=user)
+    plan = catalog.plan_for(candidates, user=user)
     if not _plan_is_auth_permission(
-        plan, _ordinary_records(registry, candidates),
+        plan, _ordinary_records(catalog, candidates),
     ):
         return None
     return plan
 
 
-def _auth_permission_plan_for_model(registry, model):
+def _auth_permission_plan_for_model(catalog, model):
     """Zero-SQL applicable auth.Permission plan for this content model."""
-    plan = registry.plan_for(model)
-    if not _plan_is_auth_permission(plan, _ordinary_records(registry, model)):
+    plan = catalog.plan_for(model)
+    if not _plan_is_auth_permission(plan, _ordinary_records(catalog, model)):
         return None
     return plan
 
 
-def _owns_selected_conditions(registry, model, conditions):
+def _owns_selected_conditions(catalog, model, conditions):
     """True when every selected name is registered with a queryable expr."""
     if not conditions:
         return True
-    lookup = registry.filter_lookup
+    lookup = catalog.filter_lookup
     if lookup is None:
         return False
     for name in conditions:
@@ -954,9 +993,9 @@ def _owns_selected_conditions(registry, model, conditions):
     return True
 
 
-def _selected_condition_q(registry, model, permission, conditions, user, *, api):
-    """AND this registry's selected names, or None when any name is missing."""
-    lookup = registry.filter_lookup
+def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
+    """AND this catalog's selected names, or None when any name is missing."""
+    lookup = catalog.filter_lookup
     if lookup is None:
         return None
     extra_q = None

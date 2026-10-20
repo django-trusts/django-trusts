@@ -39,62 +39,6 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
     return _trusts_eligibility_q(user_model) & checked.predicate
 
 
-def permitted_users_predicate_for_registry(catalog, content, perm, *,
-                                           skipped=(),
-                                           filter_lookup=None,
-                                           accepts_permission=None):
-    """Reverse predicate for one built catalog.
-
-    ``filter_lookup`` is that catalog's named-filter lookup.
-    ``accepts_permission`` is the backend's singular-permission
-    callable; omitted means the mixin default (``auth.Permission``).
-    Ordinary rows come from this catalog.
-    """
-    plan = catalog.plan_for(content)
-    if not plan.records and not plan.delegations:
-        return None
-    if filter_lookup is None:
-        filter_lookup = catalog.filter_lookup
-    binding, condition = _permission_binding_for_plan(
-        accepts_permission, content, perm, plan,
-    )
-    exists = plan.user_exists(content, binding) if plan.records else None
-    if plan.delegations:
-        permission_model = (
-            binding._meta.concrete_model
-            if isinstance(binding, Model) else Permission
-        )
-        sponsor_records = _ordinary_records(
-            catalog, content, permission_model,
-        )
-        delegated = _delegated_user_exists(
-            plan.delegations, sponsor_records, content, binding,
-            content_identity=plan.content_identity,
-            skipped=skipped,
-        )
-        if delegated is not None:
-            exists = delegated if exists is None else (_as_q(exists) | delegated)
-    user_model = _plan_user_model(plan, content)
-    permission_model = plan.permission_model
-    if permission_model is None and not isinstance(binding, Model):
-        permission_model = Permission
-    predicate = _reverse_checked(
-        plan, exists, user_model, binding, content, skipped, permission_model,
-    )
-    if predicate is None:
-        return None
-    if condition:
-        overlay = _named_filter_q(
-            filter_lookup, content, condition[1], condition[0], user_model,
-        )
-        if overlay is None:
-            return None
-        if overlay is not True:
-            predicate &= overlay
-    return predicate
-
-
-
 def lock_permitted_users_queryset(catalog, content, permission):
     """Backend-local reverse queryset compiled into the policy lock.
 
