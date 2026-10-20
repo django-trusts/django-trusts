@@ -519,7 +519,9 @@ def _build_document(catalogs, alias):
         )
     projected = []
     for catalog in catalogs:
-        projected.append(_project_backend(catalog, alias))
+        row = _project_backend(catalog, alias)
+        if row['contents']:
+            projected.append(row)
     projected.sort(key=lambda row: row['path'])
     paths = [row['path'] for row in projected]
     if len(paths) != len(set(paths)):

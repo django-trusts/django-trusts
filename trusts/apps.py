@@ -136,9 +136,7 @@ class TrustsConfigMixin(django.apps.AppConfig):
             user_model=user_model,
             path=self.catalog_path(),
             family=self.family,
-            query_compiler=(
-                self.query_compiler or Compiler.default_query_compiler()
-            ),
+            query_compiler=self.query_compiler or Compiler.default_query_compiler(),
         )
         self.recorder.freeze()
         self.recorder.play(compiler.get_recorder_target())
