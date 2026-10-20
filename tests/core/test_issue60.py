@@ -432,7 +432,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
 
         with patch.object(RelationPlan, '_correlated_exists', spy):
             list(plan.permissions(self.alice, self.doc_a))
-            plan.build_registry().has_permission(self.alice, self.doc_a, self.read)
+            plan.has_permission(self.alice, self.doc_a, self.read)
             list(plan.filter_content(
                 self.Document.objects.all(), self.alice, self.read,
             ))
@@ -673,7 +673,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             with self.assertRaisesRegex(TrustsConfigurationError, r'content'):
                 list(plan.permissions(self.alice, None))
             with self.assertRaisesRegex(TrustsConfigurationError, r'permission'):
-                plan.build_registry().has_permission(self.alice, self.doc_a, None)
+                plan.has_permission(self.alice, self.doc_a, None)
             with self.assertRaisesRegex(TrustsConfigurationError, r'user'):
                 list(plan.filter_content(candidates, None, self.read))
             with self.assertRaisesRegex(TrustsConfigurationError, r'permission'):
@@ -686,13 +686,13 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 {self.read.pk},
             )
             self.assertTrue(
-                plan.build_registry().has_permission(self.alice, self.doc_a, self.read),
+                plan.has_permission(self.alice, self.doc_a, self.read),
             )
             self.assertFalse(
-                plan.build_registry().has_permission(self.alice, self.doc_b, self.read),
+                plan.has_permission(self.alice, self.doc_b, self.read),
             )
             self.assertFalse(
-                plan.build_registry().has_permission(self.alice, self.doc_c, self.read),
+                plan.has_permission(self.alice, self.doc_c, self.read),
             )
             self.assertEqual(
                 _pks(plan.filter_content(candidates, self.alice, self.read)),

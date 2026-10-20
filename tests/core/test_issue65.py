@@ -584,7 +584,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
 
         with patch.object(RelationPlan, '_correlated_exists', spy):
             list(plan.permissions(self.alice, self.doc_a1))
-            plan.build_registry().has_permission(self.alice, self.doc_a1, self.read)
+            plan.has_permission(self.alice, self.doc_a1, self.read)
             list(plan.filter_content(
                 self.Document.objects.all(), self.alice, self.read,
             ))

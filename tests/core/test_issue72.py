@@ -22,7 +22,7 @@ class IsolatedHostDoesNotReceiveDocumentContributionTest(
         host = live_config()
         self.assertEqual(configured_catalog(HOST_BACKEND).path, HOST_BACKEND)
         registry = configured_catalog(HOST_BACKEND)
-        self.assertFalse(registry.build_registry().plan_for(Document).records)
+        self.assertFalse(registry.plan_for(Document).records)
         before = registry.records
         host.ready()
         self.assertEqual(registry.records, before)

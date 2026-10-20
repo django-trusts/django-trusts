@@ -848,23 +848,21 @@ def _role_sentinel(record, role, alias):
     )
 
 
-def _compile_content_grant(registry, alias, records, model, registries):
-    return _PolicyVisitor(registry, alias, registries)._compile_content_grant(
+def _compile_content_grant(subject, alias, records, model):
+    return _PolicyVisitor(subject, alias)._compile_content_grant(records, model)
+
+
+def _compile_has_perm(subject, alias, records, model):
+    return _PolicyVisitor(subject, alias)._compile_has_perm(records, model)
+
+
+def _compile_get_all_permissions(subject, alias, records, model):
+    return _PolicyVisitor(subject, alias)._compile_get_all_permissions(
         records, model)
 
 
-def _compile_has_perm(registry, alias, records, model, registries):
-    return _PolicyVisitor(registry, alias, registries)._compile_has_perm(
-        records, model)
-
-
-def _compile_get_all_permissions(registry, alias, records, model, registries):
-    return _PolicyVisitor(registry, alias, registries)._compile_get_all_permissions(
-        records, model)
-
-
-def _compile_get_permitted_users(registry, alias, records, model, registries):
-    return _PolicyVisitor(registry, alias, registries)._compile_get_permitted_users(
+def _compile_get_permitted_users(subject, alias, records, model):
+    return _PolicyVisitor(subject, alias)._compile_get_permitted_users(
         records, model)
 
 
@@ -896,17 +894,15 @@ def _permitted_content_prefix_models(registry, model):
     return tuple(found)
 
 
-def _compile_filter_by_permitted_content(registry, alias, records, model, registries):
+def _compile_filter_by_permitted_content(subject, alias, records, model):
     """One statement per proper prefix, the queryset that actually runs."""
-    return _PolicyVisitor(
-        registry, alias, registries,
-    )._compile_filter_by_permitted_content(records, model)
+    return _PolicyVisitor(subject, alias)._compile_filter_by_permitted_content(
+        records, model)
 
 
-def _compile_get_group_permissions(registry, alias, records, model):
-    return _PolicyVisitor(
-        registry, alias, (registry,),
-    )._compile_get_group_permissions(records, model)
+def _compile_get_group_permissions(subject, alias, records, model):
+    return _PolicyVisitor(subject, alias)._compile_get_group_permissions(
+        records, model)
 
 
 class _Query(object):

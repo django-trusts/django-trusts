@@ -487,9 +487,11 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_along_forward_lockfile_is_portable_recursive_sql(self):
         handle = _handle('documents.backends.FolderAlongBackend')
         handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        record = handle.build_registry().plan_for(Folder).records[0]
-        handles = (handle,)
-        content = {'model': 'documents.Folder', 'permitted': _sql_row(_compile_content_grant(handle, 'default', (record,), Folder, handles)), 'has_perm': _sql_row(_compile_has_perm(handle, 'default', (record,), Folder, handles)), 'get_all_permissions': _sql_row(_compile_get_all_permissions(handle, 'default', (record,), Folder, handles)), 'get_permitted_users': _sql_row(_compile_get_permitted_users(handle, 'default', (record,), Folder, handles))}
+        from trusts.compile.catalogs import Catalog
+        built = handle.build_registry()
+        subject = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=built, family_registries=())
+        record = built.plan_for(Folder).records[0]
+        content = {'model': 'documents.Folder', 'permitted': _sql_row(_compile_content_grant(subject, 'default', (record,), Folder)), 'has_perm': _sql_row(_compile_has_perm(subject, 'default', (record,), Folder)), 'get_all_permissions': _sql_row(_compile_get_all_permissions(subject, 'default', (record,), Folder)), 'get_permitted_users': _sql_row(_compile_get_permitted_users(subject, 'default', (record,), Folder))}
         payload = dump_policy_yaml({'schema_version': 1, 'database': {'engine': 'django.db.backends.sqlite3'}, 'backends': [{'path': 'documents.backends.FolderAlongBackend', 'contents': [content]}]})
         self.assertEqual(payload, GOLDEN_ALONG)
         text = payload.decode('utf-8')
