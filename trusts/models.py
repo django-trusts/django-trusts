@@ -1,4 +1,7 @@
-from django.db.models import Model, QuerySet
+# Inert library module. Do not list 'trusts' in INSTALLED_APPS.
+# This file defines no Model subclasses. Canonical models live in Zero.
+
+from django.db.models import Manager, Model, QuerySet
 
 from trusts.apps import catalog_for_model
 from trusts.errors import TrustsConfigurationError
@@ -59,6 +62,16 @@ class AuthorizedQuerySet(QuerySet):
             granted_q = granted_q & extra_q
         return bind_once(
             self.filter(granted_q).distinct(), user_model=catalog.user_model,
+        )
+
+
+class AuthorizedManagerMixin:
+    """Add ``authorized()`` without replacing an application's manager."""
+
+    def authorized(self, user, permission, extra_q=None, **skip_flags):
+        return AuthorizedQuerySet.authorized(
+            self.get_queryset(), user, permission, extra_q=extra_q,
+            **skip_flags,
         )
 
 
@@ -131,6 +144,45 @@ class PermittedQuerySetMixin:
 
 class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
     """Concrete queryset for ``permitted(permission, user, conditions=())``."""
+
+
+class PermittedUsersMixin:
+    """Content-instance adapter for the reverse permission inquiry.
+
+    ``content.get_permitted_users(perm)`` is the path that exists on
+    every protected model that mixes this in. It is not a content-manager
+    method: ``Content.objects`` keeps returning content rows.
+    """
+
+    def get_permitted_users(self, perm, **skip_flags):
+        # Catalog import stays in the method so model import needs no registry.
+        from trusts.compile.catalogs import compile_permitted_users
+
+        return compile_permitted_users(self, perm, **skip_flags)
+
+
+class PermittedUsersManagerMixin:
+    """Optional adapter on an application's existing user manager.
+
+    ``User.objects.permitted(content, perm)`` returns a lazy user
+    queryset. The name is ``permitted`` because the manager already
+    identifies the user model, and Django's ``get`` convention implies
+    one row. Does not replace that manager or its queryset class. Stock
+    ``auth.User`` does not acquire this method. The content adapter
+    ``get_permitted_users`` remains the path that does not require a
+    user-manager change.
+    """
+
+    def permitted(self, content, perm, **skip_flags):
+        from trusts.compile.catalogs import compile_permitted_users
+
+        return compile_permitted_users(
+            content, perm, user_queryset=self.get_queryset(), **skip_flags,
+        )
+
+
+PermittedManager = Manager.from_queryset(PermittedQuerySet)
+AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)
 
 
 def _normalize_permitted_permission(permission, *, api):

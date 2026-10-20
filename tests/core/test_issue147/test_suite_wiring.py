@@ -4,9 +4,7 @@ from pathlib import Path
 
 from django.test import SimpleTestCase
 
-import trusts.models.base as base
-import trusts.models.manager as manager
-import trusts.models.query as query
+import trusts.models as models_mod
 
 
 class PolicyLockImportTest(SimpleTestCase):
@@ -24,7 +22,7 @@ class PolicyLockImportTest(SimpleTestCase):
 
         self.assertFalse(hasattr(policy_snapshot, 'ensure_policy_lockfile_verified'))
         self.assertFalse(hasattr(policy_snapshot, '_policy_lock_verification_state'))
-        for module in (backends, decorators, query, base, manager):
+        for module in (backends, decorators, models_mod):
             source = Path(module.__file__).read_text(encoding='utf-8')
             self.assertNotIn('ensure_policy_lockfile_verified', source)
         lock_source = Path(policy_snapshot.__file__).read_text(encoding='utf-8')
