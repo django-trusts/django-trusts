@@ -14,6 +14,7 @@ from django.test.utils import isolate_apps
 from tests.core import KernelHostRequiredMixin
 from tests.apps import TestsConfig
 from tests.support import (
+    built_catalog,
     configured_catalog,
     install_writable_registry,
     isolate_live_registry,
@@ -190,7 +191,7 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
         handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
+            granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
 class CompilerCheckQueryCountTest(TestCase):
@@ -240,7 +241,7 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         qs = Document.objects.all()
         parts = [
             granted(registry, qs, self.alice, self.change, kind='complete')
-            for registry in (self.host, self.document, extra.build_registry())
+            for registry in (self.host, self.document, built_catalog(extra))
         ]
         pred = None
         for part in parts:
@@ -277,7 +278,7 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
             granted(configured_catalog(HOST), Document, User(), Permission(), kind='complete')
-            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
+            granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):

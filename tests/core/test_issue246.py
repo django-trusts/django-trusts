@@ -308,7 +308,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, shape=factory.build())
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -333,12 +333,12 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertFalse(self.backend.has_perm(self.alice, self.change_code, mixed))
             self.assertEqual(self.backend.get_group_permissions(self.alice, mixed), set())
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_c), {self.change_code})
-        granted = self.registry.build_registry().filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
+        granted = built_catalog(self.registry).filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
         self.assertEqual(list(granted), [self.paper_a, self.paper_c, self.paper_d])
         with listed_relationship((self.handle,)):
             listed = sorted(self.Paper.objects.authorized(self.alice, self.change), key=lambda row: row.pk)
         self.assertEqual(listed, [self.paper_a, self.paper_c, self.paper_d])
-        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=self.handle.build_registry())
+        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=built_catalog(self.handle))
         self.assertEqual(list(folders), [self.folder_a])
 
     def test_permission_and_membership_do_not_feed_group_permissions(self):
@@ -467,7 +467,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, shape=factory.build())
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -511,8 +511,8 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 sql = str(rows.query)
                 with self.subTest(authorized_sql=label):
                     self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
-        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, registry=self.handle.build_registry())
-        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=self.handle.build_registry())
+        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, registry=built_catalog(self.handle))
+        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=built_catalog(self.handle))
         with self.subTest('scope read'):
             self.assertEqual(list(read_folders), [self.folder])
         with self.subTest('scope change'):
@@ -667,7 +667,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         cls = type(backend)
         saved = catalogs.get(cls)
         factory = handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry())
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, shape=factory.build())
         try:
             with bound_handle(backend, handle):
                 for perm in granted:

@@ -22,7 +22,6 @@ from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
-from trusts.plan.registry import Registry
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies
 from trusts.decorators import _declared_authorization_guards, authorization_required
@@ -110,7 +109,7 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertIsInstance(catalog.records, tuple)
 
     def test_unowned_factory_defaults_to_relationship_family(self):
-        built = RegistryFactory(path=MIXIN).build_registry()
+        built = built_catalog(RegistryFactory(path=MIXIN))
         self.assertEqual(built.family, 'relationship')
         self.assertEqual(relationship_family((built,)), (built,))
 
@@ -132,9 +131,8 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         from tests.backends import MixinOnlyBackend
         self._saved_fold_catalog = catalogs.get(MixinOnlyBackend)
-        built_fold = self.fold_registry.build_registry()
-        catalogs[MixinOnlyBackend] = Catalog(cls=MixinOnlyBackend, path=MIXIN, family='ordered_fold', registry=built_fold)
-        self.fold_handle = built_fold
+        self.fold_handle = Catalog(cls=MixinOnlyBackend, path=MIXIN, family='ordered_fold', shape=self.fold_registry.build())
+        catalogs[MixinOnlyBackend] = self.fold_handle
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()
 
@@ -233,8 +231,8 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_standalone_factory_rebuilds_and_a_published_registry_does_not(self):
         from tests.backends import HostTrustModelBackend
         isolated = RegistryFactory()
-        first_build = isolated.build_registry()
-        second_build = isolated.build_registry()
+        first_build = built_catalog(isolated)
+        second_build = built_catalog(isolated)
         self.assertIsNot(first_build, second_build)
         from tests.myapp.models import DocumentGrant
         from trusts.compile.nodes import Ref

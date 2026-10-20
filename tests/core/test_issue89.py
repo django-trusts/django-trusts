@@ -66,8 +66,8 @@ class StandaloneIndependenceTest(SimpleTestCase):
         registry = RegistryFactory()
         _contribute_document(registry)
         before = registry.records
-        first_build = registry.build_registry()
-        second_build = registry.build_registry()
+        first_build = built_catalog(registry)
+        second_build = built_catalog(registry)
         self.assertIsNot(first_build, second_build)
         self.assertEqual(first_build.records, before)
         self.assertEqual(second_build.records, before)
@@ -99,7 +99,7 @@ class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
         registry = RegistryFactory()
         _contribute_document(registry)
         before = built_catalog(registry).plan_for(Document)
-        registry.build_registry()
+        built_catalog(registry)
         plan = built_catalog(registry).plan_for(Document)
         self.assertEqual(plan.records, before.records)
         user = get_user_model()(pk=1)
@@ -107,7 +107,7 @@ class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
         exists = plan.content_exists(user, permission)
         self.assertIsNotNone(exists)
         qs = Document.objects.all()
-        filtered = registry.build_registry().filter_authorized(qs, user, permission)
+        filtered = built_catalog(registry).filter_authorized(qs, user, permission)
         self.assertIs(filtered.model, Document)
 
 class _CatalogRestoreMixin(object):
@@ -248,8 +248,8 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
     def test_factory_builds_a_fresh_registry(self):
         registry = RegistryFactory(path='tests.core.builder')
         handle = registry
-        first = handle.build_registry()
-        second = handle.build_registry()
+        first = built_catalog(handle)
+        second = built_catalog(handle)
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
         fresh = RegistryFactory(path='tests.core.builder')

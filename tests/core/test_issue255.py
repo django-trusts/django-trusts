@@ -189,8 +189,8 @@ def _seal_document_factory(factory):
     from trusts.backends import catalogs
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
-    built = factory.build_registry()
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=built)
+    built = factory.build()
+    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, shape=built)
     return built
 
 @contextmanager
@@ -247,7 +247,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         handle.register_public(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
         folder = Folder(pk=1)
-        queryset = lock_permitted_users_queryset(handle.build_registry(), folder, Permission(pk=1))
+        queryset = lock_permitted_users_queryset(built_catalog(handle), folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
         document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
@@ -852,7 +852,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
                     found = _pks(folder.get_permitted_users(permission))
                 expected = {user.pk for user in candidates if _object_backend_allows(user, permission.user_perm_str, folder)}
                 self.assertEqual(found, expected)
-                locked = _pks(lock_permitted_users_queryset(self.handle.build_registry(), folder, permission))
+                locked = _pks(lock_permitted_users_queryset(built_catalog(self.handle), folder, permission))
                 self.assertEqual(locked, found)
         self.assertIn(self.alice.pk, _pks(at_bound.get_permitted_users(permission)))
         self.assertNotIn(self.alice.pk, _pks(beyond.get_permitted_users(permission)))
@@ -915,7 +915,7 @@ def _reverse_agrees(test, handle, content, perm, candidates):
     expected = {user.pk for user in candidates if _object_backend_allows(user, code, content)}
     test.assertEqual(found, expected)
     test.assertEqual(_pks(_user_manager().permitted(content, perm)), found)
-    test.assertEqual(_pks(lock_permitted_users_queryset(handle.build_registry(), content, perm)), found)
+    test.assertEqual(_pks(lock_permitted_users_queryset(built_catalog(handle), content, perm)), found)
     return found
 
 def _assert_along_lock(test, handle, specs, *, group=False):

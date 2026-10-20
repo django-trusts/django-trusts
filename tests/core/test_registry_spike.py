@@ -1,8 +1,7 @@
-"""Spike: a registry built whole from lowered values.
+"""A catalog is built whole from one frozen shape.
 
-``RegistryFactory`` stays the registration front end. ``Registry``
-takes records, delegations, the shared condition store, stored user
-conditions, and the user override as data.
+``RegistryFactory`` stays the registration front end. ``build()``
+returns the shape. ``built_catalog`` asks that shape.
 """
 
 import ast
@@ -15,11 +14,10 @@ from django.db import connection, models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.catalogs import Catalog
 from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Along, Ref
+from trusts.plan.conditions import ConditionRegistry
 from trusts.plan.recursions import GrantReach
-from trusts.plan.registry import Registry
 from tests.support import built_catalog
 
 
@@ -27,17 +25,6 @@ def _sql(expr, model):
     query = model._default_manager.annotate(hit=expr).query
     compiler = query.get_compiler(using=connection.alias)
     return compiler.as_sql()
-
-
-def _built_from(registry):
-    return Registry(
-        records=registry.records,
-        delegations=registry.delegations,
-        conditions=registry.conditions,
-        user_conditions=registry._stored_user_conditions(),
-        user_override=registry._user_override,
-        filter_lookup=registry.filter_lookup,
-    )
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -70,17 +57,15 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         Document, DocumentGrant = _document_models()
         registry = RegistryFactory()
         _register_document(registry, DocumentGrant)
-        built_registry = _built_from(registry)
-        self.assertIs(built_registry.conditions, registry.conditions)
-        self.assertIs(built_registry.filter_lookup, registry.filter_lookup)
-        self.assertEqual(built_registry.records, registry.records)
-        self.assertEqual(built_registry.delegations, registry.delegations)
+        shape = registry.build()
+        self.assertIsInstance(shape.conditions, tuple)
+        self.assertNotIsInstance(shape.conditions, ConditionRegistry)
+        self.assertIsNot(shape.filter_lookup, registry.filter_lookup)
+        self.assertEqual(shape.records, registry.records)
+        self.assertEqual(shape.delegations, registry.delegations)
 
         live = built_catalog(registry).plan_for(Document)
-        built = Catalog(
-            cls=type(built_registry), path=built_registry.path,
-            family=built_registry.family, registry=built_registry,
-        ).plan_for(Document)
+        built = built_catalog(registry).plan_for(Document)
         self.assertEqual(built.records, live.records)
         self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
@@ -112,12 +97,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
             permission=root.permission,
             along=Along(root.folder.parent, 2),
         )
-        built_registry = _built_from(registry)
         live = built_catalog(registry).plan_for(Folder)
-        built = Catalog(
-            cls=type(built_registry), path=built_registry.path,
-            family=built_registry.family, registry=built_registry,
-        ).plan_for(Folder)
+        built = built_catalog(registry).plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)

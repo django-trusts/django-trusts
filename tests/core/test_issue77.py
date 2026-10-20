@@ -43,7 +43,7 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
         handle = registry
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(handle.build_registry(), Document, User(), Permission(), kind='complete')
+            granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_missing_compiler_fails_loud(self):

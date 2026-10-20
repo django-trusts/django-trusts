@@ -26,7 +26,6 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, _Symbol, _classify_compiled, _compile_get_all_permissions, _compile_get_permitted_users, _compile_has_perm, _compile_content_grant, _const_from_json, _json_const, _presented_const, _sentinel, _assign_ids, _load_policy_sql_document, _render_condition, _sql_row, _symbol_for_new_param, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
-from trusts.compile.catalogs import Catalog
 GOLDEN_SQLITE = Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
 GOLDEN_CONSTANTS = Path(__file__).with_name('golden_condition_constants_sqlite.yaml').read_bytes()
 GOLDEN_ALONG = Path(__file__).with_name('golden_along_sqlite.yaml').read_bytes()
@@ -489,9 +488,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_along_forward_lockfile_is_portable_recursive_sql(self):
         handle = _handle('documents.backends.FolderAlongBackend')
         handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        built = handle.build_registry()
-        subject = Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=built)
-        record = built.plan_for(Folder).records[0]
+        subject = built_catalog(handle)
+        record = subject.plan_for(Folder).records[0]
         content = {'model': 'documents.Folder', 'permitted': _sql_row(_compile_content_grant(subject, 'default', (record,), Folder)), 'has_perm': _sql_row(_compile_has_perm(subject, 'default', (record,), Folder)), 'get_all_permissions': _sql_row(_compile_get_all_permissions(subject, 'default', (record,), Folder)), 'get_permitted_users': _sql_row(_compile_get_permitted_users(subject, 'default', (record,), Folder))}
         payload = dump_policy_yaml({'schema_version': 1, 'database': {'engine': 'django.db.backends.sqlite3'}, 'backends': [{'path': 'documents.backends.FolderAlongBackend', 'contents': [content]}]})
         self.assertEqual(payload, GOLDEN_ALONG)
