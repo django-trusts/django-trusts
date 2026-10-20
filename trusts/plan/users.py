@@ -42,12 +42,11 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
 def permitted_users_predicate_for_registry(registry, content, perm, *,
                                            family_registries=(),
                                            skipped=(),
-                                           condition_lookup=None,
-                                           accepts_permission=None,
-                                           owner_name=None):
+                                           filter_lookup=None,
+                                           accepts_permission=None):
     """Reverse predicate for one built registry.
 
-    ``condition_lookup`` is that registry's named-filter lookup.
+    ``filter_lookup`` is that registry's named-filter lookup.
     ``accepts_permission`` is the backend's singular-permission
     callable; omitted means the mixin default (``auth.Permission``).
     Ordinary rows come from each family registry.
@@ -55,10 +54,10 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
     plan = registry.plan_for(content)
     if not plan.records and not plan.delegations:
         return None
-    if condition_lookup is None:
-        condition_lookup = registry.condition_lookup
+    if filter_lookup is None:
+        filter_lookup = registry.filter_lookup
     binding, condition = _permission_binding_for_plan(
-        accepts_permission, content, perm, plan, owner_name=owner_name,
+        accepts_permission, content, perm, plan,
     )
     exists = plan.user_exists(content, binding) if plan.records else None
     if plan.delegations:
@@ -87,7 +86,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
         return None
     if condition:
         overlay = _named_filter_q(
-            condition_lookup, content, condition[1], condition[0], user_model,
+            filter_lookup, content, condition[1], condition[0], user_model,
         )
         if overlay is None:
             return None
@@ -98,7 +97,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
 
 
 def lock_permitted_users_queryset(registry, content, permission, *,
-                                  registries=None):
+                                  subjects=None):
     """Backend-local reverse queryset compiled into the policy lock.
 
     This is the backend branch (eligibility and complete grants), not
@@ -115,7 +114,7 @@ def lock_permitted_users_queryset(registry, content, permission, *,
     user_model = _plan_user_model(plan, content)
     exists = plan.user_exists(content, permission) if plan.records else None
     if plan.delegations:
-        family_registries = (registry,) if registries is None else tuple(registries)
+        family_registries = (registry,) if subjects is None else tuple(subjects)
         permission_model = (
             permission._meta.concrete_model
             if isinstance(permission, Model) else None
@@ -174,8 +173,7 @@ def _plan_user_model(plan, content):
 
 
 
-def _permission_binding_for_plan(accepts_permission, content, perm, plan,
-                                 owner_name=None):
+def _permission_binding_for_plan(accepts_permission, content, perm, plan):
     """Return ``(binding, condition)``.
 
     ``accepts_permission`` is the singular-permission callable, or
@@ -203,16 +201,12 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan,
         return binding, (singular, code)
     if accepts_permission is None:
         accepted = isinstance(perm, Permission)
-        if owner_name is None:
-            owner_name = 'Registry'
     else:
         accepted = bool(accepts_permission(perm))
-        if owner_name is None:
-            owner_name = 'Registry'
     if not accepted:
         raise TrustsConfigurationError(
-            '%s does not accept %s as a singular object permission.'
-            % (owner_name, type(perm).__name__)
+            '%s is not accepted as a singular object permission.'
+            % type(perm).__name__
         )
     if (
         permission_model is not None
@@ -229,16 +223,16 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan,
     return perm, None
 
 
-def _named_filter_q(condition_lookup, content, code, singular, user_model):
+def _named_filter_q(filter_lookup, content, code, singular, user_model):
     """User-queryset ``Q``, ``True``, or ``None`` (fail closed).
 
     ``None`` means this lookup grants nobody for this condition, matching
     a singular object check that returns false. Construction reads only
     values already loaded on ``content``.
     """
-    if condition_lookup is None:
+    if filter_lookup is None:
         return None
-    record = condition_lookup.record_for(content.__class__, code)
+    record = filter_lookup.record_for(content.__class__, code)
     if record is None:
         return None
     expr = record.expr

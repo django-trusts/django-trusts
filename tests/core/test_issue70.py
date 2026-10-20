@@ -22,7 +22,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
     def setUp(self):
         super().setUp()
         from tests.myapp.backends import DocumentBackend
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
 
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
@@ -31,7 +31,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.live_catalog = configured_catalog(DOCUMENT_BACKEND)
 
     def tearDown(self):
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
 
         if self.saved_catalog is None:
             catalogs.pop(self._document_cls, None)

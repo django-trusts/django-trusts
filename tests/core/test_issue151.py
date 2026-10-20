@@ -2,7 +2,7 @@ from tests.apps import configured_catalog
 """#151 C1: construct-time self-bind of Core's private condition lookup.
 
 Library-only proofs. Applications register builders; they do not import
-``trusts.plan.conditions`` or call ``set_condition_lookup``.
+``trusts.plan.conditions`` or call ``set_filter_lookup``.
 """
 
 import os
@@ -75,7 +75,7 @@ class _IsolatedTables(object):
 class ConstructTimeSelfBindTest(SimpleTestCase):
     def test_new_registry_self_binds_private_store_adapter(self):
         registry = RegistryFactory()
-        lookup = registry.condition_lookup
+        lookup = registry.filter_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)
 
@@ -83,21 +83,21 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         left = RegistryFactory()
         right = RegistryFactory()
         self.assertIsNot(left.conditions, right.conditions)
-        self.assertIsNot(left.condition_lookup, right.condition_lookup)
-        self.assertIs(left.condition_lookup.conditions, left.conditions)
-        self.assertIs(right.condition_lookup.conditions, right.conditions)
+        self.assertIsNot(left.filter_lookup, right.filter_lookup)
+        self.assertIs(left.filter_lookup.conditions, left.conditions)
+        self.assertIs(right.filter_lookup.conditions, right.conditions)
 
     def test_build_and_ready_do_not_bind_or_rebind(self):
         import inspect
 
         registry = RegistryFactory()
-        lookup = registry.condition_lookup
+        lookup = registry.filter_lookup
         built = registry.build_registry()
-        self.assertIs(built.condition_lookup, lookup)
-        self.assertIs(registry.condition_lookup, lookup)
+        self.assertIs(built.filter_lookup, lookup)
+        self.assertIs(registry.filter_lookup, lookup)
         self.assertIs(lookup.conditions, registry.conditions)
         self.assertNotIn(
-            'set_condition_lookup',
+            'set_filter_lookup',
             inspect.getsource(RegistryFactory.build_registry),
         )
         self.assertNotIn(
@@ -105,7 +105,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
             inspect.getsource(RegistryFactory.build_registry),
         )
         self.assertNotIn(
-            'set_condition_lookup',
+            'set_filter_lookup',
             inspect.getsource(TrustsImplementationConfig.ready),
         )
         self.assertNotIn(
@@ -161,7 +161,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         for text in (apps_text, readme, rst):
             self.assertNotIn('RegistryConditionLookup', text)
             self.assertNotIn('trusts.conditions._ir', text)
-            self.assertNotIn('set_condition_lookup', text)
+            self.assertNotIn('set_filter_lookup', text)
 
 
 class ImportOrderStandaloneConstructionTest(SimpleTestCase):
@@ -220,15 +220,17 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
 class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
         catalog = configured_catalog(DOCUMENT_BACKEND)
-        lookup = catalog.condition_lookup
-        self.assertIsInstance(lookup, RegistryConditionLookup)
-        self.assertIs(lookup.conditions, catalog.conditions)
+        found = {
+            (model, code)
+            for model, code, record in catalog.iter_permission_conditions()
+        }
+        self.assertIn((Document, 'non_confidential'), found)
 
 
 class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
     def test_explicit_unbind_and_partial_bind_do_not_mutate_wrongly(self):
         registry = RegistryFactory()
-        default = registry.condition_lookup
+        default = registry.filter_lookup
         self.assertIs(default.conditions, registry.conditions)
 
         class OnlyRecord(object):
@@ -236,41 +238,34 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
                 return None
 
         with self.assertRaises(TrustsConfigurationError):
-            registry.set_condition_lookup(OnlyRecord())
-        self.assertIs(registry.condition_lookup, default)
+            registry.set_filter_lookup(OnlyRecord())
+        self.assertIs(registry.filter_lookup, default)
 
-        registry.set_condition_lookup(None)
-        self.assertIsNone(registry.condition_lookup)
-        registry.set_condition_lookup(default)
-        self.assertIs(registry.condition_lookup, default)
+        registry.set_filter_lookup(None)
+        self.assertIsNone(registry.filter_lookup)
+        registry.set_filter_lookup(default)
+        self.assertIs(registry.filter_lookup, default)
 
     def test_unknown_condition_fail_closes_through_supported_backend_path(self):
         backend = DocumentBackend()
         document = Document(title='probe')
         user = get_user_model()(username='probe-151')
-        record, extra_q = backend.get_catalog()._condition_overlay(
-            'myapp.change_document:missing', document, user,
-        )
-        self.assertIsNone(record)
-        self.assertIsNone(extra_q)
+        self.assertFalse(backend.has_perm(
+            user, 'myapp.change_document:missing', document,
+        ))
 
     def test_explicit_unbind_fail_closes_named_condition_overlay(self):
+        from tests.apps import unbound_named_filters
+
         backend = DocumentBackend()
-        catalog = backend.get_catalog()
-        previous = catalog.condition_lookup
         document = Document(title='unbind')
         user = get_user_model()(username='unbind-151')
-        try:
-            catalog.condition_lookup = None
-            with self.assertRaises(AttributeError):
-                backend.get_catalog()._condition_overlay(
-                    'myapp.change_document:non_confidential',
-                    document,
-                    user,
+        with unbound_named_filters(DocumentBackend):
+            with self.assertRaises(AttributeError) as ctx:
+                backend.has_perm(
+                    user, 'myapp.change_document:non_confidential', document,
                 )
-        finally:
-            catalog.condition_lookup = previous
-        self.assertIs(catalog.condition_lookup, previous)
+            self.assertIn('not associate', str(ctx.exception))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -279,14 +274,14 @@ class NamedConditionCompilationTest(TransactionTestCase):
         Note = _note_model()
         with self.assertNumQueries(0):
             registry = RegistryFactory()
-            lookup = registry.condition_lookup
+            lookup = registry.filter_lookup
             self.assertIs(lookup.conditions, registry.conditions)
             registry.register_permission_condition(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
             built = registry.build_registry()
-        self.assertIs(built.condition_lookup, lookup)
-        self.assertIs(registry.condition_lookup, lookup)
+        self.assertIs(built.filter_lookup, lookup)
+        self.assertIs(registry.filter_lookup, lookup)
         self.assertIsNotNone(
             registry.get_permission_condition_record(Note, 'owned'),
         )
@@ -308,7 +303,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 registry.register_permission_condition(
                     Note, 'owned', lambda u, p, o: u == o.owner,
                 )
-            lookup = registry.condition_lookup
+            lookup = registry.filter_lookup
             self.assertIs(lookup.conditions, registry.conditions)
             record = lookup.record_for(Note, 'owned')
             self.assertIsNotNone(record)
@@ -343,7 +338,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
             )
             note = Note.objects.create(title='n', owner=alice)
             registry = RegistryFactory()
-            lookup = registry.condition_lookup
+            lookup = registry.filter_lookup
             self.assertIsNone(lookup.record_for(Note, 'missing'))
             with self.assertRaises(AttributeError) as missing:
                 registry.compile_registered_condition_q(

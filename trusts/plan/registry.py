@@ -2,9 +2,8 @@
 
 Records, delegations, the named-filter condition store, stored user
 conditions, and the user override are passed in as data, all at once.
-Builders and model helpers are imported directly here. This module
-does not import ``trusts.compile``. Object methods take the runtime
-user, content, and permission.
+Builders and model helpers are imported directly here. Object methods
+take the runtime user, content, and permission.
 """
 
 __all__ = []
@@ -29,7 +28,6 @@ from trusts.plan.standards import (
     builtin_user_conditions,
     compile_override_q,
     compile_user_rules,
-    condition_names,
 )
 from django.db.models import Model
 from trusts.plan.aggregates import all_match, instance_match
@@ -43,7 +41,7 @@ from trusts.plan.conditions import ConditionRegistry
 from trusts.plan.conditions import RegistryConditionLookup
 
 
-_CONDITION_LOOKUP_UNSET = object()
+_FILTER_LOOKUP_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -85,14 +83,14 @@ class Registry(object):
     a new empty store is created when omitted. ``user_conditions``
     is the stored user-condition tuple, or ``None`` for the built-in
     per-model rule. ``user_override`` is the stored override or
-    ``None``. ``condition_lookup`` is derived from ``conditions``
+    ``None``. ``filter_lookup`` is derived from ``conditions``
     when omitted; an explicit ``None`` stays unbound.
     """
 
     def __init__(
         self, *, records, delegations, conditions=None,
         user_conditions=None, user_override=None,
-        condition_lookup=_CONDITION_LOOKUP_UNSET,
+        filter_lookup=_FILTER_LOOKUP_UNSET,
         compiler=None, path='', family='relationship', user_model=None,
     ):
         self.records = tuple(records)
@@ -109,12 +107,12 @@ class Registry(object):
             None if user_conditions is None else tuple(user_conditions)
         )
         self.user_override = user_override
-        if condition_lookup is _CONDITION_LOOKUP_UNSET:
+        if filter_lookup is _FILTER_LOOKUP_UNSET:
 
-            condition_lookup = RegistryConditionLookup(self.conditions)
-        # An explicit None stays unbound (set_condition_lookup(None)
+            filter_lookup = RegistryConditionLookup(self.conditions)
+        # An explicit None stays unbound (set_filter_lookup(None)
         # on the builder must survive the build); only omission derives.
-        self.condition_lookup = condition_lookup
+        self.filter_lookup = filter_lookup
         self._rule_fragments = {}
         self._override_fragments = {}
 
@@ -183,9 +181,6 @@ class Registry(object):
     def _stored_user_conditions(self):
         """``None`` when this registry still uses the built-in rule."""
         return self.user_conditions
-
-    def _known_skip_names(self):
-        return condition_names(self.user_conditions, self.user_override)
 
     def compile_registered_condition_q(self, model, perm, user):
         """Compile a registered ``:condition`` to ``Q`` from this registry."""
@@ -330,7 +325,7 @@ class Registry(object):
             return queryset.none()
         family_registries = self._with_family_registries(family_registries)
         return _compile_permitted_content_queryset(
-            queryset, user, permission, content=content, registries=(self,),
+            queryset, user, permission, content=content, subjects=(self,),
             family_registries=family_registries,
             skipped=values,
         )
@@ -365,15 +360,12 @@ class Registry(object):
             return plan.permission_model._default_manager.none()
         return qs
 
-    # Backwards-compatible alias name used in earlier discussion.
-    common_permissions = permissions_for
-
     def permitted_users_predicate(self, content, perm, *, family_registries=(),
-                                  skipped=(), condition_lookup=None,
-                                  accepts_permission=None, owner_name=None):
+                                  skipped=(), filter_lookup=None,
+                                  accepts_permission=None):
         """Q3 predicate: ``Q`` over candidate users, or ``None``.
 
-        ``condition_lookup`` defaults to this registry's lookup.
+        ``filter_lookup`` defaults to this registry's lookup.
         ``accepts_permission`` is the singular-permission callable;
         omitted means ``auth.Permission``.
         """
@@ -381,9 +373,8 @@ class Registry(object):
         family_registries = self._with_family_registries(family_registries)
         return permitted_users_predicate_for_registry(
             self, content, perm, family_registries=family_registries,
-            skipped=skipped, condition_lookup=condition_lookup,
+            skipped=skipped, filter_lookup=filter_lookup,
             accepts_permission=accepts_permission,
-            owner_name=owner_name,
         )
 
     def permitted_users(self, content, perm, *, family_registries=(), **skip_flags):

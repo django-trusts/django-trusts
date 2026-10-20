@@ -3,7 +3,7 @@
 Neighbor SQL, reach rendering, and the grant and content seeds. The
 five reach expressions stay in ``trusts.plan.recursions``. ``AlongWalk``
 stays in ``trusts.compile.paths``. Record binding lives in
-``trusts.plan.predicates``. This module does not import ``trusts.compile``.
+``trusts.plan.predicates``.
 """
 
 __all__ = []

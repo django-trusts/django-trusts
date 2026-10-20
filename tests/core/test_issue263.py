@@ -26,14 +26,14 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import listed_relationship, built_registries
+from tests.apps import render_configured_policy, listed_relationship, built_registries
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     """Settings-listed probe. The test installs a registry for one block."""
 
 def _seal_factory(backend_cls, factory):
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
     catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
@@ -41,7 +41,7 @@ def _seal_factory(backend_cls, factory):
 @contextmanager
 def _listed(handle):
     from tests.apps import install_class_handle
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     install_class_handle(_ListedBackend, handle)
     _seal_factory(_ListedBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue263._ListedBackend',)):
@@ -494,9 +494,9 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._assert_unique(self._authorized(handle, self.alice, self.add), [self.spec])
 
     def test_policy_sql_describes_the_collection_without_a_group_leg(self):
-        org = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.org_handle).build_registry()]))
-        access = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.access_handle).build_registry()]))
-        classic = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.classic).build_registry()]))
+        org = _load_policy_sql_document(render_configured_policy(self.org_handle))
+        access = _load_policy_sql_document(render_configured_policy(self.access_handle))
+        classic = _load_policy_sql_document(render_configured_policy(self.classic))
         org_content = org['backends'][0]['contents'][0]
         access_content = access['backends'][0]['contents'][0]
         classic_content = classic['backends'][0]['contents'][0]

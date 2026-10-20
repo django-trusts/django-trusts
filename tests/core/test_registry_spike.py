@@ -34,7 +34,7 @@ def _built_from(registry):
         conditions=registry.conditions,
         user_conditions=registry._stored_user_conditions(),
         user_override=registry._user_override,
-        condition_lookup=registry.condition_lookup,
+        filter_lookup=registry.filter_lookup,
     )
 
 
@@ -62,7 +62,7 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         registry = RegistryFactory()
         record = _register_document(registry, DocumentGrant)
         self.assertEqual(registry.records, (record,))
-        self.assertIs(registry.plan_for(Document).records[0], record)
+        self.assertIs(registry.build_registry().plan_for(Document).records[0], record)
 
     def test_injected_plan_matches_live_registry(self):
         Document, DocumentGrant = _document_models()
@@ -70,12 +70,12 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         _register_document(registry, DocumentGrant)
         built_registry = _built_from(registry)
         self.assertIs(built_registry.conditions, registry.conditions)
-        self.assertIs(built_registry.condition_lookup, registry.condition_lookup)
+        self.assertIs(built_registry.filter_lookup, registry.filter_lookup)
         self.assertEqual(built_registry.records, registry.records)
         self.assertEqual(built_registry.delegations, registry.delegations)
 
-        live = registry.plan_for(Document)
-        built = built_registry.plan_for(Document)
+        live = registry.build_registry().plan_for(Document)
+        built = built_registry.build_registry().plan_for(Document)
         self.assertEqual(built.records, live.records)
         self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
@@ -108,8 +108,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
             along=Along(root.folder.parent, 2),
         )
         built_registry = _built_from(registry)
-        live = registry.plan_for(Folder)
-        built = built_registry.plan_for(Folder)
+        live = registry.build_registry().plan_for(Folder)
+        built = built_registry.build_registry().plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)

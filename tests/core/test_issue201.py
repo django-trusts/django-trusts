@@ -250,20 +250,16 @@ class AuthorizationRequiredReadinessPreflightTest(
         def _filtered(request, pk):
             return 'ok'
 
-        from tests.apps import configured_catalog
-        catalog = configured_catalog(DOCUMENT_BACKEND)
-        previous = catalog.condition_lookup
-        try:
-            catalog.condition_lookup = None
+        from tests.apps import unbound_named_filters
+        from tests.myapp.backends import DocumentBackend
+
+        with unbound_named_filters(DocumentBackend):
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
                     _filtered(_request(self.alice), pk=self.open_doc.pk)
                 self.assertIn('non_confidential', str(ctx.exception))
                 with self.assertRaises(TrustsConfigurationError):
                     _filtered(_request(self.superuser), pk=self.open_doc.pk)
-        finally:
-            catalog.condition_lookup = previous
-        self.assertIs(catalog.condition_lookup, previous)
 
         with self.assertNumQueries(1):
             self.assertEqual(

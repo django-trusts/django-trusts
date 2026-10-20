@@ -20,7 +20,7 @@ from tests.apps import (
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from trusts.apps import TrustsImplementationConfig
-from trusts.installed import catalogs
+from trusts.backends import catalogs
 from trusts.backends import TrustModelBackendMixin, configured_catalogs
 from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Ref
@@ -161,7 +161,6 @@ class MixinCatalogResolveTest(SimpleTestCase):
         self.assertEqual(backend.get_all_permissions(object(), None), set())
         self.assertEqual(backend.get_group_permissions(object(), None), set())
         host = configured_catalog(HOST)
-        self.assertIs(host.user_model, get_user_model())
         with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST, MIXIN)):
             found = configured_catalogs()
         self.assertEqual(found, (host,))

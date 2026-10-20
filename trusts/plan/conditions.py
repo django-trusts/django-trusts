@@ -67,7 +67,7 @@ from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
-from trusts.installed import user_model
+import trusts.plan.standards as standards
 from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
@@ -559,7 +559,7 @@ TQ = Query
 
 def _entity_model():
     """User model stored by ``TrustsImplementationConfig.ready``."""
-    model = user_model()
+    model = standards.user_model
     if model is None:
         raise PermissionConditionError(
             'Principal references need the user model stored at ready().'

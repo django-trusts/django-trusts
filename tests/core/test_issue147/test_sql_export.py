@@ -1,3 +1,4 @@
+from tests.apps import render_configured_policy
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 import datetime
 import json
@@ -270,7 +271,7 @@ def _e009():
 class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_sqlite_document_matches_the_guide_bytes(self):
-        payload = render_policy_sql_bytes(registries=[(_document_handle()).build_registry()])
+        payload = render_configured_policy(_document_handle())
         self.assertEqual(payload, GOLDEN_SQLITE)
         self.assertTrue(payload.endswith(b'\n'))
         self.assertFalse(payload.endswith(b'\n\n'))
@@ -317,7 +318,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
                 handle.register_public(trust=trust, user='user', permission='permission', content=content_field)
             for model, code in filters:
                 handle.register_permission_condition(model, code, _non_confidential)
-            return render_policy_sql_bytes(registries=[(handle).build_registry()])
+            return render_configured_policy(handle)
         forward_trusts = ((DocumentPermission, 'document'), (OtherPermission, 'other'))
         forward_filters = ((Document, 'a_code'), (Document, 'z_code'))
         forward = render(forward_trusts, forward_filters)
@@ -341,12 +342,12 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle = _handle('documents.backends.DocumentBackend')
         handle.register_permission_condition(Document, 'needs-review', _non_confidential)
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(registries=[(handle).build_registry()])
+            render_configured_policy(handle)
         self.assertIn('needs-review', str(ctx.exception))
         self.assertIn('non-portable', str(ctx.exception))
         portable = _handle('documents.backends.DocumentBackend')
         portable.register_permission_condition(Document, 'needs_review', _non_confidential)
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(portable).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(portable))
         self.assertEqual(document['backends'][0]['contents'][0]['named_filters'][0]['id'], 'documents__Document__needs_review')
 
     def test_cond_entries_show_conditions_and_delegations_use_flow_maps(self):
@@ -354,7 +355,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document')
         handle.register_public(trust=CappedDocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.caps.contains(trust.permission) & (trust.user == trust.user))
         handle.register_public(trust=PolicyDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda row, permission: row.permissions.contains(permission) & (row.delegate == row.sponsor))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         plain, capped, delegated = (content['trusts'][0], content['trusts'][1], content['delegations'][0])
         self.assertEqual(plain['id'], 'documents__DocumentPermission__document')
@@ -365,7 +366,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(delegated['delegate'], {'path': 'delegate', 'model': 'auth.User', 'target': 'id'})
         self.assertEqual(delegated['sponsor'], {'path': 'sponsor', 'model': 'auth.User', 'target': 'id'})
         self.assertEqual(delegated['condition'], '$permission.id in permissions and delegate == sponsor')
-        text = render_policy_sql_bytes(registries=[(handle).build_registry()]).decode('utf-8')
+        text = render_configured_policy(handle).decode('utf-8')
         self.assertIn('delegate: {path: "delegate", model: "auth.User", target: "id"}\n', text)
         self.assertIn('sponsor: {path: "sponsor", model: "auth.User", target: "id"}\n', text)
         self.assertIn('condition: "$permission.id in caps and user == user"\n', text)
@@ -411,7 +412,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle = _handle('documents.backends.DocumentBackend')
         handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.user == trust.user)
         handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.permission == trust.permission)
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         cond_ids = [row['id'] for row in document['backends'][0]['contents'][0]['trusts']]
         self.assertEqual(cond_ids, ['documents__DocumentPermission__document__cond', 'documents__DocumentPermission__document__cond__2'])
         along = _handle('documents.backends.FolderBackend')
@@ -426,7 +427,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         handle = _handle('documents.backends.DocumentBackend')
         handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document')
         handle.register_public(trust=TeamDocumentPermission, user='team__members', permission='permission', content='document')
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         trusts = content['trusts']
         self.assertEqual(len(trusts), 2)
@@ -451,7 +452,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
     def test_empty_relationship_backend_is_still_emitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
         empty = _handle('zzz.backends.EmptyBackend')
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(empty).build_registry(), (populated).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(empty, populated))
         paths = [row['path'] for row in document['backends']]
         self.assertEqual(paths, ['aaa.backends.DocumentBackend', 'zzz.backends.EmptyBackend'])
         self.assertEqual(document['backends'][1]['contents'], [])
@@ -463,7 +464,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         factory = _document_handle()
         factory.family = 'ordered_fold'
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            render_policy_sql_bytes(registries=[factory.build_registry()])
+            render_configured_policy(factory)
         self.assertIn('ordered_fold', str(ctx.exception))
 
     def test_sqlite_export_does_not_execute_authorization_sql(self):
@@ -473,7 +474,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
             with override_settings(DEBUG=True):
                 connection.queries_log.clear()
                 with patch('trusts.compile.factory.probe_along_capabilities') as probe:
-                    payload = render_policy_sql_bytes(registries=[(_document_handle()).build_registry()])
+                    payload = render_configured_policy(_document_handle())
                 probe.assert_not_called()
                 recorded = ' '.join((item['sql'] for item in connection.queries))
             self.assertIsNone(connection.connection)
@@ -517,7 +518,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         with patch('trusts.compile.factory.probe_along_capabilities') as probe:
             with patch('trusts.plan.walk.along_connection_supported', return_value=False):
                 with self.assertRaises(TrustsConfigurationError):
-                    render_policy_sql_bytes(registries=[(handle).build_registry()])
+                    render_configured_policy(handle)
             probe.assert_not_called()
 
 class PolicySqlCommandTest(SimpleTestCase):
@@ -648,14 +649,14 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertEqual(account.code, '1')
         actor_handle = _handle('documents.backends.ActorBackend')
         actor_handle.register_public(trust=PolicyActorGrant, user='user', permission='permission', content='document')
-        actor_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(actor_handle).build_registry()]))
+        actor_doc = _load_policy_sql_document(render_configured_policy(actor_handle))
         actor_content = actor_doc['backends'][0]['contents'][0]
         actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
         self.assertEqual(actor_content['permitted']['params'], ['$user.id', '$permission.id', '$content.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False'])
         account_handle = _handle('documents.backends.AccountBackend')
         account_handle.register_public(trust=PolicyAccountGrant, user='user', permission='permission', content='document')
-        account_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(account_handle).build_registry()]))
+        account_doc = _load_policy_sql_document(render_configured_policy(account_handle))
         account_content = account_doc['backends'][0]['contents'][0]
         account_trust = account_content['trusts'][0]
         self.assertEqual(account_trust['user'], {'path': 'user', 'model': 'documents.PolicyAccount', 'target': 'code'})
@@ -664,7 +665,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
     def test_custom_permission_pk_renders_the_resolved_target(self):
         handle = _handle('documents.backends.OperationBackend')
         handle.register_public(trust=OperationGrant, user='user', permission='permission', content='document', condition=lambda grant: grant.caps.contains(grant.permission))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         grant = content['trusts'][0]
         self.assertEqual(grant['permission'], {'path': 'permission', 'model': 'documents.Operation', 'target': 'code'})
@@ -679,7 +680,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
 class PolicySqlConstantTest(SimpleTestCase):
 
     def test_supported_constant_families_match_golden_and_round_trip(self):
-        payload = render_policy_sql_bytes(registries=[(_constant_family_handle()).build_registry()])
+        payload = render_configured_policy(_constant_family_handle())
         self.assertEqual(payload, GOLDEN_CONSTANTS)
         document = _load_policy_sql_document(payload)
         filters = document['backends'][0]['contents'][0]['named_filters']
@@ -727,7 +728,7 @@ class PolicySqlConcurrencyTest(TestCase):
         queryset = User.objects.filter(username='export-neighbor')
         control_sql, control_params = queryset.query.get_compiler(using='default').as_sql()
         control_rows = list(queryset.values_list('username', flat=True))
-        expected = render_policy_sql_bytes(registries=[(_document_handle()).build_registry()])
+        expected = render_configured_policy(_document_handle())
         entered = threading.Event()
         release = threading.Event()
         outcome = []
@@ -746,7 +747,7 @@ class PolicySqlConcurrencyTest(TestCase):
             export_ident.append(threading.get_ident())
             try:
                 with patch('trusts.inspect.snapshot._classify_compiled', classifying):
-                    outcome.append(render_policy_sql_bytes(registries=[(_document_handle()).build_registry()]))
+                    outcome.append(render_configured_policy(_document_handle()))
             except Exception as exc:
                 outcome.append(exc)
         worker = threading.Thread(target=run_export)

@@ -14,8 +14,11 @@ from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet
 
 from trusts.errors import TrustsConfigurationError
-from trusts.installed import catalogs, recorders, user_model
+import trusts.plan.standards as standards
 from trusts.plan.relations import PlanQueryCompiler
+
+catalogs = {}
+recorders = {}
 
 T = TypeVar('T', bound=Model)
 
@@ -85,7 +88,6 @@ class TrustModelBackendMixin(object):
         return catalog.permitted_users_predicate(
             content, perm, skipped=skipped,
             accepts_permission=self.singular_permission_accepted,
-            owner_name=type(self).__name__,
         )
 
     def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
@@ -193,7 +195,7 @@ def configured_catalogs():
 
 def _no_users():
     """Empty user queryset after ready, or an empty tuple before it."""
-    model = user_model()
+    model = standards.user_model
     if model is None:
         return ()
     return model._default_manager.none()

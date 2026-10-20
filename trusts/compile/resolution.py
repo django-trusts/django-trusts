@@ -2,11 +2,8 @@
 
 Metadata only: Django ``_meta`` and path info, no SQL. Shared hop math
 lives in ``trusts.plan.hops``. The registration resolvers that need
-registry-shaped validation stay here. This module does not import
-``trusts.compile.factory``.
+registry-shaped validation stay here.
 """
-
-__all__ = []
 
 from django.contrib.contenttypes.fields import (
     GenericForeignKey,
@@ -14,8 +11,9 @@ from django.contrib.contenttypes.fields import (
 )
 from django.core.exceptions import FieldDoesNotExist
 
+from django.contrib.auth.models import Group, Permission
+
 from trusts.plan.hops import (
-    auth_group_and_permission,
     lookup_text,
     materialize_related_model,
     path_text,
@@ -46,7 +44,6 @@ def _classify_field(field):
 
 def _group_permissions_field():
     """The ``auth.Group`` relation the compiler walks to ``Permission``."""
-    Group, _Permission = auth_group_and_permission()
     try:
         field = Group._meta.get_field('permissions')
     except FieldDoesNotExist:
@@ -63,7 +60,6 @@ def _resolve_group_path(root, path):
     Applications stop at the group. ``Group.permissions`` is not part
     of this path; ``_append_group_permissions`` owns that hop. Zero SQL.
     """
-    Group, _Permission = auth_group_and_permission()
     if not path:
         raise TrustsConfigurationError(
             'group must be a non-empty root-relative path from %s '
@@ -122,7 +118,6 @@ def _resolve_group_path(root, path):
 
 def _append_group_permissions(group_path, group_field):
     """Compiler-owned ``Group.permissions`` hop onto ``auth.Permission``."""
-    _Group, Permission = auth_group_and_permission()
     field = _group_permissions_field()
     if _classify_field(field) != 'm2m':
         raise TrustsConfigurationError(
@@ -356,8 +351,7 @@ def _permission_m2m_result(field, path):
     related, target_attname = _resolve_permission_in_m2m(
         field, 'permission', path, require_pk=True,
     )
-    _group, permission_model = auth_group_and_permission()
-    if related._meta.concrete_model is not permission_model._meta.concrete_model:
+    if related._meta.concrete_model is not Permission._meta.concrete_model:
         raise TrustsConfigurationError(
             'permission path %r terminates on %s, not auth.Permission.'
             % (path_text(path), related._meta.label)

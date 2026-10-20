@@ -146,44 +146,11 @@ class KernelConfigTest(SimpleTestCase):
         self.assertTrue(callable(filter_by_permitted_content))
 
 
-class FilterAuthorizedScopesAliasTest(SimpleTestCase):
-    def test_old_name_delegates_to_filter_by_permitted_content(self):
-        import inspect
-
-        from trusts.decorators import filter_authorized_scopes
-
-        self.assertEqual(
-            inspect.signature(filter_authorized_scopes),
-            inspect.signature(filter_by_permitted_content),
-        )
-        self.assertNotIn(
-            'skip_is_active',
-            inspect.signature(filter_by_permitted_content).parameters,
-        )
-        sentinel = object()
-        queryset, user, permission, content = (
-            object(), object(), object(), object(),
-        )
-        with patch(
-            'trusts.decorators.filter_by_permitted_content',
-            return_value=sentinel,
-        ) as called:
-            result = filter_authorized_scopes(
-                queryset, user, permission, content=content,
-                skip_is_active=True,
-            )
-        self.assertIs(result, sentinel)
-        called.assert_called_once_with(
-            queryset, user, permission, content=content,
-            skip_is_active=True,
-        )
-
-
 class ConditionLookupBindTest(TestCase):
     def test_construct_self_binds_and_unbind_is_zero_sql(self):
         with self.assertNumQueries(0):
             registry = RegistryFactory()
-            lookup = registry.condition_lookup
+            lookup = registry.filter_lookup
         self.assertIsNotNone(lookup)
         self.assertIs(lookup.conditions, registry.conditions)
 
@@ -196,15 +163,15 @@ class ConditionLookupBindTest(TestCase):
 
         override = Bound()
         with self.assertNumQueries(0):
-            registry.set_condition_lookup(override)
-        self.assertIs(registry.condition_lookup, override)
+            registry.set_filter_lookup(override)
+        self.assertIs(registry.filter_lookup, override)
         with self.assertNumQueries(0):
-            registry.set_condition_lookup(None)
-        self.assertIsNone(registry.condition_lookup)
+            registry.set_filter_lookup(None)
+        self.assertIsNone(registry.filter_lookup)
 
     def test_missing_methods_raise_and_do_not_partial_bind(self):
         registry = RegistryFactory()
-        default = registry.condition_lookup
+        default = registry.filter_lookup
         self.assertIs(default.conditions, registry.conditions)
 
         class Complete(object):
@@ -224,25 +191,25 @@ class ConditionLookupBindTest(TestCase):
 
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
-                registry.set_condition_lookup(OnlyRecord())
+                registry.set_filter_lookup(OnlyRecord())
             with self.assertRaises(TrustsConfigurationError):
-                registry.set_condition_lookup(OnlyCompile())
+                registry.set_filter_lookup(OnlyCompile())
             with self.assertRaises(TrustsConfigurationError):
-                registry.set_condition_lookup(object())
-        self.assertIs(registry.condition_lookup, default)
+                registry.set_filter_lookup(object())
+        self.assertIs(registry.filter_lookup, default)
         self.assertIs(default.conditions, registry.conditions)
 
         complete = Complete()
         with self.assertNumQueries(0):
-            registry.set_condition_lookup(complete)
+            registry.set_filter_lookup(complete)
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
-                registry.set_condition_lookup(OnlyRecord())
+                registry.set_filter_lookup(OnlyRecord())
             with self.assertRaises(TrustsConfigurationError):
-                registry.set_condition_lookup(OnlyCompile())
+                registry.set_filter_lookup(OnlyCompile())
             with self.assertRaises(TrustsConfigurationError):
-                registry.set_condition_lookup(object())
-        self.assertIs(registry.condition_lookup, complete)
+                registry.set_filter_lookup(object())
+        self.assertIs(registry.filter_lookup, complete)
 
     def test_callable_policy_is_not_invoked_by_the_protocol(self):
         called = []
@@ -504,8 +471,6 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         )
 
     def test_public_filter_reads_listed_catalogs(self):
-        from trusts.decorators import filter_authorized_scopes
-
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
                 filter_by_permitted_content(
@@ -570,7 +535,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     content=self.Payload,
                 ).exists())
             self.assertEqual(
-                _pks(filter_authorized_scopes(
+                _pks(filter_by_permitted_content(
                     self.Folder.objects.all(),
                     self.alice,
                     self.add,

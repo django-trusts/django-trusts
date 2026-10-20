@@ -27,7 +27,7 @@ from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
 from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
-from trusts.installed import user_model
+import trusts.plan.standards as standards
 from trusts.plan.recursions import (
     GrantReach,
     _AnchorInInverseReach,
@@ -833,7 +833,7 @@ def _user_concrete():
     model means ready has not stored one; user and content labels would
     not match a ready process.
     """
-    model = user_model()
+    model = standards.user_model
     if model is None:
         return None
     return model._meta.concrete_model
@@ -1124,7 +1124,7 @@ class BindTable(object):
     """``CROSS JOIN (SELECT %s AS col, ...) trusts_bind``.
 
     ``join_type`` stays unset so ``Query.promote_joins`` leaves the row
-    alone. ``as_sql`` still emits ``CROSS JOIN``. The row is installed
+    alone. ``as_sql`` still emits ``CROSS JOIN``. The row is placed
     after the statement's real base table.
     """
 

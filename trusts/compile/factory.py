@@ -14,7 +14,6 @@ from django.db.models import F, Model, Q
 from django.db.models.query import QuerySet
 
 from trusts.plan.hops import (
-    auth_group_and_permission,
     concrete_model,
     content_model,
     lookup_text,
@@ -60,7 +59,7 @@ from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog
-from trusts.installed import catalogs, recorders
+from trusts.backends import TrustModelBackendMixin, catalogs, recorders
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
@@ -75,7 +74,6 @@ from trusts.plan.standards import (
     compile_override_q,
     compile_user_rules,
     concrete_rule,
-    condition_names,
     normalize_on,
     normalize_override_on,
     rule_applies,
@@ -216,13 +214,13 @@ class RegistryFactory(object):
         self._order = []
         self._delegations_by_root = {}
         self._delegation_order = []
-        self._condition_lookup = None
+        self._filter_lookup = None
         self._user_conditions = None
         self._user_override = None
         self._rule_fragments = {}
         self._override_fragments = {}
         self.conditions = ConditionRegistry()
-        self.set_condition_lookup(RegistryConditionLookup(self))
+        self.set_filter_lookup(RegistryConditionLookup(self))
         self._explicit_compiler = compiler is not None
         self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path
@@ -235,11 +233,11 @@ class RegistryFactory(object):
         return self._compiler
 
     @property
-    def condition_lookup(self):
+    def filter_lookup(self):
         """Bound ``ConditionLookup``, or ``None`` after explicit unbind."""
-        return self._condition_lookup
+        return self._filter_lookup
 
-    def set_condition_lookup(self, lookup):
+    def set_filter_lookup(self, lookup):
         """Bind a ``ConditionLookup`` on this instance (zero SQL).
 
         Construction already self-binds the private store adapter.
@@ -249,7 +247,7 @@ class RegistryFactory(object):
         Methods are not invoked at bind time.
         """
         if lookup is None:
-            self._condition_lookup = None
+            self._filter_lookup = None
             return
         record_for = getattr(lookup, 'record_for', None)
         compile_q = getattr(lookup, 'compile_q', None)
@@ -258,7 +256,7 @@ class RegistryFactory(object):
                 'ConditionLookup must provide record_for and compile_q; '
                 'no partial bind.'
             )
-        self._condition_lookup = lookup
+        self._filter_lookup = lookup
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
@@ -315,11 +313,6 @@ class RegistryFactory(object):
         if self._user_conditions is None:
             return None
         return tuple(self._user_conditions.values())
-
-    def _known_skip_names(self):
-        return condition_names(
-            self._stored_user_conditions(), self._user_override,
-        )
 
     def _conditions_for_model(self, model):
         """Conditions compiled for ``model``.
@@ -389,15 +382,16 @@ class RegistryFactory(object):
     def _open_for_rules(self, kind):
         if self._order or self._delegation_order:
             raise TrustsConfigurationError(
-                'Set user conditions and the user override before '
-                'register() or register_delegation().'
+                'Record user conditions and the override before '
+                'register(). The catalog sweep checks this at ready().'
             )
 
     def set_user_condition(self, name, expr, on='*'):
         """Set, replace, or remove one named user condition.
 
-        Call this before ``register()`` or ``register_delegation()``.
-        ``None`` removes that name. ``on`` is ``*``, ``user``, or ``sponsor``.
+        Record this before ``register()``. The catalog sweep checks the
+        order at ready. ``None`` removes that name. ``on`` is ``*``,
+        ``user``, or ``sponsor``.
         The lambda is walked once against this factory's ``user_model``.
         """
         self._require_user_model()
@@ -441,8 +435,8 @@ class RegistryFactory(object):
     def set_user_override(self, name, expr, on='user'):
         """Store the one checked-user override, or clear it with ``None``.
 
-        Call this before ``register()`` or ``register_delegation()``.
-        ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
+        Record this before ``register()``. The catalog sweep checks the
+        order at ready. ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
         registered condition.
         """
         self._require_user_model()
@@ -595,8 +589,42 @@ class RegistryFactory(object):
             condition=condition, along=along,
         )
         root = record.root
-        record = self.validate_delegation(
-            record, self._delegations_by_root.get(root, ()),
+        existing = self._delegations_by_root.get(root, ())
+        conditions = self._stored_user_conditions()
+        override = self._user_override
+        same_root = [row for row in existing if row.root is record.root]
+        if record in same_root:
+            raise TrustsConfigurationError(
+                'Duplicate delegated registration for %s.'
+                % record.root._meta.label
+            )
+        for prior in same_root:
+            if prior.content_model is record.content_model:
+                raise TrustsConfigurationError(
+                    'Conflicting delegated registration for %s content '
+                    'terminal %s: existing %r, new %r.'
+                    % (
+                        record.root._meta.label,
+                        record.content_model._meta.label,
+                        prior,
+                        record,
+                    )
+                )
+        _assert_registration_rules(
+            user_model=record.delegate_model,
+            sponsor_model=record.sponsor_model,
+            conditions=conditions, override=override,
+        )
+        sponsor_model = record.sponsor_model._meta.concrete_model
+        record = replace(record, sponsor_rules=compile_user_rules(
+            sponsor_model, record.sponsor_field,
+            _rules_for_model(conditions, sponsor_model),
+            role='sponsor', values={},
+        ))
+        self._rule_fragment(record.delegate_model, role='user')
+        self._override_fragment(record.delegate_model)
+        self._rule_fragment(
+            record.sponsor_model, role='sponsor', path=record.sponsor_field,
         )
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
@@ -605,25 +633,6 @@ class RegistryFactory(object):
             self._delegations_by_root[root] = [record]
         self._delegation_order.append(record)
         return record
-
-    def validate_delegation(self, record, existing):
-        """Reject a duplicate or conflicting delegation. Does not store it.
-
-        ``existing`` is the delegations already held for this comparison,
-        any root. Delegates to the module function with this factory's
-        recorded user rules, then memos the compiled fragments.
-        """
-        checked = validate_delegation(
-            record, existing,
-            conditions=self._stored_user_conditions(),
-            override=self._user_override,
-        )
-        self._rule_fragment(record.delegate_model, role='user')
-        self._override_fragment(record.delegate_model)
-        self._rule_fragment(
-            record.sponsor_model, role='sponsor', path=record.sponsor_field,
-        )
-        return checked
 
     @staticmethod
     def build_relation(*, content, user, permission=None, group=None,
@@ -749,7 +758,39 @@ class RegistryFactory(object):
             condition=condition, along=along,
         )
         root = record.root
-        self.validate_principal(record, self._by_root.get(root, ()))
+        existing = self._by_root.get(root, ())
+        conditions = self._stored_user_conditions()
+        override = self._user_override
+        for prior in existing:
+            if prior.root is not record.root:
+                continue
+            if prior == record:
+                raise TrustsConfigurationError(
+                    'Duplicate registration for %s.' % record.root._meta.label
+                )
+            if prior.content_model is not record.content_model:
+                continue
+            if (
+                _same_terminal_bindings(prior, record)
+                and prior.condition != record.condition
+            ):
+                continue
+            raise TrustsConfigurationError(
+                'Conflicting registration for %s content terminal '
+                '%s: existing %r, new %r.'
+                % (
+                    record.root._meta.label,
+                    record.content_model._meta.label,
+                    prior,
+                    record,
+                )
+            )
+        _assert_registration_rules(
+            user_model=record.user_model, sponsor_model=None,
+            conditions=conditions, override=override,
+        )
+        self._rule_fragment(record.user_model, role='user')
+        self._override_fragment(record.user_model)
         existing_rows = self._by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -757,22 +798,6 @@ class RegistryFactory(object):
             self._by_root[root] = [record]
         self._order.append(record)
         return record
-
-    def validate_principal(self, record, existing):
-        """Reject a duplicate or conflicting ordinary row. Does not store it.
-
-        ``existing`` is the ordinary rows already held, any root. Delegates
-        to the module function with this factory's recorded user rules,
-        then memos the compiled fragments.
-        """
-        checked = validate_principal(
-            record, existing,
-            conditions=self._stored_user_conditions(),
-            override=self._user_override,
-        )
-        self._rule_fragment(record.user_model, role='user')
-        self._override_fragment(record.user_model)
-        return checked
 
     @staticmethod
     def build_public_registration(
@@ -964,56 +989,12 @@ class RegistryFactory(object):
             conditions=self.conditions,
             user_conditions=self._stored_user_conditions(),
             user_override=self._user_override,
-            condition_lookup=self._condition_lookup,
+            filter_lookup=self._filter_lookup,
             compiler=self._compiler if self._explicit_compiler else None,
             path=self.path or '',
             family=self.family,
             user_model=self.user_model,
         )
-
-    def plan_for(self, content, *, user=None, permission=None):
-        """Build the common relation plan for these terminals.
-
-        ``content`` may be a model class, instance, or ``QuerySet``.
-        Optional ``user`` / ``permission`` instances keep only registrations
-        whose inferred terminals match those models. Construction is lazy.
-        """
-        return self.build_registry().plan_for(
-            content, user=user, permission=permission,
-        )
-
-    def permissions_for(self, user, content, **skip_flags):
-        """Distinct permission rows granted to ``user`` on ``content``.
-
-        Delegates to the built registry.
-        """
-        return self.build_registry().permissions_for(
-            user, content, **skip_flags,
-        )
-
-    def has_permission(self, user, content, permission, **skip_flags):
-        """Whether ``permission`` is granted to ``user`` on ``content``."""
-        return self.build_registry().has_permission(
-            user, content, permission, **skip_flags,
-        )
-
-    def filter_authorized(self, queryset, user, permission, **skip_flags):
-        """Lazy queryset of rows ``user`` holds ``permission`` on."""
-        return self.build_registry().filter_authorized(
-            queryset, user, permission, **skip_flags,
-        )
-
-
-def validate_named_filter(model, code, predicate):
-    """Run the named-filter builder once against a fresh condition store."""
-    return ConditionRegistry().register_permission_condition(
-        model, code, predicate,
-    )
-
-
-build_public_registration = RegistryFactory.build_public_registration
-build_relation = RegistryFactory.build_relation
-build_delegation = RegistryFactory.build_delegation
 
 
 def compile_recorder(recorder, *, path, family, compiler, user_model):
@@ -1043,14 +1024,12 @@ def compile_recorder(recorder, *, path, family, compiler, user_model):
     return built.build_registry()
 
 
-def build_configured_catalogs(paths, user_model, mixin):
+def build_configured_catalogs(paths, user_model):
     """Build one catalog per listed mixin backend. A second call does nothing.
 
     Only classes named in ``paths`` (``AUTHENTICATION_BACKENDS`` order)
-    that subclass ``mixin`` are compiled. Peers of the same family are
-    fixed on that sweep. ``mixin`` is passed by the app config so this
-    module does not import the backend module while that module is
-    still loading.
+    that subclass ``TrustModelBackendMixin`` are compiled. Peers of the
+    same family are fixed on that sweep.
     """
     if catalogs:
         return
@@ -1058,7 +1037,7 @@ def build_configured_catalogs(paths, user_model, mixin):
     seen = {}
     for path in paths:
         obj = import_string(path)
-        if not isinstance(obj, type) or not issubclass(obj, mixin):
+        if not isinstance(obj, type) or not issubclass(obj, TrustModelBackendMixin):
             continue
         if obj in seen:
             raise TrustsConfigurationError(
@@ -1092,6 +1071,18 @@ def build_configured_catalogs(paths, user_model, mixin):
             registry=registry,
             family_registries=peers,
         )
+
+
+def probe_along_capabilities(connection):
+    """Execute a plain recursive CTE. Raises on failure."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            'WITH RECURSIVE t(n) AS ('
+            'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
+            ') SELECT n FROM t'
+        )
+        cursor.fetchone()
+
 
 def _validate_equal(predicate, root):
     left = _require_same_root(predicate.left, root, 'Equal left')
@@ -1503,16 +1494,6 @@ def _build_along_walk(root, content_path, content_model, along):
         rewrite_attname=rewrite_attname,
     )
 
-def probe_along_capabilities(connection):
-    """Execute a plain recursive CTE. Raises on failure."""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            'WITH RECURSIVE t(n) AS ('
-            'SELECT 0 UNION ALL SELECT n + 1 FROM t WHERE n < 0'
-            ') SELECT n FROM t'
-        )
-        cursor.fetchone()
-
 def _same_terminal_bindings(existing, record):
     """True when two records share content/user/permission/along bindings."""
     return (
@@ -1558,82 +1539,6 @@ def _assert_registration_rules(*, user_model, sponsor_model, conditions,
         assert_concrete_booleans(
             user_model._meta.concrete_model, override.expr, override.name,
         )
-
-def validate_principal(record, existing, *, conditions, override):
-    """Reject a duplicate or conflicting ordinary row. Does not store it.
-
-    ``existing`` is the ordinary rows already recorded, any root.
-    ``conditions`` and ``override`` are the recorded user rules, not
-    factory state. Same-root equality is a duplicate. The same root and
-    content terminal conflict unless the terminal bindings match and the
-    condition differs.
-    """
-    for prior in existing:
-        if prior.root is not record.root:
-            continue
-        if prior == record:
-            raise TrustsConfigurationError(
-                'Duplicate registration for %s.' % record.root._meta.label
-            )
-        if prior.content_model is not record.content_model:
-            continue
-        if (
-            _same_terminal_bindings(prior, record)
-            and prior.condition != record.condition
-        ):
-            continue
-        raise TrustsConfigurationError(
-            'Conflicting registration for %s content terminal '
-            '%s: existing %r, new %r.'
-            % (
-                record.root._meta.label,
-                record.content_model._meta.label,
-                prior,
-                record,
-            )
-        )
-    _assert_registration_rules(
-        user_model=record.user_model, sponsor_model=None,
-        conditions=conditions, override=override,
-    )
-    return record
-
-def validate_delegation(record, existing, *, conditions, override):
-    """Reject a duplicate or conflicting delegation. Does not store it.
-
-    ``existing`` is the delegations already recorded, any root.
-    ``conditions`` and ``override`` are the recorded user rules. The
-    returned row carries the compiled sponsor-rules fragment.
-    """
-    same_root = [row for row in existing if row.root is record.root]
-    if record in same_root:
-        raise TrustsConfigurationError(
-            'Duplicate delegated registration for %s.'
-            % record.root._meta.label
-        )
-    for prior in same_root:
-        if prior.content_model is record.content_model:
-            raise TrustsConfigurationError(
-                'Conflicting delegated registration for %s content '
-                'terminal %s: existing %r, new %r.'
-                % (
-                    record.root._meta.label,
-                    record.content_model._meta.label,
-                    prior,
-                    record,
-                )
-            )
-    _assert_registration_rules(
-        user_model=record.delegate_model,
-        sponsor_model=record.sponsor_model,
-        conditions=conditions, override=override,
-    )
-    sponsor_model = record.sponsor_model._meta.concrete_model
-    return replace(record, sponsor_rules=compile_user_rules(
-        sponsor_model, record.sponsor_field,
-        _rules_for_model(conditions, sponsor_model),
-        role='sponsor', values={},
-    ))
 
 def _require_condition_arity(builder):
     """Reject 0-arg, 2+-required, and keyword-only-only before invoke."""

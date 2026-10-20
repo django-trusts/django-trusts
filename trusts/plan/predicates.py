@@ -1,15 +1,18 @@
 """One ``Q`` per record so a repeated many-to-many hop stays one join."""
 
-__all__ = []
-
+from django.contrib.auth.models import Permission
 from django.db.models import F, Model, Q
 
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.hops import (
-    auth_group_and_permission,
-    lookup_text,
-    require_instance,
-)
+from trusts.plan.hops import lookup_text, require_instance
+
+__all__ = [
+    'bind_terminal',
+    'compile_predicate',
+    'permission_terminal_is_auth_permission',
+    'content_type_identity',
+    'bind_record_qs',
+]
 
 _BINDING_FIELDS = {
     'user': 'user_field',
@@ -18,16 +21,58 @@ _BINDING_FIELDS = {
 }
 
 
-def _is_lookup_expression(value):
-    """True for OuterRef / Subquery / other SQL expressions."""
-    return hasattr(value, 'resolve_expression') and not isinstance(value, Model)
-
-
 def bind_terminal(value, role):
     """Accept a model instance or an unevaluated lookup expression."""
     if _is_lookup_expression(value):
         return value
     return require_instance(value, role)
+
+
+def compile_predicate(node, record, *, permission=None):
+    return _PredicateCompiler(record, permission).compile(node)
+
+
+def permission_terminal_is_auth_permission(permission_model):
+    """True when the terminal's concrete model is ``auth.Permission``.
+
+    Typed content identity applies only to that model, on a direct
+    foreign key or a terminal many-to-many. Any other terminal,
+    including one that happens to have a ``content_type`` foreign key,
+    stays primary-key identity. Metadata only (zero SQL). This is an
+    exact model-identity check, not a field-name scan and not a
+    codename parse.
+    """
+    return (
+        permission_model._meta.concrete_model
+        is Permission._meta.concrete_model
+    )
+
+
+def content_type_identity(model):
+    """``(app_label, model_name)`` for ``for_concrete_model=False``.
+
+    ``ContentType.get_for_model(model, for_concrete_model=False)`` uses
+    the model's own ``app_label`` and ``model_name``. A real proxy keeps
+    its own pair. No content-type row is loaded.
+    """
+    return model._meta.app_label.lower(), model._meta.model_name
+
+
+def bind_record_qs(record, correlation=None, *, content_identity=None, **bindings):
+    """Root rows for one record. One ``filter()`` for every predicate."""
+    return record.root._default_manager.filter(
+        _record_predicate(
+            record,
+            correlation=correlation,
+            content_identity=content_identity,
+            **bindings,
+        ),
+    )
+
+
+def _is_lookup_expression(value):
+    """True for OuterRef / Subquery / other SQL expressions."""
+    return hasattr(value, 'resolve_expression') and not isinstance(value, Model)
 
 
 class _PredicateCompiler(object):
@@ -94,37 +139,6 @@ class _PredicateCompiler(object):
         })
 
 
-def compile_predicate(node, record, *, permission=None):
-    return _PredicateCompiler(record, permission).compile(node)
-
-
-def permission_terminal_is_auth_permission(permission_model):
-    """True when the terminal's concrete model is ``auth.Permission``.
-
-    Typed content identity applies only to that model, on a direct
-    foreign key or a terminal many-to-many. Any other terminal,
-    including one that happens to have a ``content_type`` foreign key,
-    stays primary-key identity. Metadata only (zero SQL). This is an
-    exact model-identity check, not a field-name scan and not a
-    codename parse.
-    """
-    _group, permission = auth_group_and_permission()
-    return (
-        permission_model._meta.concrete_model
-        is permission._meta.concrete_model
-    )
-
-
-def content_type_identity(model):
-    """``(app_label, model_name)`` for ``for_concrete_model=False``.
-
-    ``ContentType.get_for_model(model, for_concrete_model=False)`` uses
-    the model's own ``app_label`` and ``model_name``. A real proxy keeps
-    its own pair. No content-type row is loaded.
-    """
-    return model._meta.app_label.lower(), model._meta.model_name
-
-
 def _permission_content_type_filters(record, content_identity):
     """Lookup kwargs that pin the permission row to one content type.
 
@@ -165,15 +179,3 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
     if correlation is not None:
         combined &= correlation
     return combined
-
-
-def bind_record_qs(record, correlation=None, *, content_identity=None, **bindings):
-    """Root rows for one record. One ``filter()`` for every predicate."""
-    return record.root._default_manager.filter(
-        _record_predicate(
-            record,
-            correlation=correlation,
-            content_identity=content_identity,
-            **bindings,
-        ),
-    )

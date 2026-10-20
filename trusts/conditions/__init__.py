@@ -1,9 +1,5 @@
 """Public permission-condition API (issue #142 Stage B).
 
-This is Core's own surface, not a shim kept for django-trusts-zero.
-Zero carries its own ``permission_has_condition`` and imports
-``PermissionConditionNotQueryable`` from ``trusts.errors``.
-
 Register named filters as builders on the configured backend
 (``add_named_filter``). The application-facing surface is only the
 condition exceptions and permission-code helpers.
