@@ -446,7 +446,10 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
         with _model_tables(RetargetNode, RetargetGrant):
             user = User.objects.create_user(username='along-cap-300', password='x')
             content_type, _created = ContentType.objects.get_or_create(app_label='trusts_tests', model='retargetnode')
-            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget', defaults={'name': 'read_retarget'})
+            codename = 'read_retarget'
+            if not codename.endswith('_' + content_type.model):
+                codename = codename + '_' + content_type.model
+            permission, _created = Permission.objects.get_or_create(content_type=content_type, codename=codename, defaults={'name': codename})
             node = RetargetNode.objects.create()
             RetargetGrant.objects.create(node=node, user=user, permission=permission)
             registry = RegistryFactory()
@@ -458,14 +461,14 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                     plain = handle.build_registry().filter_authorized(candidates, user, permission)
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
-                    plain_has = handle.build_registry().has_permission(user, node, permission)
+                    plain_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
                     plain_doc = _load_policy_sql_document(render_configured_policy(handle))
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
                     bound = handle.build_registry().filter_authorized(candidates, user, permission)
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
-                    bound_has = handle.build_registry().has_permission(user, node, permission)
+                    bound_has = built_catalog(handle).has_perm(user, '%s.%s' % (permission.content_type.app_label, permission.codename), node)
                     bound_doc = _load_policy_sql_document(render_configured_policy(handle))
                     list(handle.build_registry().filter_authorized(candidates, user, permission))
                     render_configured_policy(handle)

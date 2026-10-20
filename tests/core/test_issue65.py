@@ -100,6 +100,9 @@ def _perm(codename, model=None):
         ct = ContentType.objects.get_for_model(
             model, for_concrete_model=False,
         )
+    suffix = '_' + ct.model
+    if not codename.endswith(suffix):
+        codename = codename + suffix
     permission, _created = Permission.objects.get_or_create(
         content_type=ct,
         codename=codename,
@@ -757,19 +760,19 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
                 [],
             )
             self.assertTrue(
-                registry.build_registry().has_permission(alice, folder_alpha, read_folder),
+                built_catalog(registry).has_perm(alice, '%s.%s' % (read_folder.content_type.app_label, read_folder.codename), folder_alpha),
             )
             self.assertFalse(
-                registry.build_registry().has_permission(alice, folder_alpha, read),
+                built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), folder_alpha),
             )
             self.assertFalse(
-                registry.build_registry().has_permission(alice, folder_beta, read_folder),
+                built_catalog(registry).has_perm(alice, '%s.%s' % (read_folder.content_type.app_label, read_folder.codename), folder_beta),
             )
-            self.assertTrue(registry.build_registry().has_permission(alice, doc_a1, read))
-            self.assertTrue(registry.build_registry().has_permission(alice, doc_a2, read))
-            self.assertFalse(registry.build_registry().has_permission(alice, doc_b1, read))
-            self.assertFalse(registry.build_registry().has_permission(bob, doc_a1, read))
-            self.assertFalse(registry.build_registry().has_permission(alice, doc_a1, write))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), doc_a1))
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), doc_a2))
+            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), doc_b1))
+            self.assertFalse(built_catalog(registry).has_perm(bob, '%s.%s' % (read.content_type.app_label, read.codename), doc_a1))
+            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (write.content_type.app_label, write.codename), doc_a1))
 
             folder_sql = str(registry.build_registry().filter_authorized(
                 CodedFolder.objects.order_by('pk'), alice, read_folder,
