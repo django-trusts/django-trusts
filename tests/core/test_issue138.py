@@ -19,7 +19,6 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.backends import TrustModelBackendMixin
 
 
 class AlwaysGrantBackend(object):
@@ -249,7 +248,7 @@ def _document_backend():
 
     from tests.myapp.backends import DocumentBackend
 
-    factory = RegistryFactory(cls=TrustModelBackendMixin, 
+    factory = RegistryFactory(
         path=DOCUMENT_BACKEND,
         family=DocumentBackend.family,
         compiler=DocumentBackend.query_compiler,
@@ -258,7 +257,7 @@ def _document_backend():
     return replay_recorder(factory, DocumentBackend)
 
 def _extra_handle(path='tests.core.issue138-extra'):
-    return RegistryFactory(cls=TrustModelBackendMixin, path=path)
+    return RegistryFactory(path=path)
 
 def _extra_grant_models():
     User = get_user_model()

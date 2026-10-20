@@ -30,7 +30,6 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import RegistryFactory
 from trusts.query import AuthorizedQuerySet
-from trusts.backends import TrustModelBackendMixin
 PERM = 'myapp.change_document'
 
 def _change_document():
@@ -43,7 +42,7 @@ def _replay_listed(path):
     from django.utils.module_loading import import_string
 
     cls = import_string(path)
-    factory = RegistryFactory(cls=TrustModelBackendMixin, 
+    factory = RegistryFactory(
         path=path,
         family=cls.family,
         compiler=cls.query_compiler,
@@ -53,7 +52,7 @@ def _replay_listed(path):
 
 def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
-    handle = RegistryFactory(cls=TrustModelBackendMixin, path='tests.core.issue132-extra')
+    handle = RegistryFactory(path='tests.core.issue132-extra')
     handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
     handle.register_permission_condition(Repository, 'always', lambda u, p, o: o.name != '')
     return handle
@@ -102,12 +101,8 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
             from trusts.backends import catalogs
             cls = type(self.document_backend)
             saved = catalogs.get(cls)
-            catalogs[cls] = built_catalog(
-                extra,
-                cls=cls,
-                path=extra.path,
-                family=cls.family if saved is None else saved.family,
-            )
+            extra.family = cls.family if saved is None else saved.family
+            catalogs[cls] = built_catalog(extra)
             try:
                 with bound_handle(self.document_backend, extra):
                     self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))

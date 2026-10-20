@@ -3,7 +3,6 @@
 Registration only. Does not exercise object authorization, authorized-content
 filtering, permission enumeration, backends, conditions, or compatibility.
 """
-from trusts.backends import TrustModelBackendMixin
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -85,7 +84,7 @@ class TrustsRegistryTest(SimpleTestCase):
     def test_successful_direct_registration_infers_root_and_terminals(self):
         Document, DocumentGrant, _other = _mock_models()
         User = get_user_model()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
 
         record = registry.register(
@@ -117,7 +116,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_all_refs_share_the_same_root(self):
         _document, DocumentGrant, _other = _mock_models()
-        record = _register(RegistryFactory(cls=TrustModelBackendMixin), DocumentGrant)
+        record = _register(RegistryFactory(), DocumentGrant)
         self.assertIs(record.root, DocumentGrant)
         self.assertEqual(record.content_path[0], 'document')
         self.assertEqual(record.user_path[0], 'user')
@@ -125,7 +124,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_mixed_roots_rejected(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         k = Ref(OtherGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'same root'):
@@ -138,7 +137,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_missing_field_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'missing field'):
             registry.register(
@@ -149,7 +148,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_scalar_intermediate_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'scalar'):
             registry.register(
@@ -160,7 +159,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_multi_valued_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'multi-valued',
@@ -173,7 +172,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_reverse_traversal_rejected(self):
         Document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(Document)
         with self.assertRaisesRegex(TrustsConfigurationError, r'reverse'):
             registry.register(
@@ -185,7 +184,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_generic_foreign_key_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'generic foreign key',
@@ -222,7 +221,7 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertEqual(j.root, Ref(CollisionGrant, ('root',)))
         self.assertEqual(j.path, Ref(CollisionGrant, ('path',)))
 
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         record = registry.register(
             content=j.root,
             user=j.path,
@@ -236,7 +235,7 @@ class TrustsRegistryTest(SimpleTestCase):
         self.assertEqual(record.user_field, 'path')
         self.assertIs(record.user_model, User)
 
-        alt = RegistryFactory(cls=TrustModelBackendMixin)
+        alt = RegistryFactory()
         via_path_content = alt.register(
             content=Ref(CollisionGrant).path,
             user=Ref(CollisionGrant).root,
@@ -258,7 +257,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_malformed_arguments_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'must be a root-relative Ref'):
             registry.register(
@@ -275,7 +274,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_non_none_condition_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'not supported'):
             registry.register(
@@ -294,7 +293,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_duplicate_and_conflicting_registration_are_deterministic(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         first = _register(registry, DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
             _register(registry, DocumentGrant)
@@ -312,7 +311,7 @@ class TrustsRegistryTest(SimpleTestCase):
         other = _register(registry, OtherGrant)
         self.assertEqual(registry.records, (first, other))
 
-        twin = RegistryFactory(cls=TrustModelBackendMixin)
+        twin = RegistryFactory()
         again = _register(twin, DocumentGrant)
         self.assertEqual(first, again)
         self.assertIsNot(first, again)
@@ -321,7 +320,7 @@ class TrustsRegistryTest(SimpleTestCase):
 
     def test_normalized_records_are_immutable(self):
         _document, DocumentGrant, _other = _mock_models()
-        record = _register(RegistryFactory(cls=TrustModelBackendMixin), DocumentGrant)
+        record = _register(RegistryFactory(), DocumentGrant)
         with self.assertRaises((AttributeError, TrustsConfigurationError, TypeError)):
             record.root = object
         j = Ref(DocumentGrant)
@@ -333,7 +332,7 @@ class TrustsRegistryTest(SimpleTestCase):
         # here is the zero-SQL proof; a query would raise
         # DatabaseOperationForbidden.
         _document, DocumentGrant, _other = _mock_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         _register(registry, DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
             _register(registry, DocumentGrant)
@@ -352,14 +351,14 @@ class TrustsRegistryTest(SimpleTestCase):
             self.assertNotIn('Trust', names)
             self.assertNotIn('Content', names)
             self.assertNotIn('Junction', names)
-        record = _register(RegistryFactory(cls=TrustModelBackendMixin), DocumentGrant)
+        record = _register(RegistryFactory(), DocumentGrant)
         self.assertEqual(DocumentGrant.__module__, __name__)
         self.assertIs(record.root, DocumentGrant)
 
     def test_instances_are_isolated(self):
         _document, DocumentGrant, _other = _mock_models()
-        left = RegistryFactory(cls=TrustModelBackendMixin)
-        right = RegistryFactory(cls=TrustModelBackendMixin)
+        left = RegistryFactory()
+        right = RegistryFactory()
         _register(left, DocumentGrant)
         self.assertEqual(len(left.records), 1)
         self.assertEqual(right.records, ())

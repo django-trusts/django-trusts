@@ -58,7 +58,7 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue246'):
     if registry is None:
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
     registry.path = path
     return registry
 
@@ -157,7 +157,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             handle.register_public(trust=Grant, user='group__user', permission='paper', group='group', content='paper')
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
             handle.register_public(trust=Grant, user=boom, permission=boom, group=boom, content=boom)
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
             registry.register(content=ref.paper, user=ref.group.user, permission=ref.paper, group=ref.group)
@@ -171,7 +171,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             handle.register_public(trust=Grant, user='group__user', content='paper')
         with self.assertRaises(TypeError):
             handle.register_public(trust=Grant, user='group__user')
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'requires permission= or group='):
             registry.register(content=ref.paper, user=ref.group.user)
@@ -205,7 +205,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()
-        via_ref = RegistryFactory(cls=TrustModelBackendMixin)
+        via_ref = RegistryFactory()
         ref = Ref(Grant)
         expected = via_ref.register(content=ref.paper, user=ref.group.user, group=ref.group)
         strings = _handle(path='tests.core.issue246-strings').register_public(trust=Grant, user='group__user', group='group', content='paper')
@@ -286,7 +286,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         self.DirectPaperGrant.objects.create(user=self.alice, paper=self.paper_b, permission=self.write)
         self.station = self.Station.objects.create(title='desk', group=self.editors)
         self.StationPaperGrant.objects.create(station=self.station, paper=self.paper_d)
-        self.registry = RegistryFactory(cls=TrustModelBackendMixin)
+        self.registry = RegistryFactory()
         self.handle = _handle(self.registry)
         self.handle.register_public(trust=self.GroupPaperGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper)
         self.handle.register_public(trust=self.GroupFolderGrant, user='group__user', group='group', content='folder__papers')
@@ -307,7 +307,9 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = built_catalog(factory, cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family)
+        factory.path = '%s.%s' % (cls.__module__, cls.__qualname__)
+        factory.family = cls.family if saved is None else saved.family
+        catalogs[cls] = built_catalog(factory)
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -451,7 +453,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         self.other = self.Paper.objects.create(title='other', folder=self.Folder.objects.create(title='other'))
         grant = self.Grant.objects.create(group=self.editors, folder=self.folder)
         grant.grants.add(self.read)
-        self.registry = RegistryFactory(cls=TrustModelBackendMixin)
+        self.registry = RegistryFactory()
         self.handle = _handle(self.registry, path='tests.core.issue246-ceiling')
         self.handle.register_public(trust=self.Grant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.folder.papers, condition=lambda t: t.grants.contains(t.group.permissions))
         self.backend = _ProbeBackend()
@@ -466,7 +468,9 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = built_catalog(factory, cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family)
+        factory.path = '%s.%s' % (cls.__module__, cls.__qualname__)
+        factory.family = cls.family if saved is None else saved.family
+        catalogs[cls] = built_catalog(factory)
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -615,12 +619,12 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             raise
 
     def _register_handles(self):
-        self.local = _handle(RegistryFactory(cls=TrustModelBackendMixin), path='tests.core.issue246-matrix-local')
+        self.local = _handle(RegistryFactory(), path='tests.core.issue246-matrix-local')
         self.local.register_public(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
-        self.roots = _handle(RegistryFactory(cls=TrustModelBackendMixin), path='tests.core.issue246-matrix-roots')
+        self.roots = _handle(RegistryFactory(), path='tests.core.issue246-matrix-roots')
         self.roots.register_public(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
         self.roots.register_public(trust=self.OtherGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.stamps.contains(t.group.permissions))
-        self.role = _handle(RegistryFactory(cls=TrustModelBackendMixin), path='tests.core.issue246-matrix-role')
+        self.role = _handle(RegistryFactory(), path='tests.core.issue246-matrix-role')
         self.role_record = self.role.register_public(trust=self.TrustGroupPermission, user=lambda t: t.link.group.user, permission=lambda t: t.permission, content=lambda t: t.paper, condition=lambda t: t.link.role.permissions.contains(t.permission))
 
     def _create_people(self):
@@ -666,7 +670,9 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         cls = type(backend)
         saved = catalogs.get(cls)
         factory = handle
-        catalogs[cls] = built_catalog(factory, cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family)
+        factory.path = '%s.%s' % (cls.__module__, cls.__qualname__)
+        factory.family = cls.family if saved is None else saved.family
+        catalogs[cls] = built_catalog(factory)
         try:
             with bound_handle(backend, handle):
                 for perm in granted:

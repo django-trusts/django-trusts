@@ -25,7 +25,6 @@ from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
 from tests.support import render_configured_policy, built_catalog
-from trusts.backends import TrustModelBackendMixin
 
 
 def _document_rows():
@@ -398,7 +397,7 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_note_a', defaults={'name': 'read_note_a'})
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
-            registry = RegistryFactory(cls=TrustModelBackendMixin)
+            registry = RegistryFactory()
             registry.path = 'tests.annotation.a'
             handle = registry
             handle.register_public(trust=NoteGrant, user='user', permission='permission', content='note')
@@ -451,7 +450,7 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget_retargetnode', defaults={'name': 'read_retarget_retargetnode'})
             node = RetargetNode.objects.create()
             RetargetGrant.objects.create(node=node, user=user, permission=permission)
-            registry = RegistryFactory(cls=TrustModelBackendMixin)
+            registry = RegistryFactory()
             registry.path = 'tests.along.retarget'
             handle = registry
             handle.register_public(trust=RetargetGrant, user='user', permission='permission', content='node', along=('node__parent', 4))
@@ -523,7 +522,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
         for enabled in (True, False):
             with self.subTest(TRUSTS_SQL_BIND_ONCE=enabled):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=enabled):
-                    handle = RegistryFactory(cls=TrustModelBackendMixin, path='documents.backends.ReviewBackend')
+                    handle = RegistryFactory(path='documents.backends.ReviewBackend')
                     handle.register_public(trust=ReviewGrant, user='user', permission='permission', content='document')
                     handle.register_permission_condition(ReviewDocument, 'published', _published)
                     document = _load_policy_sql_document(render_configured_policy(handle))

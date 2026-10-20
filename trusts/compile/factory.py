@@ -211,7 +211,7 @@ class RegistryFactory(object):
     """
 
     def __init__(self, *, compiler=None, path='', family='relationship',
-                 user_model=None, cls=None):
+                 user_model=None):
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}
@@ -225,7 +225,6 @@ class RegistryFactory(object):
         self.path = path
         self.family = family
         self.user_model = user_model
-        self.cls = cls
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
@@ -798,8 +797,6 @@ class RegistryFactory(object):
         fragments are compiled here. A later call builds another shape
         from the same stored rows.
         """
-        if self.cls is None:
-            raise TrustsConfigurationError('RegistryFactory.build() needs a backend class.')
         rows = tuple(self.conditions.iter_permission_conditions())
         lookup = FrozenConditionLookup(rows)
         stored = self._stored_user_conditions()
@@ -833,7 +830,6 @@ class RegistryFactory(object):
             user_conditions=stored, user_override=self._user_override,
             filter_lookup=lookup,
             compiler=self.compiler if self._explicit_compiler else None,
-            cls=self.cls,
             path=self.path or '', family=self.family, user_model=model,
             user_rules=(primary, absent), override_q=override_q,
         )
@@ -862,15 +858,14 @@ class RegistryFactory(object):
             )
 
 
-def compile_recorder(recorder, *, path, family, compiler, user_model, cls):
+def compile_recorder(recorder, *, path, family, compiler, user_model):
     """Replay ``recorder.rows`` into one factory and return its shape.
 
-    ``user_model`` is the model the caller resolved and ``cls`` the
-    backend class. This is the only factory constructed for those rows.
+    ``user_model`` is the model the caller resolved. This is the only
+    factory constructed for those rows.
     """
     built = RegistryFactory(
         compiler=compiler, path=path, family=family, user_model=user_model,
-        cls=cls,
     )
     recorder.freeze()
     for entry in recorder.rows:
@@ -915,16 +910,15 @@ def build_configured_catalogs(paths, user_model):
     for path, cls in chosen:
         if cls not in recorders:
             cls()
-        pending.append(compile_recorder(
+        pending.append((cls, compile_recorder(
             recorders[cls],
             path=path,
             family=cls.family,
             compiler=cls.query_compiler,
             user_model=user_model,
-            cls=cls,
-        ))
-    for shape in pending:
-        catalogs[shape.cls] = Catalog(shape)
+        )))
+    for cls, shape in pending:
+        catalogs[cls] = Catalog(shape)
 
 
 def probe_along_capabilities(connection):

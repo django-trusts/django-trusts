@@ -37,12 +37,9 @@ class _ListedBackend(TrustModelBackendMixin, ModelBackend):
 
 def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
-    catalogs[backend_cls] = built_catalog(
-        factory,
-        cls=backend_cls,
-        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
-        family=backend_cls.family,
-    )
+    factory.path = '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
+    factory.family = backend_cls.family
+    catalogs[backend_cls] = built_catalog(factory)
 
 @contextmanager
 def _listed(handle):
@@ -82,7 +79,7 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue263'):
     if registry is None:
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
     registry.path = path
     return registry
 
@@ -165,7 +162,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
         User = get_user_model()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         team = Ref(Team)
         access = Ref(Access)
         with self.assertNumQueries(0):
@@ -207,7 +204,7 @@ class PermissionCollectionRegistrationTest(TestCase):
                 app_label = 'trusts_tests'
         link = Ref(DeskLink)
         with self.assertNumQueries(0):
-            two_hops = RegistryFactory(cls=TrustModelBackendMixin).register(content=link.repository, user=link.desk.team.members, permission=link.desk.team.permissions)
+            two_hops = RegistryFactory().register(content=link.repository, user=link.desk.team.members, permission=link.desk.team.permissions)
         self.assertEqual(two_hops.permission_path, ('desk', 'team', 'permissions'))
         self.assertEqual(two_hops.permission_field, 'desk__team__permissions')
         self.assertEqual(two_hops.user_path, ('desk', 'team', 'members'))
@@ -220,8 +217,8 @@ class PermissionCollectionRegistrationTest(TestCase):
         direct_ref = Ref(DirectGrant)
         group_ref = Ref(GroupGrant)
         with self.assertNumQueries(0):
-            direct = RegistryFactory(cls=TrustModelBackendMixin).register(content=direct_ref.repository, user=direct_ref.user, permission=direct_ref.permission)
-            grouped = RegistryFactory(cls=TrustModelBackendMixin).register(content=group_ref.repository, user=group_ref.group.user, group=group_ref.group)
+            direct = RegistryFactory().register(content=direct_ref.repository, user=direct_ref.user, permission=direct_ref.permission)
+            grouped = RegistryFactory().register(content=group_ref.repository, user=group_ref.group.user, group=group_ref.group)
         self.assertFalse(direct.via_group)
         self.assertEqual(direct.permission_path, ('permission',))
         self.assertEqual(direct.permission_field, 'permission')
@@ -240,7 +237,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Team = models_['Team']
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
-        kept = RegistryFactory(cls=TrustModelBackendMixin)
+        kept = RegistryFactory()
         team = Ref(Team)
         with self.assertNumQueries(0):
             existing = kept.register(content=team.organization.repositories, user=team.members, permission=team.permissions)
@@ -316,7 +313,7 @@ class PermissionCollectionRegistrationTest(TestCase):
 
     def test_duplicate_collection_registration_does_not_mutate(self):
         Team = _collection_models()['Team']
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         team = Ref(Team)
         with self.assertNumQueries(0):
             first = registry.register(content=team.organization.repositories, user=team.members, permission=team.permissions)
@@ -374,11 +371,11 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._link(self.removers, self.delete, 'bob')
         self.access_spec = self.Access.objects.create(team=self.writers, repository=self.spec)
         self.Access.objects.create(team=self.writers, repository=self.spec)
-        self.org_handle = _handle(RegistryFactory(cls=TrustModelBackendMixin), path='tests.core.issue263-org')
+        self.org_handle = _handle(RegistryFactory(), path='tests.core.issue263-org')
         self.org_handle.register_public(trust=self.Team, user='members', permission='permissions', content='organization__repositories')
-        self.access_handle = _handle(RegistryFactory(cls=TrustModelBackendMixin), path='tests.core.issue263-access')
+        self.access_handle = _handle(RegistryFactory(), path='tests.core.issue263-access')
         self.access_handle.register_public(trust=self.Access, user='team__members', permission='team__permissions', content='repository')
-        self.classic = _handle(RegistryFactory(cls=TrustModelBackendMixin), path='tests.core.issue263-classic')
+        self.classic = _handle(RegistryFactory(), path='tests.core.issue263-classic')
         self.classic.register_public(trust=self.DirectGrant, user='user', permission='permission', content='repository')
         self.classic.register_public(trust=self.GroupGrant, user='group__user', group='group', content='repository')
         self.DirectGrant.objects.create(user=self.alice, repository=self.secret, permission=self.read)
