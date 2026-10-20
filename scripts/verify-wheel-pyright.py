@@ -19,9 +19,11 @@ from pathlib import Path
 
 
 OK_SOURCE = '''\
+from django.contrib.auth.backends import ModelBackend
 from django.db import models
 
 from trusts.apps import TrustsImplementationConfig
+from trusts.backends import TrustModelBackendMixin
 
 
 class AnnotatedGrant(models.Model):
@@ -34,12 +36,15 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
+class DocumentBackend(TrustModelBackendMixin, ModelBackend):
+    pass
+
+
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
     label = "pyright_proof"
 
     def ready(self):
-        from documents.backends import DocumentBackend
         DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
@@ -51,9 +56,11 @@ class DocumentsConfig(TrustsImplementationConfig):
 '''
 
 MISSING_SOURCE = '''\
+from django.contrib.auth.backends import ModelBackend
 from django.db import models
 
 from trusts.apps import TrustsImplementationConfig
+from trusts.backends import TrustModelBackendMixin
 
 
 class AnnotatedGrant(models.Model):
@@ -66,12 +73,15 @@ class AnnotatedGrant(models.Model):
         app_label = "pyright_proof"
 
 
+class DocumentBackend(TrustModelBackendMixin, ModelBackend):
+    pass
+
+
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
     label = "pyright_proof"
 
     def ready(self):
-        from documents.backends import DocumentBackend
         DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
             user=lambda t: t.user,
