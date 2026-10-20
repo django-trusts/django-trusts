@@ -220,6 +220,29 @@ class CoreImportBoundaryTest(SimpleTestCase):
         self.assertFalse(hasattr(trusts, 'ENTITY_MODEL_NAME'))
         self.assertFalse(hasattr(trusts, 'ROOT_PK'))
 
+    def test_plan_package_does_not_import_compile(self):
+        import ast
+        import inspect
+        from pathlib import Path
+        import trusts
+        root = Path(inspect.getfile(trusts)).resolve().parent / 'plan'
+        forbidden = []
+        for path in sorted(root.rglob('*.py')):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or '']
+                else:
+                    continue
+                if any((
+                    name == 'trusts.compile' or name.startswith('trusts.compile.')
+                    for name in names
+                )):
+                    forbidden.append('%s imports %s' % (path.name, ', '.join(names)))
+        self.assertEqual(forbidden, [])
+
 class PermissionConditionsMetaOptionTest(SimpleTestCase):
 
     def test_generic_option_is_registered_once(self):
