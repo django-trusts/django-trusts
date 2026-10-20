@@ -25,7 +25,6 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.compile.catalogs import Catalog
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -131,7 +130,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         from tests.backends import MixinOnlyBackend
         self._saved_fold_catalog = catalogs.get(MixinOnlyBackend)
-        self.fold_handle = Catalog(cls=MixinOnlyBackend, path=MIXIN, family='ordered_fold', shape=self.fold_registry.build())
+        self.fold_handle = built_catalog(self.fold_registry, cls=MixinOnlyBackend)
         catalogs[MixinOnlyBackend] = self.fold_handle
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()

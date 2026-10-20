@@ -29,6 +29,7 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
+from tests.support import built_catalog
 from trusts.compile.factory import RegistryFactory
 
 PERM = 'trusts_tests.change_note'
@@ -47,11 +48,12 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
 
     def has_perm(self, user_obj, perm, obj=None, **skip_flags):
         from trusts.backends import catalogs
-        from trusts.compile.catalogs import Catalog
         cls = type(self)
         if cls not in catalogs:
-            factory = self._factory
-            catalogs[cls] = Catalog(cls=cls, path='tests.core.issue203', family=self.family, shape=factory.build())
+            catalogs[cls] = built_catalog(
+                self._factory, cls=cls, path='tests.core.issue203',
+                family=self.family,
+            )
         return super().has_perm(user_obj, perm, obj, **skip_flags)
 
 class _BuilderLog(object):

@@ -21,7 +21,6 @@ from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, install_class_handle
-from trusts.compile.catalogs import Catalog
 
 
 def _handle(path='tests.core.issue266'):
@@ -38,9 +37,12 @@ class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
 def _seal_factory(backend_cls, factory):
     """Construct this class's catalog from a factory this test filled."""
     from trusts.backends import catalogs
-    built = factory.build()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, shape=built)
-    return built
+    catalogs[backend_cls] = built_catalog(
+        factory,
+        cls=backend_cls,
+        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
+        family=backend_cls.family,
+    )
 
 def _document_host_handle():
     """Same registration ``DocumentConfig.ready`` installs on the kernel host."""

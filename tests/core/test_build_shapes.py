@@ -302,6 +302,9 @@ class BuildCatalogShapeTest(SimpleTestCase):
         shape = registry.build()
 
         self.assertIsInstance(shape, CatalogShape)
+        self.assertIs(shape.cls, RegistryFactory)
+        self.assertEqual(shape.path, '')
+        self.assertEqual(shape.family, 'relationship')
         self.assertTrue(dataclasses.is_dataclass(shape))
         self.assertTrue(registry.frozen)
         with self.assertRaises(dataclasses.FrozenInstanceError):

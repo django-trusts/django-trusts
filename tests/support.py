@@ -19,14 +19,24 @@ import trusts.plan.standards as standards
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
-def built_catalog(factory):
-    """Catalog for one factory. The factory is built here."""
-    return Catalog(
-        cls=type(factory),
-        path=factory.path,
-        family=factory.family,
-        shape=factory.build(),
-    )
+def built_catalog(factory, *, cls=None, path=None, family=None):
+    """Catalog for one factory. The factory is built here.
+
+    ``cls``, ``path``, and ``family`` stamp that one build when the
+    catalog's identity differs from the factory's. The factory's own
+    attributes are restored.
+    """
+    saved = (factory.cls, factory.path, factory.family)
+    if cls is not None:
+        factory.cls = cls
+    if path is not None:
+        factory.path = path
+    if family is not None:
+        factory.family = family
+    try:
+        return Catalog(factory.build())
+    finally:
+        factory.cls, factory.path, factory.family = saved
 
 
 def built_registries(items):
@@ -53,12 +63,7 @@ def override_catalog(backend_cls, factory, path):
     """Publish one catalog for ``backend_cls`` and restore the previous entry."""
 
     saved = catalogs.get(backend_cls, _MISSING)
-    catalogs[backend_cls] = Catalog(
-        cls=backend_cls,
-        path=path,
-        family=factory.family,
-        shape=factory.build(),
-    )
+    catalogs[backend_cls] = built_catalog(factory, cls=backend_cls, path=path)
     try:
         yield catalogs[backend_cls]
     finally:
@@ -142,16 +147,12 @@ def _publish_catalog(backend_cls, factory, *, path=None):
     if factory is None:
         catalogs.pop(backend_cls, None)
         return None
-    shape = factory.build()
-    catalogs[backend_cls] = Catalog(
-        cls=backend_cls,
-        path=path or factory.path or (
-            '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
-        ),
-        family=factory.family,
-        shape=shape,
+    published = path or factory.path or (
+        '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
     )
-    return shape
+    catalog = built_catalog(factory, cls=backend_cls, path=published)
+    catalogs[backend_cls] = catalog
+    return catalog
 
 
 @contextmanager
@@ -245,18 +246,11 @@ def listed_relationship(factories):
     classes = _inquiry_backend_classes(len(factories))
     saved = {cls: catalogs.get(cls, _MISSING) for cls in classes}
     paths = []
-    prepared = []
     for cls, factory in zip(classes, factories):
         listing = '%s.%s' % (cls.__module__, cls.__name__)
         paths.append(listing)
-        shape = factory.build()
-        prepared.append((cls, shape.path or listing, shape))
-    for cls, path, shape in prepared:
-        catalogs[cls] = Catalog(
-            cls=cls,
-            path=path,
-            family=shape.family,
-            shape=shape,
+        catalogs[cls] = built_catalog(
+            factory, cls=cls, path=factory.path or listing,
         )
     with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
         try:
@@ -303,12 +297,7 @@ def unbound_named_filters(backend_cls):
     )
     factory.set_filter_lookup(None)
     replay_recorder(factory, backend_cls)
-    catalogs[backend_cls] = Catalog(
-        cls=backend_cls,
-        path=factory.path,
-        family=factory.family,
-        shape=factory.build(),
-    )
+    catalogs[backend_cls] = built_catalog(factory, cls=backend_cls)
     try:
         yield catalogs[backend_cls]
     finally:

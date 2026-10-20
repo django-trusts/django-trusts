@@ -31,7 +31,6 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager
-from trusts.compile.catalogs import Catalog
 
 
 class _ProbeBackend(TrustModelBackendMixin, ModelBackend):
@@ -308,7 +307,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, shape=factory.build())
+        catalogs[cls] = built_catalog(factory, cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family)
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -467,7 +466,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, shape=factory.build())
+        catalogs[cls] = built_catalog(factory, cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family)
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -667,7 +666,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         cls = type(backend)
         saved = catalogs.get(cls)
         factory = handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, shape=factory.build())
+        catalogs[cls] = built_catalog(factory, cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family)
         try:
             with bound_handle(backend, handle):
                 for perm in granted:
