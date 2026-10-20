@@ -171,8 +171,6 @@ def _named_filter_q(filter_lookup, content, code, singular, user_model):
     a singular object check that returns false. Construction reads only
     values already loaded on ``content``.
     """
-    if filter_lookup is None:
-        return None
     record = filter_lookup.record_for(content.__class__, code)
     if record is None:
         return None

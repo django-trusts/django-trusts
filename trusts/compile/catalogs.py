@@ -18,7 +18,6 @@ from trusts.plan.aggregates import (
     instance_match,
 )
 from trusts.plan.conditions import (
-    FrozenConditionLookup,
     compile_stored_condition_q,
     evaluate_registered_expression,
     parse_perm_code,
@@ -151,11 +150,6 @@ class Catalog(object):
         self.user_override = shape.user_override
         self.filter_lookup = shape.filter_lookup
         self._conditions = shape.conditions
-        self._condition_lookup = (
-            shape.filter_lookup
-            if shape.filter_lookup is not None
-            else FrozenConditionLookup(shape.conditions)
-        )
         self._user_rules = shape.user_rules
         self._override_q = shape.override_q
 
@@ -215,7 +209,7 @@ class Catalog(object):
         )
 
     def get_permission_condition_record(self, model, cond_code):
-        return self._condition_lookup.record_for(model, cond_code)
+        return self.filter_lookup.record_for(model, cond_code)
 
     def iter_permission_conditions(self):
         return iter(self._conditions)
@@ -562,16 +556,9 @@ class Catalog(object):
     def _condition_overlay(self, permext, obj, user_obj):
         if not permission_has_condition(permext):
             return None, None
-        applabel, modelname, _action, cond = parse_perm_code(permext)
+        cond = parse_perm_code(permext)[3]
         model = _content_model(obj)
         lookup = self.filter_lookup
-        if lookup is None:
-            if isinstance(obj, QuerySet):
-                return None, None
-            raise AttributeError(
-                'Permission condition code "%s" is not associate with model "%s_%s"'
-                % (cond, applabel, modelname)
-            )
         record = lookup.record_for(model, cond)
         if record is None or not isinstance(obj, QuerySet):
             return record, None
@@ -972,8 +959,6 @@ def _owns_selected_conditions(catalog, model, conditions):
     if not conditions:
         return True
     lookup = catalog.filter_lookup
-    if lookup is None:
-        return False
     for name in conditions:
         record = lookup.record_for(model, name)
         if record is None or record.expr is None:
@@ -984,8 +969,6 @@ def _owns_selected_conditions(catalog, model, conditions):
 def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
     """AND this catalog's selected names, or None when any name is missing."""
     lookup = catalog.filter_lookup
-    if lookup is None:
-        return None
     extra_q = None
     for name in conditions:
         record = lookup.record_for(model, name)

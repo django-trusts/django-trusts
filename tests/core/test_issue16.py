@@ -88,8 +88,6 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         right = RegistryFactory()
         self.assertIsInstance(left.conditions, ConditionRegistry)
         self.assertIsNot(left.conditions, right.conditions)
-        self.assertIsNone(left.filter_lookup)
-        self.assertIsNone(right.filter_lookup)
         self.assertEqual(list(left.conditions.iter_permission_conditions()), [])
         self.assertEqual(list(right.conditions.iter_permission_conditions()), [])
 
@@ -162,7 +160,8 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
         catalog = built_catalog(registry)
         self.assertIs(catalog.get_permission_condition_record(Note, 'own'), record)
-        self.assertIsNot(catalog.filter_lookup, registry.filter_lookup)
+        self.assertIs(catalog.filter_lookup.record_for(Note, 'own'), record)
+        self.assertFalse(hasattr(catalog.filter_lookup, 'conditions'))
 
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()

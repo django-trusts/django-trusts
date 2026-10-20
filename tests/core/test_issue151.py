@@ -1,8 +1,8 @@
 from tests.support import built_catalog, configured_catalog, unbound_named_filters
-"""#151 C1: construct-time self-bind of Core's private condition lookup.
+"""#151 C1: the catalog's condition lookup is the frozen rows.
 
 Library-only proofs. Applications register builders; they do not import
-``trusts.plan.conditions`` or call ``set_filter_lookup``.
+``trusts.plan.conditions``.
 """
 
 import os
@@ -26,8 +26,8 @@ from trusts.conditions import (
     permission_has_condition,
 )
 from trusts.plan.conditions import ConditionRecord, FrozenConditionLookup
+from trusts.compile.catalogs import Catalog
 from trusts.compile.factory import RegistryFactory
-from trusts.errors import TrustsConfigurationError
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,7 +75,6 @@ class _IsolatedTables(object):
 class ConstructTimeSelfBindTest(SimpleTestCase):
     def test_new_registry_self_binds_private_store_adapter(self):
         registry = RegistryFactory()
-        self.assertIsNone(registry.filter_lookup)
         built = built_catalog(registry)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
@@ -84,8 +83,10 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         left = RegistryFactory()
         right = RegistryFactory()
         self.assertIsNot(left.conditions, right.conditions)
-        self.assertIsNone(left.filter_lookup)
-        self.assertIsNone(right.filter_lookup)
+        self.assertIsNot(
+            built_catalog(left).filter_lookup,
+            built_catalog(right).filter_lookup,
+        )
 
     def test_build_and_ready_do_not_bind_or_rebind(self):
         import inspect
@@ -93,7 +94,6 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         registry = RegistryFactory()
         built = built_catalog(registry)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
-        self.assertIsNone(registry.filter_lookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
         source = inspect.getsource(RegistryFactory.build)
         self.assertNotIn('set_filter_lookup', source)
@@ -226,25 +226,15 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
 
 
 class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
-    def test_explicit_unbind_and_partial_bind_do_not_mutate_wrongly(self):
+    def test_catalog_uses_the_shapes_lookup(self):
         registry = RegistryFactory()
-        frozen = FrozenConditionLookup(())
-        self.assertIsNone(registry.filter_lookup)
-
-        class OnlyRecord(object):
-            def record_for(self, model, cond_code):
-                return None
-
-        with self.assertRaises(TrustsConfigurationError):
-            registry.set_filter_lookup(OnlyRecord())
-        self.assertIsNone(registry.filter_lookup)
-
-        registry.set_filter_lookup(frozen)
-        self.assertIs(registry.filter_lookup, frozen)
-        registry.set_filter_lookup(None)
-        self.assertIsNone(registry.filter_lookup)
-        registry.set_filter_lookup(frozen)
-        self.assertIs(registry.filter_lookup, frozen)
+        shape = registry.build()
+        catalog = Catalog(shape)
+        self.assertIs(catalog.filter_lookup, shape.filter_lookup)
+        self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
+        self.assertIsNone(shape.filter_lookup.record_for(Document, 'missing'))
+        self.assertFalse(hasattr(shape.filter_lookup, 'conditions'))
+        self.assertIsNot(registry.build().filter_lookup, shape.filter_lookup)
 
     def test_unknown_condition_fail_closes_through_supported_backend_path(self):
         backend = DocumentBackend()
@@ -254,16 +244,14 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
             user, 'myapp.change_document:missing', document,
         ))
 
-    def test_explicit_unbind_fail_closes_named_condition_overlay(self):
+    def test_missing_named_condition_denies(self):
         backend = DocumentBackend()
         document = Document(title='unbind')
         user = get_user_model()(username='unbind-151')
         with unbound_named_filters(DocumentBackend):
-            with self.assertRaises(AttributeError) as ctx:
-                backend.has_perm(
-                    user, 'myapp.change_document:non_confidential', document,
-                )
-            self.assertIn('not associate', str(ctx.exception))
+            self.assertFalse(backend.has_perm(
+                user, 'myapp.change_document:non_confidential', document,
+            ))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -272,13 +260,11 @@ class NamedConditionCompilationTest(TransactionTestCase):
         Note = _note_model()
         with self.assertNumQueries(0):
             registry = RegistryFactory()
-            self.assertIsNone(registry.filter_lookup)
             registry.register_permission_condition(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
             built = built_catalog(registry)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
-        self.assertIsNone(registry.filter_lookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
         self.assertIs(
             built.get_permission_condition_record(Note, 'owned'),

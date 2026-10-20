@@ -1,8 +1,8 @@
 from tests.support import configured_catalog, unbound_named_filters
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
-Public ``TrustModelBackendMixin`` methods, ``set_filter_lookup``,
-and ``TrustsImplementationConfig.ready()`` only. Does not invent a
+Public ``TrustModelBackendMixin`` methods and
+``TrustsImplementationConfig.ready()`` only. Does not invent a
 ``Permission``-instance ``has_perm`` contract, assert
 ``_trust_perm_cache`` shape, or patch private match/compiler helpers.
 """
@@ -172,23 +172,21 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                 self.document_backend.has_perm(self.alice, PERM, mapping),
             )
 
-    def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
+    def test_missing_named_condition_denies_on_instance_at_zero_sql(self):
         from tests.myapp.backends import DocumentBackend
 
         qs = Document.objects.filter(pk=self.document.pk)
         with unbound_named_filters(DocumentBackend):
             with self.assertNumQueries(0):
-                with self.assertRaises(AttributeError) as ctx:
+                self.assertFalse(
                     self.document_backend.has_perm(
                         self.alice, FILTERED, self.document,
-                    )
-                self.assertIn('not associate', str(ctx.exception))
-                self.assertIn('non_confidential', str(ctx.exception))
+                    ),
+                )
                 self.assertFalse(
                     self.host.has_perm(self.alice, FILTERED, self.document),
                 )
-                with self.assertRaises(AttributeError):
-                    self.alice.has_perm(FILTERED, self.document)
+                self.assertFalse(self.alice.has_perm(FILTERED, self.document))
                 self.assertFalse(
                     self.document_backend.has_perm(self.alice, FILTERED, qs),
                 )
