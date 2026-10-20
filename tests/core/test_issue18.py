@@ -548,11 +548,11 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.assertFalse(plan.records[0].via_group)
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.member, self.read))
-            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.member, self.read, kind='group'))
-            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.stranger, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.stranger, self.read, kind='group'))
             self.assertEqual(list(common_permissions(built_registries((handle,)), self.folder, self.member, kind='group')), [])
         with self.assertNumQueries(1):
-            self.assertIs(all_match(built_registries((handle,)), self.folder, self.member, self.read), True)
+            self.assertIs(all_match(built_registries((handle,))[0], self.folder, self.member, self.read), True)
 
     def test_fk_user_hop_is_not_group_slice(self):
         handle = self._handle(self.trustee)
@@ -560,7 +560,7 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.assertEqual(plan.records[0].user_path, ('owner',))
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.owner, self.read))
-            self.assertIsNone(granted(built_registries((handle,)), self.folder, self.owner, self.read, kind='group'))
+            self.assertIsNone(granted(built_registries((handle,))[0], self.folder, self.owner, self.read, kind='group'))
         self.assertTrue(self.trustee.build_registry().has_permission(self.owner, self.folder, self.read))
         with self.assertNumQueries(0):
             self.assertEqual(list(common_permissions(built_registries((handle,)), self.folder, self.owner, kind='group')), [])
@@ -568,13 +568,13 @@ class MembershipGroupExistsTest(TransactionTestCase):
     def test_mixed_plan_group_slice_omits_permission_records(self):
         handle = self._handle(self.mixed)
         with self.assertNumQueries(0):
-            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.member, self.read, kind='group'))
-            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.owner, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.owner, self.read, kind='group'))
             self.assertIsNone(instance_match(built_registries((handle,))[0], self.folder, self.member, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertIs(all_match(built_registries((handle,)), self.folder, self.owner, self.read), True)
+            self.assertIs(all_match(built_registries((handle,))[0], self.folder, self.owner, self.read), True)
         with self.assertNumQueries(1):
-            self.assertIs(all_match(built_registries((handle,)), self.folder, self.member, self.read), True)
+            self.assertIs(all_match(built_registries((handle,))[0], self.folder, self.member, self.read), True)
         with self.assertNumQueries(1):
             self.assertIs(instance_match(built_registries((handle,))[0], self.other, self.member, self.read), False)
 

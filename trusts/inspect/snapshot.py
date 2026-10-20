@@ -441,7 +441,7 @@ class _PolicyVisitor(object):
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
-            (subject,), instance, user, kind='complete',
+            subject, instance, user, kind='complete',
         )
         if queryset is None:
             raise TrustsConfigurationError(
@@ -479,7 +479,7 @@ class _PolicyVisitor(object):
                 user,
                 permission,
                 content=model,
-                subjects=(subject,),
+                registry=subject,
             )
             if queryset.query.is_empty():
                 continue
@@ -499,7 +499,7 @@ class _PolicyVisitor(object):
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
-            (registry,), instance, user, kind='group',
+            registry, instance, user, kind='group',
         )
         if queryset is None:
             raise TrustsConfigurationError(

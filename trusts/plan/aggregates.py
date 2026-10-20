@@ -1,4 +1,4 @@
-"""Authorization aggregates over several registries."""
+"""Authorization aggregates over one registry."""
 
 __all__ = []
 
@@ -73,17 +73,16 @@ def _compiler_applies(compiler, plan):
     return bool(plan.records)
 
 
-def all_match(registries, candidates, user, permission, *, kind='complete',
+def all_match(registry, candidates, user, permission, *, kind='complete',
               extra_q=None, permission_model=None, skipped=()):
     """True iff candidates are nonempty and no row lacks the aggregate proof.
 
-    One SQL. ``None`` when no registry applies so the caller may use the
-    undeclared fallback. ``extra_q`` is an optional overlay (AND); it
-    never creates a grant. Every supplied registry participates.
+    One SQL. ``None`` when the registry does not apply so the caller may
+    use the undeclared fallback. ``extra_q`` is an optional overlay (AND);
+    it never creates a grant.
     """
-    registries = tuple(registries)
     granted_q = _compile_granted(
-        registries, candidates, user, permission, kind=kind,
+        registry, candidates, user, permission, kind=kind,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -107,7 +106,7 @@ def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=
     overlay (AND); it never creates a grant.
     """
     granted_q = _compile_granted(
-        (registry,), obj, user, permission, kind=kind,
+        registry, obj, user, permission, kind=kind,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -120,84 +119,63 @@ def instance_match(registry, obj, user, permission, *, kind='complete', extra_q=
     ).filter(granted_q)).exists()
 
 
-def _compile_common_permissions(registries, candidates, user, *, kind='complete',
+def _compile_common_permissions(registry, candidates, user, *, kind='complete',
                                 skipped=()):
-    """Permission queryset for the given registries. Each sponsors itself."""
+    """Permission queryset for ``registry``. It sponsors itself."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
-    registries = tuple(registries)
-    parts = []
-    permission_model = None
-    applicable = False
-    for registry in registries:
-        compiler = answering_compiler(registry)
-        plan = registry.plan_for(candidates, user=user)
-        if not _compiler_applies(compiler, plan):
-            continue
-        applicable = True
-        if plan.permission_model is not None:
-            if permission_model is None:
-                permission_model = plan.permission_model
-            elif permission_model is not plan.permission_model:
-                raise TrustsConfigurationError(
-                    'Applicable registrations must share one permission '
-                    'model; got %s and %s.'
-                    % (
-                        permission_model._meta.label,
-                        plan.permission_model._meta.label,
-                    )
-                )
-        if kind == 'complete':
-            fn = compiler.complete_exists
-        else:
-            fn = compiler.group_exists
-        part = _as_q(fn(plan, qs, user, perm_expr))
-        delegated = None
-        if kind == 'complete' and plan.delegations:
-            sponsor_records = _ordinary_records(registry, candidates)
-            compatible_records = _compatible_sponsor_records(
-                plan.delegations, sponsor_records,
-            )
-            delegated = _delegated_content_exists(
-                plan.delegations, compatible_records, user, perm_expr,
-                content_identity=_candidate_model(candidates),
-                skipped=skipped,
-            )
-            if delegated is not None:
-                applicable = True
-                terminals = {
-                    (record.permission_model, record.permission_target)
-                    for record in compatible_records
-                }
-                if len(terminals) != 1:
-                    raise TrustsConfigurationError(
-                        'Delegated sponsor registrations must share one '
-                        'permission model and comparison target.'
-                    )
-                delegated_model, _delegated_target = terminals.pop()
-                if permission_model is None:
-                    permission_model = delegated_model
-                elif permission_model is not delegated_model:
-                    raise TrustsConfigurationError(
-                        'Applicable registrations must share one '
-                        'permission model.'
-                    )
-        wrapped = _apply_checked_user(
-            _or_q(part, delegated), plan, user, skipped, perm_expr,
-            _candidate_model(candidates), permission_model,
-            complete=(kind == 'complete'),
-        )
-        if wrapped is not None:
-            parts.append(wrapped)
-    if not applicable or permission_model is None:
+    compiler = answering_compiler(registry)
+    plan = registry.plan_for(candidates, user=user)
+    if not _compiler_applies(compiler, plan):
         return None
-    if not parts:
+    permission_model = plan.permission_model
+    if kind == 'complete':
+        fn = compiler.complete_exists
+    else:
+        fn = compiler.group_exists
+    part = _as_q(fn(plan, qs, user, perm_expr))
+    delegated = None
+    if kind == 'complete' and plan.delegations:
+        sponsor_records = _ordinary_records(registry, candidates)
+        compatible_records = _compatible_sponsor_records(
+            plan.delegations, sponsor_records,
+        )
+        delegated = _delegated_content_exists(
+            plan.delegations, compatible_records, user, perm_expr,
+            content_identity=_candidate_model(candidates),
+            skipped=skipped,
+        )
+        if delegated is not None:
+            terminals = {
+                (record.permission_model, record.permission_target)
+                for record in compatible_records
+            }
+            if len(terminals) != 1:
+                raise TrustsConfigurationError(
+                    'Delegated sponsor registrations must share one '
+                    'permission model and comparison target.'
+                )
+            delegated_model, _delegated_target = terminals.pop()
+            if permission_model is None:
+                permission_model = delegated_model
+            elif permission_model is not delegated_model:
+                raise TrustsConfigurationError(
+                    'Applicable registrations must share one '
+                    'permission model.'
+                )
+    wrapped = _apply_checked_user(
+        _or_q(part, delegated), plan, user, skipped, perm_expr,
+        _candidate_model(candidates), permission_model,
+        complete=(kind == 'complete'),
+    )
+    if permission_model is None:
+        return None
+    if wrapped is None:
         return permission_model._default_manager.none()
-    granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
     return bind_once(permission_model._default_manager.filter(
         Exists(qs),
     ).exclude(
-        Exists(qs.filter(~granted_q)),
+        Exists(qs.filter(~wrapped)),
     ).distinct())
 
 
@@ -221,8 +199,10 @@ def common_permissions(registries, candidates, user, *, kind='complete',
         user, skip_flags=skip_flags, subjects=participating)
     if inquiry.denied:
         return _anonymous_common_permissions(participating, candidates)
+    if len(participating) != 1:
+        return None
     return _compile_common_permissions(
-        participating, candidates, user, kind=kind,
+        participating[0], candidates, user, kind=kind,
         skipped=inquiry.values,
     )
 

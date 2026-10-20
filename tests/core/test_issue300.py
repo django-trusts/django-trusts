@@ -110,9 +110,9 @@ class Issue300BooleanFieldTest(KernelHostRequiredMixin, TestCase):
         handle = _document_handle()
         content = GuideDocument(title='note-300', pk=1)
         with self.assertRaises(TrustsConfigurationError):
-            granted(built_registries((handle,)), content, None, permission)
+            granted(built_registries((handle,))[0], content, None, permission)
         with self.assertRaises(TrustsConfigurationError):
-            granted(built_registries((handle,)), content, object(), permission)
+            granted(built_registries((handle,))[0], content, object(), permission)
 
 class Issue300BindOnceTest(SimpleTestCase):
 
@@ -532,7 +532,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(records[0], 'permission', 'default')
                     queryset = _content_manager(ReviewDocument).all()
-                    granted = _compile_granted(built_registries((handle,)), queryset, user, permission, kind='complete')
+                    granted = _compile_granted(built_registries((handle,))[0], queryset, user, permission, kind='complete')
                     raw_sql, raw_params = bind_once(queryset.filter(granted).distinct()).query.sql_with_params()
                     self._assert_cardinality_and_order(permitted, raw_params)
                     self.assertEqual(raw_sql.count('%s'), len(raw_params))

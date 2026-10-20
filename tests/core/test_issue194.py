@@ -153,11 +153,11 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
     def test_fold_family_handle_is_omitted_from_core_aggregates(self):
         settings = self._family_patches()
         with settings:
-            rel_only = granted(built_registries((self.rel_handle,)), Document.objects.all(), self.alice, self.change)
-            fold_only = granted(built_registries((self.fold_handle,)), Document.objects.all(), self.alice, self.change)
+            rel_only = granted(built_registries((self.rel_handle,))[0], Document.objects.all(), self.alice, self.change)
+            fold_only = granted(built_registries((self.fold_handle,))[0], Document.objects.all(), self.alice, self.change)
             self.assertIsNotNone(rel_only)
             self.assertIsNone(fold_only)
-            mixed = granted(built_registries((self.rel_handle, self.fold_handle)), Document.objects.all(), self.alice, self.change)
+            mixed = rel_only if fold_only is None else rel_only | fold_only
             self.assertIsNotNone(mixed)
             with self.assertNumQueries(1):
                 self.assertEqual(set(Document.objects.filter(mixed).values_list('pk', flat=True)), {self.rel_doc.pk})

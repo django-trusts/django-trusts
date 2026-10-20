@@ -223,7 +223,7 @@ class Registry(object):
             if denied:
                 return False
             matched = all_match(
-                (self,), content, user, permission,
+                self, content, user, permission,
                 kind='complete', extra_q=extra_q,
                 permission_model=permission_model, skipped=values,
             )
@@ -264,7 +264,7 @@ class Registry(object):
             if not plan.delegations:
                 return plan.filter_content(queryset, user, permission, skipped=values)
         granted_q = _compile_granted(
-            (self,), queryset, user, permission,
+            self, queryset, user, permission,
             kind='complete', skipped=values,
         )
         if granted_q is None:
@@ -286,7 +286,7 @@ class Registry(object):
         if denied:
             return queryset.none()
         return _compile_permitted_content_queryset(
-            queryset, user, permission, content=content, subjects=(self,),
+            queryset, user, permission, content=content, registry=self,
             skipped=values,
         )
 
@@ -310,7 +310,7 @@ class Registry(object):
                 and not isinstance(content, QuerySet) and not plan.delegations):
             return plan.permissions(user, content, skipped=values)
         qs = _compile_common_permissions(
-            (self,), content, user, kind=kind, skipped=values,
+            self, content, user, kind=kind, skipped=values,
         )
         if qs is None:
             if not (plan.records or plan.delegations) or plan.permission_model is None:
