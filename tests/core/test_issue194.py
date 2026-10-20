@@ -15,7 +15,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
 from trusts.apps import TrustsImplementationConfig
-from trusts.installed import catalogs
+from trusts.backends import catalogs
 from trusts.plan.contents import relationship_family
 from tests.apps import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
@@ -140,7 +140,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
 
     def tearDown(self):
         from tests.backends import MixinOnlyBackend
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         if self._saved_fold_catalog is None:
             catalogs.pop(MixinOnlyBackend, None)
         else:
@@ -216,21 +216,21 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         self.backend = DocumentBackend()
 
     def test_inapplicable_compiler_is_zero_sql(self):
-        live = catalogs[DocumentBackend]
-        silent = Registry(records=live.records, delegations=live.delegations, conditions=live.conditions, user_conditions=live.user_conditions, user_override=live.user_override, condition_lookup=live.condition_lookup, compiler=_NeverAppliesCompiler(), path=live.path, family=live.family)
-        from tests.apps import bound_handle
-        cls = type(self.backend)
-        saved = catalogs.get(cls)
-        try:
-            with bound_handle(self.backend, silent):
-                with self.assertNumQueries(0):
-                    self.assertFalse(self.backend.has_perm(self.alice, PERM, self.doc))
-                    self.assertEqual(self.backend.get_all_permissions(self.alice, self.doc), set())
-        finally:
-            if saved is None:
-                catalogs.pop(cls, None)
-            else:
-                catalogs[cls] = saved
+        from tests.apps import bound_handle, replay_recorder
+        from tests.myapp.apps import DOCUMENT_BACKEND
+        import trusts.plan.standards as standards
+
+        factory = RegistryFactory(
+            compiler=_NeverAppliesCompiler(),
+            path=DOCUMENT_BACKEND,
+            family=DocumentBackend.family,
+            user_model=standards.user_model,
+        )
+        replay_recorder(factory, DocumentBackend)
+        with bound_handle(self.backend, factory):
+            with self.assertNumQueries(0):
+                self.assertFalse(self.backend.has_perm(self.alice, PERM, self.doc))
+                self.assertEqual(self.backend.get_all_permissions(self.alice, self.doc), set())
 
     def test_relationship_applies_keeps_live_grant(self):
         with self.assertNumQueries(1):

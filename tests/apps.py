@@ -5,21 +5,6 @@ from django.apps import AppConfig
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
-class IsolatedOwnerConfig(AppConfig):
-    """Unbound pair-test app. Not installed; constructed in isolation."""
-
-    name = 'tests'
-    label = 'trusts_isolated_owner'
-    default = False
-
-
-def isolated_owner():
-    """Construct a standalone implementation owner for isolation tests."""
-    import tests as tests_module
-
-    return IsolatedOwnerConfig('tests', tests_module)
-
-
 def built_registries(items):
     """Build factories for a direct ``granted`` / filter call.
 
@@ -73,7 +58,7 @@ def scoped_permitted_content(queryset, user, permission, *, content,
 @contextmanager
 def override_catalog(backend_cls, factory, path):
     """Publish one catalog for ``backend_cls`` and restore the previous entry."""
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
 
     saved = catalogs.get(backend_cls, _MISSING)
@@ -101,7 +86,7 @@ def configured_catalog(path, explicit=None):
     """
     from django.utils.module_loading import import_string
 
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     from trusts.errors import TrustsConfigurationError
 
     if explicit is not None:
@@ -126,7 +111,7 @@ def configured_catalog(path, explicit=None):
 @contextmanager
 def empty_catalogs():
     """Clear built catalogs for one sweep, then restore them."""
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
 
     saved = dict(catalogs)
     catalogs.clear()
@@ -142,18 +127,16 @@ def sweep_listed_backends():
     from django.conf import settings
     from django.contrib.auth import get_user_model
 
-    from trusts.backends import TrustModelBackendMixin
     from trusts.compile.factory import build_configured_catalogs
 
     build_configured_catalogs(
         tuple(settings.AUTHENTICATION_BACKENDS),
         get_user_model(),
-        TrustModelBackendMixin,
     )
 
 
 def live_config(apps_registry=None):
-    """The installed sweep config. It does not own a backend path."""
+    """The sweep config. It does not own a backend path."""
     from django.apps import apps as django_apps
 
     from trusts.errors import TrustsConfigurationError
@@ -305,7 +288,7 @@ _MISSING = object()
 
 def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
     """Store one catalog for ``backend_cls``. ``factory`` is the registration object."""
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
 
     if factory is None:
@@ -327,7 +310,7 @@ def _publish_catalog(backend_cls, factory, *, path=None, peers=()):
 @contextmanager
 def bound_handle(backend, factory):
     """Publish ``factory`` as this backend class's catalog for one block."""
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
 
     cls = type(backend)
     previous = catalogs.get(cls, _MISSING)
@@ -340,6 +323,48 @@ def bound_handle(backend, factory):
             catalogs.pop(cls, None)
         else:
             catalogs[cls] = previous
+
+
+def render_configured_policy(*subjects):
+    """Publish registries and render policy SQL through the listed catalogs."""
+    from trusts.inspect.snapshot import render_policy_sql_bytes
+
+    with listed_relationship(subjects):
+        return render_policy_sql_bytes()
+
+
+@contextmanager
+def published_subjects(subjects):
+    """Store these objects as the listed catalogs, without wrapping them."""
+    from django.test import override_settings
+
+    from trusts.backends import catalogs
+
+    subjects = tuple(subjects)
+    classes = _inquiry_backend_classes(len(subjects))
+    saved = {cls: catalogs.get(cls, _MISSING) for cls in classes}
+    paths = []
+    for cls, subject in zip(classes, subjects):
+        listing = '%s.%s' % (cls.__module__, cls.__name__)
+        paths.append(listing)
+        catalogs[cls] = subject
+    with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
+        try:
+            yield
+        finally:
+            for cls, previous in saved.items():
+                if previous is _MISSING:
+                    catalogs.pop(cls, None)
+                else:
+                    catalogs[cls] = previous
+
+
+def render_published_subjects(*subjects):
+    """Render policy SQL for objects already shaped like catalogs."""
+    from trusts.inspect.snapshot import render_policy_sql_bytes
+
+    with published_subjects(subjects):
+        return render_policy_sql_bytes()
 
 
 def install_class_handle(backend_cls, factory):
@@ -379,7 +404,7 @@ def listed_relationship(factories):
     """
     from django.test import override_settings
 
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
 
     from trusts.compile.catalogs import Catalog
     from trusts.compile.factory import RegistryFactory
@@ -391,32 +416,31 @@ def listed_relationship(factories):
     paths = []
     prepared = []
     for cls, factory in zip(classes, factories):
-        path = '%s.%s' % (cls.__module__, cls.__name__)
-        paths.append(path)
-        if isinstance(factory, (Catalog, Registry)):
+        listing = '%s.%s' % (cls.__module__, cls.__name__)
+        paths.append(listing)
+        if isinstance(factory, Catalog):
+            raise TypeError(
+                'listed_relationship takes a registry or factory, not a catalog.'
+            )
+        if isinstance(factory, Registry):
             subject = factory
         elif isinstance(factory, RegistryFactory):
             subject = factory.build_registry()
         else:
             subject = factory.build_registry()
-        prepared.append((cls, path, subject))
+        prepared.append((cls, subject.path or listing, subject))
     for cls, path, subject in prepared:
         peers = tuple(
             other for _cls, _path, other in prepared
             if other.family == subject.family and other is not subject
         )
-        if isinstance(subject, Catalog):
-            catalogs[cls] = subject.bound_to(
-                cls=cls, path=path, family_registries=peers,
-            )
-        else:
-            catalogs[cls] = Catalog(
-                cls=cls,
-                path=path,
-                family=subject.family,
-                registry=subject,
-                family_registries=peers,
-            )
+        catalogs[cls] = Catalog(
+            cls=cls,
+            path=path,
+            family=subject.family,
+            registry=subject,
+            family_registries=peers,
+        )
     with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
         try:
             yield tuple(catalogs[cls] for cls in classes)
@@ -426,6 +450,62 @@ def listed_relationship(factories):
                     catalogs.pop(cls, None)
                 else:
                     catalogs[cls] = previous
+
+
+def replay_recorder(factory, backend_cls):
+    """Replay a backend recorder onto a factory this test owns."""
+    from trusts.backends import recorders
+
+    recorder = recorders.get(backend_cls)
+    if recorder is None:
+        return factory
+    rows = list(recorder.rows)
+    for entry in rows:
+        if entry[0] == 'condition':
+            factory.set_user_condition(entry[1], entry[2], on=entry[3])
+        elif entry[0] == 'override':
+            factory.set_user_override(entry[1], entry[2], on=entry[3])
+    for entry in rows:
+        if entry[0] == 'filter':
+            factory.register_permission_condition(entry[1], entry[2], entry[3])
+        elif entry[0] == 'register':
+            factory.register_public(**entry[1])
+    return factory
+
+
+@contextmanager
+def unbound_named_filters(backend_cls):
+    """Publish a catalog built with the recorder rows and no named-filter lookup."""
+    from trusts.backends import catalogs
+    from trusts.compile.catalogs import Catalog
+    from trusts.compile.factory import RegistryFactory
+    import trusts.plan.standards as standards
+
+    saved = catalogs.get(backend_cls, _MISSING)
+    live = None if saved is _MISSING else saved
+    factory = RegistryFactory(
+        compiler=backend_cls.query_compiler,
+        path='' if live is None else live.path,
+        family=backend_cls.family,
+        user_model=standards.user_model,
+    )
+    replay_recorder(factory, backend_cls)
+    factory.set_filter_lookup(None)
+    peers = () if live is None else tuple(live.family_registries)
+    catalogs[backend_cls] = Catalog(
+        cls=backend_cls,
+        path=factory.path,
+        family=factory.family,
+        registry=factory.build_registry(),
+        family_registries=peers,
+    )
+    try:
+        yield catalogs[backend_cls]
+    finally:
+        if saved is _MISSING:
+            catalogs.pop(backend_cls, None)
+        else:
+            catalogs[backend_cls] = saved
 
 
 def _inquiry_backend_classes(count):

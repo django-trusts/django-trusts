@@ -18,7 +18,7 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from tests.apps import scoped_permitted_content as filter_by_permitted_content
+from tests.apps import render_configured_policy, scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -298,7 +298,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
     @contextmanager
     def _backend(self):
         from tests.apps import bound_handle
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(self.backend)
         saved = catalogs.get(cls)
@@ -328,7 +328,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertFalse(self.backend.has_perm(self.alice, self.change_code, mixed))
             self.assertEqual(self.backend.get_group_permissions(self.alice, mixed), set())
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_c), {self.change_code})
-        granted = self.registry.filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
+        granted = self.registry.build_registry().filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
         self.assertEqual(list(granted), [self.paper_a, self.paper_c, self.paper_d])
         with listed_relationship(built_registries((self.handle,))):
             listed = sorted(self.Paper.objects.authorized(self.alice, self.change), key=lambda row: row.pk)
@@ -363,8 +363,8 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         group_only.register_public(trust=self.GroupPaperGrant, user='group__user', group='group', content='paper')
         direct_only = _handle(path='tests.core.issue246-policy-direct')
         direct_only.register_public(trust=self.DirectPaperGrant, user='user', permission='permission', content='paper')
-        grouped = _load_policy_sql_document(render_policy_sql_bytes(registries=[(group_only).build_registry()]))
-        direct = _load_policy_sql_document(render_policy_sql_bytes(registries=[(direct_only).build_registry()]))
+        grouped = _load_policy_sql_document(render_configured_policy(group_only))
+        direct = _load_policy_sql_document(render_configured_policy(direct_only))
         group_content = grouped['backends'][0]['contents'][0]
         direct_content = direct['backends'][0]['contents'][0]
         group_trust = group_content['trusts'][0]
@@ -376,7 +376,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_group_permissions'):
             self.assertIn('auth_group_permissions', group_content[key]['sql'])
         self.assertNotIn('auth_group_permissions', direct_content['has_perm']['sql'])
-        mixed = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        mixed = _load_policy_sql_document(render_configured_policy(self.handle))
         mixed_content = mixed['backends'][0]['contents'][0]
         group_sql = mixed_content['get_group_permissions']['sql']
         all_sql = mixed_content['get_all_permissions']['sql']
@@ -459,7 +459,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
     @contextmanager
     def _backend(self):
         from tests.apps import bound_handle
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(self.backend)
         saved = catalogs.get(cls)
@@ -520,13 +520,13 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
 
     def test_common_permissions_omit_change(self):
-        plan = self.registry.plan_for(self.paper, user=self.alice)
+        plan = self.registry.build_registry().plan_for(self.paper, user=self.alice)
         for label, target in (('instance', self.paper), ('queryset', self.one)):
             with self.subTest(label):
                 self.assertEqual(self._permission_codes(plan.common_permissions(self.alice, target)), {self.read_code})
 
     def test_policy_sql_shares_one_group_permissions_alias(self):
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         for key in ('permitted', 'has_perm', 'get_all_permissions', 'get_group_permissions'):
             sql = content[key]['sql']
@@ -661,7 +661,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
         from tests.apps import bound_handle
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         from trusts.compile.catalogs import Catalog
         cls = type(backend)
         saved = catalogs.get(cls)

@@ -85,7 +85,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
         self.assertNotIsInstance(owner, TrustsImplementationConfig)
         catalog = configured_catalog(DOCUMENT_BACKEND)
         self.assertEqual(catalog.path, DOCUMENT_BACKEND)
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
 
         self.assertIs(catalog, catalogs[DocumentBackend])
         self.assertTrue(catalog.records)
@@ -93,8 +93,9 @@ class ReadmeExampleAuthorizationTest(TestCase):
             catalog.records[0].content_model,
             Document,
         )
-        record = catalog.get_permission_condition_record(
-            Document, 'non_confidential',
+        record = next(
+            item for model, code, item in catalog.iter_permission_conditions()
+            if model is Document and code == 'non_confidential'
         )
         self.assertIsNotNone(record)
         self.assertEqual(
@@ -278,7 +279,7 @@ class UserFacingReadmeAndPackageTest(SimpleTestCase):
         self.assertIn('from trusts.decorators import authorization_required', rst)
         self.assertNotIn('RegistryConditionLookup', rst)
         self.assertNotIn('trusts.conditions._ir', rst)
-        self.assertNotIn('set_condition_lookup', rst)
+        self.assertNotIn('set_filter_lookup', rst)
 
     def test_no_test_modules_in_installable_trusts_package(self):
         import importlib.util

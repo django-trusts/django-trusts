@@ -23,7 +23,7 @@ from django.core import checks as django_checks
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.backends import TrustModelBackendMixin, configured_catalogs
-from trusts.query import relationship_catalogs
+from trusts.compile.catalogs import relationship_catalogs
 from trusts.decorators import _declared_authorization_guards
 from trusts.errors import PermissionConditionError, TrustsCompilerError
 from trusts.plan.conditions import (
@@ -343,7 +343,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     applicable ``auth.Permission`` plan is required, and when names
     are selected one participating backend must own the complete
     queryable tuple. A global union of names across registries is
-    not enough. Guards whose model app is not installed are skipped
+    not enough. Guards whose model app is absent are skipped
     so a host that does not load that app (pair Zero, isolated Apps)
     is not failed by imported fixtures. Silencing ``trusts.E008``
     hides only the diagnostic; first use still fails closed before

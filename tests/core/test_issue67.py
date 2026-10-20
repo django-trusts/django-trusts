@@ -13,7 +13,7 @@ from trusts.apps import TrustsImplementationConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.installed import catalogs
+from trusts.backends import catalogs
 from trusts.compile.factory import RegistryFactory
 
 

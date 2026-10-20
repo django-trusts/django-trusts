@@ -130,9 +130,9 @@ class RegisterConditionOnceTest(TransactionTestCase):
             self.assertEqual(builder.calls, 1)
             self.assertNotIn(builder, (record, record.condition))
             self.assertFalse(callable(record.condition))
-            self.assertTrue(registry.has_permission(member, repo, read))
-            list(registry.permissions_for(member, repo))
-            list(registry.filter_authorized(Repository.objects.all(), member, read))
+            self.assertTrue(registry.build_registry().has_permission(member, repo, read))
+            list(registry.build_registry().permissions_for(member, repo))
+            list(registry.build_registry().filter_authorized(Repository.objects.all(), member, read))
             self.assertEqual(builder.calls, 1)
 
 class RegisterConditionRejectPublicIRTest(TestCase):
@@ -291,12 +291,12 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
 
     def test_conjunction_allows_aligned_ceiling_and_denies_the_rest(self):
         with self.assertNumQueries(1):
-            self.assertTrue(self.registry.has_permission(self.member, self.repo_a, self.read))
+            self.assertTrue(self.registry.build_registry().has_permission(self.member, self.repo_a, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.member, self.repo_a, self.write))
+            self.assertFalse(self.registry.build_registry().has_permission(self.member, self.repo_a, self.write))
         self.TeamRepoGrant.objects.create(team=self.writers, repository=self.repo_other, operation=self.read)
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.member, self.repo_other, self.read))
+            self.assertFalse(self.registry.build_registry().has_permission(self.member, self.repo_other, self.read))
         self.bundle.operations.remove(self.read)
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.member, self.repo_a, self.read))
+            self.assertFalse(self.registry.build_registry().has_permission(self.member, self.repo_a, self.read))

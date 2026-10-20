@@ -282,9 +282,9 @@ class _SplitCompiler(object):
 
     def group_exists(self, plan, candidates, user, permission):
         if isinstance(permission, models.Model):
-            group_plan = self.group_registry.plan_for(candidates, user=user, permission=permission)
+            group_plan = self.group_registry.build_registry().plan_for(candidates, user=user, permission=permission)
         else:
-            group_plan = self.group_registry.plan_for(candidates, user=user)
+            group_plan = self.group_registry.build_registry().plan_for(candidates, user=user)
         if not group_plan.records:
             return None
         return group_plan.content_exists(user, permission)
@@ -320,7 +320,7 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         j = Ref(FolderGrant)
         record = registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
         _assert_record(self, record, root=FolderGrant, path=('folder', 'rows', 'content'), model=Payload, lookup='folder__rows__content')
-        self.assertEqual(registry.plan_for(Payload).records, (record,))
+        self.assertEqual(registry.build_registry().plan_for(Payload).records, (record,))
         self.assertEqual(registry.records, (record,))
         _assert_no_historical_names(Folder, Payload, Row, FolderGrant)
 
@@ -349,8 +349,8 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
         depth2 = registry.register(content=j.holder.items.image.image, user=j.user, permission=j.permission)
         _assert_record(self, depth1, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
         _assert_record(self, depth2, root=Grant, path=('holder', 'items', 'image', 'image'), model=ImageMeta, lookup='holder__items__image__image')
-        self.assertEqual(registry.plan_for(Image).records, (depth1,))
-        self.assertEqual(registry.plan_for(ImageMeta).records, (depth2,))
+        self.assertEqual(registry.build_registry().plan_for(Image).records, (depth1,))
+        self.assertEqual(registry.build_registry().plan_for(ImageMeta).records, (depth2,))
 
     def test_d2_registers_both_documented_depths(self):
         self._assert_both_dependent_depths(_d2_models)
@@ -462,26 +462,26 @@ class _TerminalProjectionMixin(object):
 
     def _assert_terminal(self, registry, Model, granted, sibling, other):
         handle = _direct_handle(registry)
-        self.assertTrue(registry.has_permission(self.alice, granted, self.read))
-        self.assertTrue(registry.has_permission(self.alice, sibling, self.read))
-        self.assertFalse(registry.has_permission(self.alice, granted, self.write))
-        self.assertFalse(registry.has_permission(self.bob, granted, self.read))
-        self.assertFalse(registry.has_permission(self.alice, other, self.read))
-        self.assertEqual(_pks(registry.permissions_for(self.alice, granted)), {self.read.pk})
-        self.assertEqual(_pks(registry.permissions_for(self.alice, other)), {self.write.pk})
+        self.assertTrue(registry.build_registry().has_permission(self.alice, granted, self.read))
+        self.assertTrue(registry.build_registry().has_permission(self.alice, sibling, self.read))
+        self.assertFalse(registry.build_registry().has_permission(self.alice, granted, self.write))
+        self.assertFalse(registry.build_registry().has_permission(self.bob, granted, self.read))
+        self.assertFalse(registry.build_registry().has_permission(self.alice, other, self.read))
+        self.assertEqual(_pks(registry.build_registry().permissions_for(self.alice, granted)), {self.read.pk})
+        self.assertEqual(_pks(registry.build_registry().permissions_for(self.alice, other)), {self.write.pk})
         expected = [granted, sibling]
-        qs = registry.filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
+        qs = registry.build_registry().filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
         self.assertIsInstance(qs, QuerySet)
         with self.assertNumQueries(1):
             self.assertEqual(list(qs), expected)
         granted_qs = Model.objects.filter(pk__in=[granted.pk, sibling.pk])
         mixed_qs = Model.objects.order_by('pk')
         with self.assertNumQueries(1):
-            self.assertTrue(all_match((handle,), granted, self.alice, self.read))
+            self.assertTrue(all_match(built_registries((handle,)), granted, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match((handle,), granted_qs, self.alice, self.read))
+            self.assertTrue(all_match(built_registries((handle,)), granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match((handle,), mixed_qs, self.alice, self.read))
+            self.assertFalse(all_match(built_registries((handle,)), mixed_qs, self.alice, self.read))
         with self.assertNumQueries(1):
             self.assertEqual(_pks(common_permissions(built_registries((handle,)), granted, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
@@ -491,7 +491,7 @@ class _TerminalProjectionMixin(object):
         group_only = common_permissions(built_registries((handle,)), granted_qs, self.alice, kind='group')
         self.assertIsInstance(group_only, QuerySet)
         self.assertEqual(list(group_only), [])
-        plan = registry.plan_for(granted, user=self.alice, permission=self.read)
+        plan = registry.build_registry().plan_for(granted, user=self.alice, permission=self.read)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(plan.common_permissions(self.alice, granted)), {self.read.pk})
         with self.assertNumQueries(1):
@@ -500,8 +500,8 @@ class _TerminalProjectionMixin(object):
             self.assertEqual(list(plan.common_permissions(self.alice, mixed_qs)), [])
 
     def _assert_shared_row(self, registry, granted, other_scope):
-        self.assertFalse(registry.has_permission(self.alice, granted, self.write))
-        self.assertFalse(registry.has_permission(self.alice, other_scope, self.read))
+        self.assertFalse(registry.build_registry().has_permission(self.alice, granted, self.write))
+        self.assertFalse(registry.build_registry().has_permission(self.alice, other_scope, self.read))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
@@ -535,8 +535,8 @@ class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
     def test_j1_projections_agree_and_stay_one_sql(self):
         self._assert_terminal(self.registry, self.Payload, self.pay_a1, self.pay_a2, self.pay_b1)
         self._assert_shared_row(self.registry, self.pay_a1, self.pay_b1)
-        self.assertTrue(self.registry.has_permission(self.bob, self.pay_b1, self.read))
-        self.assertTrue(self.registry.has_permission(self.alice, self.pay_b1, self.write))
+        self.assertTrue(self.registry.build_registry().has_permission(self.bob, self.pay_b1, self.read))
+        self.assertTrue(self.registry.build_registry().has_permission(self.alice, self.pay_b1, self.write))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
@@ -728,15 +728,15 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         many = self.Payload.objects.order_by('pk')
         alice_only = self.Payload.objects.filter(pk=self.pay_a.pk)
         with self.assertNumQueries(1):
-            self.assertTrue(all_match((self.handle,), self.pay_a, self.alice, self.read))
+            self.assertTrue(all_match(built_registries((self.handle,)), self.pay_a, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match((self.handle,), self.pay_a, self.alice, self.read, kind='group'))
+            self.assertFalse(all_match(built_registries((self.handle,)), self.pay_a, self.alice, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match((self.handle,), self.pay_a, self.carol, self.read, kind='group'))
+            self.assertTrue(all_match(built_registries((self.handle,)), self.pay_a, self.carol, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match((self.handle,), self.pay_a, self.carol, self.read))
+            self.assertTrue(all_match(built_registries((self.handle,)), self.pay_a, self.carol, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match((self.handle,), many, self.alice, self.read))
+            self.assertFalse(all_match(built_registries((self.handle,)), many, self.alice, self.read))
         with self.assertNumQueries(1):
             self.assertEqual(_pks(common_permissions(built_registries((self.handle,)), alice_only, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
@@ -745,8 +745,8 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
             self.assertEqual(_pks(common_permissions(built_registries((self.handle,)), alice_only, self.carol, kind='group')), {self.read.pk})
         with self.assertNumQueries(1):
             self.assertEqual(list(common_permissions(built_registries((self.handle,)), many, self.alice)), [])
-        self.assertFalse(all_match((self.handle,), self.pay_b, self.alice, self.read))
-        self.assertFalse(all_match((self.handle,), self.pay_b, self.carol, self.read))
+        self.assertFalse(all_match(built_registries((self.handle,)), self.pay_b, self.alice, self.read))
+        self.assertFalse(all_match(built_registries((self.handle,)), self.pay_b, self.carol, self.read))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
@@ -803,13 +803,13 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
             img_a2 = CodedImage.objects.create(item=item_a2, title='A2')
             img_b1 = CodedImage.objects.create(item=item_b1, title='B1')
             CodedGrant.objects.create(holder=holder_a, user=alice, permission=read)
-            self.assertTrue(registry.has_permission(alice, img_a1, read))
-            self.assertTrue(registry.has_permission(alice, img_a2, read))
-            self.assertFalse(registry.has_permission(alice, img_b1, read))
-            self.assertFalse(registry.has_permission(bob, img_a1, read))
-            self.assertFalse(registry.has_permission(alice, img_a1, write))
-            sql = str(registry.filter_authorized(CodedImage.objects.order_by('pk'), alice, read).query).lower()
+            self.assertTrue(registry.build_registry().has_permission(alice, img_a1, read))
+            self.assertTrue(registry.build_registry().has_permission(alice, img_a2, read))
+            self.assertFalse(registry.build_registry().has_permission(alice, img_b1, read))
+            self.assertFalse(registry.build_registry().has_permission(bob, img_a1, read))
+            self.assertFalse(registry.build_registry().has_permission(alice, img_a1, write))
+            sql = str(registry.build_registry().filter_authorized(CodedImage.objects.order_by('pk'), alice, read).query).lower()
             self.assertIn('exists', sql)
             self.assertIn('holder', sql)
             with self.assertNumQueries(1):
-                self.assertEqual(list(registry.filter_authorized(CodedImage.objects.order_by('pk'), alice, read)), [img_a1, img_a2])
+                self.assertEqual(list(registry.build_registry().filter_authorized(CodedImage.objects.order_by('pk'), alice, read)), [img_a1, img_a2])

@@ -1,6 +1,6 @@
 """Management command for the authorization policy SQL document.
 
-Core is not an installed Django app and does not ship
+Core is not a Django app and does not ship
 ``trusts/management``. ``TrustsImplementationConfig.ready`` calls
 :func:`install_policy_commands` so ``trusts_policy_sql`` is
 discoverable after ``django.setup()``.
@@ -80,7 +80,7 @@ def install_policy_commands():
     """Register ``trusts_policy_sql`` on Django's command loader.
 
     Idempotent. Does not override a command of the same name already
-    provided by an installed application. Safe to call from every
+    provided by another application. Safe to call from every
     implementation ``ready()``.
     """
     global _INSTALLED

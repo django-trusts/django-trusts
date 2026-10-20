@@ -29,14 +29,14 @@ from trusts.compile.factory import RegistryFactory
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import built_registries
+from tests.apps import render_configured_policy, built_registries
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
 def _seal_factory(backend_cls, factory):
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
     catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
@@ -44,7 +44,7 @@ def _seal_factory(backend_cls, factory):
 @contextmanager
 def _installed(handle):
     from tests.apps import install_class_handle
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     install_class_handle(_ListedBackend, handle)
     _seal_factory(_ListedBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue267._ListedBackend',)):
@@ -297,7 +297,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
             self.assertEqual(list(self.Organization.objects.authorized(root, self.read)), [])
 
     def test_policy_sql_requires_the_protected_models_content_type(self):
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         org = by_model['trusts_tests.Organization']
         repo = by_model['trusts_tests.Repository']
@@ -400,10 +400,10 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         with self.assertNumQueries(0):
             registry.register(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
             registry.register(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-        self.assertTrue(registry.has_permission(self.owner, self.org, operation))
-        self.assertTrue(registry.has_permission(self.owner, self.repo, operation))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, operation))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, operation))
         handle = [registry, setattr(registry, 'path', 'tests.core.issue267-operation')][0]
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
@@ -418,12 +418,12 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         grant = self._ref(self.TypedGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permit)
         registry.register(content=grant.repository, user=grant.user, permission=grant.permit)
-        self.assertTrue(registry.has_permission(self.owner, self.org, org_permit))
-        self.assertTrue(registry.has_permission(self.owner, self.repo, repo_permit))
-        self.assertTrue(registry.has_permission(self.owner, self.org, repo_permit))
-        self.assertTrue(registry.has_permission(self.owner, self.repo, org_permit))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, org_permit))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, repo_permit))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, repo_permit))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, org_permit))
         handle = [registry, setattr(registry, 'path', 'tests.core.issue267-typed')][0]
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
 
@@ -435,8 +435,8 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         registry = RegistryFactory()
         grant = self._ref(self.DirectGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permission)
-        self.assertTrue(registry.has_permission(self.owner, self.org, manage))
-        self.assertFalse(registry.has_permission(self.owner, self.org, read))
+        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, manage))
+        self.assertFalse(registry.build_registry().has_permission(self.owner, self.org, read))
 
     def _ref(self, model):
         from trusts.compile.nodes import Ref

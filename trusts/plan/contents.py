@@ -131,12 +131,8 @@ def granted(registries, candidates, user, permission, *, kind='complete',
             skipped=()):
     """OR each applicable relationship-family registry's complete (or group) predicate.
 
-    Core-owned aggregate: fold-family registries are omitted. Noun-blind
-    among relationship registries: this builder does not know Trust, Group,
-    Guardian, or ceiling. A valid compiler returning ``None`` is
-    inapplicable and is omitted. Compiler exceptions propagate. An empty
-    result is ``None`` so the caller may use the transitional undeclared
-    fallback.
+    A valid compiler returning ``None`` is inapplicable and is omitted.
+    Compiler exceptions propagate. An empty result is ``None``.
 
     ``permission`` may be a permission instance or an unevaluated lookup
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
@@ -342,23 +338,23 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 
 
 def _compile_permitted_content_queryset(
-    queryset, user, permission, *, content, registries, family_registries,
+    queryset, user, permission, *, content, subjects, family_registries,
     skipped=(),
 ):
-    """Compile the permitted-content queryset for resolved registries.
+    """Compile the permitted-content queryset for resolved subjects.
 
-    ``registries`` owns the ordinary and delegation branches being listed.
+    ``subjects`` owns the ordinary and delegation branches being listed.
     ``family_registries`` supplies the ordinary grants a delegation may
-    use. Callers resolve relationship registries and apply the inactive-user
+    use. Callers resolve relationship subjects and apply the inactive-user
     gate before this helper runs.
     """
-    registries = tuple(registries)
+    subjects = tuple(subjects)
     family_registries = tuple(family_registries)
     scope_model = queryset.model._meta.concrete_model
 
     parts = []
     content_identity = _candidate_model(content)
-    for registry in registries:
+    for registry in subjects:
         plan = _plan_for_permission(registry, content, user, permission)
         if plan.content_identity is not None:
             content_identity = plan.content_identity

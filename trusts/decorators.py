@@ -15,12 +15,11 @@ from django.http import Http404
 
 from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.relations import bind_checked_user
+from trusts.plan.relations import bind_checked_user, known_skip_names
 from trusts.plan.rewrites import bind_once
-from trusts.query import (
+from trusts.compile.catalogs import (
     assert_authorization_preflight,
     authorization_grant_q,
-    catalog_skip_names,
     codename_binding,
     guard_conditions,
     guard_permission_string,
@@ -76,7 +75,7 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     permission = require_instance(permission, 'permission')
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags,
-        skip_names=catalog_skip_names(catalogs),
+        skip_names=known_skip_names(catalogs),
     )
     if not catalogs or inquiry.denied:
         return queryset.none()
@@ -96,13 +95,6 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     for part in compiled[1:]:
         combined = combined | part
     return combined
-
-
-def filter_authorized_scopes(queryset, user, permission, *, content,
-                             **skip_flags):
-    return filter_by_permitted_content(
-        queryset, user, permission, content=content, **skip_flags,
-    )
 
 
 def authorization_required(model, permission, conditions=(), **skip_flags):
@@ -213,7 +205,7 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
     )
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags,
-        skip_names=catalog_skip_names(catalogs),
+        skip_names=known_skip_names(catalogs),
     )
     if inquiry.denied:
         raise PermissionDenied

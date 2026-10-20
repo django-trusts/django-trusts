@@ -371,13 +371,13 @@ class LongPathAuthorizationTest(TransactionTestCase):
 
     def _agree(self, principal, token, obj, expected):
         with self.assertNumQueries(1):
-            via_obj = self.registry.has_permission(principal, obj, token)
+            via_obj = self.registry.build_registry().has_permission(principal, obj, token)
         with self.assertNumQueries(1):
-            via_list = obj in list(self.registry.filter_authorized(self.Artifact.objects.filter(pk=obj.pk), principal, token))
+            via_list = obj in list(self.registry.build_registry().filter_authorized(self.Artifact.objects.filter(pk=obj.pk), principal, token))
         with listed_relationship(built_registries(self._handles())):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Artifact.objects.filter(pk=obj.pk).authorized(principal, token))
-        enumerated = {row.pk for row in self.registry.permissions_for(principal, obj)}
+        enumerated = {row.pk for row in self.registry.build_registry().permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -411,8 +411,8 @@ class LongPathAuthorizationTest(TransactionTestCase):
     def test_fixed_query_object_list_and_enumeration_agree(self):
         self.hall.badges.add(self.read)
         with self.assertNumQueries(0):
-            qs = self.registry.filter_authorized(self.Artifact.objects.all(), self.actor, self.read)
-            enumerated = self.registry.permissions_for(self.actor, self.artifact)
+            qs = self.registry.build_registry().filter_authorized(self.Artifact.objects.all(), self.actor, self.read)
+            enumerated = self.registry.build_registry().permissions_for(self.actor, self.artifact)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
@@ -420,7 +420,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
             self.assertEqual(_pks(qs), {self.artifact.pk})
         with self.assertNumQueries(1):
             self.assertEqual(_pks(enumerated), {self.read.pk})
-        sql = str(self.registry.filter_authorized(self.Artifact.objects.all(), self.actor, self.read).query).lower().replace('_', '').replace('"', '')
+        sql = str(self.registry.build_registry().filter_authorized(self.Artifact.objects.all(), self.actor, self.read).query).lower().replace('_', '').replace('"', '')
         self.assertIn('exists', sql)
         self.assertIn('placement', sql)
         self.assertIn('cluster', sql)
@@ -542,40 +542,40 @@ class MembershipGroupExistsTest(TransactionTestCase):
 
     def test_membership_user_hop_is_not_a_group_slice(self):
         handle = self._handle(self.membership)
-        plan = self.membership.plan_for(self.folder, user=self.member, permission=self.read)
+        plan = self.membership.build_registry().plan_for(self.folder, user=self.member, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('desk', 'holders'))
         self.assertFalse(plan.records[0].via_group)
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.member, self.read))
-            self.assertIsNone(all_match((handle,), self.folder, self.member, self.read, kind='group'))
-            self.assertIsNone(all_match((handle,), self.folder, self.stranger, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.stranger, self.read, kind='group'))
             self.assertEqual(list(common_permissions(built_registries((handle,)), self.folder, self.member, kind='group')), [])
         with self.assertNumQueries(1):
-            self.assertIs(all_match((handle,), self.folder, self.member, self.read), True)
+            self.assertIs(all_match(built_registries((handle,)), self.folder, self.member, self.read), True)
 
     def test_fk_user_hop_is_not_group_slice(self):
         handle = self._handle(self.trustee)
-        plan = self.trustee.plan_for(self.folder, user=self.owner, permission=self.read)
+        plan = self.trustee.build_registry().plan_for(self.folder, user=self.owner, permission=self.read)
         self.assertEqual(plan.records[0].user_path, ('owner',))
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.owner, self.read))
             self.assertIsNone(granted(built_registries((handle,)), self.folder, self.owner, self.read, kind='group'))
-        self.assertTrue(self.trustee.has_permission(self.owner, self.folder, self.read))
+        self.assertTrue(self.trustee.build_registry().has_permission(self.owner, self.folder, self.read))
         with self.assertNumQueries(0):
             self.assertEqual(list(common_permissions(built_registries((handle,)), self.folder, self.owner, kind='group')), [])
 
     def test_mixed_plan_group_slice_omits_permission_records(self):
         handle = self._handle(self.mixed)
         with self.assertNumQueries(0):
-            self.assertIsNone(all_match((handle,), self.folder, self.member, self.read, kind='group'))
-            self.assertIsNone(all_match((handle,), self.folder, self.owner, self.read, kind='group'))
-            self.assertIsNone(instance_match(handle, self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(built_registries((handle,)), self.folder, self.owner, self.read, kind='group'))
+            self.assertIsNone(instance_match(built_registries((handle,))[0], self.folder, self.member, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertIs(all_match((handle,), self.folder, self.owner, self.read), True)
+            self.assertIs(all_match(built_registries((handle,)), self.folder, self.owner, self.read), True)
         with self.assertNumQueries(1):
-            self.assertIs(all_match((handle,), self.folder, self.member, self.read), True)
+            self.assertIs(all_match(built_registries((handle,)), self.folder, self.member, self.read), True)
         with self.assertNumQueries(1):
-            self.assertIs(instance_match(handle, self.other, self.member, self.read), False)
+            self.assertIs(instance_match(built_registries((handle,))[0], self.other, self.member, self.read), False)
 
     def test_empty_records_have_no_group_slice(self):
         plan = RelationPlan(records=self.membership.records, permission_model=self.Token)
@@ -632,12 +632,12 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
 
     def test_authorized_content_is_child_not_parent(self):
         with self.assertNumQueries(1):
-            self.assertTrue(self.registry.has_permission(self.holder, self.child, self.add))
+            self.assertTrue(self.registry.build_registry().has_permission(self.holder, self.child, self.add))
         with self.assertNumQueries(1):
-            self.assertFalse(self.registry.has_permission(self.holder, self.parent, self.add))
+            self.assertFalse(self.registry.build_registry().has_permission(self.holder, self.parent, self.add))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(self.registry.filter_authorized(self.Node.objects.all(), self.holder, self.add)), {self.child.pk})
+            self.assertEqual(_pks(self.registry.build_registry().filter_authorized(self.Node.objects.all(), self.holder, self.add)), {self.child.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(self.registry.permissions_for(self.holder, self.child)), {self.add.pk})
+            self.assertEqual(_pks(self.registry.build_registry().permissions_for(self.holder, self.child)), {self.add.pk})
         with self.assertNumQueries(1):
             self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registries=built_registries((self.handle,)))), {self.parent.pk})

@@ -33,7 +33,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import built_registries
+from tests.apps import render_configured_policy, built_registries
 
 HOST = 'tests.backends.HostTrustModelBackend'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
@@ -185,7 +185,7 @@ def _assert_agrees(test, content, perm, candidates):
 def _seal_document_factory(factory):
     """This test filled ``factory``. Pass that built registry into Catalog."""
     from tests.myapp.backends import DocumentBackend
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
@@ -196,7 +196,7 @@ def _seal_document_factory(factory):
 @contextmanager
 def _document_registry():
     from tests.myapp.backends import DocumentBackend
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     had_catalog = DocumentBackend in catalogs
     saved_catalog = catalogs.get(DocumentBackend)
     registry = RegistryFactory(path=DOCUMENT_BACKEND)
@@ -220,7 +220,7 @@ class Issue255SuiteRegistrationTest(SimpleTestCase):
 class Issue255PolicySqlTest(SimpleTestCase):
 
     def test_lockfile_adds_reverse_predicate_with_content_and_permission_binds(self):
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(_document_handle()).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(_document_handle()))
         row = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertEqual(list(row), ['params', 'sql'])
         self.assertIn('$content.id', row['params'])
@@ -248,7 +248,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         folder = Folder(pk=1)
         queryset = lock_permitted_users_queryset(built_registries((handle,))[0], folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         first, second = content['trusts']
         self.assertEqual(first['id'], 'documents__FolderGrant__folder__along_folder__parent_S_2')
@@ -336,7 +336,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
         self.assertEqual(record.along.walk_ident, 'ident')
         self.assertEqual(record.along.ident_family, 'uuid')
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         self.assertEqual(document['schema_version'], 1)
         reverse = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertIn('WITH RECURSIVE', reverse['sql'])
@@ -353,7 +353,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         record = handle.build_registry().plan_for(Folder).records[0]
         _sql, params = _compile_queryset(FolderGrant.objects.filter(folder__pk=5), 'default', record=record, expr=None, records=(record,), reverse_users=True)
         self.assertEqual(params, [{'const': 5, 'hint': 'id'}])
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         reverse = document['backends'][0]['contents'][0]['get_permitted_users']
         self.assertIn('$content.id', reverse['params'])
         self.assertFalse(any((param.endswith('=5') for param in reverse['params'])))
@@ -918,7 +918,7 @@ def _reverse_agrees(test, handle, content, perm, candidates):
     return found
 
 def _assert_along_lock(test, handle, specs, *, group=False):
-    document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+    document = _load_policy_sql_document(render_configured_policy(handle))
     test.assertEqual(document['schema_version'], 1)
     content = document['backends'][0]['contents'][0]
     trusts = content['trusts']

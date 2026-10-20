@@ -226,7 +226,7 @@ def common_permissions(registries, candidates, user, *, kind='complete',
     """
     participating = relationship_family(registries)
     inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, registries=participating)
+        user, skip_flags=skip_flags, subjects=participating)
     if inquiry.denied:
         return _anonymous_common_permissions(participating, candidates)
     return _compile_common_permissions(

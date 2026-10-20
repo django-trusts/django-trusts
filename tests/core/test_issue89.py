@@ -52,7 +52,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         second = RegistryFactory()
         self.assertEqual(first.build_registry().records, ())
         _contribute_document(second)
-        self.assertEqual(len(second.plan_for(Document).records), 1)
+        self.assertEqual(len(second.build_registry().plan_for(Document).records), 1)
         _contribute_document(first)
         self.assertEqual(len(first.records), 1)
         self.assertEqual(first.build_registry().records, first.records)
@@ -72,7 +72,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 registry.register(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
         self.assertEqual(registry.records, before)
-        self.assertIs(registry.plan_for(Document).records[0], before[0])
+        self.assertIs(registry.build_registry().plan_for(Document).records[0], before[0])
 
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
@@ -88,34 +88,34 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
                 registry.register(**kwargs)
             self.assertNotIn('frozen', str(ctx.exception).lower())
         self.assertEqual(registry.records, before)
-        self.assertEqual(len(registry.plan_for(Document).records), 1)
+        self.assertEqual(len(registry.build_registry().plan_for(Document).records), 1)
 
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
         registry = RegistryFactory()
         _contribute_document(registry)
-        before = registry.plan_for(Document)
+        before = registry.build_registry().plan_for(Document)
         registry.build_registry()
-        plan = registry.plan_for(Document)
+        plan = registry.build_registry().plan_for(Document)
         self.assertEqual(plan.records, before.records)
         user = get_user_model()(pk=1)
         permission = Permission(pk=1)
         exists = plan.content_exists(user, permission)
         self.assertIsNotNone(exists)
         qs = Document.objects.all()
-        filtered = registry.filter_authorized(qs, user, permission)
+        filtered = registry.build_registry().filter_authorized(qs, user, permission)
         self.assertIs(filtered.model, Document)
 
 class _CatalogRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         self._saved_catalogs = dict(catalogs)
 
     def tearDown(self):
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         catalogs.clear()
         catalogs.update(self._saved_catalogs)
         super().tearDown()
@@ -146,7 +146,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
     def test_ready_does_not_replace_stored_objects(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         live = live_config()
         first = catalogs[HostTrustModelBackend]
         live.ready()
@@ -186,7 +186,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
 
     def test_standalone_appconfig_remains_writable_after_ready(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         first = catalogs[HostTrustModelBackend]
         private = RegistryFactory()
         live_config().ready()
@@ -206,7 +206,7 @@ class SentinelAfterFirstReadTest(KernelHostRequiredMixin, _CatalogRestoreMixin, 
 
     def test_second_ready_leaves_the_built_catalog_in_place(self):
         from tests.backends import HostTrustModelBackend
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         live = live_config()
         catalog = catalogs[HostTrustModelBackend]
         recorder = HostTrustModelBackend().get_registry()

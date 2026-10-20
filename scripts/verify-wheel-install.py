@@ -186,10 +186,7 @@ def main() -> int:
         RegistryFactory,
     )
     from trusts.compile.nodes import Ref
-    from trusts.decorators import (
-        filter_authorized_scopes,
-        filter_by_permitted_content,
-    )
+    from trusts.decorators import filter_by_permitted_content
     from trusts.plan.relations import ConditionLookup, RelationPlan
     from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
@@ -265,8 +262,8 @@ def main() -> int:
     else:
         raise SystemExit('trusts.core_backends still imports from the library wheel')
     import trusts.apps as apps_mod
-    from trusts.installed import catalogs as installed_catalogs
-    from trusts.installed import recorders as installed_recorders
+    from trusts.backends import catalogs as installed_catalogs
+    from trusts.backends import recorders as installed_recorders
     if installed_catalogs or installed_recorders:
         raise SystemExit('library-only populate must not build catalogs before ready')
     for removed in (
@@ -309,10 +306,9 @@ def main() -> int:
     print('catalogs', installed_catalogs)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
-    print('filter_authorized_scopes', filter_authorized_scopes)
     print('ConditionLookup', ConditionLookup)
     standalone = RegistryFactory()
-    bound = standalone.condition_lookup
+    bound = standalone.filter_lookup
     if bound is None:
         raise SystemExit('RegistryFactory did not self-bind condition lookup')
     if bound.conditions is not standalone.conditions:

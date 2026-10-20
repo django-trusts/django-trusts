@@ -1,14 +1,21 @@
 """Path and model identity from Django ``_meta``. No registry and no ``Q``."""
 
-__all__ = []
-
 from django.apps import apps as django_apps
 from django.db.models import Model
 from django.db.models.base import ModelBase
 from django.db.models.query import QuerySet
 
 from trusts.errors import TrustsConfigurationError
-from django.contrib.auth.models import Group, Permission
+
+__all__ = [
+    'lookup_text',
+    'path_text',
+    'concrete_model',
+    'content_model',
+    'require_instance',
+    'materialize_related_model',
+    'resolved_hop',
+]
 
 
 def lookup_text(path):
@@ -17,11 +24,6 @@ def lookup_text(path):
 
 def path_text(path):
     return '.'.join(path)
-
-
-def auth_group_and_permission():
-    """Django ``auth.Group`` and ``auth.Permission``. Metadata only."""
-    return Group, Permission
 
 
 def concrete_model(value):

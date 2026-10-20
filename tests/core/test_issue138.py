@@ -225,7 +225,10 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
     def test_ready_still_owns_the_document_plan(self):
         catalog = configured_catalog(DOCUMENT_BACKEND)
         self.assertTrue(catalog.records)
-        self.assertIsNotNone(catalog.get_permission_condition_record(Document, 'non_confidential'))
+        self.assertTrue(any(
+            model is Document and code == 'non_confidential'
+            for model, code, record in catalog.iter_permission_conditions()
+        ))
 
 @contextmanager
 def _tables(*model_classes):
@@ -240,7 +243,19 @@ def _tables(*model_classes):
                 editor.delete_model(model)
 
 def _document_backend():
-    return configured_catalog(DOCUMENT_BACKEND)
+    """Factory replay of the document recorder. Not the live catalog."""
+    from django.contrib.auth import get_user_model
+
+    from tests.apps import replay_recorder
+    from tests.myapp.backends import DocumentBackend
+
+    factory = RegistryFactory(
+        path=DOCUMENT_BACKEND,
+        family=DocumentBackend.family,
+        compiler=DocumentBackend.query_compiler,
+        user_model=get_user_model(),
+    )
+    return replay_recorder(factory, DocumentBackend)
 
 def _extra_handle(path='tests.core.issue138-extra'):
     return RegistryFactory(path=path)

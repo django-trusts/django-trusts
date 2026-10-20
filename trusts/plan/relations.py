@@ -2,8 +2,7 @@
 
 ``QueryCompiler``, ``PlanQueryCompiler``, ``ConditionLookup``, and
 ``RelationPlan`` live here with the user-binding and candidate helpers
-they close over. ``PlanQueryCompiler``, ``RelationPlan``, and
-``ConditionLookup`` are defined here.
+they close over.
 """
 
 __all__ = []
@@ -116,11 +115,6 @@ def candidate_queryset(content):
 class ConditionLookup(object):
     """Duck-typed ``:condition`` overlay protocol. Not a registry or store.
 
-    ``TrustsRegistry`` self-binds a private store adapter at construct.
-    ``set_condition_lookup`` remains for tests and explicit unbind.
-    Core never imports a Zero ``Content`` registry to evaluate
-    conditions. Unbound lookup on an instance-only caller is a no-op.
-
     ``record_for`` returns the registered record or ``None`` (unregistered
     codes fail closed as ``AttributeError`` at the caller). ``compile_q``
     compiles stored condition IR to ``Q``.
@@ -144,7 +138,26 @@ class SkipParams(object):
         self.predicate = predicate
 
 
-def user_skip_params(user, skip_flags, *, registries=None, registry=None,
+def known_skip_names(subjects):
+    """Condition and override names on these catalogs or registries.
+
+    No subject yet means the built-in ``is_active`` condition only.
+    """
+    names = set()
+    saw = False
+    for subject in subjects:
+        if subject is None:
+            continue
+        saw = True
+        names.update(condition_names(
+            subject.user_conditions, subject.user_override,
+        ))
+    if not saw:
+        names.update(rule.name for rule in BUILTIN_USER_CONDITIONS)
+    return frozenset(names)
+
+
+def user_skip_params(user, skip_flags, *, subjects=None, registry=None,
                      require_user=True, skip_names=None):
     """Validate ``skip_*`` keywords and return their bound values.
 
@@ -166,34 +179,15 @@ def user_skip_params(user, skip_flags, *, registries=None, registry=None,
     if skip_names is not None:
         known = frozenset(skip_names)
     elif registry is not None:
-        known = registry._known_skip_names()
+        known = known_skip_names((registry,))
     else:
-        known = _known_skip_names(registries or ())
+        known = known_skip_names(subjects or ())
     unknown = next((name for name in selected if name not in known), None)
     if unknown is not None:
         raise TypeError('Unknown skip keyword %r.' % ('skip_%s' % unknown,))
     return SkipParams(False, {
         name: selected.get(name, False) for name in known
     })
-
-
-def _known_skip_names(registries):
-    """Condition and override names on these registries.
-
-    No registry yet means the built-in ``is_active`` condition only.
-    """
-    names = set()
-    saw = False
-    for registry in registries:
-        if registry is None:
-            continue
-        saw = True
-        names.update(condition_names(
-            registry.user_conditions, registry.user_override,
-        ))
-    if not saw:
-        names.update(rule.name for rule in BUILTIN_USER_CONDITIONS)
-    return frozenset(names)
 
 
 def _outer_permission_identity(permission_model, content_model):
@@ -266,7 +260,7 @@ def _user_identity_denied(user):
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,
                       identity=None, values=None, plan=None, closed=False,
                       with_override=True, skip_flags=None, require_user=True,
-                      registry=None, registries=None, skip_names=None):
+                      registry=None, subjects=None, skip_names=None):
     """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
     ``skip_flags`` is a public inquiry. ``values`` means that inquiry
@@ -275,7 +269,7 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     """
     if skip_flags is not None:
         inquiry = user_skip_params(
-            subject, skip_flags, registries=registries, registry=registry,
+            subject, skip_flags, subjects=subjects, registry=registry,
             require_user=require_user, skip_names=skip_names,
         )
         if inquiry.denied:
@@ -459,8 +453,8 @@ class RelationPlan:
         """Trustee permissions held on every candidate through this plan.
 
         ``content`` is an instance or QuerySet. Empty candidates yield
-        an empty permission queryset. Group extras belong to the handle
-        compiler, not this plan-only projection.
+        an empty permission queryset. Group extras belong to the compiler,
+        not this plan-only projection.
         """
         user = require_instance(user, 'user')
         if not self.records or self.permission_model is None:

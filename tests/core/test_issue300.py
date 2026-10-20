@@ -24,11 +24,11 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
-from tests.apps import built_registries
+from tests.apps import render_configured_policy, built_registries
 
 
 def _document_rows():
-    document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(_document_handle()).build_registry()]))
+    document = _load_policy_sql_document(render_configured_policy(_document_handle()))
     return document['backends'][0]['contents'][0]
 
 def _repeat_count(params):
@@ -459,16 +459,16 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
                     plain_rows = list(plain)
                     plain_sql = plain.query.sql_with_params()
                     plain_has = handle.build_registry().has_permission(user, node, permission)
-                    plain_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+                    plain_doc = _load_policy_sql_document(render_configured_policy(handle))
                 bind_once_module._warned = False
                 with self.assertLogs('trusts', level='WARNING') as logs:
                     bound = handle.build_registry().filter_authorized(candidates, user, permission)
                     bound_rows = list(bound)
                     bound_sql = bound.query.sql_with_params()
                     bound_has = handle.build_registry().has_permission(user, node, permission)
-                    bound_doc = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+                    bound_doc = _load_policy_sql_document(render_configured_policy(handle))
                     list(handle.build_registry().filter_authorized(candidates, user, permission))
-                    render_policy_sql_bytes(registries=[(handle).build_registry()])
+                    render_configured_policy(handle)
             self.assertEqual(len(logs.records), 1)
             message = logs.records[0].getMessage()
             self.assertIn('TrustsConfigurationError', message)
@@ -523,7 +523,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     handle = RegistryFactory(path='documents.backends.ReviewBackend')
                     handle.register_public(trust=ReviewGrant, user='user', permission='permission', content='document')
                     handle.register_permission_condition(ReviewDocument, 'published', _published)
-                    document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+                    document = _load_policy_sql_document(render_configured_policy(handle))
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']
                     named = content['named_filters'][0]

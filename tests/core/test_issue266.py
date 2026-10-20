@@ -24,7 +24,7 @@ from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql
 from trusts.compile.catalogs import Catalog
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from trusts.plan.users import lock_permitted_users_queryset
-from tests.apps import built_registries
+from tests.apps import render_configured_policy, built_registries
 
 
 def _handle(path='tests.core.issue266'):
@@ -43,7 +43,7 @@ class _GrantBackend(TrustModelBackendMixin, ModelBackend):
 
 def _seal_factory(backend_cls, factory, family_registries=()):
     """Construct this class's catalog from a factory this test filled."""
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
     catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(tuple(family_registries)))
@@ -60,7 +60,7 @@ def _document_host_handle():
 @contextmanager
 def _listed(handle):
     from tests.apps import install_class_handle
-    from trusts.installed import catalogs
+    from trusts.backends import catalogs
     install_class_handle(_PairDocumentBackend, handle)
     _seal_factory(_PairDocumentBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',)):
@@ -282,7 +282,7 @@ class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
         with _listed(self.handle):
             self.assertIn(self.code, self.delegate.get_all_permissions(self.repository))
             self.assertNotIn(self.code, self.delegate_without_personal_org.get_all_permissions(self.repository))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         delegation = content['delegations'][0]
         self.assertEqual(delegation['content']['path'], 'sponsor__personal_organization_issue266_query__repositories')
@@ -505,7 +505,7 @@ class TwoRootDelegationTest(TransactionTestCase):
             self.assertNotIn(self.code, self.delegate.get_all_permissions(self.sibling))
             self.assertEqual(set(self.own.get_permitted_users(self.read)), {self.sponsor, self.delegate})
             self.assertIn(self.delegate, set(self.foreign.get_permitted_users(self.read)))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         by_model = {row['model']: row for row in document['backends'][0]['contents']}
         content = by_model[self.Repository._meta.label]
         delegations = content['delegations']
@@ -622,7 +622,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
             self.assertEqual(list(self.Repository.objects.permitted(self.read, bare)), [])
 
     def test_policy_lock_uses_the_prefix_and_has_no_delegation(self):
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(self.handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(self.handle))
         content = document['backends'][0]['contents'][0]
         trust = content['trusts'][0]
         self.assertEqual(trust['root'], self.ProfileGrant._meta.label)
@@ -793,7 +793,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         if not kernel_host_listed():
             handle = _document_host_handle()
             from tests.apps import install_class_handle
-            from trusts.installed import catalogs
+            from trusts.backends import catalogs
             install_class_handle(_PairDocumentBackend, handle)
             _seal_factory(_PairDocumentBackend, handle)
             self.addCleanup(lambda: install_class_handle(_PairDocumentBackend, None))
@@ -893,14 +893,14 @@ class DelegatedAuthorityLiveTest(TestCase):
         )
         permissions = _compile_common_permissions(built_registries((delegation_handle,)), self.document, self.delegate, family_registries=built_registries(handles))
         self.assertEqual(list(permissions), [self.change])
-        users = lock_permitted_users_queryset(built_registries((delegation_handle,))[0], self.document, self.change, registries=built_registries(handles))
+        users = lock_permitted_users_queryset(built_registries((delegation_handle,))[0], self.document, self.change, subjects=built_registries(handles))
         self.assertEqual(list(users), [self.delegate])
 
     def test_policy_lock_exports_delegation_and_correlated_sql(self):
         handle = _handle('tests.core.issue266.policy')
         handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         delegation = content['delegations'][0]
         self.assertEqual(delegation['delegate']['path'], 'delegate')
@@ -916,7 +916,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         grant_handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
         delegation_handle = _handle('tests.core.issue266.split-delegations')
         delegation_handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-        from trusts.installed import catalogs
+        from trusts.backends import catalogs
         grant_built = _seal_factory(_GrantBackend, grant_handle)
         _seal_factory(_PairDocumentBackend, delegation_handle, family_registries=built_registries((grant_built,)))
         self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
@@ -924,7 +924,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._GrantBackend', 'tests.core.test_issue266._PairDocumentBackend')):
             self.assertTrue(self.delegate.has_perm('myapp.change_document', self.document))
             self.assertFalse(self.second_delegate.has_perm('myapp.change_document', self.document))
-        document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(grant_handle).build_registry(), (delegation_handle).build_registry()]))
+        document = _load_policy_sql_document(render_configured_policy(grant_handle, delegation_handle))
         by_path = {row['path']: row for row in document['backends']}
         content = by_path['tests.core.issue266.split-delegations']['contents'][0]
         self.assertNotIn('trusts', content)

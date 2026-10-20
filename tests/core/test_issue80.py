@@ -10,6 +10,7 @@ from tests.models import Organization
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Ref
 from trusts.compile.factory import RegistryFactory
+from tests.apps import built_registries
 from trusts.plan.aggregates import any_plan_records
 
 
@@ -28,9 +29,9 @@ class AnyPlanRecordsGateRuleTest(SimpleTestCase):
         filled = RegistryFactory()
         _contribute_document(filled)
         self.assertFalse(any_plan_records((), Document))
-        self.assertFalse(any_plan_records((empty,), Document))
-        self.assertTrue(any_plan_records((empty, filled), Document))
-        self.assertTrue(any_plan_records((filled, empty), Document))
-        self.assertTrue(any_plan_records((filled,), Document))
-        self.assertFalse(any_plan_records((filled,), Organization))
-        self.assertFalse(any_plan_records((filled,), Group))
+        self.assertFalse(any_plan_records(built_registries((empty,)), Document))
+        self.assertTrue(any_plan_records(built_registries((empty, filled)), Document))
+        self.assertTrue(any_plan_records(built_registries((filled, empty)), Document))
+        self.assertTrue(any_plan_records(built_registries((filled,)), Document))
+        self.assertFalse(any_plan_records(built_registries((filled,)), Organization))
+        self.assertFalse(any_plan_records(built_registries((filled,)), Group))

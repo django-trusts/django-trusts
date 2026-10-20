@@ -4,6 +4,7 @@ from pathlib import Path
 from django.test import SimpleTestCase
 import trusts
 import trusts.inspect.checks as trusts_checks
+from tests.apps import built_registries
 from tests.myapp.models import Document
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.compile.factory import RegistryFactory
@@ -85,7 +86,7 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
         self.assertTrue(compiler.applies(filled))
         self.assertTrue(_compiler_applies(compiler, filled))
         empty_handle = RegistryFactory(path='tests.core.195-empty')
-        self.assertFalse(any_plan_records((empty_handle,), Document))
+        self.assertFalse(any_plan_records(built_registries((empty_handle,)), Document))
 
     def test_complete_exists_is_records_only(self):
         compiler = PlanQueryCompiler()
