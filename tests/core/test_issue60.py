@@ -21,6 +21,7 @@ from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.plan.registry import Registry
+from tests.apps import as_catalog
 
 
 def _projection_models():
@@ -174,19 +175,19 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         )
 
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(self.alice, self.doc_a)),
+            _pks(as_catalog(registry).permissions_for(self.alice, self.doc_a)),
             {self.read.pk, self.write.pk},
         )
         self.assertEqual(
-            list(registry.build_registry().permissions_for(self.alice, self.doc_b)),
+            list(as_catalog(registry).permissions_for(self.alice, self.doc_b)),
             [],
         )
         self.assertEqual(
-            list(registry.build_registry().permissions_for(self.bob, self.doc_a)),
+            list(as_catalog(registry).permissions_for(self.bob, self.doc_a)),
             [],
         )
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(self.bob, self.doc_b)),
+            _pks(as_catalog(registry).permissions_for(self.bob, self.doc_b)),
             {self.read.pk},
         )
 
@@ -195,7 +196,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.read,
         )
-        granted = _pks(registry.build_registry().permissions_for(self.alice, self.doc_a))
+        granted = _pks(as_catalog(registry).permissions_for(self.alice, self.doc_a))
         self.assertIn(self.read.pk, granted)
         self.assertNotIn(self.write.pk, granted)
         self.assertTrue(
@@ -245,7 +246,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         )
 
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(self.alice, self.doc_a)),
+            _pks(as_catalog(registry).permissions_for(self.alice, self.doc_a)),
             {self.read.pk},
         )
         self.assertFalse(
@@ -277,11 +278,11 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         )
 
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(self.alice, self.doc_a)),
+            _pks(as_catalog(registry).permissions_for(self.alice, self.doc_a)),
             {self.read.pk},
         )
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(self.alice, self.doc_b)),
+            _pks(as_catalog(registry).permissions_for(self.alice, self.doc_b)),
             {self.write.pk},
         )
         self.assertTrue(
@@ -310,7 +311,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             document=self.doc_a, user=self.alice, permission=self.write,
         )
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(self.alice, self.doc_a)),
+            _pks(as_catalog(registry).permissions_for(self.alice, self.doc_a)),
             {self.read.pk, self.write.pk},
         )
         sql = registry.build_registry().filter_authorized(
@@ -328,7 +329,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self.DocumentGrant.objects.create(
             document=self.doc_a, user=self.alice, permission=self.read,
         )
-        permissions = list(registry.build_registry().permissions_for(self.alice, self.doc_a))
+        permissions = list(as_catalog(registry).permissions_for(self.alice, self.doc_a))
         self.assertEqual(len(permissions), 1)
         self.assertEqual(permissions[0].pk, self.read.pk)
         documents = list(registry.build_registry().filter_authorized(
@@ -345,7 +346,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             document=self.doc_a, user=self.alice, permission=self.read,
         )
         self.assertEqual(
-            list(registry.build_registry().permissions_for(self.alice, self.folder)),
+            list(as_catalog(registry).permissions_for(self.alice, self.folder)),
             [],
         )
         self.assertFalse(
@@ -370,12 +371,12 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             qs = registry.build_registry().filter_authorized(
                 self.Document.objects.all(), self.alice, self.read,
             )
-            plan = registry.build_registry().plan_for(
+            plan = as_catalog(registry).plan_for(
                 self.Document.objects.all(),
                 user=self.alice,
                 permission=self.read,
             )
-            enumerated = registry.build_registry().permissions_for(self.alice, self.doc_a)
+            enumerated = as_catalog(registry).permissions_for(self.alice, self.doc_a)
         self.assertIsInstance(plan, RelationPlan)
         self.assertIsInstance(enumerated, QuerySet)
         with self.assertNumQueries(1):
@@ -413,14 +414,14 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             Registry, 'plan_for', autospec=True,
             wraps=Registry.plan_for,
         ) as plan_for:
-            list(registry.build_registry().permissions_for(self.alice, self.doc_a))
+            list(as_catalog(registry).permissions_for(self.alice, self.doc_a))
             registry.build_registry().has_permission(self.alice, self.doc_a, self.read)
             list(registry.build_registry().filter_authorized(
                 self.Document.objects.all(), self.alice, self.read,
             ))
         self.assertEqual(plan_for.call_count, 3)
 
-        plan = registry.build_registry().plan_for(
+        plan = as_catalog(registry).plan_for(
             self.doc_a, user=self.alice, permission=self.read,
         )
         terminals = []
@@ -451,7 +452,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             document=self.doc_a, user=self.alice, permission=self.read,
         )
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(self.alice, self.doc_a)),
+            _pks(as_catalog(registry).permissions_for(self.alice, self.doc_a)),
             {self.read.pk},
         )
         self.assertTrue(
@@ -481,7 +482,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             document=self.doc_a, account=account, action=action,
         )
         self.assertEqual(
-            _pks(registry.build_registry().permissions_for(account, self.doc_a)),
+            _pks(as_catalog(registry).permissions_for(account, self.doc_a)),
             {action.pk},
         )
         self.assertTrue(registry.build_registry().has_permission(account, self.doc_a, action))
@@ -494,7 +495,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             {self.doc_a.pk},
         )
         self.assertEqual(
-            list(registry.build_registry().permissions_for(self.alice, self.doc_a)),
+            list(as_catalog(registry).permissions_for(self.alice, self.doc_a)),
             [],
         )
         self.assertFalse(
@@ -598,11 +599,11 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             )
 
             self.assertEqual(
-                _pks(registry.build_registry().permissions_for(self.alice, doc_alpha)),
+                _pks(as_catalog(registry).permissions_for(self.alice, doc_alpha)),
                 {read.pk},
             )
             self.assertEqual(
-                list(registry.build_registry().permissions_for(self.alice, doc_beta)),
+                list(as_catalog(registry).permissions_for(self.alice, doc_beta)),
                 [],
             )
             self.assertTrue(
@@ -614,7 +615,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             self.assertFalse(
                 registry.build_registry().has_permission(self.alice, doc_beta, read),
             )
-            enumerated = registry.build_registry().permissions_for(self.alice, doc_alpha)
+            enumerated = as_catalog(registry).permissions_for(self.alice, doc_alpha)
             perm_sql = str(enumerated.query).lower()
             self.assertIn('exists', perm_sql)
             self.assertIn('code', perm_sql)
@@ -665,7 +666,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
             OptionalGrant.objects.create(
                 document=self.doc_a, user=self.bob, permission=self.write,
             )
-            plan = registry.build_registry().plan_for(self.Document)
+            plan = as_catalog(registry).plan_for(self.Document)
             candidates = self.Document.objects.order_by('pk')
 
             with self.assertRaisesRegex(TrustsConfigurationError, r'user'):

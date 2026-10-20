@@ -15,7 +15,7 @@ from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from tests.apps import forget_models, isolate_live_registry, live_config, built_registries
+from tests.apps import forget_models, isolate_live_registry, live_config, built_registries, as_catalog
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 from trusts.plan.aggregates import all_match, common_permissions
@@ -200,7 +200,7 @@ class AlongRegistrationTest(SimpleTestCase):
         j = Ref(Grant)
         record = registry.register(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=16))
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertEqual(as_catalog(registry).records, (record,))
         for kwargs in (dict(content=j.node, user=j.user, permission=j.permission, along='bad'), dict(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=0))):
             with self.assertRaises(TrustsConfigurationError) as ctx:
                 registry.register(**kwargs)
@@ -343,7 +343,7 @@ class _AlongProjectionMixin(object):
             self.assertFalse(registry.build_registry().has_permission(self.alice, obj, self.write))
             self.assertFalse(registry.build_registry().has_permission(self.bob, obj, self.read))
             with self.assertNumQueries(1):
-                self.assertEqual(_pks(registry.build_registry().permissions_for(self.alice, obj)), {self.read.pk})
+                self.assertEqual(_pks(as_catalog(registry).permissions_for(self.alice, obj)), {self.read.pk})
         for obj in denied_rows:
             self.assertFalse(registry.build_registry().has_permission(self.alice, obj, self.read))
         expected = list(granted_rows)

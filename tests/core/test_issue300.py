@@ -24,7 +24,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
-from tests.apps import render_configured_policy, built_registries
+from tests.apps import render_configured_policy, built_registries, as_catalog
 
 
 def _document_rows():
@@ -527,7 +527,7 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']
                     named = content['named_filters'][0]
-                    records = handle.build_registry().plan_for(ReviewDocument).records
+                    records = as_catalog(handle).plan_for(ReviewDocument).records
                     user = _role_sentinel(records[0], 'user', 'default')
                     permission = _role_sentinel(records[0], 'permission', 'default')
                     queryset = _content_manager(ReviewDocument).all()

@@ -16,7 +16,7 @@ from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.query import AuthorizedManager
-from tests.apps import listed_relationship, built_registries
+from tests.apps import listed_relationship, built_registries, as_catalog
 
 
 def _gh_models():
@@ -349,7 +349,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
                 via_manager = obj in list(self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation))
             with self.assertNumQueries(1):
                 via_exists = self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation).exists()
-        enumerated = {row.pk for row in self.registry.build_registry().permissions_for(principal, obj)}
+        enumerated = {row.pk for row in as_catalog(self.registry).permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -406,7 +406,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
     def test_query_construction_is_lazy_and_fixed_count(self):
         with self.assertNumQueries(0):
             qs = self.registry.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read)
-            enumerated = self.registry.build_registry().permissions_for(self.member, self.repo_a)
+            enumerated = as_catalog(self.registry).permissions_for(self.member, self.repo_a)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
@@ -424,7 +424,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self.assertFalse(empty.build_registry().has_permission(self.member, self.repo_a, self.read))
         missing = empty.build_registry().filter_authorized(self.Repository.objects.all(), self.member, self.read)
         self.assertEqual(list(missing), [])
-        self.assertEqual(list(empty.build_registry().permissions_for(self.member, self.repo_a)), [])
+        self.assertEqual(list(as_catalog(empty).permissions_for(self.member, self.repo_a)), [])
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):

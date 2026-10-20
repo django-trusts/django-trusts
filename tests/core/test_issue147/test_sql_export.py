@@ -1,4 +1,4 @@
-from tests.apps import render_configured_policy
+from tests.apps import render_configured_policy, as_catalog
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 import datetime
 import json
@@ -417,7 +417,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertEqual(cond_ids, ['documents__DocumentPermission__document__cond', 'documents__DocumentPermission__document__cond__2'])
         along = _handle('documents.backends.FolderBackend')
         along.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        along_ids = _assign_ids(tuple(along.build_registry().records))
+        along_ids = _assign_ids(tuple(as_catalog(along).records))
         self.assertEqual(along_ids, ['documents__FolderGrant__folder__along_folder__parent_S_2'])
         for trust_id in cond_ids + along_ids:
             self.assertNotIn('.', trust_id)

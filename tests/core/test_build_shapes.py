@@ -23,6 +23,7 @@ from trusts.compile.factory import (
 )
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from tests.apps import as_catalog
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -127,7 +128,7 @@ class BuildRelationTest(SimpleTestCase):
         )
         self.assertEqual(record, built)
         self.assertEqual(registry.records, (record,))
-        self.assertEqual(registry.build_registry().records, (record,))
+        self.assertEqual(as_catalog(registry).records, (record,))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')

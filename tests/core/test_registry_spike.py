@@ -19,6 +19,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Along, Ref
 from trusts.plan.recursions import GrantReach
 from trusts.plan.registry import Registry
+from tests.apps import as_catalog
 
 
 def _sql(expr, model):
@@ -62,7 +63,7 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         registry = RegistryFactory()
         record = _register_document(registry, DocumentGrant)
         self.assertEqual(registry.records, (record,))
-        self.assertIs(registry.build_registry().plan_for(Document).records[0], record)
+        self.assertIs(as_catalog(registry).plan_for(Document).records[0], record)
 
     def test_injected_plan_matches_live_registry(self):
         Document, DocumentGrant = _document_models()
@@ -74,8 +75,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         self.assertEqual(built_registry.records, registry.records)
         self.assertEqual(built_registry.delegations, registry.delegations)
 
-        live = registry.build_registry().plan_for(Document)
-        built = built_registry.build_registry().plan_for(Document)
+        live = as_catalog(registry).plan_for(Document)
+        built = as_catalog(built_registry).plan_for(Document)
         self.assertEqual(built.records, live.records)
         self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
@@ -108,8 +109,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
             along=Along(root.folder.parent, 2),
         )
         built_registry = _built_from(registry)
-        live = registry.build_registry().plan_for(Folder)
-        built = built_registry.build_registry().plan_for(Folder)
+        live = as_catalog(registry).plan_for(Folder)
+        built = as_catalog(built_registry).plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)
