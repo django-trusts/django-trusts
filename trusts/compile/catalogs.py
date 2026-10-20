@@ -1,6 +1,6 @@
 """One built catalog. Not a builder and not a second store."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 
 from django.contrib.auth.models import Permission
@@ -67,7 +67,8 @@ class CatalogShape(object):
     ``primary``; the built-in rule uses ``primary`` when the subject has
     a concrete boolean ``is_active`` and ``absent`` otherwise.
     ``override_q`` is the override compiled against the factory user
-    model, or ``None``. ``compiler is None`` means the default compiler.
+    model, or ``None``. ``plans`` is the build-time ``(key, RelationPlan)``
+    table. ``compiler is None`` means the default compiler.
     """
 
     records: tuple
@@ -82,6 +83,7 @@ class CatalogShape(object):
     user_model: object
     user_rules: tuple
     override_q: object
+    plans: tuple
 
 
 @dataclass(frozen=True)
@@ -138,54 +140,20 @@ class Catalog(object):
         self._conditions = shape.conditions
         self._user_rules = shape.user_rules
         self._override_q = shape.override_q
+        self._plans = dict(shape.plans)
 
     def plan_for(self, content, *, user=None, permission=None):
-        """Select the terminal plan for ``content``.
-
-        Lowered rows and rule data come from the shape. ``content``,
-        ``user``, and ``permission`` are the runtime parameters.
-        """
-        resolved_content = content_model(content)
-        principal_model = None
-        if user is not None:
-            principal_model = concrete_model(
-                require_instance(user, 'user'),
-            )
-        permission_model = None
-        if permission is not None:
-            permission_model = concrete_model(
-                require_instance(permission, 'permission'),
-            )
-        records = self._records_for(
-            resolved_content, principal_model, permission_model,
-        )
-        delegations = self._delegations_for(resolved_content, principal_model)
-        plan_permission = permission_model
-        if records:
-            models = {record.permission_model for record in records}
-            if len(models) != 1:
-                raise TrustsConfigurationError(
-                    'Applicable registrations must share one permission '
-                    'model; got %s.'
-                    % ', '.join(sorted(model._meta.label for model in models))
-                )
-            plan_permission = models.pop()
-        subject = self._compiled_subject(records, delegations, principal_model)
-        rules = closed = override = None
-        if subject is not None:
-            rules = self._rule_fragment(subject)
-            closed = rules
-            override = self._override_q
-        return RelationPlan(
-            records=records,
-            delegations=delegations,
-            permission_model=plan_permission,
-            content_identity=_candidate_model(content),
-            user_rules=rules,
-            user_rules_closed=closed,
-            user_override_q=override,
-            user_model=self.user_model,
-        )
+        """Look up ``(content, user, permission)``. A miss is not stored."""
+        resolved = content_model(content)
+        principal = None if user is None else concrete_model(
+            require_instance(user, 'user'))
+        terminal = None if permission is None else concrete_model(
+            require_instance(permission, 'permission'))
+        key = (resolved, principal, terminal)
+        plan = self._plans[key] if key in self._plans else relation_plan(
+            self.records, self.delegations, *key, self.user_model,
+            self.user_conditions, self._user_rules, self._override_q)
+        return replace(plan, content_identity=_candidate_model(content))
 
     def compile_registered_condition_q(self, model, perm, user):
         """Compile a registered ``:condition`` to ``Q`` from this catalog."""
@@ -656,55 +624,75 @@ class Catalog(object):
             ))
         return tuple(descriptors)
 
-    def _records_for(self, content_model, user_model, permission_model):
-        chosen = []
-        for record in self.records:
-            if record.content_model is not content_model:
-                continue
-            if user_model is not None and record.user_model is not user_model:
-                continue
-            if (
-                permission_model is not None
-                and record.permission_model is not permission_model
-            ):
-                continue
-            chosen.append(record)
-        return tuple(chosen)
 
-    def _delegations_for(self, content_model, delegate_model):
-        chosen = []
-        for record in self.delegations:
-            if record.content_model is not content_model:
-                continue
-            if (
-                delegate_model is not None
-                and record.delegate_model is not delegate_model
-            ):
-                continue
-            chosen.append(record)
-        return tuple(chosen)
+def relation_plan(records, delegations, content, user, permission,
+                  catalog_user, user_conditions, user_rules, override_q):
+    """One plan for ``(content, user, permission)``. An empty selection is a plan."""
+    chosen = tuple(
+        record for record in records
+        if record.content_model is content
+        and (user is None or record.user_model is user)
+        and (permission is None or record.permission_model is permission))
+    bridges = tuple(
+        record for record in delegations
+        if record.content_model is content
+        and (user is None or record.delegate_model is user))
+    plan_permission = permission
+    if chosen:
+        models = {record.permission_model for record in chosen}
+        if len(models) != 1:
+            raise TrustsConfigurationError(
+                'Applicable registrations must share one permission '
+                'model; got %s.'
+                % ', '.join(sorted(model._meta.label for model in models)))
+        plan_permission = models.pop()
+    subject = user
+    if subject is None:
+        subjects = {record.user_model._meta.concrete_model for record in chosen}
+        subjects.update(
+            record.delegate_model._meta.concrete_model for record in bridges)
+        if len(subjects) == 1:
+            subject = subjects.pop()
+    rules = closed = override = None
+    if subject is not None:
+        primary, absent = user_rules
+        rules = primary if (
+            user_conditions is not None or builtin_user_conditions(subject)
+        ) else absent
+        closed, override = rules, override_q
+    return RelationPlan(
+        records=chosen, delegations=bridges, permission_model=plan_permission,
+        content_identity=content, user_rules=rules, user_rules_closed=closed,
+        user_override_q=override, user_model=catalog_user)
 
-    def _compiled_subject(self, records, delegations, user_model):
-        if user_model is not None:
-            return user_model
-        models = {
-            record.user_model._meta.concrete_model for record in records
-        }
-        models.update(
-            record.delegate_model._meta.concrete_model
-            for record in delegations
-        )
-        if len(models) == 1:
-            return models.pop()
-        return None
 
-    def _rule_fragment(self, model):
-        primary, absent = self._user_rules
-        if self.user_conditions is not None:
-            return primary
-        if builtin_user_conditions(model):
-            return primary
-        return absent
+def plan_table(records, delegations, catalog_user, user_conditions,
+               user_rules, override_q):
+    """One plan per key the stored rows can select, in first-seen order."""
+    users, perms, order = {}, {}, []
+    observed = [
+        (record.content_model, record.user_model, record.permission_model)
+        for record in records]
+    observed.extend(
+        (record.content_model, record.delegate_model, None)
+        for record in delegations)
+    for content, user, perm in observed:
+        seen = users.get(content)
+        if seen is None:
+            order.append(content)
+            users[content] = seen = []
+            perms[content] = []
+        if user not in seen:
+            seen.append(user)
+        if perm is not None and perm not in perms[content]:
+            perms[content].append(perm)
+    return tuple(
+        ((content, user, perm), relation_plan(
+            records, delegations, content, user, perm, catalog_user,
+            user_conditions, user_rules, override_q))
+        for content in order
+        for user in (None, *users[content])
+        for perm in (None, *perms[content]))
 
 
 class PreparedInquiry(object):

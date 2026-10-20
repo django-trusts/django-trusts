@@ -57,7 +57,7 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import CatalogShape
+from trusts.compile.catalogs import CatalogShape, plan_table
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
@@ -795,8 +795,8 @@ class RegistryFactory(object):
         Condition rows are a tuple taken once. The condition lookup is
         a ``FrozenConditionLookup`` over that tuple, so the shape does
         not share this factory's mutable store. User-rule and override
-        fragments are compiled here. A later call builds another shape
-        from the same stored rows.
+        fragments and the plan table are compiled here. A later call
+        builds another shape from the same stored rows.
         """
         rows = tuple(self.conditions.iter_permission_conditions())
         lookup = FrozenConditionLookup(rows)
@@ -825,6 +825,9 @@ class RegistryFactory(object):
                         % (slot.name, concrete._meta.label)
                     )
             override_q = compile_override_q(model, '', slot, {})
+        rules = (primary, absent)
+        plans = plan_table(
+            self.records, self.delegations, model, stored, rules, override_q)
         self.frozen = True
         return CatalogShape(
             records=self.records, delegations=self.delegations, conditions=rows,
@@ -832,7 +835,7 @@ class RegistryFactory(object):
             filter_lookup=lookup,
             compiler=self.compiler if self._explicit_compiler else None,
             path=self.path or '', family=self.family, user_model=model,
-            user_rules=(primary, absent), override_q=override_q,
+            user_rules=rules, override_q=override_q, plans=plans,
         )
 
     def _stored_user_conditions(self):

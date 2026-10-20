@@ -17,7 +17,8 @@ from django.db.models import Q
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.catalogs import Catalog, CatalogShape
+from trusts.compile.catalogs import Catalog, CatalogShape, relation_plan
+from trusts.plan.relations import RelationPlan
 from trusts.compile.factory import (
     PublicRegistration,
     RegisteredDelegation,
@@ -330,6 +331,180 @@ class BuildCatalogShapeTest(SimpleTestCase):
         self.assertIsNone(shape.override_q)
 
 
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class PlanTableBuildTest(SimpleTestCase):
+    """``build()`` turns stored rows into a plan for every selectable key."""
+
+    def test_records_become_a_plan_table(self):
+        User = get_user_model()
+        Paper, PaperGrant, Note, NoteGrant, Reader, PaperShare = _plan_models()
+        registry = RegistryFactory()
+        grant = registry.register(
+            content=Ref(PaperGrant).paper, user=Ref(PaperGrant).user,
+            permission=Ref(PaperGrant).permission,
+        )
+        note = registry.register(
+            content=Ref(NoteGrant).note, user=Ref(NoteGrant).user,
+            permission=Ref(NoteGrant).permission,
+        )
+        share = registry.register_delegation(
+            content=Ref(PaperShare).paper, delegate=Ref(PaperShare).delegate,
+            sponsor=Ref(PaperShare).sponsor,
+        )
+
+        shape = registry.build()
+        catalog = Catalog(shape, user_model=User)
+
+        paper_keys = tuple(
+            (Paper, principal, terminal)
+            for principal in (None, User, Reader)
+            for terminal in (None, Permission)
+        )
+        note_keys = tuple(
+            (Note, principal, terminal)
+            for principal in (None, Group)
+            for terminal in (None, Permission)
+        )
+        self.assertEqual(
+            tuple(key for key, _plan in shape.plans),
+            paper_keys + note_keys,
+        )
+        stored = dict(shape.plans)
+        self.assertIs(stored[(Paper, User, None)].records[0], grant)
+        self.assertEqual(stored[(Paper, User, None)].delegations, ())
+        self.assertIs(stored[(Paper, User, None)].permission_model, Permission)
+        self.assertEqual(stored[(Paper, User, None)].user_rules, shape.user_rules[0])
+        self.assertIs(stored[(Paper, User, None)].user_model, User)
+        self.assertEqual(stored[(Paper, Reader, None)].records, ())
+        self.assertIs(stored[(Paper, Reader, None)].delegations[0], share)
+        self.assertIsNone(stored[(Paper, Reader, None)].permission_model)
+        self.assertEqual(
+            stored[(Paper, Reader, Permission)].delegations, (share,),
+        )
+        self.assertIs(
+            stored[(Paper, Reader, Permission)].permission_model, Permission,
+        )
+        self.assertIs(stored[(Paper, None, Permission)].delegations[0], share)
+        self.assertIsNone(stored[(Paper, None, None)].user_rules)
+        self.assertIs(stored[(Note, Group, None)].records[0], note)
+        self.assertEqual(stored[(Note, None, None)].user_rules, shape.user_rules[1])
+        self.assertEqual(stored[(Note, Group, None)].user_rules, shape.user_rules[1])
+        self.assertEqual(
+            stored[(Paper, None, None)],
+            relation_plan(
+                shape.records, shape.delegations, Paper, None, None, User,
+                shape.user_conditions, shape.user_rules, shape.override_q,
+            ),
+        )
+        self.assertEqual(catalog.plan_for(Paper), stored[(Paper, None, None)])
+
+        class PaperView(Paper):
+            class Meta:
+                proxy = True
+                app_label = 'trusts_tests'
+
+        viewed = catalog.plan_for(PaperView)
+        self.assertIs(viewed.content_identity, PaperView)
+        self.assertIs(viewed.records[0], grant)
+        self.assertIs(stored[(Paper, None, None)].content_identity, Paper)
+
+        stranger = Group(name='unregistered')
+        before = dict(catalog._plans)
+        missed = catalog.plan_for(Paper, user=stranger)
+        self.assertEqual(catalog._plans, before)
+        self.assertIsInstance(missed, RelationPlan)
+        self.assertEqual(missed.records, ())
+        self.assertEqual(missed.delegations, ())
+        self.assertEqual(missed.user_rules, shape.user_rules[1])
+        self.assertIs(missed.user_model, User)
+        self.assertIs(missed.content_identity, Paper)
+
+    def test_mixed_permission_models_raise_at_build(self):
+        Paper, PaperGrant, _Note, _NoteGrant, _Reader, _Share = _plan_models()
+
+        class Token(models.Model):
+            class Meta:
+                app_label = 'trusts_tests'
+
+        class TokenGrant(models.Model):
+            paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+            user = models.ForeignKey(
+                get_user_model(), on_delete=models.CASCADE,
+            )
+            permission = models.ForeignKey(Token, on_delete=models.CASCADE)
+
+            class Meta:
+                app_label = 'trusts_tests'
+
+        registry = RegistryFactory()
+        registry.register(
+            content=Ref(PaperGrant).paper, user=Ref(PaperGrant).user,
+            permission=Ref(PaperGrant).permission,
+        )
+        registry.register(
+            content=Ref(TokenGrant).paper, user=Ref(TokenGrant).user,
+            permission=Ref(TokenGrant).permission,
+        )
+        with self.assertRaisesRegex(
+            TrustsConfigurationError,
+            'Applicable registrations must share one permission model; '
+            'got auth.Permission, trusts_tests.Token.',
+        ):
+            registry.build()
+        self.assertFalse(registry.frozen)
+        self.assertEqual(len(registry.records), 2)
+
+
+def _plan_models():
+    class Paper(models.Model):
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class PaperGrant(models.Model):
+        paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+        user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE)
+        permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Note(models.Model):
+        title = models.CharField(max_length=40)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class NoteGrant(models.Model):
+        note = models.ForeignKey(Note, on_delete=models.CASCADE)
+        user = models.ForeignKey(Group, on_delete=models.CASCADE)
+        permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Reader(models.Model):
+        is_active = models.BooleanField(default=True)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class PaperShare(models.Model):
+        paper = models.ForeignKey(Paper, on_delete=models.CASCADE)
+        delegate = models.ForeignKey(
+            Reader, related_name='+', on_delete=models.CASCADE,
+        )
+        sponsor = models.ForeignKey(
+            Reader, related_name='+', on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    return Paper, PaperGrant, Note, NoteGrant, Reader, PaperShare
+
+
 def _document_models():
     class Document(models.Model):
         title = models.CharField(max_length=40)
@@ -457,6 +632,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user_model=User,
                 user_rules=(Q(), Q()),
                 override_q=None,
+                plans=(),
             ), user_model=User)
             self.assertTrue(catalog.has_perm(holder, code, payload))
             self.assertFalse(catalog.has_perm(outsider, code, payload))
@@ -484,7 +660,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 filter_lookup=FrozenConditionLookup(()),
                 compiler=None, path='empty-shape',
                 family='relationship', user_model=User,
-                user_rules=(Q(), Q()), override_q=None,
+                user_rules=(Q(), Q()), override_q=None, plans=(),
             ), user_model=User)
             self.assertFalse(empty.has_perm(holder, code, payload))
             self.assertFalse(empty.filter_authorized(
