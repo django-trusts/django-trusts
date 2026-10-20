@@ -249,7 +249,7 @@ class RegistryFactory(object):
         (no partial bind). ``lookup is None`` clears the binding.
         Methods are not invoked at bind time. A built factory is frozen.
         """
-        self._open()
+        self._open('set_filter_lookup')
         if lookup is None:
             self._filter_lookup = None
             return
@@ -269,7 +269,7 @@ class RegistryFactory(object):
         here. A prebuilt ``Expr`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
-        self._open()
+        self._open('register_permission_condition')
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
         )
@@ -321,7 +321,7 @@ class RegistryFactory(object):
         ``user``, or ``sponsor``.
         The lambda is walked once against this factory's ``user_model``.
         """
-        self._open()
+        self._open('set_user_condition')
         self._require_user_model()
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
@@ -367,7 +367,7 @@ class RegistryFactory(object):
         order at ready. ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
         registered condition.
         """
-        self._open()
+        self._open('set_user_override')
         self._require_user_model()
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
@@ -513,7 +513,7 @@ class RegistryFactory(object):
         walk as an ordinary registration: the delegation anchor reaches
         objects within that walk. Registration validates metadata only.
         """
-        self._open()
+        self._open('register_delegation')
         record = self.build_delegation(
             content=content, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
@@ -683,7 +683,7 @@ class RegistryFactory(object):
 
         This method does not inspect Django's global ``apps.ready``.
         """
-        self._open()
+        self._open('register')
         record = self.build_relation(
             content=content, user=user, permission=permission, group=group,
             condition=condition, along=along,
@@ -972,10 +972,10 @@ class RegistryFactory(object):
                 'at construction.'
             )
 
-    def _open(self):
+    def _open(self, method):
         if self.frozen:
             raise TrustsConfigurationError(
-                'register refused: this factory is frozen.'
+                '%s refused: this factory is frozen.' % method
             )
 
     def _open_for_rules(self, kind):
