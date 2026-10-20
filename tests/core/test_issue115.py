@@ -88,12 +88,12 @@ class ReadmeExampleAuthorizationTest(TestCase):
         from trusts.installed import catalogs
 
         self.assertIs(catalog, catalogs[DocumentBackend])
-        self.assertTrue(catalog.policy().records)
+        self.assertTrue(catalog.records)
         self.assertIs(
-            catalog.policy().records[0].content_model,
+            catalog.records[0].content_model,
             Document,
         )
-        record = catalog.policy().get_permission_condition_record(
+        record = catalog.get_permission_condition_record(
             Document, 'non_confidential',
         )
         self.assertIsNotNone(record)

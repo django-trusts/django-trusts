@@ -174,10 +174,9 @@ def _covered_content_models():
     """
     covered = set()
     for catalog in configured_catalogs():
-        policy = catalog.policy()
-        for record in policy.records:
+        for record in catalog.records:
             covered.add(record.content_model)
-        for record in policy.delegations:
+        for record in catalog.delegations:
             covered.add(record.content_model)
     return covered
 
@@ -282,7 +281,7 @@ def check_missing_declarations(app_configs, **kwargs):
 def _iter_catalog_permission_conditions():
     """Yield condition records from built catalogs."""
     for catalog in configured_catalogs():
-        yield from catalog.policy().iter_permission_conditions()
+        yield from catalog.iter_permission_conditions()
 
 
 def iter_live_permission_conditions(apps_registry=None):
@@ -434,7 +433,7 @@ _E005_HINT = (
 def _live_along_records():
     found = []
     for catalog in configured_catalogs():
-        for record in catalog.policy().records:
+        for record in catalog.records:
             if record.along is not None:
                 found.append(record)
     return found

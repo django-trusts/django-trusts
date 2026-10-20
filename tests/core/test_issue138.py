@@ -224,8 +224,8 @@ class AuthorizationRequiredTest(KernelHostRequiredMixin, TestCase):
 
     def test_ready_still_owns_the_document_plan(self):
         catalog = configured_catalog(DOCUMENT_BACKEND)
-        self.assertTrue(catalog.policy().records)
-        self.assertIsNotNone(catalog.policy().get_permission_condition_record(Document, 'non_confidential'))
+        self.assertTrue(catalog.records)
+        self.assertIsNotNone(catalog.get_permission_condition_record(Document, 'non_confidential'))
 
 @contextmanager
 def _tables(*model_classes):

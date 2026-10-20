@@ -904,7 +904,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
 
     def test_lockfile_records_staff_and_the_override(self):
         handle = configured_catalog(self.config, DOCUMENT_BACKEND)
-        raw = render_policy_sql_bytes(registries=[handle.policy()])
+        raw = render_policy_sql_bytes(registries=[handle])
         self.assertIn(b'user.is_staff=True', raw)
         self.assertIn(b'user.is_superuser=True', raw)
         self.assertIn(b'skip_is_active=False', raw)
@@ -1042,8 +1042,8 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
     """
     permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
     held = common_permissions(built_registries((handle,)), doc, user, **flags)
-    listed = handle.policy().permissions_for(user, doc, **flags)
-    return {'has_perm': backend.has_perm(user, perm, doc, **flags), 'authorized': Document.objects.authorized(user, change, **flags).filter(pk=doc.pk).exists(), 'permitted': permitted.permitted(change, user, **flags).filter(pk=doc.pk).exists(), 'common': change.pk in set(held.values_list('pk', flat=True)), 'reverse': user.pk in set(doc.get_permitted_users(change, **flags).values_list('pk', flat=True)), 'enumerated': perm in backend.get_all_permissions(user, doc, **flags), 'permissions_for': change.pk in set(listed.values_list('pk', flat=True)), 'has_permission': handle.policy().has_permission(user, doc, change, **flags)}
+    listed = handle.permissions_for(user, doc, **flags)
+    return {'has_perm': backend.has_perm(user, perm, doc, **flags), 'authorized': Document.objects.authorized(user, change, **flags).filter(pk=doc.pk).exists(), 'permitted': permitted.permitted(change, user, **flags).filter(pk=doc.pk).exists(), 'common': change.pk in set(held.values_list('pk', flat=True)), 'reverse': user.pk in set(doc.get_permitted_users(change, **flags).values_list('pk', flat=True)), 'enumerated': perm in backend.get_all_permissions(user, doc, **flags), 'permissions_for': change.pk in set(listed.values_list('pk', flat=True)), 'has_permission': handle.has_permission(user, doc, change, **flags)}
 
 class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
     """Active and inactive superusers, with and without the override."""
@@ -1071,7 +1071,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         handle = configured_catalog(config, DOCUMENT_BACKEND)
         self.assertIsNone(registry._user_override)
-        raw = render_policy_sql_bytes(registries=[handle.policy()])
+        raw = render_policy_sql_bytes(registries=[handle])
         document = _load_policy_sql_document(raw)
         for content in document['backends'][0]['contents']:
             for row in content.values():
@@ -1095,7 +1095,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         handle = configured_catalog(config, DOCUMENT_BACKEND)
         self.assertEqual(registry._user_override.name, 'superuser')
-        raw = render_policy_sql_bytes(registries=[handle.policy()])
+        raw = render_policy_sql_bytes(registries=[handle])
         self.assertIn(b'user.is_superuser=True', raw)
         where = str(self.doc.get_permitted_users(self.change).query)
         self.assertIn('is_superuser', where.split('WHERE', 1)[-1])

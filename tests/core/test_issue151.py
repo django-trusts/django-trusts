@@ -219,10 +219,10 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
 
 class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
-        registry = configured_catalog(DOCUMENT_BACKEND).policy()
-        lookup = registry.condition_lookup
+        catalog = configured_catalog(DOCUMENT_BACKEND)
+        lookup = catalog.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
-        self.assertIs(lookup.conditions, registry.conditions)
+        self.assertIs(lookup.conditions, catalog.conditions)
 
 
 class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
@@ -256,12 +256,12 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
 
     def test_explicit_unbind_fail_closes_named_condition_overlay(self):
         backend = DocumentBackend()
-        registry = backend.get_catalog().policy()
-        previous = registry.condition_lookup
+        catalog = backend.get_catalog()
+        previous = catalog.condition_lookup
         document = Document(title='unbind')
         user = get_user_model()(username='unbind-151')
         try:
-            registry.condition_lookup = None
+            catalog.condition_lookup = None
             with self.assertRaises(AttributeError):
                 backend.get_catalog()._condition_overlay(
                     'myapp.change_document:non_confidential',
@@ -269,8 +269,8 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
                     user,
                 )
         finally:
-            registry.condition_lookup = previous
-        self.assertIs(registry.condition_lookup, previous)
+            catalog.condition_lookup = previous
+        self.assertIs(catalog.condition_lookup, previous)
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
