@@ -329,10 +329,13 @@ def _document_factory():
     """Replay the document recorder onto a factory this test owns."""
     from tests.myapp.backends import DocumentBackend
 
+    from tests.support import config_for_class
+    from trusts.compile.factory import Compiler
+
     factory = compiler(
         path=DOCUMENT_BACKEND,
-        family=DocumentBackend.family,
-        query_compiler=DocumentBackend.query_compiler,
+        family=config_for_class(DocumentBackend).family,
+        query_compiler=Compiler.default_query_compiler(),
         user_model=get_user_model(),
     )
     return replay_recorder(factory, DocumentBackend)

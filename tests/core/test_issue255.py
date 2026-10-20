@@ -197,7 +197,7 @@ def _seal_document_factory(factory):
     )
     saved = snapshot_installed_catalogs()
     previous = config_for_class(DocumentBackend).catalog
-    family = DocumentBackend.family if previous is None else previous.family
+    family = config_for_class(DocumentBackend).family if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
     factory.family = family
     catalog = built_catalog(factory)

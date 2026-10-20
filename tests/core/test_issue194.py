@@ -78,7 +78,7 @@ def _request(user):
 class ProtectedFactorySurfaceTest(SimpleTestCase):
 
     def test_default_family_and_factories_are_protected(self):
-        self.assertEqual(TrustModelBackendMixin.family, 'relationship')
+        self.assertEqual(TrustsConfigMixin.family, 'relationship')
         self.assertFalse(hasattr(TrustsConfigMixin, '_authorization_family'))
         self.assertFalse(hasattr(TrustsConfigMixin, 'authorization_family'))
         self.assertFalse(hasattr(TrustsConfigMixin, '_create_registry'))
@@ -204,7 +204,7 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         factory = compiler(
             query_compiler=_NeverAppliesCompiler(),
             path=DOCUMENT_BACKEND,
-            family=DocumentBackend.family,
+            family=TrustsConfigMixin.family,
             user_model=get_user_model(),
         )
         replay_recorder(factory, DocumentBackend)

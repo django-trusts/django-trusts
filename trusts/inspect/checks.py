@@ -1,5 +1,5 @@
 """Django system checks for permission conditions, missing declarations,
-query compilers, and Along renderer support.
+and Along renderer support.
 
 Model-aware semantic validation (field names, traversal, multi-valued
 relations, operand types) is reported as ``CheckMessage`` objects with
@@ -19,29 +19,24 @@ __all__ = []
 
 from django.apps import apps as django_apps
 from django.core import checks as django_checks
+from django.db import connections
+from django.db.utils import OperationalError
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
 from trusts.apps import installed_catalogs
-from trusts.backends import TrustModelBackendMixin
+from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
-from trusts.errors import PermissionConditionError, TrustsCompilerError
+from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
 )
-from django.conf import settings
-from django.utils.module_loading import import_string
-from trusts.plan.aggregates import compiler_for_class
-from django.db import connections
-from django.db.utils import OperationalError
-from trusts.compile.factory import probe_along_capabilities
 from trusts.plan.walk import along_connection_supported
 
 
 CHECK_ID_INVALID_EXPR = 'trusts.E001'
 CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
-CHECK_ID_MISSING_COMPILER = 'trusts.E004'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
@@ -121,46 +116,6 @@ def _messages_for_obsolete_callback_setting():
         obj=None,
         id=CHECK_ID_OBSOLETE_CALLBACK_SETTING,
     )]
-
-
-@django_checks.register()
-def check_query_compilers(app_configs, **kwargs):
-    """Every Trusts-derived AUTHENTICATION_BACKENDS path must be query-capable.
-
-    Imports listed mixin classes and resolves ``query_compiler`` without
-    constructing a backend instance. Zero SQL. Silencing ``trusts.E004``
-    hides only this diagnostic; ``ContentQuerySet.permitted()`` still
-    raises and does not fall back or omit the broken route.
-    """
-
-
-    messages = []
-    seen = []
-    listed = settings.AUTHENTICATION_BACKENDS
-    for path in listed:
-        if path in seen:
-            continue
-        seen.append(path)
-        try:
-            cls = import_string(path)
-        except ImportError:
-            continue
-        if not isinstance(cls, type) or not issubclass(cls, TrustModelBackendMixin):
-            continue
-        try:
-            compiler_for_class(cls)
-        except TrustsCompilerError as exc:
-            messages.append(django_checks.Error(
-                str(exc),
-                hint=(
-                    'Silencing this check ID suppresses only the early '
-                    'diagnostic. ContentQuerySet.permitted() still requires '
-                    'a valid query compiler; there is no fallback or omission.'
-                ),
-                obj=cls,
-                id=CHECK_ID_MISSING_COMPILER,
-            ))
-    return messages
 
 
 def _is_concrete_model(model):

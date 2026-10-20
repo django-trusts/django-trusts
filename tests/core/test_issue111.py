@@ -105,12 +105,10 @@ class HistoricalImportCutoverTest(SimpleTestCase):
             importlib.import_module('trusts.core_backends')
         from trusts.plan.relations import PlanQueryCompiler
 
-        self.assertIsInstance(
-            TrustModelBackendMixin.query_compiler, PlanQueryCompiler,
-        )
-        self.assertFalse(
-            TrustModelBackendMixin.query_compiler.historical_fallback,
-        )
+        catalog = apps.get_app_config('trusts_kernel_host').get_catalog()
+        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertFalse(catalog.compiler.historical_fallback)
+        self.assertFalse(catalog._project)
 
     def test_core_is_not_an_installed_implementation(self):
         host = apps.get_app_config('trusts_kernel_host')

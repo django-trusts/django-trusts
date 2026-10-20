@@ -43,10 +43,16 @@ def _replay_listed(path):
     from django.utils.module_loading import import_string
 
     cls = import_string(path)
+    from tests.support import config_for_class
+    from trusts.compile.factory import Compiler
+
     factory = compiler(
         path=path,
-        family=cls.family,
-        query_compiler=cls.query_compiler,
+        family=config_for_class(cls).family,
+        query_compiler=(
+            getattr(cls, 'query_compiler', None)
+            or Compiler.default_query_compiler()
+        ),
         user_model=get_user_model(),
     )
     return replay_recorder(factory, cls)

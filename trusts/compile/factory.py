@@ -220,6 +220,15 @@ class Compiler(object):
         self.family = family
         self.user_model = user_model
 
+    @staticmethod
+    def default_query_compiler():
+        """Compiler ``ready`` stores when the config does not set one.
+
+        Passing it explicitly keeps ``_project`` false, matching the live
+        catalogs that used to receive the backend's ``PlanQueryCompiler``.
+        """
+        return PlanQueryCompiler()
+
     def get_recorder_target(self):
         return self
 

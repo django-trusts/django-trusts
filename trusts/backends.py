@@ -11,14 +11,10 @@ from django.db.models import Model, QuerySet
 
 from trusts.apps import TrustsConfigMixin
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.relations import PlanQueryCompiler
 
 
 class TrustModelBackendMixin(object):
     """Object-permission backend. The catalog belongs to the app config."""
-
-    query_compiler = PlanQueryCompiler()
-    family = 'relationship'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
