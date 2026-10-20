@@ -435,7 +435,7 @@ class CatalogFromShapeTest(TransactionTestCase):
             Row.objects.create(scope=scope, content=payload)
             content_type = ContentType.objects.get_for_model(Payload)
             read, _created = Permission.objects.get_or_create(
-                content_type=content_type, codename='read_payload',
+                content_type=content_type, codename='read_shapepayload',
                 defaults={'name': 'read'},
             )
             Grant.objects.create(scope=scope, user=holder, permission=read)
@@ -508,29 +508,29 @@ class CatalogFromShapeTest(TransactionTestCase):
 
 
 def _prefix_models():
-    class Scope(models.Model):
+    class ShapeScope(models.Model):
         title = models.CharField(max_length=20)
 
         class Meta:
             app_label = 'trusts_tests'
 
-    class Payload(models.Model):
+    class ShapePayload(models.Model):
         title = models.CharField(max_length=20)
 
         class Meta:
             app_label = 'trusts_tests'
 
-    class Row(models.Model):
+    class ShapeRow(models.Model):
         scope = models.ForeignKey(
-            Scope, related_name='rows', on_delete=models.CASCADE,
+            ShapeScope, related_name='rows', on_delete=models.CASCADE,
         )
-        content = models.ForeignKey(Payload, on_delete=models.CASCADE)
+        content = models.ForeignKey(ShapePayload, on_delete=models.CASCADE)
 
         class Meta:
             app_label = 'trusts_tests'
 
-    class Grant(models.Model):
-        scope = models.ForeignKey(Scope, on_delete=models.CASCADE)
+    class ShapeGrant(models.Model):
+        scope = models.ForeignKey(ShapeScope, on_delete=models.CASCADE)
         user = models.ForeignKey(
             settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         )
@@ -539,4 +539,4 @@ def _prefix_models():
         class Meta:
             app_label = 'trusts_tests'
 
-    return Scope, Payload, Row, Grant
+    return ShapeScope, ShapePayload, ShapeRow, ShapeGrant
