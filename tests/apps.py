@@ -28,6 +28,16 @@ class TestsConfig(AppConfig):
     label = 'trusts_tests'
     default_auto_field = 'django.db.models.AutoField'
 
+    def import_models(self):
+        # Django imports this app's models before any ready(). Ticket's
+        # Meta declares permission_conditions, so the option has to exist
+        # first. The library still registers it from ready(); this only
+        # covers the installed tests app.
+        from trusts.apps import _ensure_permission_conditions_option
+
+        _ensure_permission_conditions_option()
+        super().import_models()
+
     def ready(self):
         # Contribute TUP→Trust←Category, TUP→Trust←Ticket, and the
         # Junction-backed Group terminal to the implementation-owned
