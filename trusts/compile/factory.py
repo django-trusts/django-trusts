@@ -71,7 +71,6 @@ from trusts.plan.standards import (
     UserCondition,
     assert_concrete_booleans,
     builtin_user_conditions,
-    compile_override_q,
     compile_user_rules,
     concrete_rule,
     normalize_on,
@@ -220,8 +219,6 @@ class RegistryFactory(object):
         self.frozen = False
         self._user_conditions = None
         self._user_override = None
-        self._rule_fragments = {}
-        self._override_fragments = {}
         self.conditions = ConditionRegistry()
         self.set_filter_lookup(RegistryConditionLookup(self.conditions))
         self._explicit_compiler = compiler is not None
@@ -347,7 +344,6 @@ class RegistryFactory(object):
                         'User condition %r is not registered.' % (name,)
                     )
                 del self._user_conditions[name]
-                self._clear_compiled_rules()
                 return None
             rule = UserCondition(
                 name, concrete_rule(expr, name, self.user_model), target,
@@ -357,7 +353,6 @@ class RegistryFactory(object):
                 self._user_conditions = None
             raise
         self._user_conditions[name] = rule
-        self._clear_compiled_rules()
         return rule
 
     def set_user_override(self, name, expr, on='user'):
@@ -386,12 +381,10 @@ class RegistryFactory(object):
                     'User override %r is not the current override.' % (name,)
                 )
             self._user_override = None
-            self._clear_compiled_rules()
             return None
         self._user_override = UserCondition(
             name, concrete_rule(expr, name, self.user_model), 'user',
         )
-        self._clear_compiled_rules()
         return self._user_override
 
     @property
@@ -551,11 +544,6 @@ class RegistryFactory(object):
             _rules_for_model(conditions, sponsor_model),
             role='sponsor', values={},
         ))
-        self._rule_fragment(record.delegate_model, role='user')
-        self._override_fragment(record.delegate_model)
-        self._rule_fragment(
-            record.sponsor_model, role='sponsor', path=record.sponsor_field,
-        )
         existing_rows = self._delegations_by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -720,8 +708,6 @@ class RegistryFactory(object):
             user_model=record.user_model, sponsor_model=None,
             conditions=conditions, override=override,
         )
-        self._rule_fragment(record.user_model, role='user')
-        self._override_fragment(record.user_model)
         existing_rows = self._by_root.get(root)
         if existing_rows:
             existing_rows.append(record)
@@ -907,64 +893,6 @@ class RegistryFactory(object):
             return None
         return tuple(self._user_conditions.values())
 
-    def _conditions_for_model(self, model):
-        """Conditions compiled for ``model``.
-
-        With no caller-set rules, the built-in ``is_active`` condition is
-        included only when ``model`` has that concrete boolean field.
-        A caller-set list is used as stored, including a replacement
-        ``is_active`` condition. Every inquiry uses this same list.
-        """
-        stored = self._stored_user_conditions()
-        if stored is not None:
-            return stored
-        return builtin_user_conditions(model)
-
-    def _rule_fragment(self, model, *, role, path=''):
-        """Registration-time ``(skip OR condition)`` for one model and role."""
-        model = model._meta.concrete_model
-        key = (model, role, path)
-        try:
-            return self._rule_fragments[key]
-        except KeyError:
-            compiled = compile_user_rules(
-                model, path, self._conditions_for_model(model),
-                role=role, values={},
-            )
-            self._rule_fragments[key] = compiled
-            return compiled
-
-    def _override_fragment(self, model):
-        """Registration-time ``(NOT skip AND override)`` for the checked user."""
-        model = model._meta.concrete_model
-        try:
-            return self._override_fragments[model]
-        except KeyError:
-            compiled = compile_override_q(
-                model, '', self._user_override, {},
-            )
-            self._override_fragments[model] = compiled
-            return compiled
-
-    def _clear_compiled_rules(self):
-        """Drop registration-time fragments after a successful rule edit."""
-        self._rule_fragments.clear()
-        self._override_fragments.clear()
-
-    def _compiled_subject(self, records, delegations, user_model):
-        if user_model is not None:
-            return user_model
-        models = {
-            record.user_model._meta.concrete_model for record in records
-        }
-        models.update(
-            record.delegate_model._meta.concrete_model
-            for record in delegations
-        )
-        if len(models) == 1:
-            return models.pop()
-        return None
-
     def _require_user_model(self):
         if self.user_model is None:
             raise TrustsConfigurationError(
@@ -984,34 +912,6 @@ class RegistryFactory(object):
                 'Record user conditions and the override before '
                 'register(). The catalog sweep checks this at ready().'
             )
-
-    def _records_for(self, content_model, user_model=None, permission_model=None):
-        chosen = []
-        for record in self._order:
-            if record.content_model is not content_model:
-                continue
-            if user_model is not None and record.user_model is not user_model:
-                continue
-            if (
-                permission_model is not None
-                and record.permission_model is not permission_model
-            ):
-                continue
-            chosen.append(record)
-        return tuple(chosen)
-
-    def _delegations_for(self, content_model, delegate_model=None):
-        chosen = []
-        for record in self._delegation_order:
-            if record.content_model is not content_model:
-                continue
-            if (
-                delegate_model is not None
-                and record.delegate_model is not delegate_model
-            ):
-                continue
-            chosen.append(record)
-        return tuple(chosen)
 
 
 def compile_recorder(recorder, *, path, family, compiler, user_model):

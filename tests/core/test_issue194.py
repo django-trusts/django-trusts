@@ -154,7 +154,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         settings = self._family_patches()
         with settings:
             rel_only = granted(self.rel_handle, Document.objects.all(), self.alice, self.change)
-            fold_only = granted(self.fold_handle.build_registry(), Document.objects.all(), self.alice, self.change)
+            fold_only = granted(self.fold_handle, Document.objects.all(), self.alice, self.change)
             self.assertIsNotNone(rel_only)
             self.assertIsNone(fold_only)
             mixed = rel_only if fold_only is None else rel_only | fold_only
@@ -162,7 +162,7 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             with self.assertNumQueries(1):
                 self.assertEqual(set(Document.objects.filter(mixed).values_list('pk', flat=True)), {self.rel_doc.pk})
             rel_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.rel_doc, registry=self.rel_handle)
-            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registry=self.fold_handle.build_registry())
+            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registry=self.fold_handle)
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
             from trusts.query import relationship_catalogs

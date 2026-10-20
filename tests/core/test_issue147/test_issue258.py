@@ -271,7 +271,8 @@ class PolicyLockConfigurationTest(SimpleTestCase):
             empty = _load_policy_sql_document(render_policy_sql_bytes())
         self.assertEqual(empty['backends'], [])
 
-        populated = _document_handle('documents.backends.FilterlessBackend').build_registry()
+        handle = _document_handle('documents.backends.FilterlessBackend')
+        populated = handle.build_registry()
 
         class _NoFilterRegistry(object):
             def __init__(self, inner):
@@ -300,7 +301,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
             render_published_subjects(bare),
         )
         kept = _load_policy_sql_document(
-            render_configured_policy(populated),
+            render_configured_policy(handle),
         )
         omitted_content = omitted['backends'][0]['contents'][0]
         kept_content = kept['backends'][0]['contents'][0]
