@@ -21,7 +21,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.compile.catalogs import Catalog, grant_q
+from trusts.compile.catalogs import Catalog
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from trusts.plan.users import lock_permitted_users_queryset
 from tests.apps import built_registries
@@ -879,7 +879,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         )
         parts = []
         for catalog in catalogs:
-            part = grant_q(catalog, 
+            part = catalog.complete_grant_q(
                 Document.objects.all(), self.delegate, self.change,
             )
             if part is not None:

@@ -33,9 +33,82 @@ class Catalog(object):
         self._registry = registry
         self.family_registries = tuple(family_registries)
 
-    def policy(self):
-        """Built registry for policy SQL and registration questions."""
-        return self._registry
+    @property
+    def records(self):
+        return self._registry.records
+
+    @property
+    def delegations(self):
+        return self._registry.delegations
+
+    @property
+    def compiler(self):
+        return self._registry.compiler
+
+    @property
+    def user_model(self):
+        return self._registry.user_model
+
+    @property
+    def conditions(self):
+        return self._registry.conditions
+
+    @property
+    def condition_lookup(self):
+        return self._registry.condition_lookup
+
+    @condition_lookup.setter
+    def condition_lookup(self, lookup):
+        self._registry.condition_lookup = lookup
+
+    @property
+    def user_conditions(self):
+        return self._registry.user_conditions
+
+    @property
+    def user_override(self):
+        return self._registry.user_override
+
+    def plan_for(self, content, *, user=None, permission=None):
+        return self._registry.plan_for(
+            content, user=user, permission=permission,
+        )
+
+    def iter_permission_conditions(self):
+        return self._registry.iter_permission_conditions()
+
+    def get_permission_condition_record(self, model, cond_code):
+        return self._registry.get_permission_condition_record(model, cond_code)
+
+    def has_permission(self, user, content, permission, **skip_flags):
+        return self._registry.has_permission(
+            user, content, permission,
+            family_registries=self.family_registries,
+            **skip_flags,
+        )
+
+    def permissions_for(self, user, content, *, kind='complete', skipped=None,
+                        **skip_flags):
+        return self._registry.permissions_for(
+            user, content, kind=kind,
+            family_registries=self.family_registries,
+            skipped=skipped, **skip_flags,
+        )
+
+    def walk_questions(self, visitor, *, family_registries=()):
+        return self._registry.walk_questions(
+            visitor, family_registries=family_registries,
+        )
+
+    def bound_to(self, *, cls, path, family_registries):
+        """Same answers, published for another backend class and peer set."""
+        return Catalog(
+            cls=cls,
+            path=path,
+            family=self.family,
+            registry=self._registry,
+            family_registries=family_registries,
+        )
 
     def known_skip_names(self):
         """User-condition and override names this catalog can skip."""
@@ -100,6 +173,15 @@ class Catalog(object):
         if part is None:
             return None, False
         return part, False
+
+    def complete_grant_q(self, candidates, user, permission, *, skipped=()):
+        """This catalog's complete grant predicate, or None when it grants nothing."""
+        return granted(
+            (self._registry,), candidates, user, permission,
+            kind='complete',
+            family_registries=(self._registry,) + tuple(self.family_registries),
+            skipped=skipped,
+        )
 
     def permitted_users_predicate(self, content, perm, *, skipped=(),
                                   accepts_permission=None, owner_name=None):
@@ -190,9 +272,8 @@ class Catalog(object):
         )
         if inquiry.denied:
             return set()
-        qs = self._registry.permissions_for(
+        qs = self.permissions_for(
             user_obj, obj, kind=kind,
-            family_registries=self.family_registries,
             skipped=dict(inquiry.values) if isinstance(inquiry.values, dict) else {},
         )
         if qs is None or qs == ():
@@ -316,14 +397,3 @@ def _selected_condition_q(registry, model, permission, conditions, user, *, api)
         part = lookup.compile_q(model, '%s:%s' % (permission, name), user)
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
-
-
-def grant_q(catalog, candidates, user, permission, *, skipped=()):
-    """This catalog's complete grant predicate, or None when it grants nothing."""
-    registry = catalog._registry
-    return granted(
-        (registry,), candidates, user, permission,
-        kind='complete',
-        family_registries=(registry,) + tuple(catalog.family_registries),
-        skipped=skipped,
-    )

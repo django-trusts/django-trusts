@@ -10,7 +10,6 @@ from django.contrib.auth import get_backends
 from django.db import router
 
 from trusts.backends import TrustModelBackendMixin, configured_catalogs
-from trusts.compile.catalogs import grant_q
 from trusts.errors import TrustsConfigurationError
 from trusts.installed import installed_object_blind_backends, user_model
 from trusts.plan.contents import relationship_family
@@ -62,8 +61,8 @@ class AuthorizedQuerySet(QuerySet):
             return self.none()
         parts = []
         for catalog in catalogs:
-            part = grant_q(
-                catalog, self, user, permission, skipped=inquiry.values,
+            part = catalog.complete_grant_q(
+                self, user, permission, skipped=inquiry.values,
             )
             if part is not None:
                 parts.append(part)
@@ -359,10 +358,10 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     """
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    registries = relationship_catalogs()
+    catalogs = relationship_catalogs()
     inquiry = bind_checked_user(
         None, skip_flags=skip_flags,
-        skip_names=catalog_skip_names(registries),
+        skip_names=catalog_skip_names(catalogs),
         require_user=False,
     )
     skipped = inquiry.values
@@ -515,7 +514,7 @@ def _assert_registration_user_model(backend, content, candidate_model):
     catalog = backend.get_catalog()
     if catalog is None:
         return
-    plan = catalog.policy().plan_for(content)
+    plan = catalog.plan_for(content)
     expected = candidate_model._meta.concrete_model
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
@@ -549,7 +548,7 @@ def _registration_models(backend, content):
     catalog = backend.get_catalog()
     if catalog is None:
         return []
-    plan = catalog.policy().plan_for(content)
+    plan = catalog.plan_for(content)
     models = []
     for record in plan.records:
         models.extend((

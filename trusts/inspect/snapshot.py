@@ -197,7 +197,7 @@ def render_policy_sql_bytes(*, alias=None, registries=None):
     """Return the schema-1 policy SQL document as UTF-8 bytes.
 
     ``alias`` overrides ``TRUSTS_POLICY_DATABASE`` for this call only.
-    ``registries`` defaults to every catalog's built registry.
+    ``registries`` defaults to the listed catalogs.
     Compilation uses ``as_sql()`` / ``sql_with_params()`` and does not
     execute the exported statements. A failure raises before a partial
     document is returned.
@@ -267,9 +267,9 @@ class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias, the user/permission/content sentinels, and the
-    family registries for one backend render. ``registry`` is the built
-    registry for this backend. ``registries`` are the built registries
-    in this render. ``visit(question)`` is the single visitor method
+    family peers for one backend render. ``subject`` is the catalog or
+    registry being rendered. ``registries`` are the peers in this
+    render. ``visit(question)`` is the single visitor method
     :meth:`Registry.walk_questions` calls; it accumulates the same
     document structure (and key order) the hard-coded projection
     produced. The six ``_compile_*`` methods below are its
@@ -279,7 +279,7 @@ class _PolicyVisitor(object):
 
     def __init__(self, registry, alias, registries, *, trust_ids=None):
         self.alias = alias
-        self.registry = registry
+        self.subject = registry
         self.registries = tuple(registries)
         self._trust_ids = dict(trust_ids or {})
         self._contents = {}
@@ -290,7 +290,7 @@ class _PolicyVisitor(object):
         """Distinct built registries in this render, excluding this one."""
         found = []
         for registry in self.registries:
-            if registry is None or registry is self.registry:
+            if registry is None or registry is self.subject:
                 continue
             if any(registry is seen for seen in found):
                 continue
@@ -299,9 +299,9 @@ class _PolicyVisitor(object):
 
     def _all_registries(self):
         peers = self.family_registries()
-        if self.registry is None:
+        if self.subject is None:
             return peers
-        return (self.registry,) + peers
+        return (self.subject,) + peers
 
     def content_for(self, label):
         return self._contents[label]
@@ -430,7 +430,7 @@ class _PolicyVisitor(object):
 
     def _compile_content_grant(self, records, model):
 
-        registry, alias, registries = self.registry, self.alias, self.registries
+        registry, alias, registries = self.subject, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = _content_manager(model).all()
@@ -449,7 +449,7 @@ class _PolicyVisitor(object):
 
     def _compile_has_perm(self, records, model):
 
-        registry, alias, registries = self.registry, self.alias, self.registries
+        registry, alias, registries = self.subject, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         instance = _content_sentinel(model, alias)
@@ -470,10 +470,10 @@ class _PolicyVisitor(object):
 
     def _compile_get_all_permissions(self, records, model):
 
-        registry, alias, registries = self.registry, self.alias, self.registries
+        registry, alias, registries = self.subject, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
-        plan = self.registry.plan_for(model)
+        plan = self.subject.plan_for(model)
         if plan.delegations:
             queryset = _compile_common_permissions(
                 (registry,), instance, user, kind='complete',
@@ -494,7 +494,7 @@ class _PolicyVisitor(object):
 
     def _compile_get_permitted_users(self, records, model):
 
-        registry, alias, registries = self.registry, self.alias, self.registries
+        registry, alias, registries = self.subject, self.alias, self.registries
         content = _content_sentinel(model, alias)
         _populate_reverse_along_identity(content, records, alias)
         permission = _role_sentinel(records[0], 'permission', alias)
@@ -509,7 +509,7 @@ class _PolicyVisitor(object):
     def _compile_filter_by_permitted_content(self, records, model):
         """One statement per proper prefix, the queryset that actually runs."""
 
-        registry, alias, registries = self.registry, self.alias, self.registries
+        registry, alias, registries = self.subject, self.alias, self.registries
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         listed = relationship_family((registry,))
@@ -538,7 +538,7 @@ class _PolicyVisitor(object):
 
     def _compile_get_group_permissions(self, records, model):
 
-        registry, alias = self.registry, self.alias
+        registry, alias = self.subject, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
@@ -1138,8 +1138,8 @@ def _compile_named_filter(model, expr, alias):
 
 
 def _configured_registries():
-    """Built registries of listed mixin backends, via ``get_catalog()``."""
-    return tuple(catalog.policy() for catalog in configured_catalogs())
+    """Listed catalogs, in backend order."""
+    return tuple(configured_catalogs())
 
 
 def _any_sentinel_user(alias):

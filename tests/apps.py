@@ -23,10 +23,9 @@ def isolated_owner():
 def built_registries(items):
     """Build factories for a direct ``granted`` / filter call.
 
-    A factory is built now. A catalog is unwrapped to its built
-    registry. A registry is returned as itself. ``None`` and other
-    objects pass through so a caller can still prove a missing
-    registry fails closed.
+    A factory is built now. A catalog is returned as itself. A registry
+    is returned as itself. ``None`` and other objects pass through so a
+    caller can still prove a missing registry fails closed.
     """
     from trusts.compile.catalogs import Catalog
     from trusts.compile.factory import RegistryFactory
@@ -38,9 +37,7 @@ def built_registries(items):
         items = (items,)
     built = []
     for item in items:
-        if isinstance(item, Catalog):
-            built.append(item.policy())
-        elif item is None or isinstance(item, Registry):
+        if item is None or isinstance(item, (Catalog, Registry)):
             built.append(item)
         elif isinstance(item, RegistryFactory):
             built.append(item.build_registry())
@@ -392,37 +389,34 @@ def listed_relationship(factories):
     classes = _inquiry_backend_classes(len(factories))
     saved = {cls: catalogs.get(cls, _MISSING) for cls in classes}
     paths = []
-    built = []
+    prepared = []
     for cls, factory in zip(classes, factories):
         path = '%s.%s' % (cls.__module__, cls.__name__)
         paths.append(path)
-        if isinstance(factory, Catalog):
-            registry = factory.policy()
-            family = factory.family
-        elif isinstance(factory, Registry):
-            registry = factory
-            family = factory.family
+        if isinstance(factory, (Catalog, Registry)):
+            subject = factory
         elif isinstance(factory, RegistryFactory):
-            registry = factory.build_registry()
-            family = factory.family
+            subject = factory.build_registry()
         else:
-            registry = factory.build_registry()
-            family = getattr(factory, 'family', 'relationship')
-        built.append((cls, path, family, registry))
-    for cls, path, family, registry in built:
+            subject = factory.build_registry()
+        prepared.append((cls, path, subject))
+    for cls, path, subject in prepared:
         peers = tuple(
-            other for _cls, _path, other_family, other in built
-            if other_family == family and other is not registry
+            other for _cls, _path, other in prepared
+            if other.family == subject.family and other is not subject
         )
-        from trusts.compile.catalogs import Catalog
-
-        catalogs[cls] = Catalog(
-            cls=cls,
-            path=path,
-            family=family,
-            registry=registry,
-            family_registries=peers,
-        )
+        if isinstance(subject, Catalog):
+            catalogs[cls] = subject.bound_to(
+                cls=cls, path=path, family_registries=peers,
+            )
+        else:
+            catalogs[cls] = Catalog(
+                cls=cls,
+                path=path,
+                family=subject.family,
+                registry=subject,
+                family_registries=peers,
+            )
     with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
         try:
             yield tuple(catalogs[cls] for cls in classes)

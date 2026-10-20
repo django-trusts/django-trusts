@@ -236,17 +236,17 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                 manager.permitted('myapp.change_documentgrant', AnonymousUser())
 
     def test_unbound_condition_lookup_fails_before_the_principal(self):
-        registry = configured_catalog(DOCUMENT_BACKEND).policy()
-        previous = registry.condition_lookup
+        catalog = configured_catalog(DOCUMENT_BACKEND)
+        previous = catalog.condition_lookup
         try:
-            registry.condition_lookup = None
+            catalog.condition_lookup = None
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted(self.change, AnonymousUser(), conditions=('non_confidential',))
         finally:
-            registry.condition_lookup = previous
+            catalog.condition_lookup = previous
         self.assertEqual(_pks(self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))), {self.open_doc.pk})
 
     def test_filter_permitted_filter_chains(self):

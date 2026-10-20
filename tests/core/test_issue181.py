@@ -156,21 +156,17 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
             path=alt_path,
             family=_AltGrantBackend.family,
             registry=built,
-            family_registries=(saved_document.policy(), saved_host.policy()),
+            family_registries=(saved_document, saved_host),
         )
-        catalogs[DocumentBackend] = Catalog(
+        catalogs[DocumentBackend] = saved_document.bound_to(
             cls=DocumentBackend,
             path=saved_document.path,
-            family=saved_document.family,
-            registry=saved_document.policy(),
-            family_registries=(saved_host.policy(), built),
+            family_registries=(saved_host, built),
         )
-        catalogs[HostTrustModelBackend] = Catalog(
+        catalogs[HostTrustModelBackend] = saved_host.bound_to(
             cls=HostTrustModelBackend,
             path=saved_host.path,
-            family=saved_host.family,
-            registry=saved_host.policy(),
-            family_registries=(saved_document.policy(), built),
+            family_registries=(saved_document, built),
         )
         mixin = _AltGrantBackend()
         try:

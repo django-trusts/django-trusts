@@ -173,11 +173,11 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        registry = configured_catalog(DOCUMENT_BACKEND).policy()
-        previous = registry.condition_lookup
+        catalog = configured_catalog(DOCUMENT_BACKEND)
+        previous = catalog.condition_lookup
         qs = Document.objects.filter(pk=self.document.pk)
         try:
-            registry.condition_lookup = None
+            catalog.condition_lookup = None
             with self.assertNumQueries(0):
                 with self.assertRaises(AttributeError) as ctx:
                     self.document_backend.has_perm(
@@ -194,8 +194,8 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
                     self.document_backend.has_perm(self.alice, FILTERED, qs),
                 )
         finally:
-            registry.condition_lookup = previous
-        self.assertIs(registry.condition_lookup, previous)
+            catalog.condition_lookup = previous
+        self.assertIs(catalog.condition_lookup, previous)
 
         with self.assertNumQueries(1):
             self.assertTrue(
