@@ -207,7 +207,7 @@ class RegisterConditionFailClosedTest(TestCase):
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         handle.register_public(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=builder)
-                self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, ())
+                self.assertEqual(handle.records, ())
 
     def test_failed_condition_does_not_partially_mutate(self):
         handle = _handle()
@@ -219,7 +219,6 @@ class RegisterConditionFailClosedTest(TestCase):
     def test_condition_invoked_on_register_after_build(self):
         registry = RegistryFactory()
         handle = _handle(registry)
-        registry.build_registry()
         calls = []
 
         def condition(trust):

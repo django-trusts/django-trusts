@@ -51,7 +51,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertTrue(apps.ready)
         first = RegistryFactory()
         second = RegistryFactory()
-        self.assertEqual(Catalog(cls=type(first), path=first.path, family=first.family, registry=first.build_registry()).records, ())
+        self.assertEqual(first.records, ())
         _contribute_document(second)
         self.assertEqual(len(Catalog(cls=type(second), path=second.path, family=second.family, registry=second.build_registry()).plan_for(Document).records), 1)
         _contribute_document(first)
@@ -82,7 +82,6 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
         j = Ref(DocumentGrant)
         registry.register(content=j.document, user=j.user, permission=j.permission)
         before = registry.records
-        registry.build_registry()
         attempts = (dict(content=j.document, user=j.user, permission=j.permission), dict(content=j.document, user=j.permission, permission=j.user), dict(content='not-a-ref', user=j.user, permission=j.permission))
         for kwargs in attempts:
             with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -250,6 +249,7 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
         second = handle.build_registry()
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
-        _contribute_document(registry)
-        self.assertEqual(Catalog(cls=type(handle), path=handle.path, family=handle.family, registry=handle.build_registry()).records, registry.records)
+        fresh = RegistryFactory(path='tests.core.builder')
+        _contribute_document(fresh)
+        self.assertEqual(Catalog(cls=type(fresh), path=fresh.path, family=fresh.family, registry=fresh.build_registry()).records, fresh.records)
         self.assertEqual(first.records, ())

@@ -156,7 +156,6 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         Note, _Memo = _note_models()
         log = _BuilderLog()
         registry = RegistryFactory()
-        registry.build_registry()
         record = registry.register_permission_condition(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
@@ -171,10 +170,13 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
         self.assertEqual(len(log.calls), 1)
         registry.build_registry()
+        late_factory = RegistryFactory()
+        late_handle = [late_factory, setattr(late_factory, 'path', handle.path)][0]
         late = _BuilderLog()
-        late_record = handle.register_permission_condition(Note, 'late', late)
+        late_record = late_handle.register_permission_condition(Note, 'late', late)
         self.assertEqual(len(late.calls), 1)
-        self.assertIs(registry.get_permission_condition_record(Note, 'late'), late_record)
+        self.assertIs(late_factory.get_permission_condition_record(Note, 'late'), late_record)
+        self.assertIsNone(registry.get_permission_condition_record(Note, 'late'))
 
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()

@@ -246,9 +246,10 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIsNot(first_build, second_build)
         from tests.myapp.models import DocumentGrant
         from trusts.compile.nodes import Ref
+        fresh = RegistryFactory()
         j = Ref(DocumentGrant)
-        isolated.register(content=j.document, user=j.user, permission=j.permission)
-        self.assertEqual(Catalog(cls=type(isolated), path=isolated.path, family=isolated.family, registry=isolated.build_registry()).records, isolated.records)
+        fresh.register(content=j.document, user=j.user, permission=j.permission)
+        self.assertEqual(Catalog(cls=type(fresh), path=fresh.path, family=fresh.family, registry=fresh.build_registry()).records, fresh.records)
         published = catalogs[HostTrustModelBackend]
         self.assertIsInstance(published.records, tuple)
 

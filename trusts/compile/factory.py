@@ -202,10 +202,12 @@ class RegistryFactory(object):
     store several records when they terminate on different content
     models, or when the same bindings use a different closed condition.
 
-        Registration stays open for the life of the instance:
-        ``build_registry()`` builds a fresh ``Registry`` from the
-        current records on each call, so registering after a build
-        takes effect on the next build.
+        ``build_registry()`` freezes this factory and returns a fresh
+        ``Registry`` from the records already stored. A later build
+        returns another registry from those same records. ``register``,
+        ``register_delegation``, ``register_permission_condition``,
+        ``set_user_condition``, ``set_user_override``, and
+        ``set_filter_lookup`` raise ``TrustsConfigurationError``.
     """
 
     def __init__(self, *, compiler=None, path='', family='relationship',
@@ -247,10 +249,7 @@ class RegistryFactory(object):
         (no partial bind). ``lookup is None`` clears the binding.
         Methods are not invoked at bind time. A built factory is frozen.
         """
-        if self.frozen:
-            raise TrustsConfigurationError(
-                'set_filter_lookup refused: this factory is frozen.'
-            )
+        self._open()
         if lookup is None:
             self._filter_lookup = None
             return
@@ -270,6 +269,7 @@ class RegistryFactory(object):
         here. A prebuilt ``Expr`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
+        self._open()
         return self.conditions.register_permission_condition(
             model, cond_code, condition,
         )
@@ -321,6 +321,7 @@ class RegistryFactory(object):
         ``user``, or ``sponsor``.
         The lambda is walked once against this factory's ``user_model``.
         """
+        self._open()
         self._require_user_model()
         self._open_for_rules('condition')
         validate_user_rule_name(name, kind='condition')
@@ -366,6 +367,7 @@ class RegistryFactory(object):
         order at ready. ``on="sponsor"`` and ``on="*"`` raise. The name cannot match a
         registered condition.
         """
+        self._open()
         self._require_user_model()
         self._open_for_rules('override')
         validate_user_rule_name(name, kind='override')
@@ -511,6 +513,7 @@ class RegistryFactory(object):
         walk as an ordinary registration: the delegation anchor reaches
         objects within that walk. Registration validates metadata only.
         """
+        self._open()
         record = self.build_delegation(
             content=content, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
@@ -680,6 +683,7 @@ class RegistryFactory(object):
 
         This method does not inspect Django's global ``apps.ready``.
         """
+        self._open()
         record = self.build_relation(
             content=content, user=user, permission=permission, group=group,
             condition=condition, along=along,
@@ -966,6 +970,12 @@ class RegistryFactory(object):
             raise TrustsConfigurationError(
                 'RegistryFactory has no user model. Pass user_model '
                 'at construction.'
+            )
+
+    def _open(self):
+        if self.frozen:
+            raise TrustsConfigurationError(
+                'register refused: this factory is frozen.'
             )
 
     def _open_for_rules(self, kind):
