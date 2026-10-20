@@ -59,16 +59,16 @@ _NO_PRESET = object()
 
 @dataclass(frozen=True, slots=True)
 class CatalogShape(object):
-    """Frozen data ``factory.build()`` hands to one ``Catalog``.
+    """Frozen data ``Compiler.compile`` hands to one ``Catalog``.
 
     ``path`` and ``family`` are that catalog's identity.
     ``conditions`` is the ``(model, code, record)`` tuple taken once at
     build. ``user_rules`` is ``(primary, absent)``: stored rules use
     ``primary``; the built-in rule uses ``primary`` when the subject has
     a concrete boolean ``is_active`` and ``absent`` otherwise.
-    ``override_q`` is the override compiled against the factory user
+    ``override_q`` is the override compiled against the catalog user
     model, or ``None``. ``plans`` is the build-time ``(key, RelationPlan)``
-    table. ``compiler is None`` means the default compiler.
+    table. ``query_compiler is None`` means the default compiler.
     """
 
     records: tuple
@@ -77,7 +77,7 @@ class CatalogShape(object):
     user_conditions: object
     user_override: object
     filter_lookup: object
-    compiler: object
+    query_compiler: object
     path: str
     family: str
     user_model: object
@@ -129,17 +129,19 @@ class Catalog(object):
         self.family = shape.family
         self.records = shape.records
         self.delegations = shape.delegations
-        self._project = shape.compiler is None
-        self.compiler = (
-            PlanQueryCompiler() if shape.compiler is None else shape.compiler
+        self._project = shape.query_compiler is None
+        self.query_compiler = (
+            PlanQueryCompiler()
+            if shape.query_compiler is None else shape.query_compiler
         )
         self.user_model = user_model
         self.user_conditions = shape.user_conditions
         self.user_override = shape.user_override
         self.filter_lookup = shape.filter_lookup
-        self._conditions = shape.conditions
-        self._user_rules = shape.user_rules
-        self._override_q = shape.override_q
+        self.conditions = shape.conditions
+        self.user_rules = shape.user_rules
+        self.override_q = shape.override_q
+        self.plans = shape.plans
         self._plans = dict(shape.plans)
 
     def plan_for(self, content, *, user=None, permission=None):
@@ -152,7 +154,7 @@ class Catalog(object):
         key = (resolved, principal, terminal)
         plan = self._plans[key] if key in self._plans else relation_plan(
             self.records, self.delegations, *key, self.user_model,
-            self.user_conditions, self._user_rules, self._override_q)
+            self.user_conditions, self.user_rules, self.override_q)
         return replace(plan, content_identity=_candidate_model(content))
 
     def compile_registered_condition_q(self, model, perm, user):
@@ -167,11 +169,11 @@ class Catalog(object):
         return self.filter_lookup.record_for(model, cond_code)
 
     def iter_permission_conditions(self):
-        return iter(self._conditions)
+        return iter(self.conditions)
 
     def applies(self, plan):
         """Whether this catalog's compiler will compile ``plan``."""
-        return bool(self.compiler.applies(plan))
+        return bool(self.query_compiler.applies(plan))
 
     def has_permission(self, user, content, permission, *,
                        extra_q=None, permission_model=None,

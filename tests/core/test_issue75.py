@@ -35,7 +35,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 import tests as tests_module
 HOST = HOST_BACKEND
@@ -57,11 +57,11 @@ def _change_document():
 def _contribute_document(registry):
     from trusts.compile.nodes import Ref
     j = Ref(DocumentGrant)
-    registry.register(content=j.document, user=j.user, permission=j.permission)
+    registry.register_relation(content=j.document, user=j.user, permission=j.permission)
 
 def _evaluate(handle, queryset, user, permission):
     plan = handle.plan_for(queryset, user=user, permission=permission)
-    compiler = handle.compiler if handle.compiler is not None else PlanQueryCompiler()
+    compiler = handle.query_compiler
     return compiler.complete_exists(plan, queryset, user, permission)
 
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -75,7 +75,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             apps.get_app_config('trusts_kernel_host').catalog_path(),
         )
         self.assertIs(catalog, HostTrustModelBackend().catalog)
-        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertIsInstance(catalog.query_compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_do_not_raise(self):
         from django.apps import apps
@@ -213,7 +213,7 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
 
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
+        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)
@@ -261,7 +261,7 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.assertFalse(Document.objects.authorized(self.bob, self.change).exists())
 
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
-        isolated = RegistryFactory()
+        isolated = Compiler()
         _contribute_document(isolated)
         isolated.path = MIXIN
         extra = isolated
@@ -298,7 +298,7 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
-        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
+        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)

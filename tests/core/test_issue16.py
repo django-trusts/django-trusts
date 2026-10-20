@@ -19,7 +19,7 @@ from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLB
 from trusts.conditions import PermissionConditionError, PermissionConditionUnsupported
 from trusts.plan.conditions import ConditionRecord, ConditionRegistry, FrozenConditionLookup, ModelIdentity, Ref, condition_refs, obsolete_legacy_callback_setting_enabled
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 from tests.support import built_catalog, override_catalog
 
@@ -84,8 +84,8 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         self.assertEqual(list(second.iter_permission_conditions()), [])
 
     def test_trusts_registry_owns_a_private_condition_store(self):
-        left = RegistryFactory()
-        right = RegistryFactory()
+        left = Compiler()
+        right = Compiler()
         self.assertIsInstance(left.conditions, ConditionRegistry)
         self.assertIsNot(left.conditions, right.conditions)
         self.assertEqual(list(left.conditions.iter_permission_conditions()), [])
@@ -97,13 +97,13 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_expr_and_builder_records_and_shape_errors(self):
         Note, Memo = _note_models()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = Compiler()
         expr = u == o.owner
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(Note, 'owned', expr)
+            registry.add_named_filter(Note, 'owned', expr)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'owned'))
         log = _BuilderLog()
-        builder_record = registry.register_permission_condition(Note, 'spy', log)
+        builder_record = registry.add_named_filter(Note, 'spy', log)
         self.assertIsInstance(builder_record, ConditionRecord)
         self.assertIsNotNone(builder_record.expr)
         self.assertFalse(hasattr(builder_record, 'func'))
@@ -114,16 +114,16 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'missing'))
         self.assertIsNone(registry.conditions.get_permission_condition_record(Memo, 'owned'))
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(Note, 'bare', o.owner)
+            registry.add_named_filter(Note, 'bare', o.owner)
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(Note, 'bad', 'not-a-condition')
+            registry.add_named_filter(Note, 'bad', 'not-a-condition')
         self.assertEqual(len(log.calls), 1)
 
     def test_duplicate_condition_overwrites_same_identity(self):
         Note, _Memo = _note_models()
-        registry = RegistryFactory()
-        registry.register_permission_condition(Note, 'named', lambda u, p, o: u == o.owner)
-        registry.register_permission_condition(Note, 'named', lambda u, p, o: o.title == 'keep')
+        registry = Compiler()
+        registry.add_named_filter(Note, 'named', lambda u, p, o: u == o.owner)
+        registry.add_named_filter(Note, 'named', lambda u, p, o: o.title == 'keep')
         record = registry.conditions.get_permission_condition_record(Note, 'named')
         self.assertEqual(record.expr.to_tuple(), ('eq', ('ref', 'object', ('title',)), ('const', 'keep')))
         rows = list(registry.conditions.iter_permission_conditions())
@@ -132,20 +132,20 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_owners_do_not_share_or_overwrite_records(self):
         Note, _Memo = _note_models()
-        owner_a = RegistryFactory()
-        owner_b = RegistryFactory()
-        owner_a.register_permission_condition(Note, 'own', lambda u, p, o: u == o.owner)
-        owner_b.register_permission_condition(Note, 'own', lambda u, p, o: o.title == 'keep')
+        owner_a = Compiler()
+        owner_b = Compiler()
+        owner_a.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
+        owner_b.add_named_filter(Note, 'own', lambda u, p, o: o.title == 'keep')
         self.assertEqual(owner_a.conditions.get_permission_condition_record(Note, 'own').expr.to_tuple(), ('eq', ('ref', 'principal', ()), ('ref', 'object', ('owner',))))
         self.assertEqual(owner_b.conditions.get_permission_condition_record(Note, 'own').expr.to_tuple(), ('eq', ('ref', 'object', ('title',)), ('const', 'keep')))
         self.assertIsNot(owner_a.conditions.get_permission_condition_record(Note, 'own'), owner_b.conditions.get_permission_condition_record(Note, 'own'))
 
     def test_repeated_registry_construction_does_not_leak(self):
         Note, _Memo = _note_models()
-        first = RegistryFactory()
-        first.register_permission_condition(Note, 'own', lambda u, p, o: u == o.owner)
+        first = Compiler()
+        first.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
         self.assertIsNotNone(first.conditions.get_permission_condition_record(Note, 'own'))
-        second = RegistryFactory()
+        second = Compiler()
         self.assertIsNone(second.conditions.get_permission_condition_record(Note, 'own'))
         self.assertEqual(list(second.conditions.iter_permission_conditions()), [])
         third = ConditionRegistry()
@@ -154,8 +154,8 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_condition_registration_after_build_invokes_builder(self):
         Note, _Memo = _note_models()
         log = _BuilderLog()
-        registry = RegistryFactory()
-        record = registry.register_permission_condition(Note, 'own', log)
+        registry = Compiler()
+        record = registry.add_named_filter(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
         catalog = built_catalog(registry)
@@ -165,28 +165,28 @@ class ConditionRegistryShapeTest(SimpleTestCase):
 
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         registry.path = 'tests.kernel_host.backends.HostTrustModelBackend'
         handle = registry
         log = _BuilderLog()
-        record = handle.register_permission_condition(Note, 'own', log)
+        record = handle.add_named_filter(Note, 'own', log)
         self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
         self.assertEqual(len(log.calls), 1)
         built_catalog(registry)
-        late_factory = RegistryFactory()
+        late_factory = Compiler()
         late_factory.path = handle.path
         late_handle = late_factory
         late = _BuilderLog()
-        late_record = late_handle.register_permission_condition(Note, 'late', late)
+        late_record = late_handle.add_named_filter(Note, 'late', late)
         self.assertEqual(len(late.calls), 1)
         self.assertIs(late_factory.conditions.get_permission_condition_record(Note, 'late'), late_record)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'late'))
 
     def test_generic_lookup_binds_without_reinvoking_builder(self):
         Note, _Memo = _note_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         log = _BuilderLog()
-        record = registry.register_permission_condition(Note, 'spy', log)
+        record = registry.add_named_filter(Note, 'spy', log)
         self.assertEqual(len(log.calls), 1)
         catalog = built_catalog(registry)
         lookup = catalog.filter_lookup
@@ -210,9 +210,9 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             drop = Note.objects.create(title='drop', owner=bob, status='open')
             locked = Note.objects.create(title='keep', owner=alice, status='locked')
             log = _BuilderLog(lambda u, p, o: (u == o.owner) & (o.status != 'locked'))
-            registry = RegistryFactory()
+            registry = Compiler()
             with self.assertNumQueries(0):
-                registry.register_permission_condition(Note, 'editable', log)
+                registry.add_named_filter(Note, 'editable', log)
             self.assertEqual(len(log.calls), 1)
             perm = 'trusts_tests.change_note:editable'
             grant = 'trusts_tests.change_note'
@@ -241,13 +241,13 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         if donated is registry:
             return False
         for cond_code, condition in getattr(model._meta, 'permission_conditions', ()) or ():
-            registry.register_permission_condition(model, cond_code, condition)
+            registry.add_named_filter(model, cond_code, condition)
         registry._core_ticket_meta_donation_id = registry
         return True
 
     def test_ticket_meta_own_donation_is_zero_sql_and_idempotent(self):
         self.assertEqual(Ticket._meta.permission_conditions, (('meta_own', ticket_meta_own),))
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertNumQueries(0):
             first = self._donate_meta_permission_conditions(registry, Ticket)
         self.assertTrue(first)
@@ -262,9 +262,9 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
 
     def test_core_registration_path_is_zero_sql_for_builder(self):
         Note, _Memo = _note_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertNumQueries(0):
-            registry.register_permission_condition(Note, 'builder', lambda u, p, o: o.status != 'locked')
+            registry.add_named_filter(Note, 'builder', lambda u, p, o: o.status != 'locked')
 
     def test_unknown_malformed_and_unbound_fail_closed(self):
         Note, _Memo = _note_models()
@@ -273,14 +273,14 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             alice = User.objects.create_user('alice-16u', 'alice-16u@example.com', 'x')
             note = Note.objects.create(title='n', owner=alice)
             u, _p, o = condition_refs()
-            registry = RegistryFactory()
+            registry = Compiler()
             with self.assertRaises(AttributeError) as missing:
                 registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:missing', alice)
             self.assertIn('missing', str(missing.exception))
             with self.assertRaises(AttributeError):
                 registry.conditions.evaluate_permission_condition(Note, 'missing', alice, 'trusts_tests.change_note', note)
             with self.assertRaises(TypeError):
-                registry.register_permission_condition(Note, 'typo', u == o.nope)
+                registry.add_named_filter(Note, 'typo', u == o.nope)
             _store_expr(registry, Note, 'typo', u == o.nope)
             with self.assertRaises(PermissionConditionError) as typo:
                 registry.conditions.compile_registered_condition_q(Note, 'trusts_tests.change_note:typo', alice)
@@ -301,9 +301,9 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
             bob = User.objects.create_user('bob-16n', 'bob-16n@example.com', 'x')
             note = Note.objects.create(title='n', owner=alice, status='open')
             captured = alice
-            registry = RegistryFactory()
+            registry = Compiler()
             with self.assertNumQueries(0):
-                record = registry.register_permission_condition(Note, 'owner_is', lambda u, p, o: o.owner == captured)
+                record = registry.add_named_filter(Note, 'owner_is', lambda u, p, o: o.owner == captured)
             const = record.expr.right
             self.assertIsInstance(const.value, ModelIdentity)
             self.assertEqual(const.value.as_tuple(), (alice._meta.app_label, alice._meta.model_name, alice.pk))
@@ -317,26 +317,26 @@ class ConditionRegistryRuntimeTest(TransactionTestCase):
         Note, _Memo = _note_models()
         User = get_user_model()
         unsaved = User(username='ghost-16', email='ghost-16@example.com')
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertRaises(PermissionConditionError):
-            registry.register_permission_condition(Note, 'unsaved', lambda u, p, o: o.owner == unsaved)
+            registry.add_named_filter(Note, 'unsaved', lambda u, p, o: o.owner == unsaved)
         with self.assertRaises(PermissionConditionUnsupported):
-            registry.register_permission_condition(Note, 'qs', lambda u, p, o: o.owner == User.objects.all())
+            registry.add_named_filter(Note, 'qs', lambda u, p, o: o.owner == User.objects.all())
         with self.assertRaises(PermissionConditionUnsupported):
-            registry.register_permission_condition(Note, 'list', lambda u, p, o: o.status == ['open'])
+            registry.add_named_filter(Note, 'list', lambda u, p, o: o.status == ['open'])
         with self.assertRaises(PermissionConditionUnsupported):
-            registry.register_permission_condition(Note, 'req', lambda u, p, o: o.status == HttpRequest())
+            registry.add_named_filter(Note, 'req', lambda u, p, o: o.status == HttpRequest())
         with self.assertRaises(PermissionConditionUnsupported):
-            registry.register_permission_condition(Note, 'file', lambda u, p, o: o.status == BytesIO(b'x'))
+            registry.add_named_filter(Note, 'file', lambda u, p, o: o.status == BytesIO(b'x'))
         with self.assertRaises(PermissionConditionUnsupported):
-            registry.register_permission_condition(Note, 'fn', lambda u, p, o: o.status == str)
+            registry.add_named_filter(Note, 'fn', lambda u, p, o: o.status == str)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'unsaved'))
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'qs'))
 
     def test_immutable_scalars_are_accepted(self):
         Note, _Memo = _note_models()
-        registry = RegistryFactory()
-        record = registry.register_permission_condition(Note, 'open', lambda u, p, o: o.status == 'open')
+        registry = Compiler()
+        record = registry.add_named_filter(Note, 'open', lambda u, p, o: o.status == 'open')
         self.assertEqual(record.expr.right.value, 'open')
         uid = uuid4()
         amount = Decimal('1.5')
@@ -394,7 +394,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
 
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = Compiler()
         _store_expr(registry, Note, 'typo', u == o.nope)
 
         with override_catalog(
@@ -411,9 +411,9 @@ class ConditionRegistryCheckTest(SimpleTestCase):
 
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
-        owner_a = RegistryFactory()
-        owner_b = RegistryFactory()
-        owner_a.register_permission_condition(Note, 'own', lambda u, p, o: u == o.owner)
+        owner_a = Compiler()
+        owner_b = Compiler()
+        owner_a.add_named_filter(Note, 'own', lambda u, p, o: u == o.owner)
         _store_expr(owner_b, Note, 'own', u == o.nope)
 
         with override_settings(AUTHENTICATION_BACKENDS=(

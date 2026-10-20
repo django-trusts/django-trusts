@@ -24,7 +24,7 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.query import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import install_class_handle
 
@@ -223,9 +223,9 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             AccountGrant.objects.create(note=note, account=account, action=read)
             FolderGrant.objects.create(folder=folder, user=alice, permission=read)
             FolderGrant.objects.create(folder=folder, user=inactive, permission=read)
-            registry = RegistryFactory()
+            registry = Compiler()
             grant = Ref(NoteGrant)
-            registry.register(content=grant.note, user=grant.user, permission=grant.permission)
+            registry.register_relation(content=grant.note, user=grant.user, permission=grant.permission)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(alice, note)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), note))
             self.assertEqual(_pks(built_catalog(registry).filter_authorized(Note.objects.all(), alice, read)), {note.pk})
@@ -236,9 +236,9 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertEqual(_pks(built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=True))
             self.assertEqual(_pks(built_catalog(registry).filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
-            account_registry = RegistryFactory()
+            account_registry = Compiler()
             account_grant = Ref(AccountGrant)
-            account_registry.register(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
+            account_registry.register_relation(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
             self.assertEqual(_pks(built_catalog(account_registry).permissions_for(account, note)), {read.pk})
             self.assertTrue(built_catalog(account_registry).has_perm(account, '%s.%s' % (read.content_type.app_label, read.codename), note))
             account_sql = str(built_catalog(account_registry).permissions_for(account, note).query)
@@ -249,9 +249,9 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertEqual(_pks(skipped), {read.pk})
             self.assertEqual(skipped.query.sql_with_params()[0], built_catalog(registry).permissions_for(alice, note).query.sql_with_params()[0])
             self.assertIn('is_active', str(skipped.query))
-            scope_registry = RegistryFactory()
+            scope_registry = Compiler()
             scope_grant = Ref(FolderGrant)
-            scope_registry.register(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
+            scope_registry.register_relation(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
             handle = scope_registry
             self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), alice, read, content=Note, registry=built_catalog(handle))), {folder.pk})
             with self.assertNumQueries(1):
@@ -340,14 +340,14 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                             rows = AuthorizedQuerySet(Note).authorized(holder, read, skip_is_active=include_inactive)
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
-            registry = RegistryFactory()
+            registry = Compiler()
             grant = Ref(LocalUserGrant)
-            registry.register(content=grant.note, user=grant.holder, permission=grant.action)
+            registry.register_relation(content=grant.note, user=grant.holder, permission=grant.action)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(visible, note)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(visible, '%s.%s' % (read.content_type.app_label, read.codename), note))
-            scope_registry = RegistryFactory()
+            scope_registry = Compiler()
             scope_grant = Ref(FolderGrant)
-            scope_registry.register(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
+            scope_registry.register_relation(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
             handle = scope_registry
             self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), visible, read, content=Note, registry=built_catalog(handle))), {folder.pk})
             backend = DocumentBackend()
@@ -452,11 +452,11 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                 Grant.objects.create(cabinet=self.cabinet, user=user, permission=self.read)
             self.relationship = Relationship.objects.create(cabinet=self.cabinet, delegate=self.delegate, sponsor=self.sponsor)
             self.relationship.allowed_permissions.add(self.read)
-            self.handle = RegistryFactory(path='tests.core.test_issue284._AcceptanceBackend')
-            self.handle.register_public(trust=Grant, user='user', permission='permission', content='cabinet__sheets')
-            self.handle.register_public(trust=Relationship, delegate='delegate', sponsor='sponsor', content='cabinet__sheets', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-            self.handle.register_permission_condition(Sheet, 'active_only', lambda user, permission, content: user.is_active == True)
-            self.handle.register_permission_condition(Sheet, 'unexpired', lambda user, permission, content: content.expires_on == content.as_of)
+            self.handle = Compiler(path='tests.core.test_issue284._AcceptanceBackend')
+            self.handle.register(trust=Grant, user='user', permission='permission', content='cabinet__sheets')
+            self.handle.register(trust=Relationship, delegate='delegate', sponsor='sponsor', content='cabinet__sheets', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
+            self.handle.add_named_filter(Sheet, 'active_only', lambda user, permission, content: user.is_active == True)
+            self.handle.add_named_filter(Sheet, 'unexpired', lambda user, permission, content: content.expires_on == content.as_of)
             from tests.support import push_catalog
             self.addCleanup(push_catalog(_AcceptanceBackend, self.handle))
             self.backend = _AcceptanceBackend()

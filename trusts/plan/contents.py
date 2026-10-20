@@ -76,7 +76,7 @@ def _compile_granted(catalog, candidates, user, permission, *, kind='complete',
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     content_identity = _candidate_model(candidates)
-    compiler = catalog.compiler
+    compiler = catalog.query_compiler
     plan = _plan_for_permission(catalog, candidates, user, permission)
     if kind == 'complete':
         fn = compiler.complete_exists

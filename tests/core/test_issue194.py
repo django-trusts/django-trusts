@@ -21,7 +21,7 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.plan.relations import QueryCompiler
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compiler_applies
 from trusts.decorators import _declared_authorization_guards, authorization_required
@@ -34,7 +34,7 @@ class FoldFamilyConfig(TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_impl_194_fold'
 
-class RecordingRegistry(RegistryFactory):
+class RecordingRegistry(Compiler):
     created = True
 
 class RecordingConfig(TrustsConfigMixin):
@@ -107,7 +107,7 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertIsInstance(catalog.records, tuple)
 
     def test_unowned_factory_defaults_to_relationship_family(self):
-        built = built_catalog(RegistryFactory(path=MIXIN))
+        built = built_catalog(Compiler(path=MIXIN))
         self.assertEqual(built.family, 'relationship')
 
 class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
@@ -122,9 +122,9 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(document=self.rel_doc, user=self.alice, permission=self.change)
         DocumentAltGrant.objects.create(document=self.fold_doc, user=self.alice, permission=self.change)
         self.rel_handle = DocumentBackend().catalog
-        self.fold_registry = RegistryFactory(path=MIXIN, family='ordered_fold')
+        self.fold_registry = Compiler(path=MIXIN, family='ordered_fold')
         self.fold_handle = self.fold_registry
-        self.fold_handle.register_public(trust=DocumentAltGrant, user='user', permission='permission', content='document')
+        self.fold_handle.register(trust=DocumentAltGrant, user='user', permission='permission', content='document')
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         self._fold_config = config_for_class(MixinOnlyBackend)
         self._saved_fold_catalog = self._fold_config.catalog
@@ -202,8 +202,8 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
         from django.contrib.auth import get_user_model
         from tests.myapp.apps import DOCUMENT_BACKEND
 
-        factory = RegistryFactory(
-            compiler=_NeverAppliesCompiler(),
+        factory = Compiler(
+            query_compiler=_NeverAppliesCompiler(),
             path=DOCUMENT_BACKEND,
             family=DocumentBackend.family,
             user_model=get_user_model(),
@@ -222,15 +222,15 @@ class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_standalone_factory_rebuilds_and_a_published_registry_does_not(self):
         from tests.kernel_host.backends import HostTrustModelBackend
-        isolated = RegistryFactory()
+        isolated = Compiler()
         first_build = built_catalog(isolated)
         second_build = built_catalog(isolated)
         self.assertIsNot(first_build, second_build)
         from tests.myapp.models import DocumentGrant
         from trusts.compile.nodes import Ref
-        fresh = RegistryFactory()
+        fresh = Compiler()
         j = Ref(DocumentGrant)
-        fresh.register(content=j.document, user=j.user, permission=j.permission)
+        fresh.register_relation(content=j.document, user=j.user, permission=j.permission)
         self.assertEqual(built_catalog(fresh).records, fresh.records)
         published = HostTrustModelBackend().catalog
         self.assertIsInstance(published.records, tuple)

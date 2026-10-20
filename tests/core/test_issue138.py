@@ -17,7 +17,7 @@ from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 
 
@@ -248,16 +248,16 @@ def _document_backend():
 
     from tests.myapp.backends import DocumentBackend
 
-    factory = RegistryFactory(
+    factory = Compiler(
         path=DOCUMENT_BACKEND,
         family=DocumentBackend.family,
-        compiler=DocumentBackend.query_compiler,
+        query_compiler=DocumentBackend.query_compiler,
         user_model=get_user_model(),
     )
     return replay_recorder(factory, DocumentBackend)
 
 def _extra_handle(path='tests.core.issue138-extra'):
-    return RegistryFactory(path=path)
+    return Compiler(path=path)
 
 def _extra_grant_models():
     User = get_user_model()
@@ -327,8 +327,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_dual_backend_condition_order_does_not_broaden(self):
         primary = _document_backend()
         extra = _extra_handle()
-        extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
-        extra.register_permission_condition(Document, 'non_confidential', lambda u, p, o: o.title != 'nope')
+        extra.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        extra.add_named_filter(Document, 'non_confidential', lambda u, p, o: o.title != 'nope')
         with _tables(self.ExtraDocumentGrant):
             with listed_relationship((primary,)):
                 with self.assertRaises(PermissionDenied):
@@ -343,7 +343,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_incomplete_second_backend_grant_is_omitted(self):
         primary = _document_backend()
         extra = _extra_handle()
-        extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        extra.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
         with _tables(self.ExtraDocumentGrant):
             self.ExtraDocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
             with listed_relationship((primary,)):
@@ -356,7 +356,7 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_incompatible_permission_terminal_cannot_collide(self):
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-perm')
-        extra.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
+        extra.register(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
         with _tables(self.OtherPermission, self.OtherPermissionGrant):
             self.OtherPermission.objects.create(pk=self.change.pk, label='collide')
             self.OtherPermissionGrant.objects.create(document=self.open_doc, user=self.bob, permission_id=self.change.pk)
@@ -372,9 +372,9 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         handle_a = _extra_handle(path='tests.core.issue138-split-a')
         handle_b = _extra_handle(path='tests.core.issue138-split-b')
         for handle in (handle_a, handle_b):
-            handle.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
-        handle_a.register_permission_condition(Document, 'split_a_138', lambda u, p, o: o.confidential != True)
-        handle_b.register_permission_condition(Document, 'split_b_138', lambda u, p, o: o.confidential != True)
+            handle.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        handle_a.add_named_filter(Document, 'split_a_138', lambda u, p, o: o.confidential != True)
+        handle_b.add_named_filter(Document, 'split_b_138', lambda u, p, o: o.confidential != True)
         names = ('split_a_138', 'split_b_138')
         entry = (Document, 'myapp.change_document', names)
         self.addCleanup(self._forget_guard, entry)
@@ -399,8 +399,8 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def test_e008_name_only_on_incompatible_permission_terminal(self):
         primary = _document_backend()
         extra = _extra_handle(path='tests.core.issue138-other-e008')
-        extra.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
-        extra.register_permission_condition(Document, 'only_other_138', lambda u, p, o: o.confidential != True)
+        extra.register(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
+        extra.add_named_filter(Document, 'only_other_138', lambda u, p, o: o.confidential != True)
         entry = (Document, 'myapp.change_document', ('only_other_138',))
         self.addCleanup(self._forget_guard, entry)
 

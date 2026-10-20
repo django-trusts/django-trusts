@@ -57,7 +57,7 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import CatalogShape, plan_table
+from trusts.compile.catalogs import Catalog, CatalogShape, plan_table
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
@@ -176,8 +176,8 @@ class PublicRegistration:
     for exactly one mode (ordinary ``user`` plus ``permission`` or
     ``group``, or delegated ``delegate`` plus ``sponsor``), the already
     lowered ``condition``, and the bound ``along``. The unused mode's
-    refs are ``None``. Storing it is ``_register_public``'s job, via
-    ``register`` or ``register_delegation``.
+    refs are ``None``. Storing it is ``register``'s job, via
+    ``register_relation`` or ``register_delegation``.
     """
 
     trust: type
@@ -191,24 +191,18 @@ class PublicRegistration:
     along: object | None = None
 
 
-class RegistryFactory(object):
-    """Instantiable registry of permission-bearing relation declarations.
+class Compiler(object):
+    """Compiles one catalog from the registration verbs a recorder plays.
 
-    Create a new instance per isolated context. There is no process-global
-    singleton in this slice. ``register`` performs zero SQL. Projection
-    methods compile one shared plan from stored records. One root may
-    store several records when they terminate on different content
-    models, or when the same bindings use a different closed condition.
-
-        ``build()`` freezes this factory and returns a fresh
-        ``CatalogShape`` from the records already stored. A later build
-        returns another shape from those same records. ``register``,
-        ``register_delegation``, ``register_permission_condition``,
-        ``set_user_condition``, and ``set_user_override`` raise
-        ``TrustsConfigurationError``.
+    ``register`` performs zero SQL. ``compile`` freezes this compiler
+    and returns a ``Catalog``. A later ``compile`` returns another
+    catalog from the same stored rows. After that, ``register``,
+    ``register_delegation``, ``add_named_filter``,
+    ``set_user_condition``, and ``set_user_override`` raise
+    ``TrustsConfigurationError``.
     """
 
-    def __init__(self, *, compiler=None, path='', family='relationship',
+    def __init__(self, *, query_compiler=None, path='', family='relationship',
                  user_model=None):
         if user_model is None:
             from trusts.apps import installed_user_model
@@ -221,22 +215,24 @@ class RegistryFactory(object):
         self._user_conditions = None
         self._user_override = None
         self.conditions = ConditionRegistry(user_model=user_model)
-        self._explicit_compiler = compiler is not None
-        self.compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
+        self._explicit_compiler = query_compiler is not None
+        self.query_compiler = (
+            query_compiler if self._explicit_compiler else PlanQueryCompiler()
+        )
         self.path = path
         self.family = family
         self.user_model = user_model
 
-    def register_permission_condition(self, model, cond_code, condition):
-        """Register a ``:cond_code`` condition on ``model`` for this instance.
+    def add_named_filter(self, model, code, predicate):
+        """Register a ``:code`` condition on ``model`` for this instance.
 
         A callable is a registration-time builder, invoked once
         here. A prebuilt ``Expr`` is rejected by the condition
         store with ``TypeError`` before mutation.
         """
-        self._open('register_permission_condition')
+        self._open('add_named_filter')
         return self.conditions.register_permission_condition(
-            model, cond_code, condition, user_model=self.user_model,
+            model, code, predicate, user_model=self.user_model,
         )
 
     def user_conditions(self):
@@ -250,7 +246,7 @@ class RegistryFactory(object):
         if self._user_conditions is None:
             if self.user_model is None:
                 raise TrustsConfigurationError(
-                    'RegistryFactory has no user model. Pass user_model '
+                    'Compiler has no user model. Pass user_model '
                     'at construction.'
                 )
             return builtin_user_conditions(self.user_model)
@@ -564,7 +560,7 @@ class RegistryFactory(object):
             group_target=group_target,
         )
 
-    def register(self, *, content, user, permission=None, group=None,
+    def register_relation(self, *, content, user, permission=None, group=None,
                  condition=None, along=None):
         """Register one permission-bearing relation from root-relative refs.
 
@@ -647,12 +643,12 @@ class RegistryFactory(object):
     ):
         """Build a normalized ``PublicRegistration`` without storing it.
 
-        Shape-building half of ``_register_public``: same mode, trust,
+        Shape-building half of ``register``: same mode, trust,
         path-builder, condition, and ``along`` validation and errors, in
         the same order, but no append. Path and
         condition builders are invoked exactly once, here; the returned
         shape carries only refs, lowered condition IR, and ``Along``.
-        ``_register_public`` stores the shape
+        ``register`` stores the shape
         via ``register`` or ``register_delegation``.
         """
         ordinary = user is not None or permission is not None or group is not None
@@ -744,7 +740,7 @@ class RegistryFactory(object):
             along=_bind_public_along(trust, along),
         )
 
-    def register_public(
+    def register(
         self, *,
         trust: type[T],
         user: str | Callable[[T], object] | None = None,
@@ -772,14 +768,14 @@ class RegistryFactory(object):
                 along=shape.along,
             )
         if shape.group is not None:
-            return self.register(
+            return self.register_relation(
                 content=shape.content,
                 user=shape.user,
                 group=shape.group,
                 condition=shape.condition,
                 along=shape.along,
             )
-        return self.register(
+        return self.register_relation(
             content=shape.content,
             user=shape.user,
             permission=shape.permission,
@@ -787,16 +783,14 @@ class RegistryFactory(object):
             along=shape.along,
         )
 
-    _register_public = register_public
-
-    def build(self):
-        """Freeze this factory and return its ``CatalogShape``.
+    def compile(self):
+        """Freeze this compiler and return its ``Catalog``.
 
         Condition rows are a tuple taken once. The condition lookup is
-        a ``FrozenConditionLookup`` over that tuple, so the shape does
-        not share this factory's mutable store. User-rule and override
+        a ``FrozenConditionLookup`` over that tuple, so the catalog does
+        not share this compiler's mutable store. User-rule and override
         fragments and the plan table are compiled here. A later call
-        builds another shape from the same stored rows.
+        compiles another catalog from the same stored rows.
         """
         rows = tuple(self.conditions.iter_permission_conditions())
         lookup = FrozenConditionLookup(rows)
@@ -829,14 +823,17 @@ class RegistryFactory(object):
         plans = plan_table(
             self.records, self.delegations, model, stored, rules, override_q)
         self.frozen = True
-        return CatalogShape(
+        shape = CatalogShape(
             records=self.records, delegations=self.delegations, conditions=rows,
             user_conditions=stored, user_override=self._user_override,
             filter_lookup=lookup,
-            compiler=self.compiler if self._explicit_compiler else None,
+            query_compiler=(
+                self.query_compiler if self._explicit_compiler else None
+            ),
             path=self.path or '', family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )
+        return Catalog(shape, user_model=model)
 
     def _stored_user_conditions(self):
         """``None`` when the registry still uses the built-in rule."""
@@ -847,12 +844,14 @@ class RegistryFactory(object):
     def _require_user_model(self):
         if self.user_model is None:
             raise TrustsConfigurationError(
-                'RegistryFactory has no user model. Pass user_model at construction.'
+                'Compiler has no user model. Pass user_model at construction.'
             )
 
     def _open(self, method):
         if self.frozen:
-            raise TrustsConfigurationError('%s refused: this factory is frozen.' % method)
+            raise TrustsConfigurationError(
+                '%s refused: this compiler is frozen.' % method
+            )
 
     def _open_for_rules(self, kind):
         if self._order or self._delegation_order:
@@ -860,33 +859,6 @@ class RegistryFactory(object):
                 'Record user conditions and the override before '
                 'register(). The catalog sweep checks this at ready().'
             )
-
-
-def compile_recorder(recorder, *, path, family, compiler, user_model):
-    """Replay ``recorder.rows`` into one factory and return its shape.
-
-    ``user_model`` is the model the caller resolved. This is the only
-    factory constructed for those rows.
-    """
-    built = RegistryFactory(
-        compiler=compiler, path=path, family=family, user_model=user_model,
-    )
-    recorder.freeze()
-    for entry in recorder.rows:
-        kind = entry[0]
-        if kind == 'condition':
-            built.set_user_condition(entry[1], entry[2], on=entry[3])
-        elif kind == 'override':
-            built.set_user_override(entry[1], entry[2], on=entry[3])
-        elif kind == 'filter':
-            built.register_permission_condition(entry[1], entry[2], entry[3])
-        elif kind == 'register':
-            built.register_public(**entry[1])
-        else:
-            raise TrustsConfigurationError(
-                'Unknown recorder row %r.' % (kind,)
-            )
-    return built.build()
 
 
 def probe_along_capabilities(connection):

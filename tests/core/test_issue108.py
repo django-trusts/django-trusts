@@ -18,7 +18,7 @@ from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import configured_catalog, sweep_listed_backends
 from trusts.apps import TrustsConfigMixin, installed_catalogs
 from trusts.backends import TrustModelBackendMixin
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.compile.nodes import Ref
 from trusts.decorators import filter_by_permitted_content
 from trusts.errors import TrustsConfigurationError
@@ -71,7 +71,7 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         self.assertTrue(callable(filter_by_permitted_content))
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(issubclass(AuthorizedManager, object))
-        registry = RegistryFactory()
+        registry = Compiler()
         self.assertEqual(registry.records, ())
         self.assertIsNotNone(Ref)
 

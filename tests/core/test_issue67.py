@@ -16,7 +16,7 @@ from trusts.apps import TrustsConfigMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -50,7 +50,7 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         from tests.kernel_host.backends import HostTrustModelBackend
 
         live = HostTrustModelBackend().catalog
-        isolated = RegistryFactory()
+        isolated = Compiler()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
 

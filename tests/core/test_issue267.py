@@ -25,7 +25,7 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
@@ -63,7 +63,7 @@ def _code(permission):
     return '%s.%s' % (permission.content_type.app_label, permission.codename)
 
 def _handle(path):
-    return RegistryFactory(path=path)
+    return Compiler(path=path)
 
 def _request(user):
     request = HttpRequest()
@@ -173,8 +173,8 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
         self.Ownership.objects.create(user=self.owner, organization=self.acme)
         self.handle = _handle('tests.core.issue267-owner')
         with self.assertNumQueries(0):
-            self.handle.register_public(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization')
-            self.handle.register_public(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization__repositories')
+            self.handle.register(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization')
+            self.handle.register(trust=self.Ownership, user='user', permission='organization__owner_group__permissions', content='organization__repositories')
         self.users = _PermittedUsers(User)
 
     def test_module_is_on_kernel_and_pair_suites(self):
@@ -399,10 +399,10 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
     def test_terminal_without_content_type_keeps_primary_key_identity(self):
         operation = self.Operation.objects.create(code='review')
         self.OperationGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, operation=operation)
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertNumQueries(0):
-            registry.register(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-            registry.register(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
+            registry.register_relation(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
+            registry.register_relation(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, operation))
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, operation))
         registry.path = 'tests.core.issue267-operation'
@@ -418,10 +418,10 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         repo_permit = self.TypedPermit.objects.create(content_type=repo_ct, codename='read_repository')
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=repo_permit)
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=org_permit)
-        registry = RegistryFactory()
+        registry = Compiler()
         grant = self._ref(self.TypedGrant)
-        registry.register(content=grant.organization, user=grant.user, permission=grant.permit)
-        registry.register(content=grant.repository, user=grant.user, permission=grant.permit)
+        registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permit)
+        registry.register_relation(content=grant.repository, user=grant.user, permission=grant.permit)
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, org_permit))
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, repo_permit))
         self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, repo_permit))
@@ -437,9 +437,9 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         read = _perm(self.Repository, 'read_repository')
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=manage)
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=read)
-        registry = RegistryFactory()
+        registry = Compiler()
         grant = self._ref(self.DirectGrant)
-        registry.register(content=grant.organization, user=grant.user, permission=grant.permission)
+        registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permission)
         catalog = built_catalog(registry)
         self.assertTrue(catalog.has_perm(self.owner, _code(manage), self.org))
         self.assertFalse(catalog.has_perm(self.owner, _code(read), self.org))

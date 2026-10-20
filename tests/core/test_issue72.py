@@ -13,7 +13,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.models import Document
 import tests as tests_module
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 
 class IsolatedHostDoesNotReceiveDocumentContributionTest(
@@ -52,4 +52,4 @@ class IsolatedAppsDoesNotDonateTicketContributionTest(
         self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
         self.assertEqual(live_host.records, before_host)
         self.assertEqual(live_doc.records, before_doc)
-        self.assertIsInstance(RegistryFactory(), RegistryFactory)
+        self.assertIsInstance(Compiler(), Compiler)

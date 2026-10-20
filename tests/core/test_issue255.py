@@ -30,7 +30,7 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog
@@ -212,7 +212,7 @@ def _document_registry():
         snapshot_installed_catalogs,
     )
     saved = snapshot_installed_catalogs()
-    registry = RegistryFactory(path=DOCUMENT_BACKEND)
+    registry = Compiler(path=DOCUMENT_BACKEND)
     try:
         yield registry
     finally:
@@ -254,8 +254,8 @@ class Issue255PolicySqlTest(SimpleTestCase):
             class Meta:
                 app_label = 'documents'
         handle = _export_handle('documents.backends.FolderBackend')
-        handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
-        handle.register_public(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
+        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
+        handle.register(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
         folder = Folder(pk=1)
         queryset = lock_permitted_users_queryset(built_catalog(handle), folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
@@ -314,8 +314,8 @@ class Issue255PolicySqlTest(SimpleTestCase):
             class Meta:
                 app_label = 'documents'
         handle = _export_handle('documents.backends.WalkNodeBackend')
-        handle.register_public(trust=ParentGrant, user='user', permission='permission', content='node', along=('node__parent', 8))
-        handle.register_public(trust=MentorGrant, user='user', permission='permission', content='node', along=('node__mentor', 8))
+        handle.register(trust=ParentGrant, user='user', permission='permission', content='node', along=('node__parent', 8))
+        handle.register(trust=MentorGrant, user='user', permission='permission', content='node', along=('node__mentor', 8))
         content = _assert_along_lock(self, handle, ({'path': 'node__parent', 'shape': 'S', 'bound': 8}, {'path': 'node__mentor', 'shape': 'S', 'bound': 8}))
         permitted = content['permitted']['sql']
         self.assertIn('parent_id', permitted)
@@ -341,7 +341,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
             class Meta:
                 app_label = 'documents'
         handle = _export_handle('documents.backends.UuidNodeBackend')
-        handle.register_public(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 2))
+        handle.register(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 2))
         record = built_catalog(handle).plan_for(UuidNode).records[0]
         self.assertEqual(record.content_target, 'ident')
         self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
@@ -360,7 +360,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
 
     def test_content_pk_literal_stays_const_beside_an_along_reverse(self):
         handle = _export_handle('documents.backends.LiteralFolderBackend')
-        handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
+        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         record = built_catalog(handle).plan_for(Folder).records[0]
         _sql, params = _compile_queryset(FolderGrant.objects.filter(folder__pk=5), 'default', record=record, expr=None, records=(record,), reverse_users=True)
         self.assertEqual(params, [{'const': 5, 'hint': 'id'}])
@@ -790,13 +790,13 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         return (Org, Paper, Team, DirectGrant, TeamGrant, GroupGrant, Folder, FolderGrant, FolderPermit, UuidPaper, UuidGrant, UuidUser, UuidUserPaper, UuidGrantUser)
 
     def _register(self):
-        self.handle.register_public(trust=self.DirectGrant, user='user', permission='permission', content='paper')
-        self.handle.register_public(trust=self.TeamGrant, user='team__members', permission='permission', content='paper', condition=lambda trust: trust.team.allowed.contains(trust.permission) & (trust.team.org == trust.paper.org))
-        self.handle.register_public(trust=self.GroupGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='paper')
-        self.handle.register_public(trust=self.FolderGrant, user='user', permission='permission', content='folder', condition=lambda trust: trust.user == trust.approved_user, along=('folder__parent', 2))
-        self.handle.register_public(trust=self.FolderPermit, user='user', permission='permission', content='folder', along=('folder__parent', 1))
-        self.handle.register_public(trust=self.UuidGrant, user='user', permission='permission', content='paper')
-        self.handle.register_public(trust=self.UuidGrantUser, user='user', permission='permission', content='paper')
+        self.handle.register(trust=self.DirectGrant, user='user', permission='permission', content='paper')
+        self.handle.register(trust=self.TeamGrant, user='team__members', permission='permission', content='paper', condition=lambda trust: trust.team.allowed.contains(trust.permission) & (trust.team.org == trust.paper.org))
+        self.handle.register(trust=self.GroupGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='paper')
+        self.handle.register(trust=self.FolderGrant, user='user', permission='permission', content='folder', condition=lambda trust: trust.user == trust.approved_user, along=('folder__parent', 2))
+        self.handle.register(trust=self.FolderPermit, user='user', permission='permission', content='folder', along=('folder__parent', 1))
+        self.handle.register(trust=self.UuidGrant, user='user', permission='permission', content='paper')
+        self.handle.register(trust=self.UuidGrantUser, user='user', permission='permission', content='paper')
 
     def test_membership_group_or_distinct_ceiling_and_revocation(self):
         candidates = self.User._default_manager.get_queryset()
@@ -970,7 +970,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(UuidNode, UuidNodeGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 1))
+                record = handle.register(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 1))
                 self.assertEqual(record.content_target, 'ident')
                 self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
                 alice = User.objects.create_user('uuid-along-alice', password='x')
@@ -1016,7 +1016,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Desk, DeskGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=DeskGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='desk', along=('desk__parent', 1))
+                record = handle.register(trust=DeskGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='desk', along=('desk__parent', 1))
                 self.assertTrue(record.via_group)
                 self.assertIsNotNone(record.along)
                 locked = _assert_along_lock(self, handle, ({'path': 'desk__parent', 'shape': 'S', 'bound': 1},), group=True)
@@ -1075,7 +1075,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             _contribute_m2m(ShelfStamp._meta.get_field('permissions'), Permission)
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=ShelfStamp, user='user', permission='permissions', content='shelf', along=('shelf__parent', 1))
+                record = handle.register(trust=ShelfStamp, user='user', permission='permissions', content='shelf', along=('shelf__parent', 1))
                 self.assertFalse(record.via_group)
                 self.assertEqual(record.permission_path, ('permissions',))
                 self.assertIs(record.permission_model, Permission)
@@ -1143,7 +1143,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Cabinet, Sheet, SheetGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=SheetGrant, user='user', permission='permission', content='cabinet__sheets', along=('cabinet__parent', 1))
+                record = handle.register(trust=SheetGrant, user='user', permission='permission', content='cabinet__sheets', along=('cabinet__parent', 1))
                 self.assertTrue(record.along.suffix_path)
                 self.assertIs(record.content_model, Sheet)
                 self.assertIs(record.along.walk_model, Cabinet)
@@ -1186,7 +1186,7 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Branch, BranchGrant):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                record = handle.register_public(trust=BranchGrant, user='user', permission='permission', content='branch', along=('branch__children', 1))
+                record = handle.register(trust=BranchGrant, user='user', permission='permission', content='branch', along=('branch__children', 1))
                 self.assertEqual(record.along.shape, 'C')
                 self.assertFalse(record.along.suffix_path)
                 alice = User.objects.create_user('branch-alice', password='x')
@@ -1233,8 +1233,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
         with _tables(Place, North, South):
             with _document_registry() as registry:
                 handle = _handle(registry)
-                handle.register_public(trust=North, user='user', permission='permission', content='place', along=('place__parent', 1))
-                handle.register_public(trust=South, user='user', permission='permission', content='place', along=('place__children', 1))
+                handle.register(trust=North, user='user', permission='permission', content='place', along=('place__parent', 1))
+                handle.register(trust=South, user='user', permission='permission', content='place', along=('place__children', 1))
                 _assert_along_lock(self, handle, ({'path': 'place__parent', 'shape': 'S', 'bound': 1}, {'path': 'place__children', 'shape': 'C', 'bound': 1}))
                 alice = User.objects.create_user('place-alice', password='x')
                 bob = User.objects.create_user('place-bob', password='x')

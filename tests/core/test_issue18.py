@@ -28,7 +28,7 @@ from tests.support import scoped_permitted_content as filter_by_permitted_conten
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compile_common_permissions, all_match, instance_match
 from trusts.query import AuthorizedManager
@@ -213,11 +213,11 @@ def _tables(*model_classes):
 
 def _direct_ceiling(registry, placement):
     p = Ref(placement)
-    return registry.register(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.badges))
+    return registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.badges))
 
 def _cluster_ceiling(registry, placement):
     p = Ref(placement)
-    return registry.register(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+    return registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
 
 def _pks(rows):
     return {row.pk for row in rows}
@@ -281,7 +281,7 @@ class LongPathRegistrationTest(TestCase):
         models_ = _long_path_models()
         Placement = models_[-1]
         Artifact = models_[-2]
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertNumQueries(0):
             direct = _direct_ceiling(registry, Placement)
             clustered = _cluster_ceiling(registry, Placement)
@@ -299,15 +299,15 @@ class LongPathRegistrationTest(TestCase):
     def test_handle_string_paths_match_ref_registration(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        via_ref = RegistryFactory()
-        via_handle = RegistryFactory()
+        via_ref = Compiler()
+        via_handle = Compiler()
         via_handle.path = 'tests.core.longpath'
         handle = via_handle
         with self.assertNumQueries(0):
             ref_direct = _direct_ceiling(via_ref, Placement)
             ref_cluster = _cluster_ceiling(via_ref, Placement)
-            handle_direct = handle.register_public(trust=Placement, user='actor', permission='token', content='artifact', condition=lambda t: t.wing.floor.building.hall.badges.contains(t.token))
-            handle_cluster = handle.register_public(trust=Placement, user='actor', permission='token', content='artifact', condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token))
+            handle_direct = handle.register(trust=Placement, user='actor', permission='token', content='artifact', condition=lambda t: t.wing.floor.building.hall.badges.contains(t.token))
+            handle_cluster = handle.register(trust=Placement, user='actor', permission='token', content='artifact', condition=lambda t: t.wing.floor.building.hall.clusters.tokens.contains(t.token))
         self.assertEqual(handle_direct, ref_direct)
         self.assertEqual(handle_cluster, ref_cluster)
         self.assertGreaterEqual(len(handle_cluster.condition.refs[0]._path), 6)
@@ -315,7 +315,7 @@ class LongPathRegistrationTest(TestCase):
     def test_exact_duplicate_rejects_and_leaves_store_unchanged(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = RegistryFactory()
+        registry = Compiler()
         first = _cluster_ceiling(registry, Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
@@ -325,26 +325,26 @@ class LongPathRegistrationTest(TestCase):
     def test_different_bindings_still_conflict(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = RegistryFactory()
+        registry = Compiler()
         first = _cluster_ceiling(registry, Placement)
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
-                registry.register(content=p.artifact, user=p.alt_actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+                registry.register_relation(content=p.artifact, user=p.alt_actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
         self.assertEqual(registry.records, (first,))
 
     def test_wrong_terminal_malformed_and_gfk_fail_closed(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = RegistryFactory()
+        registry = Compiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'permission model'):
-                registry.register(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters))
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters))
             with self.assertRaisesRegex(TrustsConfigurationError, 'extra or intermediate multi-valued'):
-                registry.register(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens.clustered))
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens.clustered))
             with self.assertRaisesRegex(TrustsConfigurationError, 'scalar field|single-valued hops'):
-                registry.register(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.title))
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.title))
         self.assertEqual(registry.records, ())
 
         class Tagged(models.Model):
@@ -367,16 +367,16 @@ class LongPathRegistrationTest(TestCase):
         g = Ref(TaggedGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'generic foreign key'):
-                registry.register(content=g.artifact, user=g.actor, permission=g.token, condition=permission_in(g.tagged.target))
+                registry.register_relation(content=g.artifact, user=g.actor, permission=g.token, condition=permission_in(g.tagged.target))
         self.assertEqual(registry.records, ())
 
     def test_colliding_to_field_membership_fails_closed(self):
         _Actor, _Token, _Hall, Cluster, _Through, _Building, _Floor, _Wing, Artifact, Placement = _colliding_to_field_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
-                registry.register(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
         self.assertEqual(registry.records, ())
         self.assertIs(Cluster._meta.concrete_model, Cluster)
         self.assertIs(Artifact._meta.concrete_model, Artifact)
@@ -401,7 +401,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.artifact = self.Artifact.objects.create(title='scope')
         self.other = self.Artifact.objects.create(title='other')
         self.Placement.objects.create(artifact=self.artifact, actor=self.actor, alt_actor=self.stranger, token=self.read, wing=self.wing)
-        self.registry = RegistryFactory()
+        self.registry = Compiler()
         _direct_ceiling(self.registry, self.Placement)
         _cluster_ceiling(self.registry, self.Placement)
 
@@ -564,17 +564,17 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.desk.holders.add(self.member)
         self.Seat.objects.create(folder=self.folder, desk=self.desk, token=self.read)
         self.Title.objects.create(folder=self.folder, owner=self.owner, token=self.read)
-        self.membership = RegistryFactory()
+        self.membership = Compiler()
         s = Ref(self.Seat)
-        self.membership.register(content=s.folder, user=s.desk.holders, permission=s.token)
-        self.trustee = RegistryFactory()
+        self.membership.register_relation(content=s.folder, user=s.desk.holders, permission=s.token)
+        self.trustee = Compiler()
         t = Ref(self.Title)
-        self.trustee.register(content=t.folder, user=t.owner, permission=t.token)
-        self.mixed = RegistryFactory()
+        self.trustee.register_relation(content=t.folder, user=t.owner, permission=t.token)
+        self.mixed = Compiler()
         s = Ref(self.Seat)
         t = Ref(self.Title)
-        self.mixed.register(content=s.folder, user=s.desk.holders, permission=s.token)
-        self.mixed.register(content=t.folder, user=t.owner, permission=t.token)
+        self.mixed.register_relation(content=s.folder, user=s.desk.holders, permission=s.token)
+        self.mixed.register_relation(content=t.folder, user=t.owner, permission=t.token)
         self.compiler = PlanQueryCompiler()
 
     def tearDown(self):
@@ -645,9 +645,9 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.child = self.Node.objects.create(title='child', parent=self.parent)
         self.other = self.Node.objects.create(title='other')
         self.NodeGrant.objects.create(node=self.parent, holder=self.holder, token=self.add)
-        self.registry = RegistryFactory()
+        self.registry = Compiler()
         g = Ref(self.NodeGrant)
-        self.registry.register(content=g.node.children, user=g.holder, permission=g.token)
+        self.registry.register_relation(content=g.node.children, user=g.holder, permission=g.token)
         self.registry.path = 'issue18-prefix'
         self.handle = self.registry
 
@@ -667,9 +667,9 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.assertFalse(filter_by_permitted_content(self.Node.objects.all(), self.stranger, self.add, content=self.Node, registry=built_catalog(self.handle)).exists())
 
     def test_terminal_only_same_model_is_none(self):
-        registry = RegistryFactory()
+        registry = Compiler()
         g = Ref(self.NodeGrant)
-        registry.register(content=g.node, user=g.holder, permission=g.token)
+        registry.register_relation(content=g.node, user=g.holder, permission=g.token)
         registry.path = 'issue18-terminal'
         handle = registry
         qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=built_catalog(handle))

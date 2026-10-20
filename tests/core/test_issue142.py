@@ -13,7 +13,7 @@ from trusts.conditions import (
     permission_condition_code,
     permission_has_condition,
 )
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 
 PUBLIC_SURFACE_NAMES = (
@@ -107,11 +107,11 @@ class StageBRegisterCallableOnlyTest(SimpleTestCase):
                 app_label = 'trusts_tests'
 
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(Note, 'own', u == o.owner)
+            registry.add_named_filter(Note, 'own', u == o.owner)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'own'))
-        record = registry.register_permission_condition(
+        record = registry.add_named_filter(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
         self.assertIsNotNone(record)

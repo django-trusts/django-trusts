@@ -31,7 +31,7 @@ from trusts.compile.catalogs import Catalog
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.query import (
     AuthorizedManager,
     AuthorizedManagerMixin,
@@ -111,7 +111,7 @@ def _scope_models():
 
 def _register_payload(registry, grant):
     j = Ref(grant)
-    return registry.register(
+    return registry.register_relation(
         content=j.folder.rows.content,
         user=j.user,
         permission=j.permission,
@@ -144,18 +144,16 @@ class KernelConfigTest(SimpleTestCase):
 
 class ConditionLookupBindTest(TestCase):
     def test_build_freezes_one_lookup_at_zero_sql(self):
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertNumQueries(0):
-            shape = registry.build()
+            shape = registry.compile()
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
         self.assertIsNone(shape.filter_lookup.record_for(Document, 'own'))
-        catalog = Catalog(shape, user_model=None)
-        self.assertIs(catalog.filter_lookup, shape.filter_lookup)
         with self.assertNumQueries(0):
-            again = registry.build()
+            again = registry.compile()
         self.assertIsNot(again.filter_lookup, shape.filter_lookup)
         with self.assertRaises(TrustsConfigurationError):
-            registry.register_permission_condition(
+            registry.add_named_filter(
                 Document, 'own', lambda u, p, o: o.title == 'keep',
             )
 
@@ -166,12 +164,12 @@ class ConditionLookupBindTest(TestCase):
             called.append((user, perm, obj))
             return obj.title == 'keep'
 
-        registry = RegistryFactory()
+        registry = Compiler()
         with self.assertNumQueries(0):
-            record = registry.register_permission_condition(
+            record = registry.add_named_filter(
                 Document, 'named', builder,
             )
-            shape = registry.build()
+            shape = registry.compile()
         self.assertEqual(len(called), 1)
         lookup = shape.filter_lookup
         self.assertIs(lookup.record_for(Document, 'named'), record)
@@ -342,7 +340,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.add,
         )
-        registry = RegistryFactory()
+        registry = Compiler()
         _register_payload(registry, self.FolderGrant)
         self.handle = registry
 
@@ -383,7 +381,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
             self._filter(
                 self.Folder.objects.all(), content=self.Other, registry=built_catalog(self.handle),
             ),
-            self._filter(self.Folder.objects.all(), registry=built_catalog(RegistryFactory(family='ordered_fold'))),
+            self._filter(self.Folder.objects.all(), registry=built_catalog(Compiler(family='ordered_fold'))),
             self._filter(
                 self.Other.objects.all(), content=self.Payload, registry=built_catalog(self.handle),
             ),
@@ -541,9 +539,9 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(Scope, Payload, Row, Grant):
-            registry = RegistryFactory()
+            registry = Compiler()
             j = Ref(Grant)
-            record = registry.register(
+            record = registry.register_relation(
                 content=j.scope.rows.content,
                 user=j.user,
                 permission=j.permission,

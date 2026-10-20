@@ -18,7 +18,7 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.query import AuthorizedManager, AuthorizedQuerySet, PermittedManager, PermittedQuerySet, PermittedQuerySetMixin
 from trusts import query as query_mod
@@ -323,16 +323,16 @@ def _extra_models():
     return (ExtraDocumentGrant, OtherPermission, OtherPermissionGrant)
 
 def _handle(path):
-    return RegistryFactory(path=path)
+    return Compiler(path=path)
 
 def _document_factory():
     """Replay the document recorder onto a factory this test owns."""
     from tests.myapp.backends import DocumentBackend
 
-    factory = RegistryFactory(
+    factory = Compiler(
         path=DOCUMENT_BACKEND,
         family=DocumentBackend.family,
-        compiler=DocumentBackend.query_compiler,
+        query_compiler=DocumentBackend.query_compiler,
         user_model=get_user_model(),
     )
     return replay_recorder(factory, DocumentBackend)
@@ -381,12 +381,12 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
         handle_a = _handle('tests.core.issue270-split-a')
         handle_b = _handle('tests.core.issue270-split-b')
         for handle in (handle_a, handle_b):
-            handle.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
-        handle_a.register_permission_condition(Document, 'split_a_270', lambda u, p, o: o.confidential != True)
-        handle_b.register_permission_condition(Document, 'split_b_270', lambda u, p, o: o.confidential != True)
+            handle.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        handle_a.add_named_filter(Document, 'split_a_270', lambda u, p, o: o.confidential != True)
+        handle_b.add_named_filter(Document, 'split_b_270', lambda u, p, o: o.confidential != True)
         foreign = _handle('tests.core.issue270-other-name')
-        foreign.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
-        foreign.register_permission_condition(Document, 'only_other_270', lambda u, p, o: o.confidential != True)
+        foreign.register(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
+        foreign.add_named_filter(Document, 'only_other_270', lambda u, p, o: o.confidential != True)
         primary = _document_factory()
         with listed_relationship((handle_a, handle_b)):
             with self.assertNumQueries(0):
@@ -402,11 +402,11 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
     def test_non_owner_grant_is_omitted_and_two_names_are_anded(self):
         primary = _document_factory()
         extra = _handle('tests.core.issue270-extra-grant')
-        extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        extra.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
         owned = _handle('tests.core.issue270-both-names')
-        owned.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
-        owned.register_permission_condition(Document, 'open_title_270', lambda u, p, o: o.title == 'open')
-        owned.register_permission_condition(Document, 'not_secret_270', lambda u, p, o: o.confidential != True)
+        owned.register(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
+        owned.add_named_filter(Document, 'open_title_270', lambda u, p, o: o.title == 'open')
+        owned.add_named_filter(Document, 'not_secret_270', lambda u, p, o: o.confidential != True)
         with _tables(self.ExtraDocumentGrant):
             self.ExtraDocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
             self.ExtraDocumentGrant.objects.create(document=self.open_doc, user=self.alice, permission=self.change)
@@ -422,7 +422,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
     def test_custom_terminal_pk_collision_does_not_grant(self):
         primary = _document_factory()
         extra = _handle('tests.core.issue270-other-perm')
-        extra.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
+        extra.register(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
         with _tables(self.OtherPermission, self.OtherPermissionGrant):
             self.OtherPermission.objects.create(pk=self.change.pk, label='collide')
             self.OtherPermissionGrant.objects.create(document=self.open_doc, user=self.bob, permission_id=self.change.pk)

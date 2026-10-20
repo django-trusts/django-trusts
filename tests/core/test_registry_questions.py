@@ -3,7 +3,7 @@
 ``Catalog`` answers Q1 has_permission, Q2 filter_authorized
 (plus the scope-prefix variant filter_by_permitted_content), Q3
 permitted_users, and Q4 permissions_for (complete and group kinds),
-with production delegation semantics. ``RegistryFactory`` stores rows;
+with production delegation semantics. ``Compiler`` stores rows;
 these questions are asked on ``built_catalog()``. Where a production
 handle-based aggregate is the comparison
 (the handle is the subject there), SQL is compared literally;
@@ -17,7 +17,7 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.core.test_issue282 import _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.compile.nodes import Ref
 from trusts.plan.aggregates import _compile_common_permissions, instance_match
 from trusts.plan.contents import _compile_granted
@@ -108,15 +108,15 @@ class RegistryQuestionsTest(TransactionTestCase):
         return (Folder, Document, Grant, Share, GroupGrant)
 
     def _registry(self, *, delegated=False, group=False):
-        registry = RegistryFactory()
+        registry = Compiler()
         grant = Ref(self.Grant)
-        registry.register(content=grant.document, user=grant.user, permission=grant.permission)
+        registry.register_relation(content=grant.document, user=grant.user, permission=grant.permission)
         if delegated:
             share = Ref(self.Share)
             registry.register_delegation(content=share.document, delegate=share.delegate, sponsor=share.sponsor)
         if group:
             grouped = Ref(self.GroupGrant)
-            registry.register(content=grouped.document, user=grouped.user, group=grouped.group)
+            registry.register_relation(content=grouped.document, user=grouped.user, group=grouped.group)
         return registry
 
     def _production_handle(self, registry):
@@ -144,9 +144,9 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk})
         code = '%s.%s' % (self.read.content_type.app_label, self.read.codename)
         self.assertEqual(_pks(built.permitted_users(self.doc_a, code)), {self.alice.pk})
-        prefix_registry = RegistryFactory()
+        prefix_registry = Compiler()
         grant = Ref(self.Grant)
-        prefix_registry.register(content=grant.folder.documents, user=grant.user, permission=grant.permission)
+        prefix_registry.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.filter(user=self.alice).update(folder=self.folder_a)
         folders = built_catalog(prefix_registry).filter_by_permitted_content(self.Folder.objects.all(), self.alice, self.read, content=self.Document)
         self.assertEqual(_pks(folders), {self.folder_a.pk})
@@ -204,9 +204,9 @@ class RegistryQuestionsTest(TransactionTestCase):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):
-        prefix_registry = RegistryFactory()
+        prefix_registry = Compiler()
         grant = Ref(self.Grant)
-        prefix_registry.register(content=grant.folder.documents, user=grant.user, permission=grant.permission)
+        prefix_registry.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.create(user=self.alice, document=self.doc_a, folder=self.folder_a, permission=self.read)
         built = built_catalog(prefix_registry)
         seen = []
@@ -246,7 +246,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a, kind='group')), {self.read.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(list(built.permissions_for(self.bob, self.doc_a, kind='group')), [])
-        empty_factory = RegistryFactory(user_model=self.User)
+        empty_factory = Compiler(user_model=self.User)
         empty = built_catalog(empty_factory)
         self.assertFalse(empty.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertEqual(list(empty.permissions_for(self.alice, self.doc_a)), [])

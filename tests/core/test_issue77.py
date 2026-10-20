@@ -17,7 +17,7 @@ from tests.myapp.models import Document, DocumentGrant
 from trusts.plan.aggregates import _compile_common_permissions, compiler_for_class
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from tests.backends import MissingCompilerBackend
 
@@ -32,13 +32,13 @@ def _change_document():
 def _contribute_document(registry):
     from trusts.compile.nodes import Ref
     j = Ref(DocumentGrant)
-    registry.register(content=j.document, user=j.user, permission=j.permission)
+    registry.register_relation(content=j.document, user=j.user, permission=j.permission)
 
 class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
-        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
+        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = 'tests.backends.RaisingCompilerBackend'
         handle = registry
         _contribute_document(handle)
@@ -64,7 +64,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(document.plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
-        mixin = RegistryFactory(path='tests.backends.MixinOnlyBackend')
+        mixin = Compiler(path='tests.backends.MixinOnlyBackend')
         self.assertFalse(built_catalog(mixin).plan_for(Document).records)
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):

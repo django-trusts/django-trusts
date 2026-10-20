@@ -31,7 +31,7 @@ from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 from tests.support import override_catalog
 
@@ -76,10 +76,10 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_prebuilt_expr_is_type_error_before_mutation(self):
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = Compiler()
         expr = u == o.not_a_field
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(Note, 'missing', expr)
+            registry.add_named_filter(Note, 'missing', expr)
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'missing'))
         _store_expr(registry, Note, 'missing', expr)
         record = registry.conditions.get_permission_condition_record(Note, 'missing')
@@ -98,8 +98,8 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_builder_validates_at_register_when_models_are_ready(self):
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
-        record = registry.register_permission_condition(
+        registry = Compiler()
+        record = registry.add_named_filter(
             Note, 'deferred_own', lambda u, p, o: u == o.owner,
         )
         self.assertIs(record.model, Note)
@@ -114,7 +114,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         )
         bad = u == o.deferred_missing
         with self.assertRaises(TypeError):
-            registry.register_permission_condition(Note, 'deferred_bad', bad)
+            registry.add_named_filter(Note, 'deferred_bad', bad)
         _store_expr(registry, Note, 'deferred_bad', bad)
         errors = _messages_with_id(
             permission_condition_check_messages(
@@ -128,7 +128,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_multiple_dynamic_errors_are_aggregated(self):
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = Compiler()
         _store_expr(registry, Note, 'typo', u == o.nope)
         _store_expr(registry, Note, 'types', o.status == 1)
         errors = _messages_with_id(
@@ -145,8 +145,8 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
     def test_builder_is_invoked_once_with_symbolic_refs(self):
         Note = _note_model()
         log = _BuilderLog()
-        registry = RegistryFactory()
-        record = registry.register_permission_condition(Note, 'spy', log)
+        registry = Compiler()
+        record = registry.add_named_filter(Note, 'spy', log)
         self.assertEqual(len(log.calls), 1)
         u, p, o = log.calls[0]
         self.assertIsInstance(u, Ref)
@@ -166,22 +166,22 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
     def test_builder_exception_and_non_predicate_fail_at_register(self):
         Note = _note_model()
-        registry = RegistryFactory()
+        registry = Compiler()
 
         def exploding(u, p, o):
             raise RuntimeError('builder boom')
 
         with self.assertRaises(PermissionConditionError) as boom:
-            registry.register_permission_condition(Note, 'boom', exploding)
+            registry.add_named_filter(Note, 'boom', exploding)
         self.assertIn('builder boom', str(boom.exception))
         self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'boom'))
 
         with self.assertRaises(PermissionConditionError):
-            registry.register_permission_condition(
+            registry.add_named_filter(
                 Note, 'truth', lambda u, p, o: True,
             )
         with self.assertRaises(PermissionConditionError):
-            registry.register_permission_condition(
+            registry.add_named_filter(
                 Note, 'bare', lambda u, p, o: o.owner,
             )
 
@@ -201,7 +201,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
         Note = _note_model()
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = Compiler()
         _store_expr(registry, Note, 'typo', u == o.nope)
 
         with override_catalog(
@@ -215,9 +215,9 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
     def test_handle_after_build_invokes_builder(self):
         Note = _note_model()
-        registry = RegistryFactory()
+        registry = Compiler()
         log = _BuilderLog()
-        record = registry.register_permission_condition(Note, 'own', log)
+        record = registry.add_named_filter(Note, 'own', log)
         self.assertEqual(len(log.calls), 1)
         self.assertIs(registry.conditions.get_permission_condition_record(Note, 'own'), record)
 
@@ -239,7 +239,7 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         from tests.myapp.models import Document
 
         u, _p, o = condition_refs()
-        registry = RegistryFactory()
+        registry = Compiler()
         _store_expr(registry, Document, 'typo-29', u == o.nope)
 
         with override_catalog(
