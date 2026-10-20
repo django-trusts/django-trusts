@@ -7,7 +7,6 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.core.checks import Error, run_checks
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.utils import isolate_apps
@@ -25,26 +24,20 @@ from tests.support import (
     compiler,
 )
 from tests.kernel_host.backends import HostTrustModelBackend
-from tests.backends import MalformedCompilerBackend, MixinOnlyBackend, MissingCompilerBackend, RaisingCompilerBackend
+from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.aggregates import compiler_for_class
 from tests.gh_permissions.backends import OutsideBackend
-from trusts.backends import TrustModelBackendMixin
-from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.compile.factory import Compiler
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 import tests as tests_module
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
 OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
-MISSING = 'tests.backends.MissingCompilerBackend'
-MALFORMED = 'tests.backends.MalformedCompilerBackend'
 RAISING = 'tests.backends.RaisingCompilerBackend'
 
 def _pks(qs):
@@ -117,15 +110,11 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         live.ready()
         self.assertIs(HostTrustModelBackend().catalog, first)
 
-    def test_compiler_is_class_owned_not_instance_state(self):
-        first = HostTrustModelBackend()
-        second = HostTrustModelBackend()
-        self.assertIs(first.query_compiler, HostTrustModelBackend.query_compiler)
-        self.assertIs(second.query_compiler, first.query_compiler)
-        self.assertIs(MixinOnlyBackend.query_compiler, TrustModelBackendMixin.query_compiler)
-        self.assertIsInstance(TrustModelBackendMixin.query_compiler, PlanQueryCompiler)
-        self.assertIs(compiler_for_class(HostTrustModelBackend), HostTrustModelBackend.query_compiler)
-        self.assertIs(compiler_for_class(MixinOnlyBackend), MixinOnlyBackend.query_compiler)
+    def test_live_catalog_stores_an_explicit_plan_compiler(self):
+        catalog = HostTrustModelBackend().catalog
+        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertFalse(catalog.compiler.historical_fallback)
+        self.assertFalse(catalog._project)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes', attr_name='isolated_apps')
 class IsolatedAppsPathStoreTest(SimpleTestCase):
@@ -168,50 +157,6 @@ class _LiveRegistryRestoreMixin(object):
 
 class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, SimpleTestCase):
 
-    def test_compiler_without_applies_is_not_query_capable(self):
-        class _Methods(object):
-            def complete_exists(self, plan, candidates, user, permission):
-                return None
-
-            def group_exists(self, plan, candidates, user, permission):
-                return None
-
-        class Backend(object):
-            query_compiler = _Methods()
-
-        with self.assertRaises(TrustsCompilerError) as ctx:
-            compiler_for_class(Backend)
-        self.assertIn('not query-capable', str(ctx.exception))
-
-    def test_malformed_compiler_is_e004(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(MISSING,)):
-            messages = check_query_compilers(None)
-            errors = [m for m in messages if m.id == CHECK_ID_MISSING_COMPILER]
-            self.assertEqual(len(errors), 1)
-            self.assertIsInstance(errors[0], Error)
-            self.assertIn('not query-capable', errors[0].msg)
-        with override_settings(AUTHENTICATION_BACKENDS=(MALFORMED,)):
-            messages = check_query_compilers(None)
-            errors = [m for m in messages if m.id == CHECK_ID_MISSING_COMPILER]
-            self.assertEqual(len(errors), 1)
-
-    def test_valid_compilers_emit_no_e004(self):
-        messages = [m for m in run_checks() if m.id == CHECK_ID_MISSING_COMPILER]
-        self.assertEqual(messages, [])
-
-    def test_silenced_e004_still_fails_at_runtime(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(MISSING,), SILENCED_SYSTEM_CHECKS=['trusts.E004', 'fields.W342']):
-            messages = check_query_compilers(None)
-            self.assertTrue(messages)
-            self.assertTrue(all((m.is_silenced() for m in messages)))
-            with self.assertRaises(TrustsCompilerError):
-                compiler_for_class(MissingCompilerBackend)
-
-    def test_broken_second_path_is_not_omitted(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, MISSING)):
-            errors = [m for m in check_query_compilers(None) if m.id == CHECK_ID_MISSING_COMPILER]
-            self.assertEqual(len(errors), 1)
-
     def test_raising_compiler_propagates(self):
         User = get_user_model()
         registry = compiler(query_compiler=RaisingCompilerBackend.query_compiler)
@@ -221,13 +166,6 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
         with self.assertRaises(RuntimeError) as ctx:
             granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
-
-class CompilerCheckQueryCountTest(TestCase):
-
-    def test_e004_check_issues_zero_sql(self):
-        with override_settings(AUTHENTICATION_BACKENDS=(MISSING, HOST)):
-            with self.assertNumQueries(0):
-                check_query_compilers(None)
 
 class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
 

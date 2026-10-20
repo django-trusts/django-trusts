@@ -234,7 +234,7 @@ def push_catalog(backend_cls, factory):
         factory.path = '%s.%s' % (
             backend_cls.__module__, backend_cls.__qualname__,
         )
-    factory.family = backend_cls.family
+    factory.family = config.family
     config.catalog = built_catalog(factory)
 
     def restore():
@@ -361,9 +361,9 @@ def unbound_named_filters(backend_cls):
     )
     recorder.freeze()
     compiler = Compiler(
-        query_compiler=backend_cls.query_compiler,
+        query_compiler=Compiler.default_query_compiler(),
         path=saved.path,
-        family=backend_cls.family,
+        family=config.family,
         user_model=saved.user_model or get_user_model(),
     )
     recorder.play(compiler)

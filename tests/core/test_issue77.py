@@ -7,19 +7,17 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.query import QuerySet
 from django.test import TestCase
-from tests.support import configured_catalog, live_config, built_catalog, compiler
+from tests.support import configured_catalog, built_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
-from trusts.plan.aggregates import _compile_common_permissions, compiler_for_class
-from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
-from trusts.compile.factory import Compiler
+from trusts.plan.aggregates import _compile_common_permissions
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
-from tests.backends import MissingCompilerBackend
+
 
 def _pks(qs):
     return set(qs.values_list('pk', flat=True))
@@ -45,10 +43,6 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
-
-    def test_missing_compiler_fails_loud(self):
-        with self.assertRaises(TrustsCompilerError):
-            compiler_for_class(MissingCompilerBackend)
 
     def test_unconfigured_and_ambiguous_path_fail_loud(self):
         from tests.gh_permissions.backends import OutsideBackend

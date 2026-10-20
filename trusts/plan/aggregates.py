@@ -9,7 +9,7 @@ from django.db.models import Count, Exists, OuterRef, Q
 
 from trusts.plan.rewrites import bind_once
 from trusts.plan.hops import require_instance
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import (
     _apply_checked_user,
     _as_q,
@@ -28,19 +28,6 @@ from trusts.plan.relations import (
     _or_q,
     candidate_queryset,
 )
-
-
-def compiler_for_class(cls):
-    """Resolve the class-owned compiler. Does not construct a backend instance."""
-    compiler = getattr(cls, 'query_compiler', None)
-    if compiler is None:
-        raise TrustsCompilerError('%r is not query-capable' % (cls,))
-    complete = getattr(compiler, 'complete_exists', None)
-    group = getattr(compiler, 'group_exists', None)
-    applies = getattr(compiler, 'applies', None)
-    if not callable(complete) or not callable(group) or not callable(applies):
-        raise TrustsCompilerError('%r is not query-capable' % (cls,))
-    return compiler
 
 
 def _compiler_applies(compiler, plan):

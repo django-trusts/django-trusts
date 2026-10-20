@@ -10,18 +10,17 @@ import inspect
 
 from django.test import SimpleTestCase
 
-from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 
 
 class BackendsMixinBoundaryTest(SimpleTestCase):
     def test_canonical_mixin_import_and_plan_compiler(self):
-        self.assertIsInstance(
-            TrustModelBackendMixin.query_compiler, PlanQueryCompiler,
-        )
-        self.assertFalse(
-            TrustModelBackendMixin.query_compiler.historical_fallback,
-        )
+        from django.apps import apps
+
+        catalog = apps.get_app_config('trusts_kernel_host').get_catalog()
+        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertFalse(catalog.compiler.historical_fallback)
+        self.assertFalse(catalog._project)
 
     def test_core_backends_module_is_gone(self):
         with self.assertRaises(ModuleNotFoundError):
