@@ -16,12 +16,7 @@ from tests.apps import configured_catalog, live_config
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import (
-    TrustsImplementationConfig,
-    implementation_configs,
-    implementation_for_class,
-    implementation_for_path,
-    relationship_registries,
-)
+    TrustsImplementationConfig)
 from trusts.backends import TrustModelBackendMixin
 from trusts.errors import TrustsConfigurationError
 
@@ -32,7 +27,6 @@ MIXIN = 'tests.backends.MixinOnlyBackend'
 class MixinImplConfig(TrustsImplementationConfig):
     name = 'tests'
     label = 'trusts_impl_mixin_111'
-    trusts_backend_paths = (MIXIN,)
 
 
 class _AppsView(object):
@@ -117,8 +111,8 @@ class HistoricalImportCutoverTest(SimpleTestCase):
         )
 
     def test_core_is_not_an_installed_implementation(self):
-        self.assertIsInstance(live_config(), TrustsImplementationConfig)
-        self.assertIs(type(live_config()), KernelHostConfig)
+        self.assertIs(type(live_config()), TrustsImplementationConfig)
+        self.assertIsNot(type(apps.get_app_config('trusts_kernel_host')), TrustsImplementationConfig)
         self.assertNotIn(
             'trusts',
             {config.name for config in apps.get_app_configs()},
@@ -127,22 +121,22 @@ class HistoricalImportCutoverTest(SimpleTestCase):
 
 class OwnerResolutionTest(SimpleTestCase):
     def test_live_host_owner_resolves(self):
+        from trusts.backends import configured_catalogs
+
         owner = live_config()
         self.assertIsInstance(owner, TrustsImplementationConfig)
-        handle = configured_catalog(owner, HOST_BACKEND)
+        handle = configured_catalog(HOST_BACKEND)
         self.assertEqual(handle.path, HOST_BACKEND)
         backend = HostTrustModelBackend()
-        self.assertIs(backend._trusts_config(), owner)
-        relationship_registries()
-        implementation_for_path(HOST_BACKEND)
-        implementation_for_class(HostTrustModelBackend)
-        self.assertIn(owner, implementation_configs())
+        self.assertIs(backend.get_catalog(), handle)
+        self.assertIn(handle, configured_catalogs())
 
     def test_authorized_and_filter_scopes_use_owners(self):
+        from trusts.backends import configured_catalogs
         from trusts.plan.contents import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
-        registries = relationship_registries()
+        registries = configured_catalogs()
         self.assertTrue(registries)
         self.assertEqual(registries[0].path, HOST_BACKEND)
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
@@ -150,18 +144,11 @@ class OwnerResolutionTest(SimpleTestCase):
 
     def test_missing_owner_is_configuration_error(self):
         backend = MixinOnlyBackend()
-        with patch('trusts.apps.implementation_configs', return_value=()):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                backend._trusts_config()
-            self.assertIn('no implementation owner', str(ctx.exception))
+        self.assertIsNone(backend.get_catalog())
+        self.assertFalse(backend.has_perm(None, 'myapp.change_document', None))
 
     def test_owner_present_resolves(self):
-        owner = _bind(MixinImplConfig, ready=False)
-        with override_settings(AUTHENTICATION_BACKENDS=(MIXIN,)):
-            owner.ready()
-            backend = MixinOnlyBackend()
-            with patch(
-                'trusts.apps.implementation_configs',
-                return_value=(owner,),
-            ):
-                self.assertIs(backend._trusts_config(), owner)
+        backend = HostTrustModelBackend()
+        catalog = backend.get_catalog()
+        self.assertEqual(catalog.path, HOST_BACKEND)
+        self.assertIs(catalog.cls, HostTrustModelBackend)

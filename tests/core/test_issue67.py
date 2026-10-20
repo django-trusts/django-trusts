@@ -10,7 +10,8 @@ from django.test.utils import isolate_apps
 
 from tests.apps import configured_catalog, TestsConfig, live_config
 from tests.core import KernelHostRequiredMixin
-from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
+from tests.kernel_host.apps import HOST_BACKEND
+from trusts.apps import TrustsImplementationConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document
 import tests as tests_module
@@ -27,12 +28,12 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         from trusts.plan.registry import Registry
 
         live = live_config()
-        self.assertIsInstance(live, KernelHostConfig)
+        self.assertIsInstance(live, TrustsImplementationConfig)
         catalog = catalogs[HostTrustModelBackend]
-        self.assertIsInstance(catalog.registry, Registry)
-        first = catalog.registry
+        self.assertIsInstance(catalog._registry, Registry)
+        first = catalog._registry
         live.ready()
-        self.assertIs(catalogs[HostTrustModelBackend].registry, first)
+        self.assertIs(catalogs[HostTrustModelBackend]._registry, first)
         self.assertFalse(hasattr(live, 'registries'))
 
     def test_reader_obtains_registry_via_app_config_not_package_root(self):
@@ -41,7 +42,7 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         from tests.backends import HostTrustModelBackend
         from trusts.plan.registry import Registry
 
-        live = catalogs[HostTrustModelBackend].registry
+        live = catalogs[HostTrustModelBackend]._registry
         self.assertIsInstance(live, Registry)
         self.assertIsNone(getattr(trusts, 'registry', None))
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
@@ -50,7 +51,7 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_isolated_core_registries_stay_independent(self):
         from tests.backends import HostTrustModelBackend
 
-        live = catalogs[HostTrustModelBackend].registry
+        live = catalogs[HostTrustModelBackend]._registry
         isolated = RegistryFactory()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
@@ -101,8 +102,7 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
         contributor = apps.get_app_config('myapp')
         self.assertIsInstance(contributor, DocumentConfig)
         recorder = DocumentBackend().get_registry()
-        built = configured_catalog(contributor).registry
-        self.assertIs(contributor._document_grant_registry_id, recorder)
+        built = configured_catalog(DOCUMENT_BACKEND)
         self.assertTrue(recorder.frozen)
         before = built.records
         contributor.ready()
@@ -111,9 +111,9 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_host_ready_does_not_replace_or_donate_document(self):
         host = live_config()
-        self.assertEqual(host._configured_trusts_paths(), (HOST_BACKEND,))
+        self.assertEqual(configured_catalog(HOST_BACKEND).path, HOST_BACKEND)
         from tests.backends import HostTrustModelBackend
-        registry = catalogs[HostTrustModelBackend].registry
+        registry = catalogs[HostTrustModelBackend]._registry
         before = registry.records
         host.ready()
         self.assertEqual(registry.records, before)
@@ -129,7 +129,7 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
 class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
     def test_isolate_apps_ready_does_not_touch_live_registry(self):
         from tests.backends import HostTrustModelBackend
-        live = catalogs[HostTrustModelBackend].registry
+        live = catalogs[HostTrustModelBackend]._registry
         before = live.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps

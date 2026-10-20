@@ -121,8 +121,13 @@ class KernelConfigTest(SimpleTestCase):
         import trusts.apps as apps_mod
 
         config = live_config()
-        self.assertIs(type(config), KernelHostConfig)
-        self.assertIsInstance(config, TrustsImplementationConfig)
+        self.assertIs(type(config), TrustsImplementationConfig)
+        self.assertNotIsInstance(
+            __import__('django.apps', fromlist=['apps']).apps.get_app_config(
+                'trusts_kernel_host',
+            ),
+            TrustsImplementationConfig,
+        )
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 

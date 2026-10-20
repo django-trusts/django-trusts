@@ -1017,7 +1017,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_no_aliases_is_not_all_clear(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry)
+        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
         self.assertEqual(check_along_renderer(None), [])
         self.assertEqual(check_along_renderer(None, databases=None), [])
         self.assertEqual(check_along_renderer(None, databases=()), [])
@@ -1025,13 +1025,13 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_supported_alias(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry)
+        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
         messages = check_along_renderer(None, databases=['default'])
         self.assertEqual(messages, [])
 
     def test_unsupported_and_several_aliases(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry)
+        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
         fake = MagicMock()
         fake.settings_dict = {'ENGINE': 'django.db.backends.oracle'}
         fake.vendor = 'oracle'
@@ -1053,7 +1053,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_mariadb_is_rejected_before_the_probe(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry)
+        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
 
         class Maria(object):
             vendor = 'mysql'
@@ -1076,7 +1076,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_failed_probe(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry)
+        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
 
         class BoomCursor(object):
 

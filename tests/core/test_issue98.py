@@ -14,7 +14,7 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import permission_in
 from trusts.core import All, Equal, PermissionIn, PlanQueryCompiler, Ref, TrustsConfigurationError, RegistryFactory
 from trusts.query import AuthorizedManager
-from tests.apps import built_registries
+from tests.apps import listed_relationship, built_registries
 
 
 def _gh_models():
@@ -350,7 +350,7 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
             via_obj = self.registry.has_permission(principal, obj, operation)
         with self.assertNumQueries(1):
             via_list = obj in list(self.registry.filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries(self._handles())):
+        with listed_relationship(built_registries(self._handles())):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation))
             with self.assertNumQueries(1):

@@ -1,4 +1,4 @@
-from tests.apps import configured_catalog, built_registries
+from tests.apps import listed_relationship, configured_catalog, built_registries
 """#270: queryset.permitted(permission, user, conditions=())."""
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -15,7 +15,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.apps import implementation_for_path
+
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
@@ -236,7 +236,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                 manager.permitted('myapp.change_documentgrant', AnonymousUser())
 
     def test_unbound_condition_lookup_fails_before_the_principal(self):
-        registry = configured_catalog(implementation_for_path(DOCUMENT_BACKEND)).registry
+        registry = configured_catalog(DOCUMENT_BACKEND)._registry
         previous = registry.condition_lookup
         try:
             registry.condition_lookup = None
@@ -288,8 +288,8 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
 
     def test_private_compiler_takes_explicit_handles(self):
         from trusts._permitted import permitted_queryset
-        handle = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries(())):
+        handle = configured_catalog(DOCUMENT_BACKEND)
+        with listed_relationship(built_registries(())):
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted('myapp.change_document', self.alice)
@@ -382,20 +382,20 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
         foreign = _handle('tests.core.issue270-other-name')
         foreign.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
         foreign.register_permission_condition(Document, 'only_other_270', lambda u, p, o: o.confidential != True)
-        primary = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((handle_a, handle_b))):
+        primary = configured_catalog(DOCUMENT_BACKEND)
+        with listed_relationship(built_registries((handle_a, handle_b))):
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted('myapp.change_document', self.alice, conditions=('split_a_270', 'split_b_270'))
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted(self.change, AnonymousUser(), conditions=('split_a_270', 'split_b_270'))
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((primary, foreign))):
+        with listed_relationship(built_registries((primary, foreign))):
             with self.assertNumQueries(0):
                 with self.assertRaises(TrustsConfigurationError):
                     self.docs.permitted(self.change, self.alice, conditions=('only_other_270',))
 
     def test_non_owner_grant_is_omitted_and_two_names_are_anded(self):
-        primary = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
+        primary = configured_catalog(DOCUMENT_BACKEND)
         extra = _handle('tests.core.issue270-extra-grant')
         extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
         owned = _handle('tests.core.issue270-both-names')
@@ -406,13 +406,13 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
             self.ExtraDocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
             self.ExtraDocumentGrant.objects.create(document=self.open_doc, user=self.alice, permission=self.change)
             self.ExtraDocumentGrant.objects.create(document=self.plain, user=self.alice, permission=self.change)
-            with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((primary, extra))):
+            with listed_relationship(built_registries((primary, extra))):
                 self.assertEqual(_pks(self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))), {self.open_doc.pk})
-            with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((owned,))):
+            with listed_relationship(built_registries((owned,))):
                 self.assertEqual(_pks(self.docs.permitted(self.change, self.alice, conditions=('open_title_270', 'not_secret_270'))), {self.open_doc.pk})
 
     def test_custom_terminal_pk_collision_does_not_grant(self):
-        primary = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
+        primary = configured_catalog(DOCUMENT_BACKEND)
         extra = _handle('tests.core.issue270-other-perm')
         extra.register_public(trust=self.OtherPermissionGrant, user='user', permission='permission', content='document')
         with _tables(self.OtherPermission, self.OtherPermissionGrant):
@@ -421,7 +421,7 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
             for permission in ('myapp.change_document', self.change):
                 for handles in ((primary, extra), (extra, primary)):
                     with self.subTest(permission=type(permission).__name__, order=handles[0].path):
-                        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries(handles)):
+                        with listed_relationship(built_registries(handles)):
                             denied = self.docs.permitted(permission, self.bob)
                             self.assertNotIn('issue270_other_permission', str(denied.query))
                             self.assertEqual(list(denied), [])

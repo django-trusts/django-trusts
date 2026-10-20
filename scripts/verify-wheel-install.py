@@ -178,12 +178,7 @@ def main() -> int:
     import sys as _sys
     import trusts
     from trusts.apps import (
-        TrustsImplementationConfig,
-        implementation_configs,
-        implementation_for_class,
-        implementation_for_path,
-        relationship_registries,
-    )
+        TrustsImplementationConfig)
     from trusts.backends import TrustModelBackendMixin
     from trusts.compile.factory import (
         RegisteredDelegation,
@@ -270,25 +265,26 @@ def main() -> int:
         pass
     else:
         raise SystemExit('trusts.core_backends still imports from the library wheel')
-    if implementation_configs() != ():
-        raise SystemExit('library-only wheel must expose no implementation configs')
-    if relationship_registries() != ():
-        raise SystemExit('library-only wheel must expose no relationship registries')
+    import trusts.apps as apps_mod
+    if apps_mod.catalogs or apps_mod.recorders:
+        raise SystemExit('library-only populate must not build catalogs before ready')
+    for removed in (
+        'implementation_configs',
+        'implementation_for_path',
+        'implementation_for_class',
+        'relationship_registries',
+        'trusts_backend_paths',
+    ):
+        if hasattr(apps_mod, removed) or hasattr(TrustsImplementationConfig, removed):
+            raise SystemExit('library wheel still exposes %s' % removed)
     try:
         from trusts.backends import TrustModelBackend  # noqa: F401
     except ImportError:
         pass
     else:
         raise SystemExit('historical TrustModelBackend still imports')
-    try:
-        implementation_for_path('trusts.backends.TrustModelBackend')
-    except Exception as exc:
-        if 'No implementation owns' not in str(exc):
-            raise SystemExit('unexpected implementation_for_path error: %s' % exc)
-    else:
-        raise SystemExit('implementation_for_path succeeded without an owner')
-    if implementation_for_class(type(TrustModelBackendMixin()), required=False) is not None:
-        raise SystemExit('library-only wheel must not own the mixin class')
+    if TrustsImplementationConfig.name == 'trusts' or TrustsImplementationConfig.label == 'trusts':
+        raise SystemExit('sweep config must not take the trusts app label')
 
     import trusts.models as models_mod
     try:
@@ -309,7 +305,7 @@ def main() -> int:
     print('library apps', sorted(labels))
     print('kernel_config absent')
     print('TrustsImplementationConfig', TrustsImplementationConfig)
-    print('implementation_configs', implementation_configs())
+    print('catalogs', apps_mod.catalogs)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
     print('filter_authorized_scopes', filter_authorized_scopes)

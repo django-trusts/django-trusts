@@ -1,5 +1,6 @@
 from functools import wraps
 
+from django.apps import apps as django_apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Model
 from django.http import Http404
@@ -11,7 +12,7 @@ from trusts._permitted import (
     _guard_permission_string,
     _permission_binding,
 )
-import trusts.apps as trusts_apps
+from trusts.backends import configured_catalogs
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.rewrites import bind_once
 from trusts.errors import TrustsConfigurationError
@@ -68,11 +69,17 @@ def _coerce_pk(model, raw):
     return value
 
 
+def _relationship_catalogs():
+    """Relationship catalogs of the listed mixin backends."""
+    return tuple(
+        catalog for catalog in configured_catalogs()
+        if catalog.family == 'relationship'
+    )
+
+
 def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
-    from django.apps import apps as django_apps
-
-    registries = trusts_apps.relationship_registries()
+    registries = _relationship_catalogs()
 
     user = getattr(request, 'user', None)
     raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None

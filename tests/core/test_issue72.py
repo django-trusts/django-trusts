@@ -20,8 +20,8 @@ class IsolatedHostDoesNotReceiveDocumentContributionTest(
 ):
     def test_host_registry_stays_empty_of_document_terminal(self):
         host = live_config()
-        self.assertEqual(host._configured_trusts_paths(), (HOST_BACKEND,))
-        registry = configured_catalog(host).registry
+        self.assertEqual(configured_catalog(HOST_BACKEND).path, HOST_BACKEND)
+        registry = configured_catalog(HOST_BACKEND)._registry
         self.assertFalse(registry.plan_for(Document).records)
         before = registry.records
         host.ready()
@@ -38,8 +38,9 @@ class IsolatedAppsDoesNotDonateTicketContributionTest(
     KernelHostRequiredMixin, SimpleTestCase,
 ):
     def test_tests_config_ready_on_isolate_does_not_touch_live(self):
-        live_host = configured_catalog(live_config()).registry
-        live_doc = configured_catalog(apps.get_app_config('myapp')).registry
+        live_host = configured_catalog(HOST_BACKEND)._registry
+        from tests.myapp.apps import DOCUMENT_BACKEND
+        live_doc = configured_catalog(DOCUMENT_BACKEND)._registry
         before_host = live_host.records
         before_doc = live_doc.records
         contributor = TestsConfig('tests', tests_module)

@@ -27,7 +27,7 @@ from tests.core.test_issue246 import _tables
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.apps import implementation_for_path
+
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
@@ -190,7 +190,7 @@ def _seal_document_factory(factory):
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
     built = factory.build_registry()
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, factory=factory, registry=built, family_registries=built_registries(() if previous is None else previous.family_registries))
+    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=built, family_registries=built_registries(() if previous is None else previous.family_registries))
     return built
 
 @contextmanager

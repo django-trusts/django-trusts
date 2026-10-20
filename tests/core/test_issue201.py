@@ -28,7 +28,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.apps import implementation_for_path
+
 from trusts.errors import TrustsConfigurationError
 from trusts.decorators import authorization_required
 
@@ -251,9 +251,7 @@ class AuthorizationRequiredReadinessPreflightTest(
             return 'ok'
 
         from tests.apps import configured_catalog
-        registry = configured_catalog(implementation_for_path(
-            DOCUMENT_BACKEND,
-        )).registry
+        registry = configured_catalog(DOCUMENT_BACKEND)._registry
         previous = registry.condition_lookup
         try:
             registry.condition_lookup = None

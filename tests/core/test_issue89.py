@@ -16,13 +16,16 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
-from tests.apps import configured_catalog, install_writable_registry, live_config, override_apps_ready
+from tests.apps import (
+    configured_catalog, empty_catalogs, live_config, override_apps_ready,
+    sweep_listed_backends,
+)
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import implementation_for_path
+
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -120,31 +123,26 @@ class _CatalogRestoreMixin(object):
 class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, SimpleTestCase):
 
     def test_rows_before_ready_survive_and_later_register_is_refused(self):
-        class _BeforeReady(TrustModelBackendMixin, ModelBackend):
-            pass
-
-        backend = _BeforeReady()
+        backend = DocumentBackend()
         recorder = backend.get_registry()
-        _contribute_recorder(recorder)
-        catalog = backend.ready()
-        self.assertEqual(len(catalog.registry.records), 1)
+        catalog = backend.get_catalog()
+        self.assertIsNotNone(catalog)
         self.assertTrue(recorder.frozen)
+        before = catalog.records
         with self.assertRaises(TrustsConfigurationError):
             _contribute_recorder(recorder)
-        self.assertEqual(len(catalog.registry.records), 1)
+        self.assertEqual(catalog.records, before)
 
     def test_multi_path_reversed_duplicate_and_late_observed_path(self):
-        live = live_config()
-        document = implementation_for_path(DOCUMENT)
-        with override_settings(AUTHENTICATION_BACKENDS=(DOCUMENT, HOST)):
-            catalogs = (configured_catalog(document), configured_catalog(live))
-            self.assertEqual([catalog.path for catalog in catalogs], [DOCUMENT, HOST])
-            self.assertIs(catalogs[0].registry.build_registry(), catalogs[0].registry)
-            self.assertIs(catalogs[1].registry.build_registry(), catalogs[1].registry)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
-            catalog = configured_catalog(live)
-            self.assertEqual(catalog.path, HOST)
-            self.assertIsNotNone(catalog.registry)
+        document = configured_catalog(DOCUMENT)
+        host = configured_catalog(HOST)
+        self.assertEqual([document.path, host.path], [DOCUMENT, HOST])
+        self.assertIs(document._registry.build_registry(), document._registry)
+        self.assertIs(host._registry.build_registry(), host._registry)
+        with empty_catalogs():
+            with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
+                with self.assertRaises(TrustsConfigurationError):
+                    sweep_listed_backends()
 
     def test_ready_does_not_replace_stored_objects(self):
         from tests.backends import HostTrustModelBackend
@@ -163,10 +161,12 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         recorder = backend.get_registry()
         self.assertFalse(recorder.frozen)
         _contribute_recorder(recorder)
-        self.assertEqual(len(recorder.principals[Document]), 1)
-        catalog = backend.ready()
-        self.assertEqual(len(catalog.registry.records), 1)
-        self.assertTrue(recorder.frozen)
+        self.assertEqual(len([
+            entry for entry in recorder.rows
+            if entry[0] == 'principal' and entry[1].content_model is Document
+        ]), 1)
+        self.assertIsNone(backend.get_catalog())
+        self.assertFalse(recorder.frozen)
 
     def test_assignment_before_ready_stays_writable_on_read(self):
         class _OpenThenReady(TrustModelBackendMixin, ModelBackend):
@@ -177,23 +177,19 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         with override_apps_ready(False):
             self.assertFalse(recorder.frozen)
             _contribute_recorder(recorder)
-        catalog = backend.ready()
-        self.assertEqual(len(catalog.registry.records), 1)
-        with self.assertRaises(TrustsConfigurationError):
-            _contribute_recorder(recorder)
-        self.assertEqual(len(catalog.registry.records), 1)
-        self.assertEqual(len(recorder.principals[Document]), 1)
+        self.assertIsNone(backend.get_catalog())
+        self.assertFalse(recorder.frozen)
+        self.assertEqual(len([
+            entry for entry in recorder.rows
+            if entry[0] == 'principal' and entry[1].content_model is Document
+        ]), 1)
 
     def test_standalone_appconfig_remains_writable_after_ready(self):
         from tests.backends import HostTrustModelBackend
-        from tests.core.test_issue108 import HostImplConfig, _bind
         from trusts.apps import catalogs
-        isolated = _bind(HostImplConfig, ready=False)
-        self.assertFalse(isolated.apps.ready)
         first = catalogs[HostTrustModelBackend]
         private = RegistryFactory()
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST,)):
-            isolated.ready()
+        live_config().ready()
         self.assertIs(catalogs[HostTrustModelBackend], first)
         _contribute_document(private)
         self.assertEqual(len(private.records), 1)
@@ -202,23 +198,23 @@ class SentinelAfterFirstReadTest(KernelHostRequiredMixin, _CatalogRestoreMixin, 
 
     def test_same_instance_reentry_is_noop_after_first_read(self):
         live = live_config()
-        catalog = configured_catalog(live)
-        before = catalog.registry.records
+        catalog = configured_catalog(HOST)
+        before = catalog.records
         live.ready()
-        self.assertEqual(catalog.registry.records, before)
-        self.assertIs(configured_catalog(live), catalog)
+        self.assertEqual(catalog.records, before)
+        self.assertIs(configured_catalog(HOST), catalog)
 
-    def test_package_ready_after_supported_read_leaves_registry_writable(self):
+    def test_second_ready_leaves_the_built_catalog_in_place(self):
         from tests.backends import HostTrustModelBackend
         from trusts.apps import catalogs
         live = live_config()
         catalog = catalogs[HostTrustModelBackend]
         recorder = HostTrustModelBackend().get_registry()
         self.assertTrue(recorder.frozen)
-        before = catalog.registry.records
+        before = catalog.records
         live.ready()
         self.assertIs(catalogs[HostTrustModelBackend], catalog)
-        self.assertEqual(catalog.registry.records, before)
+        self.assertEqual(catalog.records, before)
         with self.assertRaises(TrustsConfigurationError):
             recorder.register(
                 trust=DocumentGrant, user='user',
@@ -233,14 +229,15 @@ class BackendQuestionAfterLateRegistrationTest(SimpleTestCase):
 
     def test_register_after_build_is_refused(self):
         from trusts.errors import TrustsConfigurationError
-        backend = _LateBackend()
+        backend = DocumentBackend()
         recorder = backend.get_registry()
-        catalog = backend.ready()
-        self.assertIs(catalog.registry, backend.registry)
+        catalog = backend.get_catalog()
+        self.assertIsNotNone(catalog)
         self.assertTrue(recorder.frozen)
+        before = catalog.records
         with self.assertRaisesRegex(TrustsConfigurationError, 'register refused: this recorder is frozen'):
             recorder.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        self.assertEqual(catalog.registry.records, ())
+        self.assertEqual(catalog.records, before)
 
 class HandleBuildRegistrySignalTest(SimpleTestCase):
     """A configured path holds a registry. The registry builds itself."""

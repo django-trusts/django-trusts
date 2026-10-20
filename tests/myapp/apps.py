@@ -1,17 +1,15 @@
-from trusts.apps import TrustsImplementationConfig
+from django.apps import AppConfig
 
 DOCUMENT_BACKEND = 'tests.myapp.backends.DocumentBackend'
 
 
-class DocumentConfig(TrustsImplementationConfig):
+class DocumentConfig(AppConfig):
     name = 'tests.myapp'
     label = 'myapp'
     default = False
     default_auto_field = 'django.db.models.AutoField'
-    trusts_backend_paths = (DOCUMENT_BACKEND,)
 
     def ready(self):
-        super().ready()
         from tests.myapp.backends import DocumentBackend
         from tests.myapp.models import (
             Document,
@@ -22,13 +20,9 @@ class DocumentConfig(TrustsImplementationConfig):
         target = DocumentBackend().get_registry()
         register = target.register
         add_filter = target.add_named_filter
-        registry = target
-        if getattr(self, '_document_grant_registry_id', None) is registry:
-            return
-        if getattr(registry, 'frozen', False):
+        if target.frozen:
             # set_installed_apps() builds a new config against a recorder
-            # that an inquiry or the tests app already sealed.
-            self._document_grant_registry_id = registry
+            # the sweep already froze.
             return
         register(
             trust=DocumentGrant,
@@ -50,4 +44,3 @@ class DocumentConfig(TrustsImplementationConfig):
             'non_confidential',
             lambda u, p, o: o.confidential != True,
         )
-        self._document_grant_registry_id = registry

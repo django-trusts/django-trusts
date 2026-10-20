@@ -35,11 +35,13 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
+from django.contrib.auth import get_backends
 from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-from trusts.apps import catalogs
+from trusts.apps import user_model
+from trusts.backends import TrustModelBackendMixin
 from trusts.commons import _resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -183,7 +185,7 @@ def render_policy_sql_bytes(*, alias=None, registries=None):
     """
     resolved = resolve_policy_database(alias)
     if registries is None:
-        registries = tuple(catalog.registry for catalog in catalogs.values())
+        registries = _configured_registries()
     document = _build_document(tuple(registries), resolved)
     return _dump_document(document)
 
@@ -1127,11 +1129,30 @@ def _compile_named_filter(model, expr, alias):
     return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
-def _any_sentinel_user(alias):
-    from django.contrib.auth import get_user_model
+def _configured_registries():
+    """Built registries of listed mixin backends, via ``get_catalog()``."""
+    found = []
+    seen = set()
+    for backend in get_backends():
+        if not isinstance(backend, TrustModelBackendMixin):
+            continue
+        if type(backend) in seen:
+            continue
+        seen.add(type(backend))
+        catalog = backend.get_catalog()
+        if catalog is None:
+            continue
+        found.append(catalog._registry)
+    return tuple(found)
 
-    user_model = get_user_model()
-    return _sentinel(user_model, user_model._meta.pk.attname, alias=alias)
+
+def _any_sentinel_user(alias):
+    model = user_model()
+    if model is None:
+        raise TrustsConfigurationError(
+            'Policy SQL has no user model. TrustsImplementationConfig.ready has not stored one.'
+        )
+    return _sentinel(model, model._meta.pk.attname, alias=alias)
 
 
 def _any_sentinel_permission(alias):

@@ -36,12 +36,9 @@ class AnnotatedGrant(models.Model):
 
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
-    trusts_backend_paths = (
-        "documents.backends.DocumentBackend",
-    )
+    label = "pyright_proof"
 
     def ready(self):
-        super().ready()
         from documents.backends import DocumentBackend
         DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
@@ -50,6 +47,7 @@ class DocumentsConfig(TrustsImplementationConfig):
             content=lambda t: t.document,
             condition=lambda t: t.team == t.document,
         )
+        super().ready()
 '''
 
 MISSING_SOURCE = '''\
@@ -70,12 +68,9 @@ class AnnotatedGrant(models.Model):
 
 class DocumentsConfig(TrustsImplementationConfig):
     name = "pyright_proof"
-    trusts_backend_paths = (
-        "documents.backends.DocumentBackend",
-    )
+    label = "pyright_proof"
 
     def ready(self):
-        super().ready()
         from documents.backends import DocumentBackend
         DocumentBackend().get_registry().register(
             trust=AnnotatedGrant,
@@ -84,6 +79,7 @@ class DocumentsConfig(TrustsImplementationConfig):
             content=lambda t: t.document,
             condition=lambda t: t.not_a_field == t.document,
         )
+        super().ready()
 '''
 
 CONFIG = '''\

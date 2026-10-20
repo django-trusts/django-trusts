@@ -33,7 +33,7 @@ from trusts.plan.recursions import (
     _KeyedReach,
     _PrefixInForwardWalk,
 )
-import trusts.apps as trusts_apps
+from trusts.backends import configured_catalogs
 from trusts.plan.relations import (
     _bound_permission_identity,
     _candidate_model,
@@ -450,7 +450,10 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
             % (queryset,)
         )
     if registries is None:
-        registries = trusts_apps.relationship_registries()
+        registries = tuple(
+            catalog for catalog in configured_catalogs()
+            if catalog.family == 'relationship'
+        )
     else:
         registries = _relationship_registries(registries)
     user = _require_instance(user, 'user')

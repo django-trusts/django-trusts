@@ -63,6 +63,7 @@ from django.db.models import (
 from django.db.models.fields import GenericIPAddressField
 
 from trusts._meta_options import _ensure_permission_conditions_option
+from trusts.apps import user_model
 from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
@@ -531,8 +532,13 @@ TQ = Query
 
 
 def _entity_model():
-    from django.contrib.auth import get_user_model
-    return get_user_model()
+    """User model stored by ``TrustsImplementationConfig.ready``."""
+    model = user_model()
+    if model is None:
+        raise PermissionConditionError(
+            'Principal references need the user model stored at ready().'
+        )
+    return model
 
 
 def resolve_field_path(model, path, ref_kind='object'):

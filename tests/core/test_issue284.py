@@ -463,12 +463,11 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             from trusts.apps import catalogs
             from trusts.compile.catalogs import Catalog
             factory = self.handle
-            catalogs[_AcceptanceBackend] = Catalog(cls=_AcceptanceBackend, path='%s.%s' % (_AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__), family=_AcceptanceBackend.family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(()))
+            catalogs[_AcceptanceBackend] = Catalog(cls=_AcceptanceBackend, path='%s.%s' % (_AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__), family=_AcceptanceBackend.family, registry=factory.build_registry(), family_registries=built_registries(()))
             self.backend = _AcceptanceBackend()
             self._settings = override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue284._AcceptanceBackend',))
             self._settings.enable()
-            self._handles = patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((self.handle,)))
-            self._handles.start()
+            self._handles = None
         except Exception:
             self._drop_tables()
             raise
@@ -478,8 +477,6 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         install_class_handle(_AcceptanceBackend, None)
         from trusts.apps import catalogs
         catalogs.pop(_AcceptanceBackend, None)
-        if getattr(self, '_handles', None) is not None:
-            self._handles.stop()
         if getattr(self, '_settings', None) is not None:
             self._settings.disable()
         self._drop_tables()

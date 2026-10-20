@@ -203,24 +203,13 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         registry = RegistryFactory()
         _store_expr(registry, Note, 'typo', u == o.nope)
 
-        class _Config(object):
-            def _configured_trusts_paths(self):
-                return ('tests.backends.HostTrustModelBackend',)
-
-            def ready(self):
-                return None
-
         with override_catalog(
             HostTrustModelBackend, registry,
             'tests.backends.HostTrustModelBackend',
         ):
-            with patch(
-                'trusts.apps.implementation_configs', return_value=(_Config(),),
-            ):
-                _Config().ready()
-                errors = _messages_with_id(
-                    check_permission_conditions(None), CHECK_ID_INVALID_EXPR,
-                )
+            errors = _messages_with_id(
+                check_permission_conditions(None), CHECK_ID_INVALID_EXPR,
+            )
         self.assertTrue(any("'typo'" in m.msg for m in errors))
 
     def test_handle_after_build_invokes_builder(self):
@@ -254,19 +243,12 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         registry = RegistryFactory()
         _store_expr(registry, Document, 'typo-29', u == o.nope)
 
-        class _Config(object):
-            def _configured_trusts_paths(self):
-                return ('tests.backends.HostTrustModelBackend',)
-
         with override_catalog(
             HostTrustModelBackend, registry,
             'tests.backends.HostTrustModelBackend',
         ):
-            with patch(
-                'trusts.apps.implementation_configs', return_value=(_Config(),),
-            ):
-                with self.assertRaises(SystemCheckError) as ctx:
-                    call_command('check')
+            with self.assertRaises(SystemCheckError) as ctx:
+                call_command('check')
         self.assertIn(CHECK_ID_INVALID_EXPR, str(ctx.exception))
         self.assertIn('typo-29', str(ctx.exception))
 

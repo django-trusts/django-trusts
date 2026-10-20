@@ -14,14 +14,14 @@ from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import override_settings
 
-from tests.apps import configured_catalog, live_config
+from tests.apps import configured_catalog
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from tests.myapp.views import edit_document
-from trusts.apps import TrustsImplementationConfig, implementation_for_path
+from trusts.apps import TrustsImplementationConfig
 from trusts.backends import TrustModelBackendMixin
 from trusts.query import AuthorizedQuerySet
 
@@ -78,20 +78,22 @@ class ReadmeExampleAuthorizationTest(TestCase):
         )
 
     def test_ready_contributed_the_documented_ref_to_the_owner_registry(self):
-        owner = implementation_for_path(DOCUMENT_BACKEND)
+        from django.apps import apps as django_apps
+
+        owner = django_apps.get_app_config('myapp')
         self.assertIs(type(owner), DocumentConfig)
-        self.assertIsInstance(owner, TrustsImplementationConfig)
-        catalog = configured_catalog(owner)
+        self.assertNotIsInstance(owner, TrustsImplementationConfig)
+        catalog = configured_catalog(DOCUMENT_BACKEND)
         self.assertEqual(catalog.path, DOCUMENT_BACKEND)
         from trusts.apps import catalogs
 
         self.assertIs(catalog, catalogs[DocumentBackend])
-        self.assertTrue(catalog.registry.records)
+        self.assertTrue(catalog.records)
         self.assertIs(
-            catalog.registry.records[0].content_model,
+            catalog.records[0].content_model,
             Document,
         )
-        record = catalog.registry.get_permission_condition_record(
+        record = catalog.get_permission_condition_record(
             Document, 'non_confidential',
         )
         self.assertIsNotNone(record)
@@ -151,7 +153,8 @@ class ReadmeExampleAuthorizationTest(TestCase):
                 'myapp.change_document:non_confidential', secret,
             ),
         )
-        owner = implementation_for_path(DOCUMENT_BACKEND)
+        from django.apps import apps as django_apps
+        owner = django_apps.get_app_config('myapp')
         with self.assertNumQueries(0):
             owner.ready()
 
@@ -166,10 +169,15 @@ class ReadmeExampleAuthorizationTest(TestCase):
 
 class ReadmeHostSurfaceTest(SimpleTestCase):
     def test_default_suite_still_has_no_trusts_app(self):
-        owner = live_config()
-        self.assertIs(type(owner), KernelHostConfig)
-        labels = {config.label for config in owner.apps.get_app_configs()}
-        names = {config.name for config in owner.apps.get_app_configs()}
+        from django.apps import apps as django_apps
+        sweep = django_apps.get_app_config('trusts_lifecycle')
+        host = django_apps.get_app_config('trusts_kernel_host')
+        self.assertIs(type(sweep), TrustsImplementationConfig)
+        self.assertEqual(sweep.name, 'trusts.apps')
+        self.assertIs(type(host), KernelHostConfig)
+        self.assertFalse(issubclass(KernelHostConfig, TrustsImplementationConfig))
+        labels = {config.label for config in django_apps.get_app_configs()}
+        names = {config.name for config in django_apps.get_app_configs()}
         self.assertNotIn('trusts', labels)
         self.assertNotIn('trusts', names)
         self.assertEqual(

@@ -8,7 +8,7 @@ resolved inside the eventual SQL. Construction does not query.
 
 __all__ = []
 
-from django.contrib.auth import get_backends, get_user_model
+from django.contrib.auth import get_backends
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import Permission
 from django.core.exceptions import FieldDoesNotExist
@@ -17,10 +17,10 @@ from django.db.models import F, Model, Q, QuerySet
 
 from trusts.utils import parse_perm_code
 from trusts.plan.rewrites import bind_once
-from trusts.backends import TrustModelBackendMixin
+from trusts.apps import installed_object_blind_backends, user_model
+from trusts.backends import TrustModelBackendMixin, configured_catalogs
 from trusts.compile.catalogs import _permission_binding
 from trusts.errors import TrustsConfigurationError
-import trusts.apps as trusts_apps
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
 from trusts.commons import _object_memory_value, _user_lookup
@@ -28,14 +28,11 @@ from trusts.plan.aggregates import _delegated_user_exists
 from trusts.plan import conditions as _ir
 
 
-_OBJECT_BLIND_BACKENDS = None
-
-
 def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     """Lazy user queryset for one saved content object and one permission.
 
     The candidate rows are ``user_queryset`` when given (the optional
-    manager adapter) and otherwise ``AUTH_USER_MODEL``'s default manager.
+    manager adapter) and otherwise the user model stored at ready.
     Each configured backend that can contribute an exact reverse predicate
     is OR-ed. A registered user override is part of the Trusts-owned
     predicate, not a separate superuser grant. The ``is_active`` check
@@ -48,24 +45,31 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     """
     _require_saved_content(content)
     _reject_permission_shape(perm)
+    registries = _relationship_catalogs()
     inquiry = bind_checked_user(
         None, skip_flags=skip_flags,
-        registries=trusts_apps.relationship_registries(),
+        registries=registries,
         require_user=False,
     )
     skipped = inquiry.values
     if user_queryset is None:
-        user_queryset = get_user_model()._default_manager.get_queryset()
+        model = user_model()
+        if model is None:
+            raise TrustsConfigurationError(
+                'get_permitted_users has no user model. '
+                'TrustsImplementationConfig.ready has not stored one.'
+            )
+        user_queryset = model._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
         raise TrustsConfigurationError(
             'user queryset must be a QuerySet, not %r.' % (user_queryset,)
         )
     backends = tuple(get_backends())
     _reject_unaccepted_permission_instance(perm, backends)
-    user_model = user_queryset.model
-    _assert_persisted_principal(user_model)
+    principal_model = user_queryset.model
+    _assert_persisted_principal(principal_model)
     parts = []
-    involved = [user_model, content.__class__]
+    involved = [principal_model, content.__class__]
     if isinstance(perm, (str, Permission)):
         involved.append(Permission)
     for backend in backends:
@@ -80,7 +84,7 @@ def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
                 '%s permitted_users_predicate returned %s, not a Q or None.'
                 % (type(backend).__name__, type(predicate).__name__)
             )
-        _assert_registration_user_model(backend, content, user_model)
+        _assert_registration_user_model(backend, content, principal_model)
         involved.extend(_registration_models(backend, content))
         parts.append(predicate)
     alias = _database_alias(content, user_queryset)
@@ -118,7 +122,8 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
                                            family_registries=(),
                                            skipped=(),
                                            condition_lookup=None,
-                                           accepts_permission=None):
+                                           accepts_permission=None,
+                                           owner_name=None):
     """Reverse predicate for one built registry.
 
     ``condition_lookup`` is that registry's named-filter lookup.
@@ -132,7 +137,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
     if condition_lookup is None:
         condition_lookup = registry.condition_lookup
     binding, condition = _permission_binding_for_plan(
-        accepts_permission, content, perm, plan,
+        accepts_permission, content, perm, plan, owner_name=owner_name,
     )
     exists = plan.user_exists(content, binding) if plan.records else None
     if plan.delegations:
@@ -247,6 +252,14 @@ def _plan_user_model(plan, content):
     return models.pop()
 
 
+def _relationship_catalogs():
+    """Relationship catalogs of the listed mixin backends."""
+    return tuple(
+        catalog for catalog in configured_catalogs()
+        if catalog.family == 'relationship'
+    )
+
+
 def _require_saved_content(content):
     if isinstance(content, QuerySet):
         raise TrustsConfigurationError(
@@ -281,29 +294,8 @@ def _reject_permission_shape(perm):
 
 
 def _object_blind_backends():
-    """Django's stock object-blind backends.
-
-    Imported here, not at module import. ``django.contrib.auth.backends``
-    calls ``get_user_model()`` while it loads, and a custom user model
-    may import ``trusts.query`` (and therefore this module) from its
-    own model module.
-    """
-    global _OBJECT_BLIND_BACKENDS
-    if _OBJECT_BLIND_BACKENDS is None:
-        from django.contrib.auth.backends import (
-            AllowAllUsersModelBackend,
-            AllowAllUsersRemoteUserBackend,
-            ModelBackend,
-            RemoteUserBackend,
-        )
-
-        _OBJECT_BLIND_BACKENDS = frozenset((
-            ModelBackend,
-            AllowAllUsersModelBackend,
-            RemoteUserBackend,
-            AllowAllUsersRemoteUserBackend,
-        ))
-    return _OBJECT_BLIND_BACKENDS
+    """Django's stock object-blind backends, stored at ready."""
+    return installed_object_blind_backends()
 
 
 def _trusts_owned_reverse_hook(backend):
@@ -334,8 +326,6 @@ def _backend_predicate(backend, content, perm, *,
         return backend.permitted_users_predicate(content, perm)
     if type(backend) in _object_blind_backends():
         return None
-    if not callable(getattr(backend, 'has_perm', None)):
-        return None
     raise TrustsConfigurationError(
         '%s may grant an object permission but cannot express an exact '
         'reverse user predicate. get_permitted_users will not return a '
@@ -363,7 +353,8 @@ def _declares_reverse_hook(backend):
     return False
 
 
-def _permission_binding_for_plan(accepts_permission, content, perm, plan):
+def _permission_binding_for_plan(accepts_permission, content, perm, plan,
+                                 owner_name=None):
     """Return ``(binding, condition)``.
 
     ``accepts_permission`` is the singular-permission callable, or
@@ -391,11 +382,12 @@ def _permission_binding_for_plan(accepts_permission, content, perm, plan):
         return binding, (singular, code)
     if accepts_permission is None:
         accepted = isinstance(perm, Permission)
-        owner_name = 'Registry'
+        if owner_name is None:
+            owner_name = 'Registry'
     else:
         accepted = bool(accepts_permission(perm))
-        bound = getattr(accepts_permission, '__self__', None)
-        owner_name = type(bound).__name__ if bound is not None else 'Registry'
+        if owner_name is None:
+            owner_name = 'Registry'
     if not accepted:
         raise TrustsConfigurationError(
             '%s does not accept %s as a singular object permission.'
@@ -613,11 +605,14 @@ def _trusts_eligibility_q(model):
     return predicate
 
 
-def _assert_registration_user_model(backend, content, user_model):
+def _assert_registration_user_model(backend, content, candidate_model):
     if not isinstance(backend, TrustModelBackendMixin):
         return
-    plan = backend.registry.plan_for(content)
-    expected = user_model._meta.concrete_model
+    catalog = backend.get_catalog()
+    if catalog is None:
+        return
+    plan = catalog.plan_for(content)
+    expected = candidate_model._meta.concrete_model
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
         if registered is not expected:
@@ -647,7 +642,10 @@ def _assert_registration_user_model(backend, content, user_model):
 def _registration_models(backend, content):
     if not isinstance(backend, TrustModelBackendMixin):
         return []
-    plan = backend.registry.plan_for(content)
+    catalog = backend.get_catalog()
+    if catalog is None:
+        return []
+    plan = catalog.plan_for(content)
     models = []
     for record in plan.records:
         models.extend((

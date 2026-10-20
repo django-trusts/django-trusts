@@ -26,7 +26,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import built_registries
+from tests.apps import listed_relationship, built_registries
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
@@ -36,7 +36,7 @@ def _seal_factory(backend_cls, factory):
     from trusts.apps import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, factory=factory, registry=built, family_registries=built_registries(()))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
 
 @contextmanager
 def _listed(handle):
@@ -386,7 +386,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         return self.TeamPermission.objects.create(team=team, permission=permission, note=note)
 
     def _authorized(self, handle, user, permission, *, skip_is_active=False):
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((handle,))):
+        with listed_relationship(built_registries((handle,))):
             return list(self.Repository.objects.authorized(user, permission, skip_is_active=skip_is_active).order_by('pk'))
 
     def _assert_unique(self, rows, expected):
@@ -439,7 +439,7 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self.assertIn(self.Team._meta.get_field('members').m2m_db_table(), granted_sql)
 
     def _authorized_qs(self, handle, user, permission):
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((handle,))):
+        with listed_relationship(built_registries((handle,))):
             return self.Repository.objects.authorized(user, permission)
 
     def test_prefixed_access_does_not_cross_members_or_permissions(self):

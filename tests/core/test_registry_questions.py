@@ -248,7 +248,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a, kind='group')), {self.read.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(list(built.permissions_for(self.bob, self.doc_a, kind='group')), [])
-        empty = RegistryFactory().build_registry()
+        empty = RegistryFactory(user_model=self.User).build_registry()
         self.assertFalse(empty.has_permission(self.alice, self.doc_a, self.read))
         self.assertEqual(list(empty.permissions_for(self.alice, self.doc_a)), [])
         self.assertEqual(list(empty.filter_authorized(self.Document.objects.all(), self.alice, self.read)), [])

@@ -83,7 +83,7 @@ class Registry(object):
         self, *, records, delegations, conditions=None,
         user_conditions=None, user_override=None,
         condition_lookup=_CONDITION_LOOKUP_UNSET,
-        compiler=None, path='', family='relationship',
+        compiler=None, path='', family='relationship', user_model=None,
     ):
         self.records = tuple(records)
         self.delegations = tuple(delegations)
@@ -91,6 +91,7 @@ class Registry(object):
         self._compiler = PlanQueryCompiler() if compiler is None else compiler
         self.path = path
         self.family = family
+        self.user_model = user_model
         if conditions is None:
             # Stay lazy: importing this module must not load the
             # condition IR unless a store or lookup must be created.
@@ -370,7 +371,7 @@ class Registry(object):
 
     def permitted_users_predicate(self, content, perm, *, family_registries=(),
                                   skipped=(), condition_lookup=None,
-                                  accepts_permission=None):
+                                  accepts_permission=None, owner_name=None):
         """Q3 predicate: ``Q`` over candidate users, or ``None``.
 
         ``condition_lookup`` defaults to this registry's lookup.
@@ -384,11 +385,11 @@ class Registry(object):
             self, content, perm, family_registries=family_registries,
             skipped=skipped, condition_lookup=condition_lookup,
             accepts_permission=accepts_permission,
+            owner_name=owner_name,
         )
 
     def permitted_users(self, content, perm, *, family_registries=(), **skip_flags):
         """Q3: lazy user queryset permitted on ``content`` for ``perm``."""
-        from django.contrib.auth import get_user_model
         from trusts.plan.rewrites import bind_once
         from trusts.plan.users import _plan_user_model
 
@@ -403,8 +404,13 @@ class Registry(object):
         if predicate is None:
             if plan.records or plan.delegations:
                 user_model = _plan_user_model(plan, content)
+            elif self.user_model is not None:
+                user_model = self.user_model
             else:
-                user_model = get_user_model()
+                raise TrustsConfigurationError(
+                    'permitted_users has no registered user model and this '
+                    'registry was built without user_model.'
+                )
             return user_model._default_manager.none()
         user_model = _plan_user_model(plan, content)
         return bind_once(
