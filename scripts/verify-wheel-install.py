@@ -186,7 +186,7 @@ def main() -> int:
         RegistryFactory,
     )
     from trusts.compile.nodes import Ref
-    from trusts.plan.contents import (
+    from trusts.decorators import (
         filter_authorized_scopes,
         filter_by_permitted_content,
     )

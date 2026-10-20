@@ -1,6 +1,7 @@
-"""Content grants and permitted-content filters.
+"""Content grants and the permitted-content compiler.
 
-``granted`` and ``filter_authorized_scopes`` are defined here.
+``granted`` is defined here. The permitted-content queryset compiler
+is private; the public filter lives in ``trusts.decorators``.
 """
 
 __all__ = []
@@ -9,14 +10,12 @@ from functools import reduce
 from operator import or_
 
 from django.db.models import Exists, F, Model, OuterRef, Q
-from django.db.models.query import QuerySet
 
 from trusts.plan.rewrites import bind_once
 from trusts.commons import (
     _bind_record_qs,
     _bind_terminal,
     _path_text,
-    _require_instance,
     _root_relative_column,
     _scope_prefix_lookups,
 )
@@ -32,7 +31,6 @@ from trusts.plan.recursions import (
     _KeyedReach,
     _PrefixInForwardWalk,
 )
-from trusts.backends import configured_catalogs
 from trusts.plan.relations import (
     _bound_permission_identity,
     _candidate_model,
@@ -405,77 +403,6 @@ def _compile_permitted_content_queryset(
         return queryset.none()
     granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
     return bind_once(queryset.filter(granted_q).distinct())
-
-
-def filter_by_permitted_content(queryset, user, permission, *, content,
-                                registries=None, **skip_flags):
-    """Filter scope-model rows that appear as a proper prefix of ``content``.
-
-    Fail closed unless ``queryset.model`` is a proper prefix node of some
-    applicable record's ``content_path`` whose content terminal is
-    ``content``. Compile ``EXISTS`` of root rows correlated to
-    ``OuterRef`` of that hop's resolved target field (the related
-    ``attname`` from ``get_path_info()``, which need not be ``pk``) at
-    that node, bind user + permission from the same record, and OR
-    applicable records.
-
-    An ``along=`` registration uses the same bounded ``WITH RECURSIVE``
-    walk as the forward check. A prefix at the walk site is kept when
-    its identity is in that walk. A later proper prefix is kept when it
-    hangs off a walk-site row in the walk. A one-level delegation
-    contributes a prefix only when the delegation and the sponsor's
-    ordinary permission both reach it. A second delegation level does
-    not. A delegated ``along=`` whose content suffix is longer than one
-    reverse hop raises ``TrustsConfigurationError``.
-
-    ``queryset.model`` equal to the content terminal is allowed when a
-    proper prefix hop of that same model exists (self-referential
-    trees). A terminal-only path has no proper prefix, so the same-model
-    queryset still returns ``none()``. Unknown terminal, empty registries,
-    or a scope model not on the path also return ``none()``.
-    ``permission`` must be a model instance. Construction of a
-    fail-closed result issues zero SQL; SQL runs only when a compiled
-    predicate is evaluated. Default and explicit registry lists include
-    relationship-family registries only.
-
-    Noun-blind: this builder does not import or name Zero schema models
-    and does not use a compiler's historical group
-    OR. Explicit ``group=`` records participate through the same prefix
-    correlation. Membership shape is not a group.
-    """
-    if not isinstance(queryset, QuerySet):
-        raise TrustsConfigurationError(
-            'filter_by_permitted_content requires a QuerySet, not %r.'
-            % (queryset,)
-        )
-    if registries is None:
-        registries = tuple(
-            catalog for catalog in configured_catalogs()
-            if catalog.family == 'relationship'
-        )
-    else:
-        registries = _relationship_registries(registries)
-    user = _require_instance(user, 'user')
-    permission = _require_instance(permission, 'permission')
-    inquiry = bind_checked_user(
-        user, skip_flags=skip_flags, registries=registries,
-    )
-    if not registries or inquiry.denied:
-        return queryset.none()
-    skipped = inquiry.values
-    return _compile_permitted_content_queryset(
-        queryset, user, permission, content=content, registries=registries,
-        family_registries=registries,
-        skipped=skipped,
-    )
-
-
-def filter_authorized_scopes(queryset, user, permission, *, content,
-                             registries=None, **skip_flags):
-    return filter_by_permitted_content(
-        queryset, user, permission, content=content, registries=registries,
-        **skip_flags,
-    )
 
 
 def _shift_outer_ref(value):

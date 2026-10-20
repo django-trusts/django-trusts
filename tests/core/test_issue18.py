@@ -20,7 +20,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from trusts.compile.nodes import permission_in
-from trusts.plan.contents import filter_by_permitted_content
+from trusts.decorators import filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError

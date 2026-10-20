@@ -3,11 +3,18 @@
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
+from trusts._permitted import (
+    _auth_permission_plan,
+    _auth_permission_plan_for_model,
+    _backend_has_selected_conditions,
+    _overlay_for_backend,
+)
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     evaluate_registered_expression,
     permission_has_condition,
 )
+from trusts.plan.contents import granted
 from trusts.plan.relations import bind_checked_user
 from trusts.utils import parse_perm_code
 
@@ -84,6 +91,65 @@ class Catalog(object):
             family_registries=self.family_registries,
             **skip_flags,
         )
+
+    def filter_by_permitted_content(self, queryset, user, permission, *,
+                                    content, skipped=None, **skip_flags):
+        """Scope rows that are a proper prefix of ``content`` for this catalog."""
+        return self._registry.filter_by_permitted_content(
+            queryset, user, permission, content=content,
+            family_registries=self.family_registries,
+            skipped=skipped, **skip_flags,
+        )
+
+    def authorization_preflight(self, model, conditions):
+        """Zero-SQL ``(participating, owns_conditions)`` for this catalog.
+
+        A catalog with no applicable ``auth.Permission`` plan contributes
+        nothing. Family peers supply ordinary sponsor records for a
+        delegation; they are not extra backends.
+        """
+        family = (self._registry,) + tuple(self.family_registries)
+        plan = _auth_permission_plan_for_model(self._registry, model, family)
+        if plan is None:
+            return False, False
+        return True, _backend_has_selected_conditions(
+            self._registry, model, conditions,
+        )
+
+    def authorization_grant(self, candidates, user, model, permission,
+                            conditions, binding, *, api, skipped=()):
+        """This catalog's grant predicate and whether it owned the names.
+
+        ``(None, False)`` when this catalog does not participate. The
+        predicate is a ``Q`` when this catalog grants. ``owned`` is true
+        when names were selected and this catalog registered every one.
+        """
+        family = (self._registry,) + tuple(self.family_registries)
+        registry = self._registry
+        if _auth_permission_plan(registry, candidates, user, family) is None:
+            return None, False
+        if conditions:
+            overlay = _overlay_for_backend(
+                registry, model, permission, conditions, user, api=api,
+            )
+            if overlay is None:
+                return None, False
+            part = granted(
+                (registry,), candidates, user, binding, kind='complete',
+                family_registries=family, permission_model=Permission,
+                skipped=skipped,
+            )
+            if part is None:
+                return None, True
+            return part & overlay, True
+        part = granted(
+            (registry,), candidates, user, binding, kind='complete',
+            family_registries=family, permission_model=Permission,
+            skipped=skipped,
+        )
+        if part is None:
+            return None, False
+        return part, False
 
     def permissions_for(self, user, content, *, kind='complete', skipped=None,
                         **skip_flags):
@@ -207,6 +273,32 @@ class Catalog(object):
         if record is None or not isinstance(obj, QuerySet):
             return record, None
         return record, lookup.compile_q(obj.model, permext, user_obj)
+
+
+def explicit_catalogs(entries):
+    """Front an explicit sequence as catalogs. Does not compile.
+
+    A ``Catalog`` is kept. Any other object becomes the registry of a
+    new catalog; its peers are the other non-catalog objects. This does
+    not read ``AUTHENTICATION_BACKENDS``.
+    """
+    kept = []
+    loose = []
+    for entry in entries:
+        if isinstance(entry, Catalog):
+            kept.append(entry)
+        else:
+            loose.append(entry)
+    for entry in loose:
+        peers = tuple(other for other in loose if other is not entry)
+        kept.append(Catalog(
+            cls=type(entry),
+            path=entry.path,
+            family=entry.family,
+            registry=entry,
+            family_registries=peers,
+        ))
+    return tuple(kept)
 
 
 class PreparedInquiry(object):
