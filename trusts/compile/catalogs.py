@@ -73,7 +73,7 @@ _BACKENDS_THAT_IGNORE_THE_OBJECT = (
 class CatalogShape(object):
     """Frozen data ``factory.build()`` hands to one ``Catalog``.
 
-    ``cls``, ``path``, and ``family`` are that catalog's identity.
+    ``path`` and ``family`` are that catalog's identity.
     ``conditions`` is the ``(model, code, record)`` tuple taken once at
     build. ``user_rules`` is ``(primary, absent)``: stored rules use
     ``primary``; the built-in rule uses ``primary`` when the subject has
@@ -89,7 +89,6 @@ class CatalogShape(object):
     user_override: object
     filter_lookup: object
     compiler: object
-    cls: object
     path: str
     family: str
     user_model: object
@@ -136,7 +135,6 @@ class Catalog(object):
     """
 
     def __init__(self, shape):
-        self.cls = shape.cls
         self.path = shape.path
         self.family = shape.family
         self.records = shape.records

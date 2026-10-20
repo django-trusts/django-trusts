@@ -34,7 +34,6 @@ from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog
-from trusts.backends import TrustModelBackendMixin
 
 HOST = 'tests.backends.HostTrustModelBackend'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
@@ -189,9 +188,9 @@ def _seal_document_factory(factory):
     from trusts.backends import catalogs
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
-    catalogs[DocumentBackend] = built_catalog(
-        factory, cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family,
-    )
+    factory.path = DOCUMENT_BACKEND
+    factory.family = family
+    catalogs[DocumentBackend] = built_catalog(factory)
     return catalogs[DocumentBackend]
 
 @contextmanager
@@ -200,7 +199,7 @@ def _document_registry():
     from trusts.backends import catalogs
     had_catalog = DocumentBackend in catalogs
     saved_catalog = catalogs.get(DocumentBackend)
-    registry = RegistryFactory(cls=TrustModelBackendMixin, path=DOCUMENT_BACKEND)
+    registry = RegistryFactory(path=DOCUMENT_BACKEND)
     try:
         yield registry
     finally:

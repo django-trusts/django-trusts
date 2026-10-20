@@ -73,7 +73,7 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         self.assertTrue(callable(filter_by_permitted_content))
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(issubclass(AuthorizedManager, object))
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         self.assertEqual(registry.records, ())
         self.assertIsNotNone(Ref)
 
@@ -182,7 +182,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
         if HOST_BACKEND not in settings.AUTHENTICATION_BACKENDS:
             self.skipTest('kernel-only host path is not listed on the pair')
         catalog = configured_catalog(HOST_BACKEND)
-        self.assertIs(catalog.cls, HostTrustModelBackend)
+        self.assertIs(catalog, catalogs[HostTrustModelBackend])
         self.assertIn(catalog, configured_catalogs())
 
 

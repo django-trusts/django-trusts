@@ -24,7 +24,7 @@ from tests.support import render_configured_policy, built_catalog, install_class
 
 
 def _handle(path='tests.core.issue266'):
-    return RegistryFactory(cls=TrustModelBackendMixin, path=path)
+    return RegistryFactory(path=path)
 
 def _permission(model, codename):
     content_type = ContentType.objects.get_for_model(model)
@@ -37,12 +37,9 @@ class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
 def _seal_factory(backend_cls, factory):
     """Construct this class's catalog from a factory this test filled."""
     from trusts.backends import catalogs
-    catalogs[backend_cls] = built_catalog(
-        factory,
-        cls=backend_cls,
-        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
-        family=backend_cls.family,
-    )
+    factory.path = '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
+    factory.family = backend_cls.family
+    catalogs[backend_cls] = built_catalog(factory)
 
 def _document_host_handle():
     """Same registration ``DocumentConfig.ready`` installs on the kernel host."""
@@ -719,7 +716,7 @@ class DelegationRootGuardTest(TestCase):
         self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         delegation = Ref(DocumentDelegation)
         grant = Ref(DocumentGrant)
         with self.assertNumQueries(0):

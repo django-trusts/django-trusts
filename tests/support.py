@@ -19,24 +19,9 @@ import trusts.plan.standards as standards
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
-def built_catalog(factory, *, cls=None, path=None, family=None):
-    """Catalog for one factory. The factory is built here.
-
-    ``cls``, ``path``, and ``family`` stamp that one build when the
-    catalog's identity differs from the factory's. The factory's own
-    attributes are restored.
-    """
-    saved = (factory.cls, factory.path, factory.family)
-    if cls is not None:
-        factory.cls = cls
-    if path is not None:
-        factory.path = path
-    if family is not None:
-        factory.family = family
-    try:
-        return Catalog(factory.build())
-    finally:
-        factory.cls, factory.path, factory.family = saved
+def built_catalog(factory):
+    """Catalog for one factory. The factory is built here."""
+    return Catalog(factory.build())
 
 
 def built_registries(items):
@@ -63,7 +48,8 @@ def override_catalog(backend_cls, factory, path):
     """Publish one catalog for ``backend_cls`` and restore the previous entry."""
 
     saved = catalogs.get(backend_cls, _MISSING)
-    catalogs[backend_cls] = built_catalog(factory, cls=backend_cls, path=path)
+    factory.path = path
+    catalogs[backend_cls] = built_catalog(factory)
     try:
         yield catalogs[backend_cls]
     finally:
@@ -150,7 +136,8 @@ def _publish_catalog(backend_cls, factory, *, path=None):
     published = path or factory.path or (
         '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
     )
-    catalog = built_catalog(factory, cls=backend_cls, path=published)
+    factory.path = published
+    catalog = built_catalog(factory)
     catalogs[backend_cls] = catalog
     return catalog
 
@@ -225,7 +212,7 @@ def isolate_live_registry(config, registry, path):
 def install_writable_registry(config, path, contribute=None):
     """Install a standalone factory as the catalog for one live path."""
 
-    registry = RegistryFactory(cls=TrustModelBackendMixin, path=path)
+    registry = RegistryFactory(path=path)
     if contribute is not None:
         contribute(registry)
     isolate_live_registry(config, registry, path)
@@ -249,9 +236,9 @@ def listed_relationship(factories):
     for cls, factory in zip(classes, factories):
         listing = '%s.%s' % (cls.__module__, cls.__name__)
         paths.append(listing)
-        catalogs[cls] = built_catalog(
-            factory, cls=cls, path=factory.path or listing,
-        )
+        if not factory.path:
+            factory.path = listing
+        catalogs[cls] = built_catalog(factory)
     with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
         try:
             yield tuple(catalogs[cls] for cls in classes)
@@ -298,10 +285,9 @@ def unbound_named_filters(backend_cls):
         path='' if live is None else live.path,
         family=backend_cls.family,
         user_model=standards.user_model,
-        cls=backend_cls,
     )
     replay_recorder(factory, backend_cls, filters=False)
-    catalogs[backend_cls] = built_catalog(factory, cls=backend_cls)
+    catalogs[backend_cls] = built_catalog(factory)
     try:
         yield catalogs[backend_cls]
     finally:

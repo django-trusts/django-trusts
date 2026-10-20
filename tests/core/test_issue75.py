@@ -201,7 +201,7 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
 
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        registry = RegistryFactory(cls=TrustModelBackendMixin, compiler=RaisingCompilerBackend.query_compiler)
+        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)
@@ -249,7 +249,7 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.assertFalse(Document.objects.authorized(self.bob, self.change).exists())
 
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
-        isolated = RegistryFactory(cls=TrustModelBackendMixin)
+        isolated = RegistryFactory()
         _contribute_document(isolated)
         isolated.path = MIXIN
         extra = isolated
@@ -287,7 +287,7 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
         live = live_config()
-        registry = RegistryFactory(cls=TrustModelBackendMixin, compiler=RaisingCompilerBackend.query_compiler)
+        registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)

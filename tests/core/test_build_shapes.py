@@ -18,7 +18,6 @@ from django.db.models import Q
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.backends import TrustModelBackendMixin
 from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.compile.factory import (
     PublicRegistration,
@@ -36,7 +35,7 @@ from tests.support import built_catalog, forget_models
 class BuildRelationTest(SimpleTestCase):
     def test_build_relation_returns_frozen_shape_without_storing(self):
         Document, DocumentGrant = _document_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(DocumentGrant)
 
         built = registry.build_relation(
@@ -63,7 +62,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_equality_and_register_appends_same_shape(self):
         _Document, DocumentGrant = _document_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(DocumentGrant)
         kwargs = dict(
             content=root.document, user=root.user,
@@ -79,7 +78,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_group_shape(self):
         Document, GroupGrant = _group_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(GroupGrant)
 
         built = registry.build_relation(
@@ -99,7 +98,7 @@ class BuildRelationTest(SimpleTestCase):
     def test_build_relation_rejects_bad_permission_source_and_roots(self):
         _Document, DocumentGrant = _document_models()
         _Other, OtherGrant = _other_grant_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(DocumentGrant)
 
         with self.assertRaises(TrustsConfigurationError):
@@ -118,7 +117,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_after_build_still_builds_and_registers(self):
         _Document, DocumentGrant = _document_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(DocumentGrant)
         built = registry.build_relation(
             content=root.document, user=root.user,
@@ -139,7 +138,7 @@ class BuildRelationTest(SimpleTestCase):
 class BuildDelegationTest(SimpleTestCase):
     def test_build_delegation_returns_shape_without_storing(self):
         Document, Share = _share_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(Share)
 
         built = registry.build_delegation(
@@ -161,7 +160,7 @@ class BuildDelegationTest(SimpleTestCase):
 
     def test_register_delegation_appends_shape_with_sponsor_rules(self):
         _Document, Share = _share_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(Share)
         kwargs = dict(
             content=root.document, delegate=root.delegate,
@@ -178,7 +177,7 @@ class BuildDelegationTest(SimpleTestCase):
 
     def test_build_delegation_rejects_mismatched_principals(self):
         _Document, Share = _share_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(Share)
 
         with self.assertRaises(TrustsConfigurationError):
@@ -193,7 +192,7 @@ class BuildDelegationTest(SimpleTestCase):
 class BuildPublicRegistrationTest(SimpleTestCase):
     def test_build_public_registration_ordinary_shape(self):
         _Document, DocumentGrant = _document_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
 
         shape = registry.build_public_registration(
             trust=DocumentGrant, content='document', user='user',
@@ -226,7 +225,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 
     def test_build_public_registration_invokes_builder_once(self):
         _Document, DocumentGrant = _document_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         calls = []
 
         def content_builder(trust):
@@ -246,7 +245,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
     def test_build_public_registration_group_and_delegated_shapes(self):
         _Document, GroupGrant = _group_models()
         _Doc2, Share = _share_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
 
         group_shape = registry.build_public_registration(
             trust=GroupGrant, content='document', user='user', group='group',
@@ -268,7 +267,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 
     def test_build_public_registration_rejects_mixed_modes(self):
         _Document, DocumentGrant = _document_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
 
         with self.assertRaises(TrustsConfigurationError):
             registry.build_public_registration(
@@ -292,7 +291,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 class BuildCatalogShapeTest(SimpleTestCase):
     def test_build_freezes_rows_and_fragments(self):
         Document, DocumentGrant = _document_models()
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
+        registry = RegistryFactory()
         root = Ref(DocumentGrant)
         record = registry.register(
             content=root.document, user=root.user,
@@ -305,7 +304,6 @@ class BuildCatalogShapeTest(SimpleTestCase):
         shape = registry.build()
 
         self.assertIsInstance(shape, CatalogShape)
-        self.assertIs(shape.cls, TrustModelBackendMixin)
         self.assertEqual(shape.path, '')
         self.assertEqual(shape.family, 'relationship')
         self.assertTrue(dataclasses.is_dataclass(shape))
@@ -331,13 +329,6 @@ class BuildCatalogShapeTest(SimpleTestCase):
         self.assertTrue(all(isinstance(part, models.Q) for part in shape.user_rules))
         self.assertNotEqual(str(shape.user_rules[0]), str(shape.user_rules[1]))
         self.assertIsNone(shape.override_q)
-
-    def test_build_without_a_backend_class_raises(self):
-        registry = RegistryFactory(cls=TrustModelBackendMixin)
-        registry.cls = None
-        with self.assertRaises(TrustsConfigurationError) as ctx:
-            registry.build()
-        self.assertIn('backend class', str(ctx.exception))
 
 
 def _document_models():
@@ -462,7 +453,6 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user_override=None,
                 filter_lookup=FrozenConditionLookup(()),
                 compiler=None,
-                cls=TrustModelBackendMixin,
                 path='shape-answers',
                 family='relationship',
                 user_model=User,
@@ -493,7 +483,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 records=(), delegations=(), conditions=(),
                 user_conditions=None, user_override=None,
                 filter_lookup=FrozenConditionLookup(()),
-                compiler=None, cls=TrustModelBackendMixin, path='empty-shape',
+                compiler=None, path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,
             ))

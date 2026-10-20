@@ -2,7 +2,6 @@
 
 Trust-as-content ``.permitted()`` stays on Zero ``tests/legacy/``.
 """
-from trusts.backends import TrustModelBackendMixin
 
 from django.apps import apps
 from django.test import SimpleTestCase
@@ -55,7 +54,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
     def test_frozen_recorder_is_not_rewritten(self):
         from tests.myapp.backends import DocumentBackend
 
-        isolated = RegistryFactory(cls=TrustModelBackendMixin)
+        isolated = RegistryFactory()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
         recorder = DocumentBackend().get_registry()
         self.contributor.ready()
@@ -64,7 +63,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertTrue(self.live_catalog.plan_for(Document).records)
 
     def test_conflicting_contribution_does_not_reach_the_frozen_recorder(self):
-        isolated = RegistryFactory(cls=TrustModelBackendMixin)
+        isolated = RegistryFactory()
         j = Ref(DocumentGrant)
         isolated.register(
             content=j.document,

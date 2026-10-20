@@ -25,7 +25,7 @@ from tests.support import render_configured_policy, install_class_handle
 
 
 def _handle(path='tests.core.issue282'):
-    return RegistryFactory(cls=TrustModelBackendMixin, path=path)
+    return RegistryFactory(path=path)
 
 def _contribute_m2m(field, model):
     if not hasattr(field, 'm2m_field_name'):
@@ -42,12 +42,9 @@ class _PairBackend(TrustModelBackendMixin, ModelBackend):
 def _seal_factory(backend_cls, factory):
     from trusts.backends import catalogs
     from tests.support import built_catalog
-    catalogs[backend_cls] = built_catalog(
-        factory,
-        cls=backend_cls,
-        path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__),
-        family=backend_cls.family,
-    )
+    factory.path = '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
+    factory.family = backend_cls.family
+    catalogs[backend_cls] = built_catalog(factory)
 
 @contextmanager
 def _listed(handle):

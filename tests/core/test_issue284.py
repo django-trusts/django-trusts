@@ -223,7 +223,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             AccountGrant.objects.create(note=note, account=account, action=read)
             FolderGrant.objects.create(folder=folder, user=alice, permission=read)
             FolderGrant.objects.create(folder=folder, user=inactive, permission=read)
-            registry = RegistryFactory(cls=TrustModelBackendMixin)
+            registry = RegistryFactory()
             grant = Ref(NoteGrant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(alice, note)), {read.pk})
@@ -236,7 +236,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertEqual(_pks(built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=True))
             self.assertEqual(_pks(built_catalog(registry).filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
-            account_registry = RegistryFactory(cls=TrustModelBackendMixin)
+            account_registry = RegistryFactory()
             account_grant = Ref(AccountGrant)
             account_registry.register(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
             self.assertEqual(_pks(built_catalog(account_registry).permissions_for(account, note)), {read.pk})
@@ -249,7 +249,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertEqual(_pks(skipped), {read.pk})
             self.assertEqual(skipped.query.sql_with_params()[0], built_catalog(registry).permissions_for(alice, note).query.sql_with_params()[0])
             self.assertIn('is_active', str(skipped.query))
-            scope_registry = RegistryFactory(cls=TrustModelBackendMixin)
+            scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
             scope_registry.register(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
             handle = scope_registry
@@ -340,12 +340,12 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                             rows = AuthorizedQuerySet(Note).authorized(holder, read, skip_is_active=include_inactive)
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
-            registry = RegistryFactory(cls=TrustModelBackendMixin)
+            registry = RegistryFactory()
             grant = Ref(LocalUserGrant)
             registry.register(content=grant.note, user=grant.holder, permission=grant.action)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(visible, note)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(visible, '%s.%s' % (read.content_type.app_label, read.codename), note))
-            scope_registry = RegistryFactory(cls=TrustModelBackendMixin)
+            scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
             scope_registry.register(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
             handle = scope_registry
@@ -452,7 +452,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                 Grant.objects.create(cabinet=self.cabinet, user=user, permission=self.read)
             self.relationship = Relationship.objects.create(cabinet=self.cabinet, delegate=self.delegate, sponsor=self.sponsor)
             self.relationship.allowed_permissions.add(self.read)
-            self.handle = RegistryFactory(cls=TrustModelBackendMixin, path='tests.core.test_issue284._AcceptanceBackend')
+            self.handle = RegistryFactory(path='tests.core.test_issue284._AcceptanceBackend')
             self.handle.register_public(trust=Grant, user='user', permission='permission', content='cabinet__sheets')
             self.handle.register_public(trust=Relationship, delegate='delegate', sponsor='sponsor', content='cabinet__sheets', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
             self.handle.register_permission_condition(Sheet, 'active_only', lambda user, permission, content: user.is_active == True)
@@ -460,7 +460,11 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             install_class_handle(_AcceptanceBackend, self.handle)
             from trusts.backends import catalogs
             factory = self.handle
-            catalogs[_AcceptanceBackend] = built_catalog(factory, cls=_AcceptanceBackend, path='%s.%s' % (_AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__), family=_AcceptanceBackend.family)
+            factory.path = '%s.%s' % (
+                _AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__,
+            )
+            factory.family = _AcceptanceBackend.family
+            catalogs[_AcceptanceBackend] = built_catalog(factory)
             self.backend = _AcceptanceBackend()
             self._settings = override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue284._AcceptanceBackend',))
             self._settings.enable()

@@ -2,7 +2,6 @@
 
 Ticket ``.permitted()`` stays on Zero ``tests/legacy/``.
 """
-from trusts.backends import TrustModelBackendMixin
 
 from django.apps import apps
 from django.test import SimpleTestCase
@@ -51,4 +50,4 @@ class IsolatedAppsDoesNotDonateTicketContributionTest(
         self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
         self.assertEqual(live_host.records, before_host)
         self.assertEqual(live_doc.records, before_doc)
-        self.assertIsInstance(RegistryFactory(cls=TrustModelBackendMixin), RegistryFactory)
+        self.assertIsInstance(RegistryFactory(), RegistryFactory)

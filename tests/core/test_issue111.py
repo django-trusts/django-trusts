@@ -17,7 +17,7 @@ from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import (
     TrustsImplementationConfig)
-from trusts.backends import TrustModelBackendMixin
+from trusts.backends import TrustModelBackendMixin, catalogs
 from trusts.errors import TrustsConfigurationError
 
 
@@ -151,4 +151,4 @@ class OwnerResolutionTest(SimpleTestCase):
         backend = HostTrustModelBackend()
         catalog = backend.get_catalog()
         self.assertEqual(catalog.path, HOST_BACKEND)
-        self.assertIs(catalog.cls, HostTrustModelBackend)
+        self.assertIs(catalog, catalogs[HostTrustModelBackend])
