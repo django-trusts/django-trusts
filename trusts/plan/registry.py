@@ -103,9 +103,6 @@ class Registry(object):
         self.family = family
         self.user_model = user_model
         if conditions is None:
-            # Stay lazy: importing this module must not load the
-            # condition IR unless a store or lookup must be created.
-
             conditions = ConditionRegistry()
         self.conditions = conditions
         self.user_conditions = (
@@ -127,15 +124,15 @@ class Registry(object):
         return self._compiler
 
     def plan_for(self, content, *, user=None, permission=None):
-        """Same terminal selection as ``TrustsRegistry.plan_for``.
+        """Select the terminal plan for ``content``.
 
         Lowered rows and rule data come from construction. ``content``,
         ``user``, and ``permission`` are the runtime parameters.
         """
-        content_model = content_model(content)
-        user_model = None
+        resolved_content = content_model(content)
+        principal_model = None
         if user is not None:
-            user_model = concrete_model(
+            principal_model = concrete_model(
                 require_instance(user, 'user'),
             )
         permission_model = None
@@ -144,9 +141,9 @@ class Registry(object):
                 require_instance(permission, 'permission'),
             )
         records = self._records_for(
-            content_model, user_model, permission_model,
+            resolved_content, principal_model, permission_model,
         )
-        delegations = self._delegations_for(content_model, user_model)
+        delegations = self._delegations_for(resolved_content, principal_model)
         plan_permission = permission_model
         if records:
             models = {record.permission_model for record in records}
@@ -157,7 +154,7 @@ class Registry(object):
                     % ', '.join(sorted(model._meta.label for model in models))
                 )
             plan_permission = models.pop()
-        subject = self._compiled_subject(records, delegations, user_model)
+        subject = self._compiled_subject(records, delegations, principal_model)
         rules = closed = override = None
         if subject is not None:
             rules = self._rule_fragment(subject, role='user')
