@@ -2,6 +2,8 @@ from contextlib import contextmanager
 
 from django.apps import AppConfig
 
+from trusts.plan.hops import _require_instance
+
 
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
@@ -54,8 +56,6 @@ def scoped_permitted_content(queryset, user, permission, *, content,
     The public filter walks ``get_catalog()`` and takes no registry
     argument. This helper is the direct registry question.
     """
-    from trusts.commons import _require_instance
-
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
     parts = []

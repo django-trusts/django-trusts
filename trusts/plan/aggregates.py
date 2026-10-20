@@ -1,8 +1,8 @@
 """Multi-handle authorization aggregates.
 
 These combine several registries. Single-registry grants stay in
-``trusts.plan.contents``. This module may import other ``plan`` modules,
-``commons``, and ``errors``. It does not import ``trusts.compile``,
+``trusts.plan.contents``. This module may import other ``plan`` modules
+and ``errors``. It does not import ``trusts.compile``,
 ``trusts.backends``, or ``trusts.apps``.
 """
 
@@ -14,7 +14,7 @@ from operator import or_
 from django.db.models import Count, Exists, OuterRef, Q
 
 from trusts.plan.rewrites import bind_once
-from trusts.commons import _require_instance
+from trusts.plan.hops import _require_instance
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.contents import (
     _apply_checked_user,

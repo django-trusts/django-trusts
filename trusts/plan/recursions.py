@@ -9,7 +9,7 @@ __all__ = []
 from django.db.models import BooleanField, Exists, F, OuterRef, Q
 from django.db.models.expressions import Expression
 
-from trusts.commons import _bind_record_qs
+from trusts.plan.predicates import _bind_record_qs
 from trusts.plan.walk import (
     _content_walk_seed,
     _grant_walk_attname,

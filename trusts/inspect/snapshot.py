@@ -42,7 +42,7 @@ from django.db.models.lookups import Lookup
 
 from trusts.apps import user_model
 from trusts.backends import TrustModelBackendMixin
-from trusts.commons import _resolved_hop
+from trusts.plan.hops import _resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _relationship_registries
@@ -952,7 +952,7 @@ class _PolicyConditionText(object):
     """Render one stored predicate as a policy-lock condition line.
 
     The node dispatches through ``accept``, the same way
-    ``commons._PredicateCompiler`` keeps ``Q`` off the nodes. Text stays
+    ``plan.predicates._PredicateCompiler`` keeps ``Q`` off the nodes. Text stays
     here. ``grouped`` is restored around each child so a nested ``All``
     does not change its parent's parentheses.
     """

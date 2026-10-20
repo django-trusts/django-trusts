@@ -14,7 +14,7 @@ from functools import partial
 
 from django.db.models import QuerySet
 
-from trusts.commons import (
+from trusts.plan.hops import (
     _concrete_model, _content_model, _require_instance, _resolved_hop,
 )
 from trusts.errors import TrustsConfigurationError

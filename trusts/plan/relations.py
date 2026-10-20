@@ -16,12 +16,12 @@ from django.db.models import Exists, Model, OuterRef, Q, QuerySet
 from django.db.models.base import ModelBase
 
 from trusts.plan.rewrites import bind_once
-from trusts.commons import (
+from trusts.plan.hops import _require_instance
+from trusts.plan.predicates import (
     _bind_record_qs,
     _bind_terminal,
     _content_type_identity,
     _permission_terminal_is_auth_permission,
-    _require_instance,
 )
 from trusts.plan.recursions import GrantReach
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError

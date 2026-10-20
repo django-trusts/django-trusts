@@ -2,16 +2,15 @@
 
 Neighbor SQL, reach rendering, and the grant and content seeds. The
 five reach expressions stay in ``trusts.plan.recursions``. ``AlongWalk``
-stays in ``trusts.compile.paths``. Record binding and the predicate
-visitor stay in ``trusts.commons``. This module imports ``commons`` and
-does not import ``trusts.compile``.
+stays in ``trusts.compile.paths``. Record binding lives in
+``trusts.plan.predicates``. This module does not import ``trusts.compile``.
 """
 
 __all__ = []
 
 from django.db.models import F, Q
 
-from trusts.commons import _bind_record_qs, _bind_terminal
+from trusts.plan.predicates import _bind_record_qs, _bind_terminal
 from trusts.errors import TrustsConfigurationError
 
 

@@ -15,7 +15,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import router
 from django.db.models import F, Model, Q, QuerySet
 
-from trusts.utils import parse_perm_code
+from trusts.plan.conditions import parse_perm_code
 from trusts.plan.rewrites import bind_once
 from trusts.apps import installed_object_blind_backends, user_model
 from trusts.backends import TrustModelBackendMixin, configured_catalogs
@@ -23,7 +23,6 @@ from trusts.compile.catalogs import _permission_binding
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import _as_q, _ordinary_records
 from trusts.plan.relations import _bound_permission_identity, bind_checked_user
-from trusts.commons import _object_memory_value, _user_lookup
 from trusts.plan.aggregates import _delegated_user_exists
 from trusts.plan import conditions as _ir
 
@@ -691,3 +690,66 @@ def _assert_same_database(alias, models):
                 'not one SQL statement.'
                 % (concrete._meta.label, alias, chosen)
             )
+
+
+def _object_memory_value(instance, path):
+    """Field value already present on ``instance``. Does not query."""
+    if not path:
+        return instance
+    current = instance
+    model = instance.__class__
+    for index, name in enumerate(path):
+        try:
+            field = model._meta.get_field(name)
+        except FieldDoesNotExist as exc:
+            raise TrustsConfigurationError(
+                'Permission condition field %r is not on %s.'
+                % (name, model._meta.label)
+            ) from exc
+        last = index == len(path) - 1
+        if field.many_to_many or field.one_to_many:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry cannot compile multi-valued '
+                'condition field %s.%s.' % (model._meta.label, name)
+            )
+        if not last and getattr(field, 'is_relation', False):
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry cannot traverse %s.%s without '
+                'a construction query.' % (model._meta.label, name)
+            )
+        attname = field.attname
+        if attname not in current.__dict__:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry needs %s.%s loaded on the '
+                'content instance to compile a named filter without SQL.'
+                % (model._meta.label, attname)
+            )
+        current = current.__dict__[attname]
+        if not last:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry cannot traverse %s.%s.'
+                % (model._meta.label, name)
+            )
+    return current
+
+
+def _user_lookup(user_model, path):
+    if not path:
+        return 'pk'
+    current = user_model
+    for name in path:
+        try:
+            field = current._meta.get_field(name)
+        except FieldDoesNotExist as exc:
+            raise TrustsConfigurationError(
+                'Permission condition field %r is not on %s.'
+                % (name, current._meta.label)
+            ) from exc
+        if field.many_to_many or field.one_to_many:
+            raise TrustsConfigurationError(
+                'Reverse permission inquiry cannot compile multi-valued '
+                'principal field %s.%s.' % (current._meta.label, name)
+            )
+        if getattr(field, 'is_relation', False) and field.related_model is not None:
+            current = field.related_model
+    return '__'.join(path)
