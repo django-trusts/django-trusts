@@ -35,23 +35,12 @@ from tests.support import render_configured_policy, built_catalog, install_class
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
-def _seal_factory(backend_cls, factory):
-    from trusts.backends import catalogs
-    factory.path = '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
-    factory.family = backend_cls.family
-    catalogs[backend_cls] = built_catalog(factory)
-
 @contextmanager
 def _installed(handle):
-    from trusts.backends import catalogs
-    install_class_handle(_ListedBackend, handle)
-    _seal_factory(_ListedBackend, handle)
-    with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue267._ListedBackend',)):
-        try:
+    from tests.support import published_class_catalog
+    with published_class_catalog(_ListedBackend, handle):
+        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue267._ListedBackend',)):
             yield
-        finally:
-            install_class_handle(_ListedBackend, None)
-            catalogs.pop(_ListedBackend, None)
 
 @contextmanager
 def _tables(*model_classes):

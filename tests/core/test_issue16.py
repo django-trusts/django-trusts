@@ -166,7 +166,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
         registry = RegistryFactory()
-        registry.path = 'tests.backends.HostTrustModelBackend'
+        registry.path = 'tests.kernel_host.backends.HostTrustModelBackend'
         handle = registry
         log = _BuilderLog()
         record = handle.register_permission_condition(Note, 'own', log)
@@ -390,7 +390,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         self.assertIn('does not enable', messages[0].msg)
 
     def test_check_permission_conditions_reads_catalog_registry(self):
-        from tests.backends import HostTrustModelBackend
+        from tests.kernel_host.backends import HostTrustModelBackend
 
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
@@ -399,14 +399,15 @@ class ConditionRegistryCheckTest(SimpleTestCase):
 
         with override_catalog(
             HostTrustModelBackend, registry,
-            'tests.backends.HostTrustModelBackend',
+            'tests.kernel_host.backends.HostTrustModelBackend',
         ):
             messages = check_permission_conditions(None)
         errors = [m for m in messages if m.id == CHECK_ID_INVALID_EXPR]
         self.assertTrue(any(("'typo'" in m.msg for m in errors)))
 
     def test_two_owners_same_model_code_both_validated(self):
-        from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+        from tests.kernel_host.backends import HostTrustModelBackend
+        from tests.backends import MixinOnlyBackend
 
         Note, _Memo = _note_models()
         u, _p, o = condition_refs()
@@ -416,12 +417,12 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         _store_expr(owner_b, Note, 'own', u == o.nope)
 
         with override_settings(AUTHENTICATION_BACKENDS=(
-            'tests.backends.HostTrustModelBackend',
+            'tests.kernel_host.backends.HostTrustModelBackend',
             'tests.backends.MixinOnlyBackend',
         )):
             with override_catalog(
                 HostTrustModelBackend, owner_a,
-                'tests.backends.HostTrustModelBackend',
+                'tests.kernel_host.backends.HostTrustModelBackend',
             ):
                 with override_catalog(
                     MixinOnlyBackend, owner_b,

@@ -47,12 +47,11 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         self._factory = handle
 
     def has_perm(self, user_obj, perm, obj=None, **skip_flags):
-        from trusts.backends import catalogs
-        cls = type(self)
-        if cls not in catalogs:
+        if not getattr(self, '_sealed', False):
             self._factory.path = 'tests.core.issue203'
             self._factory.family = self.family
-            catalogs[cls] = built_catalog(self._factory)
+            self.catalog = built_catalog(self._factory)
+            self._sealed = True
         return super().has_perm(user_obj, perm, obj, **skip_flags)
 
 class _BuilderLog(object):

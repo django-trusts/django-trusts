@@ -22,8 +22,8 @@ from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from trusts.backends import TrustModelBackendMixin, configured_catalogs
-from trusts.compile.catalogs import relationship_catalogs
+from trusts.apps import installed_catalogs
+from trusts.backends import TrustModelBackendMixin
 from trusts.decorators import _declared_authorization_guards
 from trusts.errors import PermissionConditionError, TrustsCompilerError
 from trusts.plan.conditions import (
@@ -89,9 +89,9 @@ def _model_label(model):
     return repr(model)
 
 
-def _messages_for_expr(model, cond_code, expr):
+def _messages_for_expr(model, cond_code, expr, user_model=None):
     try:
-        validate_expression(expr, model)
+        validate_expression(expr, model, user_model)
     except PermissionConditionError as exc:
         return [django_checks.Error(
             'Permission condition %r on %s is invalid: %s' % (
@@ -178,7 +178,7 @@ def _covered_content_models():
     to hold the declaration.
     """
     covered = set()
-    for catalog in configured_catalogs():
+    for catalog in installed_catalogs():
         for record in catalog.records:
             covered.add(record.content_model)
         for record in catalog.delegations:
@@ -226,7 +226,7 @@ def check_missing_declarations(app_configs, **kwargs):
     terminals still fail closed at runtime.
     """
 
-    if not configured_catalogs():
+    if not installed_catalogs():
         return []
 
     covered = _covered_content_models()
@@ -285,7 +285,7 @@ def check_missing_declarations(app_configs, **kwargs):
 
 def _iter_catalog_permission_conditions():
     """Yield condition records from built catalogs."""
-    for catalog in configured_catalogs():
+    for catalog in installed_catalogs():
         yield from catalog.iter_permission_conditions()
 
 
@@ -322,15 +322,18 @@ def iter_live_permission_conditions(apps_registry=None):
         yield model, cond_code, record
 
 
-def permission_condition_check_messages(entries):
+def permission_condition_check_messages(entries, user_model=None):
     """Build check messages for ``(model, cond_code, record)`` entries.
 
     Builders are never invoked here; only stored IR is validated.
+    ``user_model`` is the catalog user model principal paths resolve against.
     """
     messages = []
     for model, cond_code, record in entries:
         if getattr(record, 'expr', None) is not None:
-            messages.extend(_messages_for_expr(model, cond_code, record.expr))
+            messages.extend(_messages_for_expr(
+                model, cond_code, record.expr, user_model,
+            ))
     return messages
 
 
@@ -355,7 +358,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    catalogs = relationship_catalogs()
+    catalogs = installed_catalogs()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -423,14 +426,16 @@ def check_permission_conditions(app_configs, **kwargs):
     ``manage.py check trusts`` still reports project-model conditions.
     Builders are never invoked. No database queries.
     """
+    catalogs = installed_catalogs()
+    user_model = catalogs[0].user_model if catalogs else None
     return permission_condition_check_messages(
-        iter_live_permission_conditions()
+        iter_live_permission_conditions(), user_model,
     )
 
 
 def _live_along_records():
     found = []
-    for catalog in configured_catalogs():
+    for catalog in installed_catalogs():
         for record in catalog.records:
             if record.along is not None:
                 found.append(record)
@@ -455,7 +460,7 @@ def check_along_renderer(app_configs, **kwargs):
 
 
 
-    if not configured_catalogs():
+    if not installed_catalogs():
         return []
     along_records = _live_along_records()
     if not along_records:

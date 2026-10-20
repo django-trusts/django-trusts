@@ -1,8 +1,8 @@
 """#111: library cutover. Core is ``1.0.0.dev3``.
 
 Core ships no AppConfig, no Django app label, and no ``kernel_config()``.
-Historical concrete imports fail. Supported owners resolve through
-``TrustsImplementationConfig``. The generic mixin lives only on
+Historical concrete imports fail. Supported owners subclass
+``TrustsConfigMixin``. The generic mixin lives only on
 ``trusts.backends``; ``trusts.core_backends`` is gone.
 """
 
@@ -12,19 +12,19 @@ from django.apps import apps
 from django.test import SimpleTestCase, override_settings
 
 import tests as tests_module
-from tests.support import configured_catalog, live_config
-from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from tests.gh_permissions.backends import OutsideBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
-from trusts.apps import (
-    TrustsImplementationConfig)
-from trusts.backends import TrustModelBackendMixin, catalogs
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.support import configured_catalog
+from trusts.apps import TrustsConfigMixin, installed_catalogs
+from trusts.backends import TrustModelBackendMixin
 from trusts.errors import TrustsConfigurationError
 
 
 MIXIN = 'tests.backends.MixinOnlyBackend'
 
 
-class MixinImplConfig(TrustsImplementationConfig):
+class MixinImplConfig(TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_impl_mixin_111'
 
@@ -111,8 +111,9 @@ class HistoricalImportCutoverTest(SimpleTestCase):
         )
 
     def test_core_is_not_an_installed_implementation(self):
-        self.assertIs(type(live_config()), TrustsImplementationConfig)
-        self.assertIsNot(type(apps.get_app_config('trusts_kernel_host')), TrustsImplementationConfig)
+        host = apps.get_app_config('trusts_kernel_host')
+        self.assertIs(type(host), KernelHostConfig)
+        self.assertIsInstance(host, TrustsConfigMixin)
         self.assertNotIn(
             'trusts',
             {config.name for config in apps.get_app_configs()},
@@ -121,34 +122,37 @@ class HistoricalImportCutoverTest(SimpleTestCase):
 
 class OwnerResolutionTest(SimpleTestCase):
     def test_live_host_owner_resolves(self):
-        from trusts.backends import configured_catalogs
-
-        owner = live_config()
-        self.assertIsInstance(owner, TrustsImplementationConfig)
+        owner = apps.get_app_config('trusts_kernel_host')
+        self.assertIsInstance(owner, TrustsConfigMixin)
         handle = configured_catalog(HOST_BACKEND)
-        self.assertEqual(handle.path, HOST_BACKEND)
+        self.assertEqual(handle.path, owner.catalog_path())
         backend = HostTrustModelBackend()
         self.assertIs(backend.get_catalog(), handle)
-        self.assertIn(handle, configured_catalogs())
+        self.assertIn(handle, installed_catalogs())
 
     def test_authorized_and_filter_scopes_use_owners(self):
-        from trusts.backends import configured_catalogs
         from trusts.decorators import filter_by_permitted_content
         from trusts.query import AuthorizedQuerySet
 
-        registries = configured_catalogs()
+        registries = installed_catalogs()
         self.assertTrue(registries)
-        self.assertEqual(registries[0].path, HOST_BACKEND)
+        self.assertEqual(
+            registries[0].path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(callable(filter_by_permitted_content))
 
     def test_missing_owner_is_configuration_error(self):
-        backend = MixinOnlyBackend()
-        self.assertIsNone(backend.get_catalog())
-        self.assertFalse(backend.has_perm(None, 'myapp.change_document', None))
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            OutsideBackend()
+        self.assertIn('TrustsConfigMixin', str(ctx.exception))
 
     def test_owner_present_resolves(self):
         backend = HostTrustModelBackend()
         catalog = backend.get_catalog()
-        self.assertEqual(catalog.path, HOST_BACKEND)
-        self.assertIs(catalog, catalogs[HostTrustModelBackend])
+        self.assertEqual(
+            catalog.path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
+        self.assertIs(catalog, HostTrustModelBackend().catalog)

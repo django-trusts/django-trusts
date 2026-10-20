@@ -35,11 +35,9 @@ class _PairDocumentBackend(TrustModelBackendMixin, ModelBackend):
     """Stand-in for ``DocumentBackend`` when pair settings omit myapp."""
 
 def _seal_factory(backend_cls, factory):
-    """Construct this class's catalog from a factory this test filled."""
-    from trusts.backends import catalogs
-    factory.path = '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
-    factory.family = backend_cls.family
-    catalogs[backend_cls] = built_catalog(factory)
+    """Publish this factory on the app that contains ``backend_cls``."""
+    from tests.support import push_catalog
+    return push_catalog(backend_cls, factory)
 
 def _document_host_handle():
     """Same registration ``DocumentConfig.ready`` installs on the kernel host."""
@@ -51,15 +49,10 @@ def _document_host_handle():
 
 @contextmanager
 def _listed(handle):
-    from trusts.backends import catalogs
-    install_class_handle(_PairDocumentBackend, handle)
-    _seal_factory(_PairDocumentBackend, handle)
-    with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',)):
-        try:
+    from tests.support import published_class_catalog
+    with published_class_catalog(_PairDocumentBackend, handle):
+        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',)):
             yield
-        finally:
-            install_class_handle(_PairDocumentBackend, None)
-            catalogs.pop(_PairDocumentBackend, None)
 
 @contextmanager
 def _tables(*model_classes):
@@ -778,11 +771,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         ContentType.objects.clear_cache()
         if not kernel_host_listed():
             handle = _document_host_handle()
-            from trusts.backends import catalogs
-            install_class_handle(_PairDocumentBackend, handle)
-            _seal_factory(_PairDocumentBackend, handle)
-            self.addCleanup(lambda: install_class_handle(_PairDocumentBackend, None))
-            self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
+            self.addCleanup(_seal_factory(_PairDocumentBackend, handle))
             settings_override = override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',))
             settings_override.enable()
             self.addCleanup(settings_override.disable)

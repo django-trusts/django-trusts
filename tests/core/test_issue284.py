@@ -457,14 +457,8 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.handle.register_public(trust=Relationship, delegate='delegate', sponsor='sponsor', content='cabinet__sheets', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
             self.handle.register_permission_condition(Sheet, 'active_only', lambda user, permission, content: user.is_active == True)
             self.handle.register_permission_condition(Sheet, 'unexpired', lambda user, permission, content: content.expires_on == content.as_of)
-            install_class_handle(_AcceptanceBackend, self.handle)
-            from trusts.backends import catalogs
-            factory = self.handle
-            factory.path = '%s.%s' % (
-                _AcceptanceBackend.__module__, _AcceptanceBackend.__qualname__,
-            )
-            factory.family = _AcceptanceBackend.family
-            catalogs[_AcceptanceBackend] = built_catalog(factory)
+            from tests.support import push_catalog
+            self.addCleanup(push_catalog(_AcceptanceBackend, self.handle))
             self.backend = _AcceptanceBackend()
             self._settings = override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue284._AcceptanceBackend',))
             self._settings.enable()
@@ -474,9 +468,6 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             raise
 
     def tearDown(self):
-        install_class_handle(_AcceptanceBackend, None)
-        from trusts.backends import catalogs
-        catalogs.pop(_AcceptanceBackend, None)
         if getattr(self, '_settings', None) is not None:
             self._settings.disable()
         self._drop_tables()

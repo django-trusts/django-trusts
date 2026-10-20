@@ -65,7 +65,9 @@ def all_match(catalog, candidates, user, permission, *, kind='complete',
         return None
     if extra_q is not None:
         granted_q = granted_q & extra_q
-    qs, granted_q = bind_once(candidate_queryset(candidates), granted_q)
+    qs, granted_q = bind_once(
+        candidate_queryset(candidates), granted_q, user_model=catalog.user_model,
+    )
     stats = qs.aggregate(
         total=Count('pk', distinct=True),
         lacking=Count('pk', distinct=True, filter=~granted_q),
@@ -91,7 +93,7 @@ def instance_match(catalog, obj, user, permission, *, kind='complete', extra_q=N
         granted_q = granted_q & extra_q
     return bind_once(obj._meta.concrete_model._default_manager.filter(
         pk=obj.pk,
-    ).filter(granted_q)).exists()
+    ).filter(granted_q), user_model=catalog.user_model).exists()
 
 
 def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
@@ -151,7 +153,7 @@ def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
         Exists(qs),
     ).exclude(
         Exists(qs.filter(~wrapped)),
-    ).distinct())
+    ).distinct(), user_model=catalog.user_model)
 
 
 def _delegated_user_exists(delegations, sponsor_records, content, permission,

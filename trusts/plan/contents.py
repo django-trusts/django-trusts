@@ -51,14 +51,6 @@ def _plan_for_permission(catalog, candidates, user, permission):
     return catalog.plan_for(candidates, user=user)
 
 
-def relationship_family(items):
-    """Keep catalogs or registries whose family is relationship."""
-    return tuple(
-        item for item in items
-        if item.family == 'relationship'
-    )
-
-
 def _apply_checked_user(grant, plan, user, values, permission, content_identity,
                         permission_model, *, complete):
     """Bind this plan's registration-time rules around ``grant``."""
@@ -358,7 +350,9 @@ def _compile_permitted_content_queryset(
     )
     if wrapped is None:
         return queryset.none()
-    return bind_once(queryset.filter(wrapped).distinct())
+    return bind_once(
+        queryset.filter(wrapped).distinct(), user_model=catalog.user_model,
+    )
 
 
 def _shift_outer_ref(value):

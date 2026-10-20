@@ -39,24 +39,12 @@ def _permission(model, codename):
 class _PairBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
-def _seal_factory(backend_cls, factory):
-    from trusts.backends import catalogs
-    from tests.support import built_catalog
-    factory.path = '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
-    factory.family = backend_cls.family
-    catalogs[backend_cls] = built_catalog(factory)
-
 @contextmanager
 def _listed(handle):
-    from trusts.backends import catalogs
-    install_class_handle(_PairBackend, handle)
-    _seal_factory(_PairBackend, handle)
-    with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue282._PairBackend',)):
-        try:
+    from tests.support import published_class_catalog
+    with published_class_catalog(_PairBackend, handle):
+        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue282._PairBackend',)):
             yield
-        finally:
-            install_class_handle(_PairBackend, None)
-            catalogs.pop(_PairBackend, None)
 
 @contextmanager
 def _tables(*model_classes):
@@ -290,10 +278,10 @@ class DelegatedAlongTest(TransactionTestCase):
         self.Grant.objects.create(user=self.sponsor, issue=self.root, permission=self.change)
         self.Delegation.objects.create(delegate=self.delegate, sponsor=self.sponsor, issue=self.child)
         handle = self._register(sponsor_along=('issue__parent', 2))
-        backend = _PairBackend()
         self.sponsor.is_active = False
         self.sponsor.save(update_fields=['is_active'])
         with _listed(handle):
+            backend = _PairBackend()
             self.assertFalse(self.delegate.has_perm(self.code, self.child))
             self.assertFalse(backend.has_perm(self.delegate, self.code, self.child))
             self.assertEqual(set(self.Issue.objects.permitted(self.code, self.delegate)), set())
@@ -307,6 +295,7 @@ class DelegatedAlongTest(TransactionTestCase):
         self.delegate.is_active = False
         self.delegate.save(update_fields=['is_active'])
         with _listed(handle):
+            backend = _PairBackend()
             self.assertFalse(self.delegate.has_perm(self.code, self.child))
             self.assertEqual(set(self.Issue.objects.permitted(self.code, self.delegate)), set())
             self.assertEqual(set(self.Issue.objects.authorized(self.delegate, self.change)), set())

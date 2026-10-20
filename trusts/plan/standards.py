@@ -19,8 +19,6 @@ from django.db.models.expressions import RawSQL
 
 from trusts.errors import TrustsConfigurationError
 
-user_model = None
-
 _MSG = 'User conditions only support concrete boolean fields, &, and ~.'
 
 # ``skip_<name>`` must not reuse an inquiry parameter. ``skip_is_active``

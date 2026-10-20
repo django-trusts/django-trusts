@@ -8,12 +8,12 @@ from django.contrib.auth.backends import ModelBackend
 from django.test import override_settings
 from django.utils.module_loading import import_string
 
-from trusts.backends import TrustModelBackendMixin, catalogs, recorders
+from trusts.apps import TrustsConfigMixin
+from trusts.backends import TrustModelBackendMixin
 from trusts.compile.catalogs import Catalog
-from trusts.compile.factory import RegistryFactory, build_configured_catalogs
+from trusts.compile.factory import RegistryFactory
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import render_policy_sql_bytes
-import trusts.plan.standards as standards
 
 
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
@@ -21,7 +21,7 @@ ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 def built_catalog(factory):
     """Catalog for one factory. The factory is built here."""
-    return Catalog(factory.build())
+    return Catalog(factory.build(), user_model=factory.user_model)
 
 
 def built_registries(items):
@@ -43,66 +43,130 @@ def scoped_permitted_content(queryset, user, permission, *, content,
     )
 
 
+def mixin_configs(apps_registry=None):
+    """Installed ``TrustsConfigMixin`` configs, in ``INSTALLED_APPS`` order."""
+    registry = django_apps if apps_registry is None else apps_registry
+    return tuple(
+        config for config in registry.get_app_configs()
+        if isinstance(config, TrustsConfigMixin)
+    )
+
+
+def config_for_class(backend_cls, apps_registry=None):
+    """App config that contains ``backend_cls``."""
+    registry = django_apps if apps_registry is None else apps_registry
+    config = registry.get_containing_app_config(backend_cls.__module__)
+    if not isinstance(config, TrustsConfigMixin):
+        raise TrustsConfigurationError(
+            '%s.%s must live inside an app whose config subclasses '
+            'TrustsConfigMixin.'
+            % (backend_cls.__module__, backend_cls.__qualname__)
+        )
+    return config
+
+
+def _ensure_factory_user(factory):
+    if factory.user_model is None:
+        factory.user_model = get_user_model()
+    return factory
+
+
+@contextmanager
+def _publish_built(built):
+    """Point installed configs and the catalog walk at ``built``."""
+    import trusts.apps as apps_mod
+    import trusts.inspect.checks as checks_mod
+    import trusts.inspect.snapshot as snapshot_mod
+
+    configs = mixin_configs()
+    saved = [(config, config.catalog) for config in configs]
+    originals = (
+        apps_mod.installed_catalogs,
+        checks_mod.installed_catalogs,
+        snapshot_mod.installed_catalogs,
+    )
+
+    def published():
+        return tuple(built)
+
+    try:
+        if not built:
+            for config in configs:
+                config.catalog = built_catalog(RegistryFactory(
+                    path='%s.empty' % config.catalog_path(),
+                    user_model=get_user_model(),
+                ))
+        elif len(built) == 1:
+            for config in configs:
+                config.catalog = built[0]
+        else:
+            for config, catalog in zip(configs, built):
+                config.catalog = catalog
+        apps_mod.installed_catalogs = published
+        checks_mod.installed_catalogs = published
+        snapshot_mod.installed_catalogs = published
+        count = max(len(built), 1)
+        paths = tuple(
+            '%s.%s' % (cls.__module__, cls.__name__)
+            for cls in _inquiry_backend_classes(count)
+        )
+        with override_settings(AUTHENTICATION_BACKENDS=paths):
+            yield tuple(built)
+    finally:
+        apps_mod.installed_catalogs = originals[0]
+        checks_mod.installed_catalogs = originals[1]
+        snapshot_mod.installed_catalogs = originals[2]
+        for config, catalog in saved:
+            config.catalog = catalog
+
+
 @contextmanager
 def override_catalog(backend_cls, factory, path):
-    """Publish one catalog for ``backend_cls`` and restore the previous entry."""
+    """Publish one catalog for the app that contains ``backend_cls``."""
 
-    saved = catalogs.get(backend_cls, _MISSING)
+    config = config_for_class(backend_cls)
+    saved = config.catalog
     factory.path = path
-    catalogs[backend_cls] = built_catalog(factory)
+    _ensure_factory_user(factory)
+    config.catalog = built_catalog(factory)
     try:
-        yield catalogs[backend_cls]
+        with override_settings(AUTHENTICATION_BACKENDS=tuple(
+            settings.AUTHENTICATION_BACKENDS,
+        )):
+            yield config.catalog
     finally:
-        if saved is _MISSING:
-            catalogs.pop(backend_cls, None)
-        else:
-            catalogs[backend_cls] = saved
+        config.catalog = saved
 
 
 def configured_catalog(path):
-    """Catalog stored for one ``AUTHENTICATION_BACKENDS`` dotted path."""
+    """Catalog of the app that contains the backend class at ``path``."""
 
     cls = import_string(path)
-    catalog = catalogs.get(cls)
-    if catalog is None or catalog.path != path:
-        raise TrustsConfigurationError(
-            '%r is not a configured Trusts backend' % (path,)
-        )
-    return catalog
+    return config_for_class(cls).get_catalog()
 
 
 @contextmanager
 def empty_catalogs():
-    """Clear built catalogs for one sweep, then restore them."""
+    """Give every mixin config an empty catalog, then restore."""
 
-    saved = dict(catalogs)
-    catalogs.clear()
-    try:
+    with _publish_built(()):
         yield
-    finally:
-        catalogs.clear()
-        catalogs.update(saved)
 
 
 def sweep_listed_backends():
-    """Run the ready-time build against the current ``AUTHENTICATION_BACKENDS``."""
+    """Rebuild each installed mixin config's catalog from its recorder."""
 
-    build_configured_catalogs(
-        tuple(settings.AUTHENTICATION_BACKENDS),
-        get_user_model(),
-    )
+    for config in mixin_configs():
+        config.ready()
 
 
 def live_config(apps_registry=None):
-    """The sweep config. It does not own a backend path."""
+    """There is no sweep config. Callers use the owning app config."""
 
-    registry = django_apps if apps_registry is None else apps_registry
-    try:
-        return registry.get_app_config('trusts_lifecycle')
-    except LookupError as exc:
-        raise TrustsConfigurationError(
-            'TrustsImplementationConfig is not installed.'
-        ) from exc
+    del apps_registry
+    raise TrustsConfigurationError(
+        'TrustsConfigMixin apps own their catalogs. There is no sweep config.'
+    )
 
 
 @contextmanager
@@ -124,38 +188,86 @@ def override_apps_ready(ready, apps_registry=None):
     finally:
         target.ready = was
 
-_MISSING = object()
-
-
 def _publish_catalog(backend_cls, factory, *, path=None):
-    """Store one catalog for ``backend_cls``. ``factory`` is the registration object."""
+    """Store one catalog on the app that contains ``backend_cls``."""
 
+    config = config_for_class(backend_cls)
     if factory is None:
-        catalogs.pop(backend_cls, None)
+        config.catalog = built_catalog(RegistryFactory(
+            path=path or config.catalog_path(),
+            user_model=get_user_model(),
+        ))
         return None
     published = path or factory.path or (
         '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
     )
     factory.path = published
+    _ensure_factory_user(factory)
     catalog = built_catalog(factory)
-    catalogs[backend_cls] = catalog
+    config.catalog = catalog
     return catalog
 
 
 @contextmanager
 def bound_handle(backend, factory):
-    """Publish ``factory`` as this backend class's catalog for one block."""
+    """Publish ``factory`` as this backend's app catalog for one block."""
 
-    cls = type(backend)
-    previous = catalogs.get(cls, _MISSING)
-    _publish_catalog(cls, factory)
+    config = config_for_class(type(backend))
+    previous = config.catalog
+    previous_backend = backend.catalog
+    _publish_catalog(type(backend), factory)
+    backend.catalog = config.catalog
     try:
         yield
     finally:
-        if previous is _MISSING:
-            catalogs.pop(cls, None)
-        else:
-            catalogs[cls] = previous
+        config.catalog = previous
+        backend.catalog = previous_backend
+
+
+def push_catalog(backend_cls, factory):
+    """Publish ``factory`` on the app that contains ``backend_cls``.
+
+    Returns a zero-argument restore of the catalog that was there.
+    """
+
+    config = config_for_class(backend_cls)
+    saved = config.catalog
+    if not factory.path:
+        factory.path = '%s.%s' % (
+            backend_cls.__module__, backend_cls.__qualname__,
+        )
+    factory.family = backend_cls.family
+    _ensure_factory_user(factory)
+    config.catalog = built_catalog(factory)
+
+    def restore():
+        config.catalog = saved
+
+    return restore
+
+
+@contextmanager
+def published_class_catalog(backend_cls, factory):
+    """Publish ``factory`` for one block, then restore the app catalog."""
+
+    restore = push_catalog(backend_cls, factory)
+    try:
+        yield config_for_class(backend_cls).catalog
+    finally:
+        restore()
+
+
+def snapshot_installed_catalogs():
+    """``(config, catalog)`` pairs for the installed mixin configs."""
+
+    return tuple((config, config.catalog) for config in mixin_configs())
+
+
+def restore_installed_catalogs(saved):
+    """Put back catalogs captured by ``snapshot_installed_catalogs``."""
+
+    for config, catalog in saved:
+        config.catalog = catalog
 
 
 def render_configured_policy(*subjects):
@@ -167,25 +279,10 @@ def render_configured_policy(*subjects):
 
 @contextmanager
 def published_subjects(subjects):
-    """Store these objects as the listed catalogs, without wrapping them."""
+    """Store these objects as the catalogs the policy walk lists."""
 
-    subjects = tuple(subjects)
-    classes = _inquiry_backend_classes(len(subjects))
-    saved = {cls: catalogs.get(cls, _MISSING) for cls in classes}
-    paths = []
-    for cls, subject in zip(classes, subjects):
-        listing = '%s.%s' % (cls.__module__, cls.__name__)
-        paths.append(listing)
-        catalogs[cls] = subject
-    with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
-        try:
-            yield
-        finally:
-            for cls, previous in saved.items():
-                if previous is _MISSING:
-                    catalogs.pop(cls, None)
-                else:
-                    catalogs[cls] = previous
+    with _publish_built(tuple(subjects)):
+        yield
 
 
 def render_published_subjects(*subjects):
@@ -196,12 +293,12 @@ def render_published_subjects(*subjects):
 
 
 def install_class_handle(backend_cls, factory):
-    """Publish ``factory`` as ``backend_cls``'s catalog. ``None`` removes it."""
+    """Publish ``factory`` as the catalog of ``backend_cls``'s app."""
     _publish_catalog(backend_cls, factory)
 
 
 def isolate_live_registry(config, registry, path):
-    """Publish a standalone registry as the catalog for one listed path."""
+    """Publish a standalone registry as the catalog for one backend path."""
 
     del config
     cls = import_string(path)
@@ -212,7 +309,7 @@ def isolate_live_registry(config, registry, path):
 def install_writable_registry(config, path, contribute=None):
     """Install a standalone factory as the catalog for one live path."""
 
-    registry = RegistryFactory(path=path)
+    registry = RegistryFactory(path=path, user_model=get_user_model())
     if contribute is not None:
         contribute(registry)
     isolate_live_registry(config, registry, path)
@@ -221,45 +318,31 @@ def install_writable_registry(config, path, contribute=None):
 
 @contextmanager
 def listed_relationship(factories):
-    """List inquiry backends whose catalogs are these factories.
+    """Publish these factories as the catalogs inquiry and the lockfile see.
 
-    ``authorized`` and the other consumers read ``get_backends()`` and
-    ``get_catalog()``. This publishes one catalog per factory on a
-    mixin class and sets ``AUTHENTICATION_BACKENDS`` to those classes
-    for the block.
+    One factory is installed on every mixin config, so the app that
+    contains a model answers from it. Several factories are what
+    ``installed_catalogs`` returns. A model still reads its own app.
     """
 
-    factories = tuple(factories)
-    classes = _inquiry_backend_classes(len(factories))
-    saved = {cls: catalogs.get(cls, _MISSING) for cls in classes}
-    paths = []
-    for cls, factory in zip(classes, factories):
-        listing = '%s.%s' % (cls.__module__, cls.__name__)
-        paths.append(listing)
+    built = []
+    for index, factory in enumerate(tuple(factories)):
         if not factory.path:
-            factory.path = listing
-        catalogs[cls] = built_catalog(factory)
-    with override_settings(AUTHENTICATION_BACKENDS=tuple(paths)):
-        try:
-            yield tuple(catalogs[cls] for cls in classes)
-        finally:
-            for cls, previous in saved.items():
-                if previous is _MISSING:
-                    catalogs.pop(cls, None)
-                else:
-                    catalogs[cls] = previous
+            factory.path = 'tests.support.Listed%d' % index
+        _ensure_factory_user(factory)
+        built.append(built_catalog(factory))
+    with _publish_built(built) as published:
+        yield published
 
 
 def replay_recorder(factory, backend_cls, *, filters=True):
-    """Replay a backend recorder onto a factory this test owns.
+    """Replay an app recorder onto a factory this test owns.
 
     ``filters=False`` skips named-filter rows, so the frozen lookup
     built from this factory does not contain them.
     """
 
-    recorder = recorders.get(backend_cls)
-    if recorder is None:
-        return factory
+    recorder = config_for_class(backend_cls).recorder
     rows = list(recorder.rows)
     for entry in rows:
         if entry[0] == 'condition':
@@ -278,23 +361,20 @@ def replay_recorder(factory, backend_cls, *, filters=True):
 def unbound_named_filters(backend_cls):
     """Publish a catalog whose frozen lookup has no named-filter rows."""
 
-    saved = catalogs.get(backend_cls, _MISSING)
-    live = None if saved is _MISSING else saved
+    config = config_for_class(backend_cls)
+    saved = config.catalog
     factory = RegistryFactory(
         compiler=backend_cls.query_compiler,
-        path='' if live is None else live.path,
+        path=saved.path,
         family=backend_cls.family,
-        user_model=standards.user_model,
+        user_model=saved.user_model or get_user_model(),
     )
     replay_recorder(factory, backend_cls, filters=False)
-    catalogs[backend_cls] = built_catalog(factory)
+    config.catalog = built_catalog(factory)
     try:
-        yield catalogs[backend_cls]
+        yield config.catalog
     finally:
-        if saved is _MISSING:
-            catalogs.pop(backend_cls, None)
-        else:
-            catalogs[backend_cls] = saved
+        config.catalog = saved
 
 
 def _inquiry_backend_classes(count):

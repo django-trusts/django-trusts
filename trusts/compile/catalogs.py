@@ -1,15 +1,13 @@
 """One built catalog. Not a builder and not a second store."""
 
 from dataclasses import dataclass
-from functools import partial, reduce
-from operator import or_
+from functools import partial
 
-from django.contrib.auth import get_backends
 from django.contrib.auth.models import Permission
 from django.db import router
 from django.db.models import Model, Q, QuerySet, Subquery
 
-from trusts.backends import TrustModelBackendMixin, configured_catalogs
+from trusts.apps import catalog_for_model
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.aggregates import (
     _compile_common_permissions,
@@ -31,7 +29,6 @@ from trusts.plan.contents import (
     _compile_permitted_content_queryset,
     _ordinary_records,
     granted,
-    relationship_family,
 )
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.plan.hops import (
@@ -56,17 +53,8 @@ from trusts.plan.users import (
     _reverse_checked,
     assert_persisted_principal,
 )
-import trusts.plan.standards as standards
 
 _NO_PRESET = object()
-
-
-_BACKENDS_THAT_IGNORE_THE_OBJECT = (
-    'django.contrib.auth.backends.ModelBackend',
-    'django.contrib.auth.backends.AllowAllUsersModelBackend',
-    'django.contrib.auth.backends.RemoteUserBackend',
-    'django.contrib.auth.backends.AllowAllUsersRemoteUserBackend',
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +122,7 @@ class Catalog(object):
     are on the shape. Nothing here compiles them again.
     """
 
-    def __init__(self, shape):
+    def __init__(self, shape, *, user_model):
         self.path = shape.path
         self.family = shape.family
         self.records = shape.records
@@ -143,7 +131,7 @@ class Catalog(object):
         self.compiler = (
             PlanQueryCompiler() if shape.compiler is None else shape.compiler
         )
-        self.user_model = shape.user_model
+        self.user_model = user_model
         self.user_conditions = shape.user_conditions
         self.user_override = shape.user_override
         self.filter_lookup = shape.filter_lookup
@@ -196,6 +184,7 @@ class Catalog(object):
             user_rules=rules,
             user_rules_closed=closed,
             user_override_q=override,
+            user_model=self.user_model,
         )
 
     def compile_registered_condition_q(self, model, perm, user):
@@ -203,7 +192,7 @@ class Catalog(object):
         cond = permission_condition_code(perm)
         return compile_stored_condition_q(
             self.get_permission_condition_record(model, cond),
-            model, perm, user,
+            model, perm, user, self.user_model,
         )
 
     def get_permission_condition_record(self, model, cond_code):
@@ -279,7 +268,9 @@ class Catalog(object):
         )
         if granted_q is None:
             return queryset.none()
-        return bind_once(queryset.filter(granted_q).distinct())
+        return bind_once(
+            queryset.filter(granted_q).distinct(), user_model=self.user_model,
+        )
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
                                     content, skipped=None, **skip_flags):
@@ -403,7 +394,8 @@ class Catalog(object):
             return user_model._default_manager.none()
         user_model = _plan_user_model(plan, content)
         return bind_once(
-            user_model._default_manager.filter(predicate).distinct()
+            user_model._default_manager.filter(predicate).distinct(),
+            user_model=self.user_model,
         )
 
     def walk_questions(self, visitor):
@@ -532,6 +524,7 @@ class Catalog(object):
             evaluate_registered_expression(
                 record.expr, user_obj, perm, item,
                 model=model or item.__class__,
+                user_model=self.user_model,
             )
             for item in objs
         )
@@ -560,7 +553,9 @@ class Catalog(object):
         record = lookup.record_for(model, cond)
         if record is None or not isinstance(obj, QuerySet):
             return record, None
-        return record, lookup.compile_q(obj.model, permext, user_obj)
+        return record, lookup.compile_q(
+            obj.model, permext, user_obj, self.user_model,
+        )
 
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
         if skip_flags:
@@ -724,11 +719,6 @@ class PreparedInquiry(object):
         return bool(self.qs.exists())
 
 
-def relationship_catalogs():
-    """Relationship catalogs from ``get_catalog()``, in listed-backend order."""
-    return relationship_family(configured_catalogs())
-
-
 def guard_permission_string(permission, *, api):
     """Exact ``app_label.codename`` form. Does not infer a model name."""
     if not isinstance(permission, str):
@@ -782,118 +772,94 @@ def codename_binding(model, app_label, codename):
     )
 
 
-def assert_authorization_preflight(catalogs, model, conditions, *, api):
-    """Fail closed unless one catalog has a plan and owns the names."""
-    participating = False
-    for catalog in catalogs:
+def assert_authorization_preflight(catalog, model, conditions, *, api):
+    """Fail closed unless this catalog has a plan and owns the names."""
+    if catalog is not None:
         has_plan, owns = catalog.authorization_preflight(model, conditions)
-        if not has_plan:
-            continue
-        participating = True
-        if owns:
+        if has_plan and owns:
             return
-    if not participating:
-        raise TrustsConfigurationError(
-            '%s has no applicable auth.Permission plan for %s.'
-            % (api, model._meta.label)
-        )
+        if has_plan:
+            raise TrustsConfigurationError(
+                '%s condition %r is not registered on %s.'
+                % (api, conditions[0], model._meta.label)
+            )
     raise TrustsConfigurationError(
-        '%s condition %r is not registered on %s.'
-        % (api, conditions[0], model._meta.label)
+        '%s has no applicable auth.Permission plan for %s.'
+        % (api, model._meta.label)
     )
 
 
-def authorization_grant_q(catalogs, candidates, user, model, permission,
+def authorization_grant_q(catalog, candidates, user, model, permission,
                            conditions, binding, *, api, skipped=()):
-    """OR each catalog's auth.Permission grant. Order does not matter."""
-    parts = []
-    complete = 0
-    for catalog in catalogs:
-        predicate, owned = catalog.authorization_grant(
-            candidates, user, model, permission, conditions, binding,
-            api=api, skipped=skipped,
-        )
-        if owned:
-            complete += 1
-        if predicate is not None:
-            parts.append(predicate)
-    if conditions and complete == 0:
+    """This catalog's auth.Permission grant, or ``None`` when it grants nothing."""
+    if catalog is None:
+        return None
+    predicate, owned = catalog.authorization_grant(
+        candidates, user, model, permission, conditions, binding,
+        api=api, skipped=skipped,
+    )
+    if conditions and not owned:
         raise TrustsConfigurationError(
             '%s condition %r is not registered on %s.'
             % (api, conditions[0], model._meta.label)
         )
-    if not parts:
-        return None
-    if len(parts) == 1:
-        return parts[0]
-    return reduce(or_, parts)
+    return predicate
 
 
 def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
     """Lazy user queryset for one saved content object and one permission.
 
-    The candidate rows are ``user_queryset`` when given (the optional
-    manager adapter) and otherwise the user model stored at ready.
-    Each configured backend that can contribute an exact reverse predicate
-    is OR-ed. A registered user override is part of the predicate, not a
-    separate superuser grant. The ``is_active`` check applies inside that
-    branch only. A custom predicate is not wrapped. ``skip_<name>=True``
-    sets that bound parameter. The values are forwarded only to the mixin
-    method. Django's ``PermissionsMixin.has_perm`` early return is not
-    copied here. An unsupported object-permission backend raises before SQL.
+    The candidate rows are ``user_queryset`` when given and otherwise the
+    user model on the catalog owned by the content model's app. That
+    catalog's predicate includes a registered user override. ``skip_<name>``
+    is a bound parameter on that predicate.
     """
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    catalogs = relationship_catalogs()
+    catalog = catalog_for_model(type(content))
+    subjects = () if catalog is None else (catalog,)
     inquiry = bind_checked_user(
         None, skip_flags=skip_flags,
-        skip_names=known_skip_names(catalogs),
+        skip_names=known_skip_names(subjects),
         require_user=False,
     )
-    skipped = inquiry.values
     if user_queryset is None:
-        model = standards.user_model
-        if model is None:
+        if catalog is None or catalog.user_model is None:
             raise TrustsConfigurationError(
                 'get_permitted_users has no user model. '
-                'TrustsImplementationConfig.ready has not stored one.'
+                'The catalog is not built yet.'
             )
-        user_queryset = model._default_manager.get_queryset()
+        user_queryset = catalog.user_model._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
         raise TrustsConfigurationError(
             'user queryset must be a QuerySet, not %r.' % (user_queryset,)
         )
-    backends = tuple(get_backends())
-    _reject_unaccepted_permission_instance(perm, backends)
     principal_model = user_queryset.model
     assert_persisted_principal(principal_model)
-    parts = []
-    involved = [principal_model, content.__class__]
+    involved = [principal_model, type(content)]
     if isinstance(perm, (str, Permission)):
         involved.append(Permission)
-    for backend in backends:
-        predicate = _backend_predicate(backend, content, perm, skipped=skipped)
-        if predicate is None:
-            continue
-        if not isinstance(predicate, Q):
+    combined = Q(pk__isnull=True)
+    if catalog is not None:
+        predicate = catalog.permitted_users_predicate(
+            content, perm, skipped=inquiry.values,
+        )
+        if predicate is not None and not isinstance(predicate, Q):
             raise TrustsConfigurationError(
-                '%s permitted_users_predicate returned %s, not a Q or None.'
-                % (type(backend).__name__, type(predicate).__name__)
+                'permitted_users_predicate returned %s, not a Q or None.'
+                % type(predicate).__name__
             )
-        _assert_registration_user_model(backend, content, principal_model)
-        involved.extend(_registration_models(backend, content))
-        parts.append(predicate)
+        if predicate is not None:
+            combined = predicate
+        involved.extend(_catalog_models(catalog, content, principal_model))
     alias = _database_alias(content, user_queryset)
     _assert_same_database(alias, involved)
     if user_queryset.db != alias:
         user_queryset = user_queryset.using(alias)
-    if not parts:
-        combined = Q(pk__isnull=True)
-    else:
-        combined = parts[0]
-        for part in parts[1:]:
-            combined |= part
-    return bind_once(user_queryset.filter(combined).distinct())
+    user_model = principal_model if catalog is None else catalog.user_model
+    return bind_once(
+        user_queryset.filter(combined).distinct(), user_model=user_model,
+    )
 
 
 def _content_model(obj):
@@ -977,7 +943,9 @@ def _selected_condition_q(catalog, model, permission, conditions, user, *, api):
                 '%s condition %r on %s is unsupported.'
                 % (api, name, model._meta.label)
             )
-        part = lookup.compile_q(model, '%s:%s' % (permission, name), user)
+        part = lookup.compile_q(
+            model, '%s:%s' % (permission, name), user, catalog.user_model,
+        )
         extra_q = part if extra_q is None else extra_q & part
     return extra_q
 
@@ -1015,64 +983,11 @@ def _reject_permission_shape(perm):
     )
 
 
-def _trusts_owned_reverse_hook(backend):
-    """True when the reverse hook is the mixin method, not an override."""
-    if not isinstance(backend, TrustModelBackendMixin):
-        return False
-    return (
-        type(backend).permitted_users_predicate
-        is TrustModelBackendMixin.permitted_users_predicate
-    )
-
-
-def _backend_predicate(backend, content, perm, *, skipped=()):
-    if getattr(backend, 'trusts_object_permissions', None) is False:
-        return None
-    if _declares_reverse_hook(backend):
-        if _trusts_owned_reverse_hook(backend):
-            return backend.permitted_users_predicate(
-                content, perm, skipped=skipped,
-            )
-        return backend.permitted_users_predicate(content, perm)
-    if '%s.%s' % (
-        type(backend).__module__, type(backend).__qualname__,
-    ) in _BACKENDS_THAT_IGNORE_THE_OBJECT:
-        return None
-    raise TrustsConfigurationError(
-        '%s may grant an object permission but cannot express an exact '
-        'reverse user predicate. get_permitted_users will not return a '
-        'partial result.' % type(backend).__name__
-    )
-
-
-def _reject_unaccepted_permission_instance(perm, backends):
-    if not isinstance(perm, Model) or isinstance(perm, Permission):
-        return
-    for backend in backends:
-        checker = getattr(backend, 'singular_permission_accepted', None)
-        if callable(checker) and checker(perm):
-            return
-    raise TrustsConfigurationError(
-        '%s is not a permission identity accepted by a configured '
-        'object-permission backend.' % type(perm).__name__
-    )
-
-
-def _declares_reverse_hook(backend):
-    for cls in type(backend).__mro__:
-        if 'permitted_users_predicate' in cls.__dict__:
-            return True
-    return False
-
-
-def _assert_registration_user_model(backend, content, candidate_model):
-    if not isinstance(backend, TrustModelBackendMixin):
-        return
-    catalog = backend.get_catalog()
-    if catalog is None:
-        return
+def _catalog_models(catalog, content, principal_model):
+    """Models this catalog's plan joins, after the user model matches."""
     plan = catalog.plan_for(content)
-    expected = candidate_model._meta.concrete_model
+    expected = principal_model._meta.concrete_model
+    models = []
     for record in plan.records:
         registered = record.user_model._meta.concrete_model
         if registered is not expected:
@@ -1085,6 +1000,10 @@ def _assert_registration_user_model(backend, content, candidate_model):
                     registered._meta.label,
                 )
             )
+        models.extend((
+            record.root, record.user_model, record.permission_model,
+            record.content_model,
+        ))
     for record in plan.delegations:
         registered = record.delegate_model._meta.concrete_model
         if registered is not expected:
@@ -1097,28 +1016,8 @@ def _assert_registration_user_model(backend, content, candidate_model):
                     registered._meta.label,
                 )
             )
-
-
-def _registration_models(backend, content):
-    if not isinstance(backend, TrustModelBackendMixin):
-        return []
-    catalog = backend.get_catalog()
-    if catalog is None:
-        return []
-    plan = catalog.plan_for(content)
-    models = []
-    for record in plan.records:
         models.extend((
-            record.root,
-            record.user_model,
-            record.permission_model,
-            record.content_model,
-        ))
-    for record in plan.delegations:
-        models.extend((
-            record.root,
-            record.delegate_model,
-            record.sponsor_model,
+            record.root, record.delegate_model, record.sponsor_model,
             record.content_model,
         ))
         if record.condition_permission_model is not None:

@@ -16,7 +16,7 @@ from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.aggregates import _compile_common_permissions, compiler_for_class
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.errors import TrustsCompilerError
+from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from tests.backends import MissingCompilerBackend
@@ -51,8 +51,9 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
             compiler_for_class(MissingCompilerBackend)
 
     def test_unconfigured_and_ambiguous_path_fail_loud(self):
-        with self.assertRaises(Exception):
-            configured_catalog('tests.backends.MixinOnlyBackend')
+        from tests.gh_permissions.backends import OutsideBackend
+        with self.assertRaises(TrustsConfigurationError):
+            OutsideBackend()
 
 class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
 

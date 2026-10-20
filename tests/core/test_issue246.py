@@ -303,21 +303,8 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
 
     @contextmanager
     def _backend(self):
-        from trusts.backends import catalogs
-        cls = type(self.backend)
-        saved = catalogs.get(cls)
-        factory = self.handle
-        factory.path = '%s.%s' % (cls.__module__, cls.__qualname__)
-        factory.family = cls.family if saved is None else saved.family
-        catalogs[cls] = built_catalog(factory)
-        try:
-            with bound_handle(self.backend, self.handle):
-                yield
-        finally:
-            if saved is None:
-                catalogs.pop(cls, None)
-            else:
-                catalogs[cls] = saved
+        with bound_handle(self.backend, self.handle):
+            yield
 
     def test_explicit_group_feeds_group_and_ordinary_authorization(self):
         with self._backend():
@@ -464,21 +451,8 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
 
     @contextmanager
     def _backend(self):
-        from trusts.backends import catalogs
-        cls = type(self.backend)
-        saved = catalogs.get(cls)
-        factory = self.handle
-        factory.path = '%s.%s' % (cls.__module__, cls.__qualname__)
-        factory.family = cls.family if saved is None else saved.family
-        catalogs[cls] = built_catalog(factory)
-        try:
-            with bound_handle(self.backend, self.handle):
-                yield
-        finally:
-            if saved is None:
-                catalogs.pop(cls, None)
-            else:
-                catalogs[cls] = saved
+        with bound_handle(self.backend, self.handle):
+            yield
 
     @contextmanager
     def _handles(self):
@@ -666,15 +640,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         backend = _ProbeBackend()
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
-        from trusts.backends import catalogs
-        cls = type(backend)
-        saved = catalogs.get(cls)
-        factory = handle
-        factory.path = '%s.%s' % (cls.__module__, cls.__qualname__)
-        factory.family = cls.family if saved is None else saved.family
-        catalogs[cls] = built_catalog(factory)
-        try:
-            with bound_handle(backend, handle):
+        with bound_handle(backend, handle):
                 for perm in granted:
                     code = _code(perm)
                     for label, target in (('instance', paper), ('queryset', one)):
@@ -690,11 +656,6 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
                         self.assertEqual(backend.get_all_permissions(user, target), granted_codes)
                     with self.subTest(user=user.username, paper=paper.title, enumeration=label, kind='get_group_permissions'):
                         self.assertEqual(backend.get_group_permissions(user, target), set(group_codes))
-        finally:
-            if saved is None:
-                catalogs.pop(cls, None)
-            else:
-                catalogs[cls] = saved
 
     def _authorized(self, handle, expectations):
         with listed_relationship((handle,)):

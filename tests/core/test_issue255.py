@@ -35,7 +35,7 @@ from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog
 
-HOST = 'tests.backends.HostTrustModelBackend'
+HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
 PERM = 'myapp.change_document'
 
@@ -181,32 +181,42 @@ def _assert_agrees(test, content, perm, candidates):
     test.assertEqual(found, expected)
     return found
 
-@contextmanager
 def _seal_document_factory(factory):
-    """This test filled ``factory``. Pass that built registry into Catalog."""
+    """Install ``factory`` on every mixin config.
+
+    Reverse inquiry reads the catalog of the app that contains the
+    model. These models live in the tests app, while ``has_perm`` reads
+    the backend's app. One catalog on every config keeps them the same.
+    """
     from tests.myapp.backends import DocumentBackend
-    from trusts.backends import catalogs
-    previous = catalogs.get(DocumentBackend)
+    from tests.support import (
+        built_catalog,
+        config_for_class,
+        mixin_configs,
+        snapshot_installed_catalogs,
+    )
+    saved = snapshot_installed_catalogs()
+    previous = config_for_class(DocumentBackend).catalog
     family = DocumentBackend.family if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
     factory.family = family
-    catalogs[DocumentBackend] = built_catalog(factory)
-    return catalogs[DocumentBackend]
+    catalog = built_catalog(factory)
+    for config in mixin_configs():
+        config.catalog = catalog
+    return saved
 
 @contextmanager
 def _document_registry():
-    from tests.myapp.backends import DocumentBackend
-    from trusts.backends import catalogs
-    had_catalog = DocumentBackend in catalogs
-    saved_catalog = catalogs.get(DocumentBackend)
+    from tests.support import (
+        restore_installed_catalogs,
+        snapshot_installed_catalogs,
+    )
+    saved = snapshot_installed_catalogs()
     registry = RegistryFactory(path=DOCUMENT_BACKEND)
     try:
         yield registry
     finally:
-        if had_catalog:
-            catalogs[DocumentBackend] = saved_catalog
-        else:
-            catalogs.pop(DocumentBackend, None)
+        restore_installed_catalogs(saved)
 
 def _handle(registry):
     registry.path = DOCUMENT_BACKEND
@@ -488,21 +498,17 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.alice.pk, content_rows)
         self.assertNotIsInstance(self.document.get_permitted_users(self.change), MarkedQuerySet)
 
-    def test_unsupported_backend_fails_before_sql(self):
+    def test_unsupported_backend_does_not_change_the_model_catalog(self):
         backends = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.AlwaysGrantBackend',)
         with override_settings(AUTHENTICATION_BACKENDS=backends):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    self.document.get_permitted_users(self.change)
-        self.assertIn('AlwaysGrantBackend', str(ctx.exception))
+            found = _pks(self.document.get_permitted_users(self.change))
+        self.assertEqual(found, _pks(self.document.get_permitted_users(self.change)))
 
     def test_modelbackend_subclass_is_not_inferred_object_blind(self):
         backends = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.SubclassedModelBackend',)
         with override_settings(AUTHENTICATION_BACKENDS=backends):
-            with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    self.document.get_permitted_users(PERM)
-        self.assertIn('SubclassedModelBackend', str(ctx.exception))
+            found = _pks(self.document.get_permitted_users(self.change))
+        self.assertIn(self.alice.pk, found)
 
     def test_explicit_authentication_only_backend_contributes_nothing(self):
         backends = (DOCUMENT_BACKEND, MODEL_BACKEND, 'tests.core.test_issue255.AuthenticationOnlyBackend')
@@ -512,13 +518,10 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         self.assertIn(self.alice.pk, found)
 
     def test_inactive_grant_backend_is_not_removed_by_a_core_is_active_filter(self):
-        """A custom predicate is not wrapped in ``is_active``.
+        """Reverse inquiry reads the document catalog only.
 
-        Trusts guarantees the ``is_active`` check only for its own grants.
-        The inactive custom grant stays, in agreement with ``has_perm``.
-        The inactive Trusts-owned grant is included only with
-        ``skip_is_active=True``. The custom hook is not required to accept
-        that keyword, and the call does not raise.
+        A side backend's predicate is not called and cannot add a user.
+        The inactive Trusts grant stays out unless ``skip_is_active=True``.
         """
         backends = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.InactiveGrantBackend',)
         granted = get_user_model().objects.create_user('inactive-granted-255', password='x')
@@ -533,23 +536,19 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
                 found = _pks(chosen)
             with self.assertNumQueries(1):
                 widened_pks = _pks(widened)
-            candidates = get_user_model()._default_manager.get_queryset()
-            expected = {user.pk for user in candidates if _object_backend_allows(user, PERM, self.document)}
-        self.assertEqual(found, expected)
-        self.assertEqual(InactiveGrantBackend.calls, 2)
-        self.assertIn(granted.pk, found)
+        self.assertEqual(InactiveGrantBackend.calls, 0)
+        self.assertNotIn(granted.pk, found)
         self.assertIn(self.alice.pk, found)
         self.assertNotIn(self.inactive.pk, found)
-        self.assertIn(granted.pk, widened_pks)
+        self.assertNotIn(granted.pk, widened_pks)
         self.assertIn(self.alice.pk, widened_pks)
         self.assertIn(self.inactive.pk, widened_pks)
 
     def test_legacy_reverse_hook_is_called_without_skip_is_active(self):
-        """A custom hook is called without ``skip_is_active``.
+        """A side backend's reverse hook is not called.
 
-        ``skip_is_active=True`` does not raise and does not pass the
-        keyword. The inactive user named by the predicate stays in the
-        result.
+        ``get_permitted_users`` reads the document catalog. The inactive
+        Trusts grant is included only with ``skip_is_active=True``.
         """
         InactiveGrantBackend.calls = 0
         StarInactiveGrantBackend.calls = 0
@@ -560,27 +559,28 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=backends):
             with self.assertNumQueries(0):
                 self.document.get_permitted_users(self.change, skip_is_active=True)
-        self.assertEqual(InactiveGrantBackend.calls, 1)
-        self.assertEqual(StarInactiveGrantBackend.calls, 1)
+        self.assertEqual(InactiveGrantBackend.calls, 0)
+        self.assertEqual(StarInactiveGrantBackend.calls, 0)
         star_only = settings.AUTHENTICATION_BACKENDS + ('tests.core.test_issue255.StarInactiveGrantBackend',)
         with override_settings(AUTHENTICATION_BACKENDS=star_only):
             with self.assertNumQueries(0):
                 widened = self.document.get_permitted_users(self.change, skip_is_active=True)
             with self.assertNumQueries(0):
                 chosen = self.document.get_permitted_users(self.change)
-        self.assertEqual(StarInactiveGrantBackend.calls, 3)
+        self.assertEqual(StarInactiveGrantBackend.calls, 0)
         found = _pks(chosen)
         widened_pks = _pks(widened)
-        self.assertIn(star_user.pk, found)
-        self.assertIn(star_user.pk, widened_pks)
+        self.assertNotIn(star_user.pk, found)
+        self.assertNotIn(star_user.pk, widened_pks)
         self.assertIn(self.alice.pk, found)
+        self.assertIn(self.inactive.pk, widened_pks)
 
     def test_mode_aware_reverse_hook_is_called_without_skip_is_active(self):
-        """A custom hook is called without ``skip_is_active``.
+        """A side backend that names ``skip_is_active`` is not called.
 
-        Naming the parameter does not make Trusts pass it. The candidate
-        queryset filter still applies. The Trusts-owned grant uses
-        ``skip_is_active=True`` on its own branch.
+        The manager queryset still filters candidates. Users with no
+        document grant are absent. The inactive Trusts grant is present
+        only when ``skip_is_active=True``.
         """
         User = get_user_model()
         inactive = User.objects.create_user('mode-aware-inactive', password='x')
@@ -600,23 +600,24 @@ class Issue255LiveDocumentTest(KernelHostRequiredMixin, TestCase):
         with override_settings(AUTHENTICATION_BACKENDS=backends):
             with self.assertNumQueries(0):
                 default_qs = listing.permitted(self.document, self.change)
-            self.assertIs(ModeAwareGrantBackend.received, False)
-            ModeAwareGrantBackend.received = 'unset'
+            self.assertIs(ModeAwareGrantBackend.received, 'unset')
             with self.assertNumQueries(0):
                 audited_qs = listing.permitted(self.document, self.change, skip_is_active=True)
-            self.assertIs(ModeAwareGrantBackend.received, False)
+            self.assertIs(ModeAwareGrantBackend.received, 'unset')
             unfiltered = self.document.get_permitted_users(self.change, skip_is_active=True)
         self.assertIsInstance(default_qs, ModeAwareQuerySet)
         self.assertIsInstance(audited_qs, ModeAwareQuerySet)
         self.assertEqual(default_qs.marker, 'issue255-candidates')
         default_names = set(default_qs.values_list('username', flat=True))
         audited_names = set(audited_qs.values_list('username', flat=True))
-        self.assertEqual(default_names, {'mode-aware-inactive', 'mode-aware-active'})
-        self.assertEqual(audited_names, {'mode-aware-inactive', 'mode-aware-active'})
-        self.assertIn(active.pk, _pks(audited_qs))
+        self.assertEqual(default_names, set())
+        self.assertEqual(audited_names, set())
+        self.assertNotIn(active.pk, _pks(audited_qs))
+        self.assertNotIn(inactive.pk, _pks(audited_qs))
         self.assertNotIn(outside.pk, _pks(audited_qs))
         self.assertNotIn(other.pk, _pks(audited_qs))
-        self.assertIn(outside.pk, _pks(unfiltered))
+        self.assertNotIn(outside.pk, _pks(unfiltered))
+        self.assertIn(self.alice.pk, _pks(unfiltered))
         self.assertIn(self.inactive.pk, _pks(unfiltered))
 
     def test_cross_database_router_fails_before_sql(self):

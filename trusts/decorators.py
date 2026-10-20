@@ -17,13 +17,13 @@ from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user, known_skip_names
 from trusts.plan.rewrites import bind_once
+from trusts.apps import catalog_for_model
 from trusts.compile.catalogs import (
     assert_authorization_preflight,
     authorization_grant_q,
     codename_binding,
     guard_conditions,
     guard_permission_string,
-    relationship_catalogs,
 )
 
 
@@ -70,31 +70,20 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
             'filter_by_permitted_content requires a QuerySet, not %r.'
             % (queryset,)
         )
-    catalogs = relationship_catalogs()
+    catalog = catalog_for_model(queryset.model)
     user = require_instance(user, 'user')
     permission = require_instance(permission, 'permission')
+    subjects = () if catalog is None else (catalog,)
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags,
-        skip_names=known_skip_names(catalogs),
+        skip_names=known_skip_names(subjects),
     )
-    if not catalogs or inquiry.denied:
+    if catalog is None or inquiry.denied:
         return queryset.none()
-    compiled = []
-    for catalog in catalogs:
-        part = catalog.filter_by_permitted_content(
-            queryset, user, permission, content=content,
-            skipped=inquiry.values,
-        )
-        if not part.query.is_empty():
-            compiled.append(part)
-    if not compiled:
-        return queryset.none()
-    if len(compiled) == 1:
-        return compiled[0]
-    combined = compiled[0]
-    for part in compiled[1:]:
-        combined = combined | part
-    return combined
+    return catalog.filter_by_permitted_content(
+        queryset, user, permission, content=content,
+        skipped=inquiry.values,
+    )
 
 
 def authorization_required(model, permission, conditions=(), **skip_flags):
@@ -188,7 +177,7 @@ def _coerce_pk(model, raw):
 
 def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
-    catalogs = relationship_catalogs()
+    catalog = catalog_for_model(model)
     user = request.user
     raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None
     if 'pk' not in view_kwargs:
@@ -201,11 +190,11 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
             'are ready.'
         )
     assert_authorization_preflight(
-        catalogs, model, conditions, api='authorization_required',
+        catalog, model, conditions, api='authorization_required',
     )
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags,
-        skip_names=known_skip_names(catalogs),
+        skip_names=known_skip_names((catalog,)),
     )
     if inquiry.denied:
         raise PermissionDenied
@@ -214,13 +203,15 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
     app_label, codename = permission.split('.', 1)
     binding = codename_binding(model, app_label, codename)
     granted_q = authorization_grant_q(
-        catalogs, candidates, user, model, permission, conditions, binding,
+        catalog, candidates, user, model, permission, conditions, binding,
         api='authorization_required', skipped=inquiry.values,
     )
     if granted_q is None:
         matched = None
     else:
-        matched = bind_once(candidates.filter(granted_q))
+        matched = bind_once(
+            candidates.filter(granted_q), user_model=catalog.user_model,
+        )
         if matched.exists():
             return
     if matched is None:

@@ -457,7 +457,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user_model=User,
                 user_rules=(Q(), Q()),
                 override_q=None,
-            ))
+            ), user_model=User)
             self.assertTrue(catalog.has_perm(holder, code, payload))
             self.assertFalse(catalog.has_perm(outsider, code, payload))
             self.assertEqual(
@@ -485,7 +485,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 compiler=None, path='empty-shape',
                 family='relationship', user_model=User,
                 user_rules=(Q(), Q()), override_q=None,
-            ))
+            ), user_model=User)
             self.assertFalse(empty.has_perm(holder, code, payload))
             self.assertFalse(empty.filter_authorized(
                 Payload.objects.all(), holder, read,

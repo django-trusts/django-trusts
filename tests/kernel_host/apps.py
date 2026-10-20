@@ -1,15 +1,11 @@
-from django.apps import AppConfig
+import trusts.apps as trusts_apps
 
 
-HOST_BACKEND = 'tests.backends.HostTrustModelBackend'
+HOST_BACKEND = 'tests.kernel_host.backends.HostTrustModelBackend'
 
 
-class KernelHostConfig(AppConfig):
-    """Kernel-only test app. The host backend is listed in settings.
-
-    Pair settings omit this app. The ready-time sweep builds whatever
-    ``AUTHENTICATION_BACKENDS`` lists.
-    """
+class KernelHostConfig(trusts_apps.TrustsConfigMixin):
+    """Kernel-only test app. The host backend lives in this package."""
 
     name = 'tests.kernel_host'
     label = 'trusts_kernel_host'

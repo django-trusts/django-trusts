@@ -9,7 +9,6 @@ from typing import TypeVar
 from dataclasses import dataclass, field, replace
 
 from django.core.exceptions import FieldDoesNotExist
-from django.utils.module_loading import import_string
 from django.db.models import F, Model, Q
 from django.db.models.query import QuerySet
 
@@ -58,8 +57,7 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.compile.catalogs import Catalog, CatalogShape
-from trusts.backends import TrustModelBackendMixin, catalogs, recorders
+from trusts.compile.catalogs import CatalogShape
 from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
@@ -212,6 +210,9 @@ class RegistryFactory(object):
 
     def __init__(self, *, compiler=None, path='', family='relationship',
                  user_model=None):
+        if user_model is None:
+            from trusts.apps import installed_user_model
+            user_model = installed_user_model()
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}
@@ -219,7 +220,7 @@ class RegistryFactory(object):
         self.frozen = False
         self._user_conditions = None
         self._user_override = None
-        self.conditions = ConditionRegistry()
+        self.conditions = ConditionRegistry(user_model=user_model)
         self._explicit_compiler = compiler is not None
         self.compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path
@@ -235,7 +236,7 @@ class RegistryFactory(object):
         """
         self._open('register_permission_condition')
         return self.conditions.register_permission_condition(
-            model, cond_code, condition,
+            model, cond_code, condition, user_model=self.user_model,
         )
 
     def user_conditions(self):
@@ -883,42 +884,6 @@ def compile_recorder(recorder, *, path, family, compiler, user_model):
                 'Unknown recorder row %r.' % (kind,)
             )
     return built.build()
-
-
-def build_configured_catalogs(paths, user_model):
-    """Build one catalog per listed mixin backend. A second call does nothing.
-
-    Only classes named in ``paths`` (``AUTHENTICATION_BACKENDS`` order)
-    that subclass ``TrustModelBackendMixin`` are compiled.
-    """
-    if catalogs:
-        return
-    chosen = []
-    seen = {}
-    for path in paths:
-        obj = import_string(path)
-        if not isinstance(obj, type) or not issubclass(obj, TrustModelBackendMixin):
-            continue
-        if obj in seen:
-            raise TrustsConfigurationError(
-                'Configured Trusts backend class is listed under multiple '
-                'paths: %r → %s.' % (path, [seen[obj], path])
-            )
-        seen[obj] = path
-        chosen.append((path, obj))
-    pending = []
-    for path, cls in chosen:
-        if cls not in recorders:
-            cls()
-        pending.append((cls, compile_recorder(
-            recorders[cls],
-            path=path,
-            family=cls.family,
-            compiler=cls.query_compiler,
-            user_model=user_model,
-        )))
-    for cls, shape in pending:
-        catalogs[cls] = Catalog(shape)
 
 
 def probe_along_capabilities(connection):

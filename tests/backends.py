@@ -10,14 +10,6 @@ class MixinOnlyBackend(TrustModelBackendMixin, ModelBackend):
     """Listed mixin-only path: plan compiler, no package Trust-as-content."""
 
 
-class HostTrustModelBackend(TrustModelBackendMixin, ModelBackend):
-    """Kernel-only host backend. Pair historical SQL lives on Zero."""
-
-
-# Same class under a second import path (alias-ambiguity tests).
-AliasedTrustModelBackend = HostTrustModelBackend
-
-
 class MissingCompilerBackend(TrustModelBackendMixin, ModelBackend):
     query_compiler = None
 
