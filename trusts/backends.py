@@ -163,7 +163,7 @@ class Recorder(object):
     def _open(self):
         if self.frozen:
             raise TrustsConfigurationError(
-                'register refused: this recorder is frozen.'
+                'register refused: this recorder is frozen. The catalog was already built by TrustsImplementationConfig.ready(), so it must be listed after every app that registers.'
             )
 
 

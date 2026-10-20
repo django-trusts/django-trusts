@@ -242,6 +242,12 @@ class BackendQuestionAfterLateRegistrationTest(SimpleTestCase):
             recorder.register(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(catalog.records, before)
 
+    def test_frozen_register_names_ready_and_app_order(self):
+        recorder = DocumentBackend().get_registry()
+        with self.assertRaises(TrustsConfigurationError) as caught:
+            recorder.register(trust=DocumentGrant, user='user', permission='permission', content='document')
+        self.assertEqual(str(caught.exception), 'register refused: this recorder is frozen. The catalog was already built by TrustsImplementationConfig.ready(), so it must be listed after every app that registers.')
+
 class HandleBuildRegistrySignalTest(SimpleTestCase):
     """A configured path holds a registry. The registry builds itself."""
 
