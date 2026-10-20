@@ -135,10 +135,7 @@ class TrustsConfigMixin(django.apps.AppConfig):
         # Compiler imports Permission through the factory chain.
         # Apps.populate phase 1 imports this module before that is safe.
         from trusts.compile.factory import Compiler
-        from trusts.inspect.commands import install_policy_commands
-        import trusts.inspect.checks  # noqa: F401
 
-        install_policy_commands()
         user_model = get_user_model()
         compiler = Compiler(
             user_model=user_model,

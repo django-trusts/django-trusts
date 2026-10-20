@@ -1,8 +1,8 @@
 """Management command for the authorization policy SQL document.
 
 Core is not a Django app and does not ship
-``trusts/management``. ``TrustsImplementationConfig.ready`` calls
-:func:`install_policy_commands` so ``trusts_policy_sql`` is
+``trusts/management``. Importing ``trusts.models`` calls
+:func:`install_policy_commands` once, so ``trusts_policy_sql`` is
 discoverable after ``django.setup()``.
 
 The command prints the schema-1 canonical YAML document and, with
@@ -25,7 +25,6 @@ from trusts.inspect.snapshot import (
 import django.core.management as management
 
 _POLICY_COMMAND_APP = 'trusts.policy_commands'
-_INSTALLED = False
 
 
 class PolicySqlCommand(BaseCommand):
@@ -79,14 +78,10 @@ _POLICY_COMMANDS = {
 def install_policy_commands():
     """Register ``trusts_policy_sql`` on Django's command loader.
 
-    Idempotent. Does not override a command of the same name already
-    provided by another application. Safe to call from every
-    implementation ``ready()``.
+    ``trusts.models`` calls this once, when that module is first
+    imported. Does not override a command of the same name already
+    provided by another application.
     """
-    global _INSTALLED
-    if _INSTALLED:
-        return
-
     original_get = management.get_commands
     original_load = management.load_command_class
 
@@ -109,4 +104,3 @@ def install_policy_commands():
 
     management.get_commands = get_commands
     management.load_command_class = load_command_class
-    _INSTALLED = True
