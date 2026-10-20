@@ -152,9 +152,9 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
                 self.backend.has_perm(self.alice, PERM, self.open_doc, skip_is_active='yes')
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class InactiveCompilerInquiryTest(TransactionTestCase):
+class InactiveRegistryInquiryTest(TransactionTestCase):
 
-    def test_compiler_and_scopes_deny_inactive_users_and_keep_schemaless_holders(self):
+    def test_registry_and_scopes_deny_inactive_users_and_keep_schemaless_holders(self):
         User = get_user_model()
 
         class Note(models.Model):
@@ -223,40 +223,40 @@ class InactiveCompilerInquiryTest(TransactionTestCase):
             AccountGrant.objects.create(note=note, account=account, action=read)
             FolderGrant.objects.create(folder=folder, user=alice, permission=read)
             FolderGrant.objects.create(folder=folder, user=inactive, permission=read)
-            compiler = Compiler()
+            registry = Compiler()
             grant = Ref(NoteGrant)
-            compiler.register_relation(content=grant.note, user=grant.user, permission=grant.permission)
-            self.assertEqual(_pks(built_catalog(compiler).permissions_for(alice, note)), {read.pk})
-            self.assertTrue(built_catalog(compiler).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), note))
-            self.assertEqual(_pks(built_catalog(compiler).filter_authorized(Note.objects.all(), alice, read)), {note.pk})
+            registry.register_relation(content=grant.note, user=grant.user, permission=grant.permission)
+            self.assertEqual(_pks(built_catalog(registry).permissions_for(alice, note)), {read.pk})
+            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), note))
+            self.assertEqual(_pks(built_catalog(registry).filter_authorized(Note.objects.all(), alice, read)), {note.pk})
             with self.assertNumQueries(3):
-                self.assertEqual(list(built_catalog(compiler).permissions_for(inactive, note)), [])
-                self.assertFalse(built_catalog(compiler).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note))
-                self.assertFalse(built_catalog(compiler).filter_authorized(Note.objects.all(), inactive, read).exists())
-            self.assertEqual(_pks(built_catalog(compiler).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
-            self.assertTrue(built_catalog(compiler).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=True))
-            self.assertEqual(_pks(built_catalog(compiler).filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
-            account_compiler = Compiler()
+                self.assertEqual(list(built_catalog(registry).permissions_for(inactive, note)), [])
+                self.assertFalse(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note))
+                self.assertFalse(built_catalog(registry).filter_authorized(Note.objects.all(), inactive, read).exists())
+            self.assertEqual(_pks(built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
+            self.assertTrue(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=True))
+            self.assertEqual(_pks(built_catalog(registry).filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
+            account_registry = Compiler()
             account_grant = Ref(AccountGrant)
-            account_compiler.register_relation(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
-            self.assertEqual(_pks(built_catalog(account_compiler).permissions_for(account, note)), {read.pk})
-            self.assertTrue(built_catalog(account_compiler).has_perm(account, '%s.%s' % (read.content_type.app_label, read.codename), note))
-            account_sql = str(built_catalog(account_compiler).permissions_for(account, note).query)
+            account_registry.register_relation(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
+            self.assertEqual(_pks(built_catalog(account_registry).permissions_for(account, note)), {read.pk})
+            self.assertTrue(built_catalog(account_registry).has_perm(account, '%s.%s' % (read.content_type.app_label, read.codename), note))
+            account_sql = str(built_catalog(account_registry).permissions_for(account, note).query)
             self.assertNotIn('is_active', account_sql)
-            active_sql = str(built_catalog(compiler).permissions_for(alice, note).query)
+            active_sql = str(built_catalog(registry).permissions_for(alice, note).query)
             self.assertIn('"is_active"', active_sql)
-            skipped = built_catalog(compiler).permissions_for(inactive, note, skip_is_active=True)
+            skipped = built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)
             self.assertEqual(_pks(skipped), {read.pk})
-            self.assertEqual(skipped.query.sql_with_params()[0], built_catalog(compiler).permissions_for(alice, note).query.sql_with_params()[0])
+            self.assertEqual(skipped.query.sql_with_params()[0], built_catalog(registry).permissions_for(alice, note).query.sql_with_params()[0])
             self.assertIn('is_active', str(skipped.query))
-            scope_compiler = Compiler()
+            scope_registry = Compiler()
             scope_grant = Ref(FolderGrant)
-            scope_compiler.register_relation(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
-            handle = scope_compiler
-            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), alice, read, content=Note, compiler=built_catalog(handle))), {folder.pk})
+            scope_registry.register_relation(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
+            handle = scope_registry
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), alice, read, content=Note, registry=built_catalog(handle))), {folder.pk})
             with self.assertNumQueries(1):
-                self.assertFalse(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, compiler=built_catalog(handle)).exists())
-            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, compiler=built_catalog(handle), skip_is_active=True)), {folder.pk})
+                self.assertFalse(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registry=built_catalog(handle)).exists())
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registry=built_catalog(handle), skip_is_active=True)), {folder.pk})
         finally:
             with connection.schema_editor() as editor:
                 for model in (FolderGrant, AccountGrant, NoteGrant, Account, Row, Folder, Note):
@@ -340,24 +340,24 @@ class InactiveCompilerInquiryTest(TransactionTestCase):
                             rows = AuthorizedQuerySet(Note).authorized(holder, read, skip_is_active=include_inactive)
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
-            compiler = Compiler()
+            registry = Compiler()
             grant = Ref(LocalUserGrant)
-            compiler.register_relation(content=grant.note, user=grant.holder, permission=grant.action)
-            self.assertEqual(_pks(built_catalog(compiler).permissions_for(visible, note)), {read.pk})
-            self.assertTrue(built_catalog(compiler).has_perm(visible, '%s.%s' % (read.content_type.app_label, read.codename), note))
-            scope_compiler = Compiler()
+            registry.register_relation(content=grant.note, user=grant.holder, permission=grant.action)
+            self.assertEqual(_pks(built_catalog(registry).permissions_for(visible, note)), {read.pk})
+            self.assertTrue(built_catalog(registry).has_perm(visible, '%s.%s' % (read.content_type.app_label, read.codename), note))
+            scope_registry = Compiler()
             scope_grant = Ref(FolderGrant)
-            scope_compiler.register_relation(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
-            handle = scope_compiler
-            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), visible, read, content=Note, compiler=built_catalog(handle))), {folder.pk})
+            scope_registry.register_relation(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
+            handle = scope_registry
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), visible, read, content=Note, registry=built_catalog(handle))), {folder.pk})
             backend = DocumentBackend()
             for holder in (anonymous, guest):
                 with self.assertNumQueries(0):
                     for include_inactive in (False, True):
-                        self.assertEqual(list(built_catalog(compiler).permissions_for(holder, note, skip_is_active=include_inactive)), [])
-                        self.assertFalse(built_catalog(compiler).has_perm(holder, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=include_inactive))
-                        self.assertFalse(built_catalog(compiler).filter_authorized(Note.objects.all(), holder, read, skip_is_active=include_inactive).exists())
-                        self.assertFalse(filter_by_permitted_content(Folder.objects.all(), holder, read, content=Note, compiler=built_catalog(handle), skip_is_active=include_inactive).exists())
+                        self.assertEqual(list(built_catalog(registry).permissions_for(holder, note, skip_is_active=include_inactive)), [])
+                        self.assertFalse(built_catalog(registry).has_perm(holder, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=include_inactive))
+                        self.assertFalse(built_catalog(registry).filter_authorized(Note.objects.all(), holder, read, skip_is_active=include_inactive).exists())
+                        self.assertFalse(filter_by_permitted_content(Folder.objects.all(), holder, read, content=Note, registry=built_catalog(handle), skip_is_active=include_inactive).exists())
                         self.assertFalse(backend.has_perm(holder, 'myapp.change_document', note, skip_is_active=include_inactive))
                         self.assertEqual(backend.get_all_permissions(holder, note, skip_is_active=include_inactive), set())
                         self.assertEqual(backend.get_group_permissions(holder, note, skip_is_active=include_inactive), set())
@@ -489,7 +489,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         return set(self.sheet.get_permitted_users(perm, **kwargs).values_list('pk', flat=True))
 
     def _scope_pks(self, user, **kwargs):
-        return set(filter_by_permitted_content(self.Cabinet.objects.all(), user, self.read, content=self.Sheet, compiler=built_catalog(self.handle), **kwargs).values_list('pk', flat=True))
+        return set(filter_by_permitted_content(self.Cabinet.objects.all(), user, self.read, content=self.Sheet, registry=built_catalog(self.handle), **kwargs).values_list('pk', flat=True))
 
     def test_both_inactive_delegate_and_sponsor_need_the_optional_keyword(self):
         self.assertTrue(self.backend.has_perm(self.delegate, self.code, self.sheet))

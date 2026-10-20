@@ -1,4 +1,4 @@
-"""#67: catalog ownership and first-contribution idempotence.
+"""#67: registry ownership and first-contribution idempotence.
 
 Category ``.permitted()`` runtime stays on Zero ``tests/legacy/``.
 """
@@ -19,8 +19,8 @@ import tests as tests_module
 from trusts.compile.factory import Compiler
 
 
-class TrustsCompilerOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
-    def test_package_compiler_is_created_in_init_not_replaced_by_ready(self):
+class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
+    def test_package_registry_is_created_in_init_not_replaced_by_ready(self):
         # The built object is sealed onto the backend class, not
         # constructed in AppConfig.__init__. A second ready() must not
         # replace it. The path dict stays empty unless a test writes it.
@@ -35,7 +35,7 @@ class TrustsCompilerOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertIs(HostTrustModelBackend().catalog, catalog)
         self.assertFalse(hasattr(live, 'registries'))
 
-    def test_reader_obtains_compiler_via_app_config_not_package_root(self):
+    def test_reader_obtains_registry_via_app_config_not_package_root(self):
         import trusts
 
         from tests.kernel_host.backends import HostTrustModelBackend
@@ -98,8 +98,8 @@ class ContributorIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
     'django.contrib.contenttypes',
     attr_name='isolated_apps',
 )
-class IsolatedAppsDoesNotDonateToLiveCompilerTest(SimpleTestCase):
-    def test_isolate_apps_ready_does_not_touch_live_compiler(self):
+class IsolatedAppsDoesNotDonateToLiveRegistryTest(SimpleTestCase):
+    def test_isolate_apps_ready_does_not_touch_live_registry(self):
         from tests.kernel_host.backends import HostTrustModelBackend
         live = HostTrustModelBackend().catalog
         before = live.records

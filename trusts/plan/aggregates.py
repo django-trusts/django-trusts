@@ -1,4 +1,4 @@
-"""Authorization aggregates over one catalog."""
+"""Authorization aggregates over one registry."""
 
 __all__ = []
 

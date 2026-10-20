@@ -69,9 +69,9 @@ def _mock_models():
     return Document, DocumentGrant, OtherGrant
 
 
-def _register(compiler, grant, content_attr='document'):
+def _register(registry, grant, content_attr='document'):
     j = Ref(grant)
-    return compiler.register_relation(
+    return registry.register_relation(
         content=getattr(j, content_attr),
         user=j.user,
         permission=j.permission,
@@ -79,14 +79,14 @@ def _register(compiler, grant, content_attr='document'):
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsCompilerTest(SimpleTestCase):
+class TrustsRegistryTest(SimpleTestCase):
     def test_successful_direct_registration_infers_root_and_terminals(self):
         Document, DocumentGrant, _other = _mock_models()
         User = get_user_model()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
 
-        record = compiler.register_relation(
+        record = registry.register_relation(
             content=j.document,
             user=j.user,
             permission=j.permission,
@@ -108,10 +108,10 @@ class TrustsCompilerTest(SimpleTestCase):
         self.assertEqual(record.user_target, User._meta.pk.attname)
         self.assertEqual(record.permission_target, Permission._meta.pk.attname)
         self.assertEqual(
-            tuple(row for row in compiler.records if row.root is DocumentGrant),
+            tuple(row for row in registry.records if row.root is DocumentGrant),
             (record,),
         )
-        self.assertEqual(compiler.records, (record,))
+        self.assertEqual(registry.records, (record,))
 
     def test_all_refs_share_the_same_root(self):
         _document, DocumentGrant, _other = _mock_models()
@@ -123,23 +123,23 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_mixed_roots_rejected(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
         k = Ref(OtherGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'same root'):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.document,
                 user=k.user,
                 permission=j.permission,
             )
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
     def test_missing_field_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'missing field'):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.missing,
                 user=j.user,
                 permission=j.permission,
@@ -147,10 +147,10 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_scalar_intermediate_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'scalar'):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.document.title,
                 user=j.user,
                 permission=j.permission,
@@ -158,12 +158,12 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_multi_valued_traversal_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'multi-valued',
         ):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.tags,
                 user=j.user,
                 permission=j.permission,
@@ -171,10 +171,10 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_reverse_traversal_rejected(self):
         Document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(Document)
         with self.assertRaisesRegex(TrustsConfigurationError, r'reverse'):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.grants,
                 user=j.grants,
                 permission=j.grants,
@@ -183,12 +183,12 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_generic_foreign_key_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'generic foreign key',
         ):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.target,
                 user=j.user,
                 permission=j.permission,
@@ -220,8 +220,8 @@ class TrustsCompilerTest(SimpleTestCase):
         self.assertEqual(j.root, Ref(CollisionGrant, ('root',)))
         self.assertEqual(j.path, Ref(CollisionGrant, ('path',)))
 
-        compiler = Compiler()
-        record = compiler.register_relation(
+        registry = Compiler()
+        record = registry.register_relation(
             content=j.root,
             user=j.path,
             permission=j.permission,
@@ -256,16 +256,16 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_malformed_arguments_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'must be a root-relative Ref'):
-            compiler.register_relation(
+            registry.register_relation(
                 content='document',
                 user=j.user,
                 permission=j.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'non-empty'):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j,
                 user=j.user,
                 permission=j.permission,
@@ -273,16 +273,16 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_non_none_condition_rejected(self):
         _document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'not supported'):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.document,
                 user=j.user,
                 permission=j.permission,
                 condition=object(),
             )
-        record = compiler.register_relation(
+        record = registry.register_relation(
             content=j.document,
             user=j.user,
             permission=j.permission,
@@ -292,30 +292,30 @@ class TrustsCompilerTest(SimpleTestCase):
 
     def test_duplicate_and_conflicting_registration_are_deterministic(self):
         _document, DocumentGrant, OtherGrant = _mock_models()
-        compiler = Compiler()
-        first = _register(compiler, DocumentGrant)
+        registry = Compiler()
+        first = _register(registry, DocumentGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            _register(compiler, DocumentGrant)
-        self.assertEqual(compiler.records, (first,))
+            _register(registry, DocumentGrant)
+        self.assertEqual(registry.records, (first,))
         self.assertEqual(
-            tuple(row for row in compiler.records if row.root is DocumentGrant),
+            tuple(row for row in registry.records if row.root is DocumentGrant),
             (first,),
         )
 
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-            _register(compiler, DocumentGrant, content_attr='alt_document')
-        self.assertEqual(compiler.records, (first,))
+            _register(registry, DocumentGrant, content_attr='alt_document')
+        self.assertEqual(registry.records, (first,))
         self.assertEqual(first.content_path, ('document',))
 
-        other = _register(compiler, OtherGrant)
-        self.assertEqual(compiler.records, (first, other))
+        other = _register(registry, OtherGrant)
+        self.assertEqual(registry.records, (first, other))
 
         twin = Compiler()
         again = _register(twin, DocumentGrant)
         self.assertEqual(first, again)
         self.assertIsNot(first, again)
         self.assertEqual(twin.records, (again,))
-        self.assertEqual(compiler.records, (first, other))
+        self.assertEqual(registry.records, (first, other))
 
     def test_normalized_records_are_immutable(self):
         _document, DocumentGrant, _other = _mock_models()
@@ -331,13 +331,13 @@ class TrustsCompilerTest(SimpleTestCase):
         # here is the zero-SQL proof; a query would raise
         # DatabaseOperationForbidden.
         _document, DocumentGrant, _other = _mock_models()
-        compiler = Compiler()
-        _register(compiler, DocumentGrant)
+        registry = Compiler()
+        _register(registry, DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
-            _register(compiler, DocumentGrant)
+            _register(registry, DocumentGrant)
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
-            compiler.register_relation(
+            registry.register_relation(
                 content=j.missing,
                 user=j.user,
                 permission=j.permission,
@@ -362,7 +362,7 @@ class TrustsCompilerTest(SimpleTestCase):
         self.assertEqual(len(left.records), 1)
         self.assertEqual(right.records, ())
 
-    def test_package_surface_does_not_reexport_compiler(self):
+    def test_package_surface_does_not_reexport_registry(self):
         import trusts
         self.assertIsNone(getattr(trusts, 'TrustsRegistry', None))
         self.assertIsNone(getattr(trusts, 'RegisteredRelation', None))

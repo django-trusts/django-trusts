@@ -211,13 +211,13 @@ def _tables(*model_classes):
             for model in reversed(model_classes):
                 editor.delete_model(model)
 
-def _direct_ceiling(compiler, placement):
+def _direct_ceiling(registry, placement):
     p = Ref(placement)
-    return compiler.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.badges))
+    return registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.badges))
 
-def _cluster_ceiling(compiler, placement):
+def _cluster_ceiling(registry, placement):
     p = Ref(placement)
-    return compiler.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+    return registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
 
 def _pks(rows):
     return {row.pk for row in rows}
@@ -281,11 +281,11 @@ class LongPathRegistrationTest(TestCase):
         models_ = _long_path_models()
         Placement = models_[-1]
         Artifact = models_[-2]
-        compiler = Compiler()
+        registry = Compiler()
         with self.assertNumQueries(0):
-            direct = _direct_ceiling(compiler, Placement)
-            clustered = _cluster_ceiling(compiler, Placement)
-        self.assertEqual(len(compiler.records), 2)
+            direct = _direct_ceiling(registry, Placement)
+            clustered = _cluster_ceiling(registry, Placement)
+        self.assertEqual(len(registry.records), 2)
         self.assertIs(direct.content_model, Artifact)
         self.assertIs(clustered.content_model, Artifact)
         self.assertEqual(direct.user_path, ('actor',))
@@ -315,37 +315,37 @@ class LongPathRegistrationTest(TestCase):
     def test_exact_duplicate_rejects_and_leaves_store_unchanged(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        compiler = Compiler()
-        first = _cluster_ceiling(compiler, Placement)
+        registry = Compiler()
+        first = _cluster_ceiling(registry, Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
-                _cluster_ceiling(compiler, Placement)
-        self.assertEqual(compiler.records, (first,))
+                _cluster_ceiling(registry, Placement)
+        self.assertEqual(registry.records, (first,))
 
     def test_different_bindings_still_conflict(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        compiler = Compiler()
-        first = _cluster_ceiling(compiler, Placement)
+        registry = Compiler()
+        first = _cluster_ceiling(registry, Placement)
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
-                compiler.register_relation(content=p.artifact, user=p.alt_actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
-        self.assertEqual(compiler.records, (first,))
+                registry.register_relation(content=p.artifact, user=p.alt_actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+        self.assertEqual(registry.records, (first,))
 
     def test_wrong_terminal_malformed_and_gfk_fail_closed(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        compiler = Compiler()
+        registry = Compiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'permission model'):
-                compiler.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters))
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters))
             with self.assertRaisesRegex(TrustsConfigurationError, 'extra or intermediate multi-valued'):
-                compiler.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens.clustered))
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens.clustered))
             with self.assertRaisesRegex(TrustsConfigurationError, 'scalar field|single-valued hops'):
-                compiler.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.title))
-        self.assertEqual(compiler.records, ())
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.title))
+        self.assertEqual(registry.records, ())
 
         class Tagged(models.Model):
             label = models.CharField(max_length=20)
@@ -367,17 +367,17 @@ class LongPathRegistrationTest(TestCase):
         g = Ref(TaggedGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'generic foreign key'):
-                compiler.register_relation(content=g.artifact, user=g.actor, permission=g.token, condition=permission_in(g.tagged.target))
-        self.assertEqual(compiler.records, ())
+                registry.register_relation(content=g.artifact, user=g.actor, permission=g.token, condition=permission_in(g.tagged.target))
+        self.assertEqual(registry.records, ())
 
     def test_colliding_to_field_membership_fails_closed(self):
         _Actor, _Token, _Hall, Cluster, _Through, _Building, _Floor, _Wing, Artifact, Placement = _colliding_to_field_models()
-        compiler = Compiler()
+        registry = Compiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
-                compiler.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
-        self.assertEqual(compiler.records, ())
+                registry.register_relation(content=p.artifact, user=p.actor, permission=p.token, condition=permission_in(p.wing.floor.building.hall.clusters.tokens))
+        self.assertEqual(registry.records, ())
         self.assertIs(Cluster._meta.concrete_model, Cluster)
         self.assertIs(Artifact._meta.concrete_model, Artifact)
 
@@ -401,26 +401,26 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.artifact = self.Artifact.objects.create(title='scope')
         self.other = self.Artifact.objects.create(title='other')
         self.Placement.objects.create(artifact=self.artifact, actor=self.actor, alt_actor=self.stranger, token=self.read, wing=self.wing)
-        self.compiler = Compiler()
-        _direct_ceiling(self.compiler, self.Placement)
-        _cluster_ceiling(self.compiler, self.Placement)
+        self.registry = Compiler()
+        _direct_ceiling(self.registry, self.Placement)
+        _cluster_ceiling(self.registry, self.Placement)
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        self.compiler.path = 'issue18'
-        return (self.compiler,)
+        self.registry.path = 'issue18'
+        return (self.registry,)
 
     def _agree(self, principal, token, obj, expected):
         with self.assertNumQueries(1):
-            via_obj = built_catalog(self.compiler).has_permission(principal, obj, token)
+            via_obj = built_catalog(self.registry).has_permission(principal, obj, token)
         with self.assertNumQueries(1):
-            via_list = obj in list(built_catalog(self.compiler).filter_authorized(self.Artifact.objects.filter(pk=obj.pk), principal, token))
+            via_list = obj in list(built_catalog(self.registry).filter_authorized(self.Artifact.objects.filter(pk=obj.pk), principal, token))
         with listed_relationship(self._handles()):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Artifact.objects.filter(pk=obj.pk).authorized(principal, token))
-        enumerated = {row.pk for row in built_catalog(self.compiler).permissions_for(principal, obj)}
+        enumerated = {row.pk for row in built_catalog(self.registry).permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -454,8 +454,8 @@ class LongPathAuthorizationTest(TransactionTestCase):
     def test_fixed_query_object_list_and_enumeration_agree(self):
         self.hall.badges.add(self.read)
         with self.assertNumQueries(0):
-            qs = built_catalog(self.compiler).filter_authorized(self.Artifact.objects.all(), self.actor, self.read)
-            enumerated = built_catalog(self.compiler).permissions_for(self.actor, self.artifact)
+            qs = built_catalog(self.registry).filter_authorized(self.Artifact.objects.all(), self.actor, self.read)
+            enumerated = built_catalog(self.registry).permissions_for(self.actor, self.artifact)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
@@ -463,7 +463,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
             self.assertEqual(_pks(qs), {self.artifact.pk})
         with self.assertNumQueries(1):
             self.assertEqual(_pks(enumerated), {self.read.pk})
-        sql = str(built_catalog(self.compiler).filter_authorized(self.Artifact.objects.all(), self.actor, self.read).query).lower().replace('_', '').replace('"', '')
+        sql = str(built_catalog(self.registry).filter_authorized(self.Artifact.objects.all(), self.actor, self.read).query).lower().replace('_', '').replace('"', '')
         self.assertIn('exists', sql)
         self.assertIn('placement', sql)
         self.assertIn('cluster', sql)
@@ -580,9 +580,9 @@ class MembershipGroupExistsTest(TransactionTestCase):
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
-    def _handle(self, compiler):
-        compiler.path = 'issue18-group'
-        return compiler
+    def _handle(self, registry):
+        registry.path = 'issue18-group'
+        return registry
 
     def test_membership_user_hop_is_not_a_group_slice(self):
         handle = self._handle(self.membership)
@@ -645,45 +645,45 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.child = self.Node.objects.create(title='child', parent=self.parent)
         self.other = self.Node.objects.create(title='other')
         self.NodeGrant.objects.create(node=self.parent, holder=self.holder, token=self.add)
-        self.compiler = Compiler()
+        self.registry = Compiler()
         g = Ref(self.NodeGrant)
-        self.compiler.register_relation(content=g.node.children, user=g.holder, permission=g.token)
-        self.compiler.path = 'issue18-prefix'
-        self.handle = self.compiler
+        self.registry.register_relation(content=g.node.children, user=g.holder, permission=g.token)
+        self.registry.path = 'issue18-prefix'
+        self.handle = self.registry
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
     def test_same_model_prefix_is_create_scope(self):
-        record = self.compiler.records[0]
+        record = self.registry.records[0]
         self.assertEqual(record.content_path, ('node', 'children'))
         self.assertIs(record.content_model, self.Node)
         with self.assertNumQueries(0):
-            qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, compiler=built_catalog(self.handle))
+            qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=built_catalog(self.handle))
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.parent.pk})
-        self.assertFalse(filter_by_permitted_content(self.Node.objects.all(), self.stranger, self.add, content=self.Node, compiler=built_catalog(self.handle)).exists())
+        self.assertFalse(filter_by_permitted_content(self.Node.objects.all(), self.stranger, self.add, content=self.Node, registry=built_catalog(self.handle)).exists())
 
     def test_terminal_only_same_model_is_none(self):
-        compiler = Compiler()
+        registry = Compiler()
         g = Ref(self.NodeGrant)
-        compiler.register_relation(content=g.node, user=g.holder, permission=g.token)
-        compiler.path = 'issue18-terminal'
-        handle = compiler
-        qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, compiler=built_catalog(handle))
+        registry.register_relation(content=g.node, user=g.holder, permission=g.token)
+        registry.path = 'issue18-terminal'
+        handle = registry
+        qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=built_catalog(handle))
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
     def test_authorized_content_is_child_not_parent(self):
         with self.assertNumQueries(1):
-            self.assertTrue(built_catalog(self.compiler).has_permission(self.holder, self.child, self.add))
+            self.assertTrue(built_catalog(self.registry).has_permission(self.holder, self.child, self.add))
         with self.assertNumQueries(1):
-            self.assertFalse(built_catalog(self.compiler).has_permission(self.holder, self.parent, self.add))
+            self.assertFalse(built_catalog(self.registry).has_permission(self.holder, self.parent, self.add))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(built_catalog(self.compiler).filter_authorized(self.Node.objects.all(), self.holder, self.add)), {self.child.pk})
+            self.assertEqual(_pks(built_catalog(self.registry).filter_authorized(self.Node.objects.all(), self.holder, self.add)), {self.child.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(built_catalog(self.compiler).permissions_for(self.holder, self.child)), {self.add.pk})
+            self.assertEqual(_pks(built_catalog(self.registry).permissions_for(self.holder, self.child)), {self.add.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, compiler=built_catalog(self.handle))), {self.parent.pk})
+            self.assertEqual(_pks(filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registry=built_catalog(self.handle))), {self.parent.pk})

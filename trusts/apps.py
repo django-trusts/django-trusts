@@ -99,11 +99,11 @@ class Recorder(object):
 
 
 class TrustsConfigMixin(django.apps.AppConfig):
-    """Host apps subclass this and own one recorder and one catalog.
+    """The backend is the registry: one recorder and one catalog.
 
-    Register on ``self.recorder``, then call ``super().ready()``.
-    ``ready`` freezes the recorder and builds the catalog. Order across
-    apps does not matter.
+    It records every registration call through ``self.recorder``.
+    ``ready`` freezes that recorder; the compiler builds the catalog.
+    Order across apps does not matter.
     """
 
     family = 'relationship'

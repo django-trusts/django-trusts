@@ -92,12 +92,6 @@ except ImportError:
 else:
     raise SystemExit("companion overlay still exports trusts.conditions.ConditionRegistry")
 try:
-    from trusts.conditions import ConditionStore
-except ImportError:
-    pass
-else:
-    raise SystemExit("companion overlay still exports trusts.conditions.ConditionStore")
-try:
     from trusts.conditions import validate_expression
 except ImportError:
     pass

@@ -35,14 +35,14 @@ def _permission(model, codename):
 def _pks(qs):
     return set(qs.values_list('pk', flat=True))
 
-class CatalogQuestionsSuiteRegistrationTest(SimpleTestCase):
+class RegistryQuestionsSuiteRegistrationTest(SimpleTestCase):
 
     def test_module_is_on_kernel_and_pair_suites(self):
-        self.assertIn('tests.core.test_catalog_questions', KERNEL_SUITE)
-        self.assertIn('tests.core.test_catalog_questions', PAIR_KERNEL_SUITE)
+        self.assertIn('tests.core.test_registry_questions', KERNEL_SUITE)
+        self.assertIn('tests.core.test_registry_questions', PAIR_KERNEL_SUITE)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class CatalogQuestionsTest(TransactionTestCase):
+class RegistryQuestionsTest(TransactionTestCase):
 
     def setUp(self):
         super().setUp()
@@ -107,30 +107,30 @@ class CatalogQuestionsTest(TransactionTestCase):
                 db_table = 'rq_group_grant'
         return (Folder, Document, Grant, Share, GroupGrant)
 
-    def _compiler(self, *, delegated=False, group=False):
-        compiler = Compiler()
+    def _registry(self, *, delegated=False, group=False):
+        registry = Compiler()
         grant = Ref(self.Grant)
-        compiler.register_relation(content=grant.document, user=grant.user, permission=grant.permission)
+        registry.register_relation(content=grant.document, user=grant.user, permission=grant.permission)
         if delegated:
             share = Ref(self.Share)
-            compiler.register_delegation(content=share.document, delegate=share.delegate, sponsor=share.sponsor)
+            registry.register_delegation(content=share.document, delegate=share.delegate, sponsor=share.sponsor)
         if group:
             grouped = Ref(self.GroupGrant)
-            compiler.register_relation(content=grouped.document, user=grouped.user, group=grouped.group)
-        return compiler
+            registry.register_relation(content=grouped.document, user=grouped.user, group=grouped.group)
+        return registry
 
-    def _production_handle(self, compiler):
-        compiler.path = 'tests.core.catalog-questions'
-        return compiler
+    def _production_handle(self, registry):
+        registry.path = 'tests.core.registry-questions'
+        return registry
 
     def test_q1_to_q4_ordinary_sql_matches_production(self):
-        compiler = self._compiler()
+        registry = self._registry()
         self.Grant.objects.create(user=self.alice, document=self.doc_a, permission=self.read)
-        built = built_catalog(compiler)
+        built = built_catalog(registry)
         self.assertTrue(built.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertFalse(built.has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a))
         self.assertFalse(built.has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
-        handle = self._production_handle(compiler)
+        handle = self._production_handle(registry)
         self.assertEqual(built.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(built_catalog(handle), self.doc_a, self.alice, self.read))
         built_qs = built.filter_authorized(self.Document.objects.all(), self.alice, self.read)
         granted_q = _compile_granted(built_catalog(handle), self.Document.objects.all(), self.alice, self.read)
@@ -138,25 +138,25 @@ class CatalogQuestionsTest(TransactionTestCase):
         self.assertEqual(str(built_qs.query), str(production_qs.query))
         self.assertEqual(_pks(built_qs), {self.doc_a.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
-        self.assertEqual(str(built.permissions_for(self.alice, self.doc_a).query), str(built_catalog(compiler).permissions_for(self.alice, self.doc_a).query))
-        self.assertEqual(built.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), built_catalog(compiler).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
-        self.assertEqual(str(built.filter_authorized(self.Document.objects.all(), self.alice, self.read).query), str(built_catalog(compiler).filter_authorized(self.Document.objects.all(), self.alice, self.read).query))
+        self.assertEqual(str(built.permissions_for(self.alice, self.doc_a).query), str(built_catalog(registry).permissions_for(self.alice, self.doc_a).query))
+        self.assertEqual(built.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
+        self.assertEqual(str(built.filter_authorized(self.Document.objects.all(), self.alice, self.read).query), str(built_catalog(registry).filter_authorized(self.Document.objects.all(), self.alice, self.read).query))
         self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk})
         code = '%s.%s' % (self.read.content_type.app_label, self.read.codename)
         self.assertEqual(_pks(built.permitted_users(self.doc_a, code)), {self.alice.pk})
-        prefix_compiler = Compiler()
+        prefix_registry = Compiler()
         grant = Ref(self.Grant)
-        prefix_compiler.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
+        prefix_registry.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.filter(user=self.alice).update(folder=self.folder_a)
-        folders = built_catalog(prefix_compiler).filter_by_permitted_content(self.Folder.objects.all(), self.alice, self.read, content=self.Document)
+        folders = built_catalog(prefix_registry).filter_by_permitted_content(self.Folder.objects.all(), self.alice, self.read, content=self.Document)
         self.assertEqual(_pks(folders), {self.folder_a.pk})
 
-    def test_delegation_uses_production_semantics_on_built_compiler(self):
-        compiler = self._compiler(delegated=True)
+    def test_delegation_uses_production_semantics_on_built_registry(self):
+        registry = self._registry(delegated=True)
         self.Grant.objects.create(user=self.alice, document=self.doc_a, permission=self.read)
         self.Share.objects.create(delegate=self.bob, sponsor=self.alice, document=self.doc_a)
-        built = built_catalog(compiler)
-        handle = self._production_handle(compiler)
+        built = built_catalog(registry)
+        handle = self._production_handle(registry)
         self.assertTrue(built.has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertEqual(built.has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(built_catalog(handle), self.doc_a, self.bob, self.read))
         self.assertFalse(built.has_perm(self.outsider, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
@@ -165,19 +165,19 @@ class CatalogQuestionsTest(TransactionTestCase):
         production_permissions = _compile_common_permissions(built_catalog(handle), self.doc_a, self.bob, kind='complete')
         self.assertEqual(str(built.permissions_for(self.bob, self.doc_a).query), str(production_permissions.query))
         self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk, self.bob.pk})
-        self.assertTrue(built_catalog(compiler).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
-        self.assertEqual(_pks(built_catalog(compiler).permissions_for(self.bob, self.doc_a)), {self.read.pk})
+        self.assertTrue(built_catalog(registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
+        self.assertEqual(_pks(built_catalog(registry).permissions_for(self.bob, self.doc_a)), {self.read.pk})
         self.Share.objects.create(delegate=self.bob, sponsor=self.alice, document=self.doc_b)
-        built = built_catalog(compiler)
+        built = built_catalog(registry)
         self.assertFalse(built.has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_b))
 
     def test_walk_questions_order_descriptors_and_bound_answers(self):
-        compiler = self._compiler(group=True)
+        registry = self._registry(group=True)
         group = Group.objects.create(name='rq-walkers')
         group.permissions.add(self.read)
         self.Grant.objects.create(user=self.alice, document=self.doc_a, permission=self.read)
         self.GroupGrant.objects.create(user=self.alice, document=self.doc_a, group=group)
-        built = built_catalog(compiler)
+        built = built_catalog(registry)
         seen = []
 
         class _RecordingVisitor(object):
@@ -204,11 +204,11 @@ class CatalogQuestionsTest(TransactionTestCase):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):
-        prefix_compiler = Compiler()
+        prefix_registry = Compiler()
         grant = Ref(self.Grant)
-        prefix_compiler.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
+        prefix_registry.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.create(user=self.alice, document=self.doc_a, folder=self.folder_a, permission=self.read)
-        built = built_catalog(prefix_compiler)
+        built = built_catalog(prefix_registry)
         seen = []
 
         class _Visitor(object):
@@ -221,7 +221,7 @@ class CatalogQuestionsTest(TransactionTestCase):
         prefix_q = seen[-1]
         self.assertIs(prefix_q.content_model, self.Document)
         self.assertEqual(_pks(prefix_q.question(self.Folder.objects.all(), self.alice, self.read)), {self.folder_a.pk})
-        delegated = self._compiler(delegated=True)
+        delegated = self._registry(delegated=True)
         self.Grant.objects.create(user=self.alice, document=self.doc_b, permission=self.read)
         self.Share.objects.create(delegate=self.bob, sponsor=self.alice, document=self.doc_b)
         built_delegated = built_catalog(delegated)
@@ -237,12 +237,12 @@ class CatalogQuestionsTest(TransactionTestCase):
         self.assertEqual(len(by_name['permitted'].delegations), 1)
         self.assertTrue(by_name['has_perm'].question(self.bob, self.doc_b, self.read))
 
-    def test_group_kind_and_empty_compiler(self):
-        compiler = self._compiler(group=True)
+    def test_group_kind_and_empty_registry(self):
+        registry = self._registry(group=True)
         group = Group.objects.create(name='rq-readers')
         group.permissions.add(self.read)
         self.GroupGrant.objects.create(user=self.alice, document=self.doc_a, group=group)
-        built = built_catalog(compiler)
+        built = built_catalog(registry)
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a, kind='group')), {self.read.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(list(built.permissions_for(self.bob, self.doc_a, kind='group')), [])

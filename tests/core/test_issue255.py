@@ -206,21 +206,21 @@ def _seal_document_factory(factory):
     return saved
 
 @contextmanager
-def _document_compiler():
+def _document_registry():
     from tests.support import (
         restore_installed_catalogs,
         snapshot_installed_catalogs,
     )
     saved = snapshot_installed_catalogs()
-    compiler = Compiler(path=DOCUMENT_BACKEND)
+    registry = Compiler(path=DOCUMENT_BACKEND)
     try:
-        yield compiler
+        yield registry
     finally:
         restore_installed_catalogs(saved)
 
-def _handle(compiler):
-    compiler.path = DOCUMENT_BACKEND
-    return compiler
+def _handle(registry):
+    registry.path = DOCUMENT_BACKEND
+    return registry
 
 class Issue255SuiteRegistrationTest(SimpleTestCase):
 
@@ -643,12 +643,12 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
         self.addCleanup(self._table_cm.__exit__, None, None, None)
         _contribute_m2m(self.Team._meta.get_field('members'), get_user_model())
         _contribute_m2m(self.Team._meta.get_field('allowed'), Permission)
-        self._compiler_cm = _document_compiler()
-        self.compiler = self._compiler_cm.__enter__()
-        self.addCleanup(self._compiler_cm.__exit__, None, None, None)
-        self.handle = _handle(self.compiler)
+        self._registry_cm = _document_registry()
+        self.registry = self._registry_cm.__enter__()
+        self.addCleanup(self._registry_cm.__exit__, None, None, None)
+        self.handle = _handle(self.registry)
         self._register()
-        _seal_document_factory(self.compiler)
+        _seal_document_factory(self.registry)
         self.change = _permission(self.Paper, 'change_paper')
         self.add = _permission(self.Paper, 'add_paper')
         self.code = '%s.%s' % (self.change.content_type.app_label, self.change.codename)
@@ -968,8 +968,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with _tables(UuidNode, UuidNodeGrant):
-            with _document_compiler() as compiler:
-                handle = _handle(compiler)
+            with _document_registry() as registry:
+                handle = _handle(registry)
                 record = handle.register(trust=UuidNodeGrant, user='user', permission='permission', content='node', along=('node__parent', 1))
                 self.assertEqual(record.content_target, 'ident')
                 self.assertNotEqual(record.content_target, UuidNode._meta.pk.attname)
@@ -1014,8 +1014,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with _tables(Desk, DeskGrant):
-            with _document_compiler() as compiler:
-                handle = _handle(compiler)
+            with _document_registry() as registry:
+                handle = _handle(registry)
                 record = handle.register(trust=DeskGrant, user=lambda trust: trust.group.user, group=lambda trust: trust.group, content='desk', along=('desk__parent', 1))
                 self.assertTrue(record.via_group)
                 self.assertIsNotNone(record.along)
@@ -1073,8 +1073,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
                 app_label = 'trusts_tests'
         with _tables(Shelf, ShelfStamp):
             _contribute_m2m(ShelfStamp._meta.get_field('permissions'), Permission)
-            with _document_compiler() as compiler:
-                handle = _handle(compiler)
+            with _document_registry() as registry:
+                handle = _handle(registry)
                 record = handle.register(trust=ShelfStamp, user='user', permission='permissions', content='shelf', along=('shelf__parent', 1))
                 self.assertFalse(record.via_group)
                 self.assertEqual(record.permission_path, ('permissions',))
@@ -1141,8 +1141,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with _tables(Cabinet, Sheet, SheetGrant):
-            with _document_compiler() as compiler:
-                handle = _handle(compiler)
+            with _document_registry() as registry:
+                handle = _handle(registry)
                 record = handle.register(trust=SheetGrant, user='user', permission='permission', content='cabinet__sheets', along=('cabinet__parent', 1))
                 self.assertTrue(record.along.suffix_path)
                 self.assertIs(record.content_model, Sheet)
@@ -1184,8 +1184,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with _tables(Branch, BranchGrant):
-            with _document_compiler() as compiler:
-                handle = _handle(compiler)
+            with _document_registry() as registry:
+                handle = _handle(registry)
                 record = handle.register(trust=BranchGrant, user='user', permission='permission', content='branch', along=('branch__children', 1))
                 self.assertEqual(record.along.shape, 'C')
                 self.assertFalse(record.along.suffix_path)
@@ -1231,8 +1231,8 @@ class AlongReverseSurfaceTest(KernelHostRequiredMixin, TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with _tables(Place, North, South):
-            with _document_compiler() as compiler:
-                handle = _handle(compiler)
+            with _document_registry() as registry:
+                handle = _handle(registry)
                 handle.register(trust=North, user='user', permission='permission', content='place', along=('place__parent', 1))
                 handle.register(trust=South, user='user', permission='permission', content='place', along=('place__children', 1))
                 _assert_along_lock(self, handle, ({'path': 'place__parent', 'shape': 'S', 'bound': 1}, {'path': 'place__children', 'shape': 'C', 'bound': 1}))
