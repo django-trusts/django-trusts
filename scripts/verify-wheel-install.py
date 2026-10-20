@@ -307,13 +307,15 @@ def main() -> int:
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
     print('ConditionLookup', ConditionLookup)
+    from trusts.plan.conditions import FrozenConditionLookup
     standalone = RegistryFactory()
-    bound = standalone.filter_lookup
-    if bound is None:
-        raise SystemExit('RegistryFactory did not self-bind condition lookup')
-    if bound.conditions is not standalone.conditions:
-        raise SystemExit('self-bound lookup does not wrap registry.conditions')
-    print('condition lookup self-bound')
+    shape = standalone.build()
+    bound = shape.filter_lookup
+    if not isinstance(bound, FrozenConditionLookup):
+        raise SystemExit('factory.build() did not freeze a condition lookup')
+    if getattr(bound, 'conditions', None) is standalone.conditions:
+        raise SystemExit('frozen lookup shares the mutable condition store')
+    print('condition lookup frozen')
     print(
         'defining modules', RegistryFactory, Ref, RegisteredRelation,
         RegisteredDelegation, RelationPlan,

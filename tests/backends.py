@@ -3,6 +3,7 @@
 from django.contrib.auth.backends import ModelBackend
 
 from trusts.backends import TrustModelBackendMixin
+from trusts.plan.relations import PlanQueryCompiler
 
 
 class MixinOnlyBackend(TrustModelBackendMixin, ModelBackend):
@@ -25,7 +26,7 @@ class MalformedCompilerBackend(TrustModelBackendMixin, ModelBackend):
     query_compiler = object()
 
 
-class _RaisingQueryCompiler(object):
+class _RaisingQueryCompiler(PlanQueryCompiler):
     def complete_exists(self, plan, candidates, user, permission):
         raise RuntimeError('compiler exploded')
 

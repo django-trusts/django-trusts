@@ -26,7 +26,6 @@ from trusts.plan.delegations import (
 from trusts.plan.relations import (
     _candidate_model,
     _or_q,
-    answering_compiler,
     candidate_queryset,
 )
 
@@ -102,7 +101,7 @@ def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
     """Permission queryset for ``catalog``. It sponsors itself."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
-    compiler = answering_compiler(catalog)
+    compiler = catalog.compiler
     plan = catalog.plan_for(candidates, user=user)
     if not _compiler_applies(compiler, plan):
         return None

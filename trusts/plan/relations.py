@@ -23,7 +23,7 @@ from trusts.plan.predicates import (
     permission_terminal_is_auth_permission,
 )
 from trusts.plan.recursions import GrantReach
-from trusts.errors import TrustsCompilerError, TrustsConfigurationError
+from trusts.errors import TrustsConfigurationError
 from trusts.plan.standards import (
     BUILTIN_USER_CONDITIONS,
     bind_skip_flags,
@@ -86,16 +86,6 @@ class PlanQueryCompiler(object):
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
         ).content_exists(user, permission)
-
-
-def answering_compiler(catalog):
-    """Compiler bound when ``catalog`` was built."""
-    compiler = catalog.compiler
-    try: complete, group = compiler.complete_exists, compiler.group_exists
-    except AttributeError: complete = group = None
-    if not callable(complete) or not callable(group):
-        raise TrustsCompilerError('%r is not query-capable' % (compiler,))
-    return compiler
 
 
 def candidate_queryset(content):

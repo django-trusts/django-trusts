@@ -17,7 +17,7 @@ from django.test.utils import isolate_apps
 from tests.models import Ticket, ticket_meta_own
 from trusts.inspect.checks import CHECK_ID_INVALID_EXPR, CHECK_ID_OBSOLETE_CALLBACK_SETTING, check_obsolete_legacy_callback_setting, check_permission_conditions, iter_live_permission_conditions, permission_condition_check_messages
 from trusts.conditions import PermissionConditionError, PermissionConditionUnsupported
-from trusts.plan.conditions import ConditionLookup, ConditionRecord, ConditionRegistry, ModelIdentity, Ref, RegistryConditionLookup, condition_refs, obsolete_legacy_callback_setting_enabled
+from trusts.plan.conditions import ConditionRecord, ConditionRegistry, FrozenConditionLookup, ModelIdentity, Ref, condition_refs, obsolete_legacy_callback_setting_enabled
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 
@@ -88,9 +88,8 @@ class ConditionRegistryIsolationTest(SimpleTestCase):
         right = RegistryFactory()
         self.assertIsInstance(left.conditions, ConditionRegistry)
         self.assertIsNot(left.conditions, right.conditions)
-        self.assertIs(left.filter_lookup.conditions, left.conditions)
-        self.assertIs(right.filter_lookup.conditions, right.conditions)
-        self.assertIsNot(left.filter_lookup, right.filter_lookup)
+        self.assertIsNone(left.filter_lookup)
+        self.assertIsNone(right.filter_lookup)
         self.assertEqual(list(left.conditions.iter_permission_conditions()), [])
         self.assertEqual(list(right.conditions.iter_permission_conditions()), [])
 
@@ -188,13 +187,13 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         Note, _Memo = _note_models()
         registry = RegistryFactory()
         log = _BuilderLog()
-        registry.register_permission_condition(Note, 'spy', log)
-        lookup = RegistryConditionLookup(registry.conditions)
-        self.assertIsInstance(lookup, ConditionLookup)
-        registry.set_filter_lookup(lookup)
-        self.assertIs(registry.filter_lookup, lookup)
-        self.assertIsNotNone(lookup.record_for(Note, 'spy').expr)
+        record = registry.register_permission_condition(Note, 'spy', log)
         self.assertEqual(len(log.calls), 1)
+        catalog = built_catalog(registry)
+        lookup = catalog.filter_lookup
+        self.assertIsInstance(lookup, FrozenConditionLookup)
+        self.assertIs(lookup.record_for(Note, 'spy'), record)
+        self.assertFalse(hasattr(lookup, 'conditions'))
         q = lookup.compile_q(Note, 'trusts_tests.change_note:spy', None)
         self.assertIsNotNone(q)
         self.assertEqual(len(log.calls), 1)

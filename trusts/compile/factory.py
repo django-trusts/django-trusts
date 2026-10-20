@@ -64,7 +64,6 @@ from trusts.plan.conditions import (
     ConditionRegistry,
     Expr,
     FrozenConditionLookup,
-    RegistryConditionLookup,
 )
 from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
 from trusts.plan.standards import (
@@ -221,7 +220,7 @@ class RegistryFactory(object):
         self._user_conditions = None
         self._user_override = None
         self.conditions = ConditionRegistry()
-        self.set_filter_lookup(RegistryConditionLookup(self.conditions))
+        self._lookup_explicit = False
         self._explicit_compiler = compiler is not None
         self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path
@@ -239,29 +238,21 @@ class RegistryFactory(object):
         return self._filter_lookup
 
     def set_filter_lookup(self, lookup):
-        """Bind a ``ConditionLookup`` on this instance (zero SQL).
+        """Bind a ``FrozenConditionLookup``, or ``None`` to unbind.
 
-        Construction already self-binds the private store adapter.
-        Both ``record_for`` and ``compile_q`` must be callable. A missing
-        method raises ``TrustsConfigurationError`` and does not bind
-        (no partial bind). ``lookup is None`` clears the binding.
-        Methods are not invoked at bind time. A built factory is frozen.
+        The only condition lookup is ``FrozenConditionLookup``. Anything
+        else raises ``TrustsConfigurationError`` and does not bind.
+        ``lookup is None`` clears the binding. Methods are not invoked
+        at bind time. A built factory is frozen.
         """
         self._open('set_filter_lookup')
-        if lookup is None:
-            self._filter_lookup = None
-            return
-        try:
-            record_for = lookup.record_for
-            compile_q = lookup.compile_q
-        except AttributeError:
-            record_for = compile_q = None
-        if not callable(record_for) or not callable(compile_q):
+        if lookup is not None and not isinstance(lookup, FrozenConditionLookup):
             raise TrustsConfigurationError(
-                'ConditionLookup must provide record_for and compile_q; '
+                'ConditionLookup must be a FrozenConditionLookup; '
                 'no partial bind.'
             )
         self._filter_lookup = lookup
+        self._lookup_explicit = True
 
     def register_permission_condition(self, model, cond_code, condition):
         """Register a ``:cond_code`` condition on ``model`` for this instance.
@@ -835,9 +826,10 @@ class RegistryFactory(object):
         same stored rows.
         """
         rows = tuple(self.conditions.iter_permission_conditions())
-        lookup = self._filter_lookup
-        if type(lookup) is RegistryConditionLookup and lookup.conditions is self.conditions:
-            lookup = FrozenConditionLookup(rows)
+        lookup = (
+            self._filter_lookup if self._lookup_explicit
+            else FrozenConditionLookup(rows)
+        )
         stored = self._stored_user_conditions()
         model = self.user_model
         primary = compile_user_rules(

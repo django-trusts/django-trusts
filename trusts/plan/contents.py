@@ -31,7 +31,6 @@ from trusts.plan.relations import (
     _bound_permission_identity,
     _candidate_model,
     _or_q,
-    answering_compiler,
     bind_checked_user,
 )
 
@@ -85,7 +84,7 @@ def _compile_granted(catalog, candidates, user, permission, *, kind='complete',
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     content_identity = _candidate_model(candidates)
-    compiler = answering_compiler(catalog)
+    compiler = catalog.compiler
     plan = _plan_for_permission(catalog, candidates, user, permission)
     if kind == 'complete':
         fn = compiler.complete_exists
