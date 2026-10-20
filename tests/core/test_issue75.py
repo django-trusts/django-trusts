@@ -108,7 +108,10 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         live = apps.get_app_config('trusts_kernel_host')
         first = HostTrustModelBackend().catalog
         live.ready()
-        self.assertIs(HostTrustModelBackend().catalog, first)
+        rebuilt = HostTrustModelBackend().catalog
+        self.assertEqual(rebuilt.records, first.records)
+        self.assertEqual(rebuilt.path, first.path)
+        self.assertIsNot(rebuilt, first)
 
     def test_live_catalog_stores_an_explicit_plan_compiler(self):
         catalog = HostTrustModelBackend().catalog

@@ -159,7 +159,10 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         live = apps.get_app_config('trusts_kernel_host')
         first = HostTrustModelBackend().catalog
         live.ready()
-        self.assertIs(HostTrustModelBackend().catalog, first)
+        rebuilt = HostTrustModelBackend().catalog
+        self.assertEqual(rebuilt.records, first.records)
+        self.assertEqual(rebuilt.path, first.path)
+        self.assertIsNot(rebuilt, first)
         self.assertFalse(hasattr(live, 'registries'))
 
     def test_fresh_config_recorder_is_writable_until_ready(self):
@@ -209,7 +212,9 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         first = HostTrustModelBackend().catalog
         private = compiler()
         apps.get_app_config('trusts_kernel_host').ready()
-        self.assertIs(HostTrustModelBackend().catalog, first)
+        rebuilt = HostTrustModelBackend().catalog
+        self.assertEqual(rebuilt.records, first.records)
+        self.assertIsNot(rebuilt, first)
         _contribute_document(private)
         self.assertEqual(len(private.records), 1)
 
@@ -223,7 +228,10 @@ class SentinelAfterFirstReadTest(KernelHostRequiredMixin, _CatalogRestoreMixin, 
         before = catalog.records
         live.ready()
         self.assertEqual(catalog.records, before)
-        self.assertIs(configured_catalog(HOST), catalog)
+        rebuilt = configured_catalog(HOST)
+        self.assertEqual(rebuilt.records, before)
+        self.assertEqual(rebuilt.path, catalog.path)
+        self.assertIsNot(rebuilt, catalog)
 
     def test_second_ready_leaves_the_built_catalog_in_place(self):
         from django.apps import apps
@@ -235,8 +243,11 @@ class SentinelAfterFirstReadTest(KernelHostRequiredMixin, _CatalogRestoreMixin, 
         self.assertTrue(recorder.frozen)
         before = catalog.records
         live.ready()
-        self.assertIs(HostTrustModelBackend().catalog, catalog)
+        rebuilt = HostTrustModelBackend().catalog
         self.assertEqual(catalog.records, before)
+        self.assertEqual(rebuilt.records, before)
+        self.assertEqual(rebuilt.path, catalog.path)
+        self.assertIsNot(rebuilt, catalog)
         with self.assertRaises(TrustsConfigurationError):
             recorder.register(
                 trust=DocumentGrant, user='user',

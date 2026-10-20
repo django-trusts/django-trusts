@@ -127,11 +127,6 @@ class TrustsConfigMixin(django.apps.AppConfig):
         return '%s.%s' % (type(self).__module__, type(self).__qualname__)
 
     def ready(self):
-        # A second ``ready()`` on this config finds the recorder already
-        # frozen and leaves the catalog in place. ``register()`` on that
-        # recorder still raises.
-        if self.recorder.frozen:
-            return
         # Compiler imports Permission through the factory chain.
         # Apps.populate phase 1 imports this module before that is safe.
         from trusts.compile.factory import Compiler

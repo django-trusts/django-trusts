@@ -83,7 +83,4 @@ class TrustModelBackendMixin(object):
 
     def _no_users(self):
         """Empty user queryset from the catalog's user model."""
-        model = self.catalog.user_model
-        if model is None:
-            return ()
-        return model._default_manager.none()
+        return self.catalog.user_model._default_manager.none()
