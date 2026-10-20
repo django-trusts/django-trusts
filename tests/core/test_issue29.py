@@ -107,6 +107,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
             _messages_with_id(
                 permission_condition_check_messages(
                     registry.conditions.iter_permission_conditions(),
+                    get_user_model(),
                 ),
                 CHECK_ID_INVALID_EXPR,
             ),

@@ -26,6 +26,7 @@ from django.test.utils import isolate_apps
 from django.utils.functional import SimpleLazyObject
 from django.utils.translation import gettext_lazy
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
+from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
@@ -49,7 +50,7 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
     def has_perm(self, user_obj, perm, obj=None, **skip_flags):
         if not getattr(self, '_sealed', False):
             self._factory.path = 'tests.core.issue203'
-            self._factory.family = self.family
+            self._factory.family = TrustsConfigMixin.family
             self.catalog = built_catalog(self._factory)
             self._sealed = True
         return super().has_perm(user_obj, perm, obj, **skip_flags)

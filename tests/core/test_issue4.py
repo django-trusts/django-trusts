@@ -188,7 +188,7 @@ class ConditionGrammarTest(SimpleTestCase):
         with self.assertRaises(PermissionConditionError):
             validate_expression(o.owner != 1, Ticket)
         validate_expression(o.status == 'open', Ticket)
-        validate_expression(u == o.owner, Ticket)
+        validate_expression(u == o.owner, Ticket, get_user_model())
         validate_expression(o.region == None, Ticket)
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -203,7 +203,7 @@ class ConditionGrammarTest(SimpleTestCase):
         registry = compiler()
         record = registry.add_named_filter(Ticket, 'own', owned)
         self.assertEqual(len(calls), 1)
-        validate_expression(record.expr, Ticket)
+        validate_expression(record.expr, Ticket, get_user_model())
         self.assertEqual(len(calls), 1)
         self.assertEqual(
             record.expr.to_tuple(),
