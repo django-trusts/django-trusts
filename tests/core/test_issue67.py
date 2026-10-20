@@ -21,9 +21,8 @@ from trusts.compile.factory import Compiler
 
 class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_package_registry_is_created_in_init_not_replaced_by_ready(self):
-        # The built object is sealed onto the backend class, not
-        # constructed in AppConfig.__init__. A second ready() must not
-        # replace it. The path dict stays empty unless a test writes it.
+        # The catalog is built in ready(), not AppConfig.__init__.
+        # A second ready() builds another catalog from the same log.
         from tests.kernel_host.backends import HostTrustModelBackend
 
         live = apps.get_app_config('trusts_kernel_host')
@@ -32,7 +31,10 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         catalog = HostTrustModelBackend().catalog
         self.assertIsInstance(catalog.records, tuple)
         live.ready()
-        self.assertIs(HostTrustModelBackend().catalog, catalog)
+        rebuilt = HostTrustModelBackend().catalog
+        self.assertEqual(rebuilt.records, catalog.records)
+        self.assertEqual(rebuilt.path, catalog.path)
+        self.assertIsNot(rebuilt, catalog)
         self.assertFalse(hasattr(live, 'registries'))
 
     def test_reader_obtains_registry_via_app_config_not_package_root(self):

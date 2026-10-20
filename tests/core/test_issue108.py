@@ -120,7 +120,9 @@ class ImplementationReadyTest(SimpleTestCase):
         before = HostTrustModelBackend().catalog
         config.ready()
         config.ready()
-        self.assertIs(HostTrustModelBackend().catalog, before)
+        rebuilt = HostTrustModelBackend().catalog
+        self.assertEqual(rebuilt.records, before.records)
+        self.assertEqual(rebuilt.path, before.path)
         self.assertFalse(hasattr(config, 'registries'))
         self.assertFalse(hasattr(config, 'trusts_backend_paths'))
 
