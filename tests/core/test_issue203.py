@@ -30,7 +30,7 @@ from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
 from tests.support import built_catalog
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 PERM = 'trusts_tests.change_note'
 OPEN = '%s:open' % PERM
@@ -111,8 +111,8 @@ def _note_models():
     return (Tag, Note, NoteGrant)
 
 def _handle(note_grant):
-    handle = RegistryFactory(path='tests.core.issue203')
-    handle.register_public(trust=note_grant, user='user', permission='permission', content='note')
+    handle = Compiler(path='tests.core.issue203')
+    handle.register(trust=note_grant, user='user', permission='permission', content='note')
     return handle
 
 def _permission(model):
@@ -131,7 +131,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
     def _reject(self, code, builder, needle):
         with self.assertNumQueries(0):
             with self.assertRaises(PermissionConditionError) as ctx:
-                self.handle.register_permission_condition(self.Note, code, builder)
+                self.handle.add_named_filter(self.Note, code, builder)
         self.assertIn(needle, str(ctx.exception))
 
     def _cannot_authorize(self, *codes):
@@ -165,7 +165,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
         User = get_user_model()
         log = _BuilderLog(lambda u, p, o: o.confidential != True)
         with self.assertNumQueries(0):
-            self.handle.register_permission_condition(self.Note, 'open', log)
+            self.handle.add_named_filter(self.Note, 'open', log)
         self.assertEqual(len(log.calls), 1)
         with _tables(self.Tag, self.Note, self.NoteGrant):
             alice = User.objects.create_user('alice-203p', password='x')
@@ -184,11 +184,11 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, secret))
             with self.assertNumQueries(0):
-                fresh = RegistryFactory(path='tests.core.issue203-reject')
+                fresh = Compiler(path='tests.core.issue203-reject')
                 with self.assertRaises(PermissionConditionError):
-                    fresh.register_permission_condition(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
+                    fresh.add_named_filter(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
                 with self.assertRaises(PermissionConditionError):
-                    fresh.register_permission_condition(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
+                    fresh.add_named_filter(self.Note, 'partial_203', lambda u, p, o: o.owner == self.Note.objects)
                 self.assertIsNone(fresh.conditions.get_permission_condition_record(self.Note, 'open'))
                 self.assertIsNone(fresh.conditions.get_permission_condition_record(self.Note, 'partial_203'))
             self.assertEqual(len(log.calls), 1)
@@ -205,16 +205,16 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
         User = get_user_model()
         log = _BuilderLog(lambda u, p, o: (u == o.owner) & (o.confidential != True))
         with self.assertNumQueries(0):
-            self.handle.register_permission_condition(self.Note, 'open', log)
-            self.handle.register_permission_condition(self.Note, 'titled', lambda u, p, o: o.title != 'secret')
-            self.handle.register_permission_condition(self.Note, 'owned', lambda u, p, o: u == o.owner)
-            self.handle.register_permission_condition(self.Note, 'amount_ok', lambda u, p, o: o.amount == Decimal('1.50'))
-            self.handle.register_permission_condition(self.Note, 'token_ok', lambda u, p, o: o.token == uuid4())
-            self.handle.register_permission_condition(self.Note, 'date_ok', lambda u, p, o: o.published == date(2026, 1, 1))
-            self.handle.register_permission_condition(self.Note, 'time_ok', lambda u, p, o: o.opens == time(12, 0))
-            self.handle.register_permission_condition(self.Note, 'datetime_ok', lambda u, p, o: o.published_at == datetime(2026, 1, 1))
-            self.handle.register_permission_condition(self.Note, 'duration_ok', lambda u, p, o: o.duration == timedelta(days=1))
-            self.handle.register_permission_condition(self.Note, 'blob_ok', lambda u, p, o: o.blob == b'x')
+            self.handle.add_named_filter(self.Note, 'open', log)
+            self.handle.add_named_filter(self.Note, 'titled', lambda u, p, o: o.title != 'secret')
+            self.handle.add_named_filter(self.Note, 'owned', lambda u, p, o: u == o.owner)
+            self.handle.add_named_filter(self.Note, 'amount_ok', lambda u, p, o: o.amount == Decimal('1.50'))
+            self.handle.add_named_filter(self.Note, 'token_ok', lambda u, p, o: o.token == uuid4())
+            self.handle.add_named_filter(self.Note, 'date_ok', lambda u, p, o: o.published == date(2026, 1, 1))
+            self.handle.add_named_filter(self.Note, 'time_ok', lambda u, p, o: o.opens == time(12, 0))
+            self.handle.add_named_filter(self.Note, 'datetime_ok', lambda u, p, o: o.published_at == datetime(2026, 1, 1))
+            self.handle.add_named_filter(self.Note, 'duration_ok', lambda u, p, o: o.duration == timedelta(days=1))
+            self.handle.add_named_filter(self.Note, 'blob_ok', lambda u, p, o: o.blob == b'x')
         self.assertEqual(len(log.calls), 1)
         with _tables(self.Tag, self.Note, self.NoteGrant):
             alice = User.objects.create_user('alice-203s', password='x')

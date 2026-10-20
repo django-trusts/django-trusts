@@ -183,7 +183,7 @@ def main() -> int:
     from trusts.compile.factory import (
         RegisteredDelegation,
         RegisteredRelation,
-        RegistryFactory,
+        Compiler,
     )
     from trusts.compile.nodes import Ref
     from trusts.decorators import filter_by_permitted_content
@@ -208,11 +208,11 @@ def main() -> int:
         raise SystemExit('installed wheel missing trusts/py.typed')
     if hasattr(trusts, 'BackendHandle') or hasattr(trusts.backends, 'BackendHandle'):
         raise SystemExit('library wheel still exports BackendHandle')
-    if hasattr(RegistryFactory, 'register_relationship'):
+    if hasattr(Compiler, 'register_relationship'):
         raise SystemExit('library wheel still exposes register_relationship')
-    assert_register_signature(RegistryFactory.register_public)
+    assert_register_signature(Compiler.register)
     print('py.typed present')
-    print('register contextual typing', RegistryFactory.register_public)
+    print('register contextual typing', Compiler.register)
 
     from django.apps import apps as django_apps
 
@@ -306,14 +306,14 @@ def main() -> int:
     print('filter_by_permitted_content', filter_by_permitted_content)
     from trusts.plan.conditions import FrozenConditionLookup
     print('FrozenConditionLookup', FrozenConditionLookup)
-    standalone = RegistryFactory()
-    shape = standalone.build()
+    standalone = Compiler()
+    shape = standalone.compile()
     bound = shape.filter_lookup
     if not isinstance(bound, FrozenConditionLookup):
-        raise SystemExit('factory.build() did not freeze a condition lookup')
+        raise SystemExit('Compiler.compile() did not freeze a condition lookup')
     print('condition lookup frozen')
     print(
-        'defining modules', RegistryFactory, Ref, RegisteredRelation,
+        'defining modules', Compiler, Ref, RegisteredRelation,
         RegisteredDelegation, RelationPlan,
     )
     print('permission_has_condition', permission_has_condition)

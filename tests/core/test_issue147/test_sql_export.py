@@ -23,7 +23,7 @@ from trusts.compile.nodes import _InquiryPermissionMatch
 from trusts.plan.recursions import _IdentInReach
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import CHECK_ID_POLICY_LOCK, CONVENTIONAL_LOCKFILE_NAME, _Symbol, _classify_compiled, _compile_get_all_permissions, _compile_get_permitted_users, _compile_has_perm, _compile_content_grant, _const_from_json, _json_const, _presented_const, _sentinel, _assign_ids, _load_policy_sql_document, _render_condition, _sql_row, _symbol_for_new_param, check_policy_sql_lockfile, render_policy_sql_bytes
 from trusts.inspect.yaml import dump_policy_yaml
 GOLDEN_SQLITE = Path(__file__).with_name('golden_document_sqlite.yaml').read_bytes()
@@ -186,7 +186,7 @@ class FolderGrant(models.Model):
 
 def _handle(path, registry=None):
     if registry is None:
-        registry = RegistryFactory()
+        registry = Compiler()
     registry.path = path
     return registry
 
@@ -196,8 +196,8 @@ def _non_confidential(user, permission, obj):
 
 def _document_handle(path='documents.backends.DocumentBackend'):
     handle = _handle(path)
-    handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document')
-    handle.register_permission_condition(Document, 'non_confidential', _non_confidential)
+    handle.register(trust=DocumentPermission, user='user', permission='permission', content='document')
+    handle.add_named_filter(Document, 'non_confidential', _non_confidential)
     return handle
 
 def _constant_family_handle():
@@ -263,7 +263,7 @@ def _constant_family_handle():
         return obj.label == 'alpha'
     filters = (('amount', amount), ('negzero', negzero), ('nan', nan), ('infinity', infinity), ('negative_infinity', negative_infinity), ('payload', payload), ('price', price), ('token', token), ('day', day), ('clock', clock), ('stamp', stamp), ('span', span), ('owner', owner), ('label', label))
     for code, builder in filters:
-        handle.register_permission_condition(ConstantDocument, code, builder)
+        handle.add_named_filter(ConstantDocument, code, builder)
     return handle
 
 def _e009():
@@ -316,9 +316,9 @@ class PolicySqlGoldenTest(SimpleTestCase):
         def render(trusts, filters):
             handle = _handle('documents.backends.DocumentBackend')
             for trust, content_field in trusts:
-                handle.register_public(trust=trust, user='user', permission='permission', content=content_field)
+                handle.register(trust=trust, user='user', permission='permission', content=content_field)
             for model, code in filters:
-                handle.register_permission_condition(model, code, _non_confidential)
+                handle.add_named_filter(model, code, _non_confidential)
             return render_configured_policy(handle)
         forward_trusts = ((DocumentPermission, 'document'), (OtherPermission, 'other'))
         forward_filters = ((Document, 'a_code'), (Document, 'z_code'))
@@ -341,21 +341,21 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_named_filter_code_outside_id_alphabet_is_rejected(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.register_permission_condition(Document, 'needs-review', _non_confidential)
+        handle.add_named_filter(Document, 'needs-review', _non_confidential)
         with self.assertRaises(TrustsConfigurationError) as ctx:
             render_configured_policy(handle)
         self.assertIn('needs-review', str(ctx.exception))
         self.assertIn('non-portable', str(ctx.exception))
         portable = _handle('documents.backends.DocumentBackend')
-        portable.register_permission_condition(Document, 'needs_review', _non_confidential)
+        portable.add_named_filter(Document, 'needs_review', _non_confidential)
         document = _load_policy_sql_document(render_configured_policy(portable))
         self.assertEqual(document['backends'][0]['contents'][0]['named_filters'][0]['id'], 'documents__Document__needs_review')
 
     def test_cond_entries_show_conditions_and_delegations_use_flow_maps(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document')
-        handle.register_public(trust=CappedDocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.caps.contains(trust.permission) & (trust.user == trust.user))
-        handle.register_public(trust=PolicyDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda row, permission: row.permissions.contains(permission) & (row.delegate == row.sponsor))
+        handle.register(trust=DocumentPermission, user='user', permission='permission', content='document')
+        handle.register(trust=CappedDocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.caps.contains(trust.permission) & (trust.user == trust.user))
+        handle.register(trust=PolicyDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda row, permission: row.permissions.contains(permission) & (row.delegate == row.sponsor))
         document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         plain, capped, delegated = (content['trusts'][0], content['trusts'][1], content['delegations'][0])
@@ -411,13 +411,13 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_condition_along_and_duplicate_suffixes_are_in_the_trust_id(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.user == trust.user)
-        handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.permission == trust.permission)
+        handle.register(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.user == trust.user)
+        handle.register(trust=DocumentPermission, user='user', permission='permission', content='document', condition=lambda trust: trust.permission == trust.permission)
         document = _load_policy_sql_document(render_configured_policy(handle))
         cond_ids = [row['id'] for row in document['backends'][0]['contents'][0]['trusts']]
         self.assertEqual(cond_ids, ['documents__DocumentPermission__document__cond', 'documents__DocumentPermission__document__cond__2'])
         along = _handle('documents.backends.FolderBackend')
-        along.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
+        along.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         along_ids = _assign_ids(tuple(built_catalog(along).records))
         self.assertEqual(along_ids, ['documents__FolderGrant__folder__along_folder__parent_S_2'])
         for trust_id in cond_ids + along_ids:
@@ -426,8 +426,8 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_or_siblings_share_or_group_and_keep_separate_sql(self):
         handle = _handle('documents.backends.DocumentBackend')
-        handle.register_public(trust=DocumentPermission, user='user', permission='permission', content='document')
-        handle.register_public(trust=TeamDocumentPermission, user='team__members', permission='permission', content='document')
+        handle.register(trust=DocumentPermission, user='user', permission='permission', content='document')
+        handle.register(trust=TeamDocumentPermission, user='team__members', permission='permission', content='document')
         document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         trusts = content['trusts']
@@ -487,7 +487,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_along_forward_lockfile_is_portable_recursive_sql(self):
         handle = _handle('documents.backends.FolderAlongBackend')
-        handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
+        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         subject = built_catalog(handle)
         record = subject.plan_for(Folder).records[0]
         content = {'model': 'documents.Folder', 'permitted': _sql_row(_compile_content_grant(subject, 'default', (record,), Folder)), 'has_perm': _sql_row(_compile_has_perm(subject, 'default', (record,), Folder)), 'get_all_permissions': _sql_row(_compile_get_all_permissions(subject, 'default', (record,), Folder)), 'get_permitted_users': _sql_row(_compile_get_permitted_users(subject, 'default', (record,), Folder))}
@@ -515,7 +515,7 @@ class PolicySqlGoldenTest(SimpleTestCase):
 
     def test_along_failure_does_not_return_a_partial_document(self):
         handle = _handle('documents.backends.FolderBackend')
-        handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
+        handle.register(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         with patch('trusts.compile.factory.probe_along_capabilities') as probe:
             with patch('trusts.plan.walk.along_connection_supported', return_value=False):
                 with self.assertRaises(TrustsConfigurationError):
@@ -649,14 +649,14 @@ class PolicySqlSentinelTest(SimpleTestCase):
         self.assertIsInstance(account.code, str)
         self.assertEqual(account.code, '1')
         actor_handle = _handle('documents.backends.ActorBackend')
-        actor_handle.register_public(trust=PolicyActorGrant, user='user', permission='permission', content='document')
+        actor_handle.register(trust=PolicyActorGrant, user='user', permission='permission', content='document')
         actor_doc = _load_policy_sql_document(render_configured_policy(actor_handle))
         actor_content = actor_doc['backends'][0]['contents'][0]
         actor_trust = actor_content['trusts'][0]
         self.assertEqual(actor_trust['user']['target'], 'id')
         self.assertEqual(actor_content['permitted']['params'], ['$user.id', '$permission.id', '$content.id', 'user.is_active=True', '$content.app_label="documents"', '$content.model="document"', 'skip_is_active=False'])
         account_handle = _handle('documents.backends.AccountBackend')
-        account_handle.register_public(trust=PolicyAccountGrant, user='user', permission='permission', content='document')
+        account_handle.register(trust=PolicyAccountGrant, user='user', permission='permission', content='document')
         account_doc = _load_policy_sql_document(render_configured_policy(account_handle))
         account_content = account_doc['backends'][0]['contents'][0]
         account_trust = account_content['trusts'][0]
@@ -665,7 +665,7 @@ class PolicySqlSentinelTest(SimpleTestCase):
 
     def test_custom_permission_pk_renders_the_resolved_target(self):
         handle = _handle('documents.backends.OperationBackend')
-        handle.register_public(trust=OperationGrant, user='user', permission='permission', content='document', condition=lambda grant: grant.caps.contains(grant.permission))
+        handle.register(trust=OperationGrant, user='user', permission='permission', content='document', condition=lambda grant: grant.caps.contains(grant.permission))
         document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         grant = content['trusts'][0]

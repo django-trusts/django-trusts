@@ -10,8 +10,7 @@ from django.utils.module_loading import import_string
 
 from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
-from trusts.compile.catalogs import Catalog
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.snapshot import render_policy_sql_bytes
 
@@ -19,9 +18,9 @@ from trusts.inspect.snapshot import render_policy_sql_bytes
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
-def built_catalog(factory):
-    """Catalog for one factory. The factory is built here."""
-    return Catalog(factory.build(), user_model=factory.user_model)
+def built_catalog(compiler):
+    """Catalog for one compiler. ``compile`` runs here."""
+    return compiler.compile()
 
 
 def built_registries(items):
@@ -92,7 +91,7 @@ def _publish_built(built):
     try:
         if not built:
             for config in configs:
-                config.catalog = built_catalog(RegistryFactory(
+                config.catalog = built_catalog(Compiler(
                     path='%s.empty' % config.catalog_path(),
                     user_model=get_user_model(),
                 ))
@@ -193,7 +192,7 @@ def _publish_catalog(backend_cls, factory, *, path=None):
 
     config = config_for_class(backend_cls)
     if factory is None:
-        config.catalog = built_catalog(RegistryFactory(
+        config.catalog = built_catalog(Compiler(
             path=path or config.catalog_path(),
             user_model=get_user_model(),
         ))
@@ -309,7 +308,7 @@ def isolate_live_registry(config, registry, path):
 def install_writable_registry(config, path, contribute=None):
     """Install a standalone factory as the catalog for one live path."""
 
-    registry = RegistryFactory(path=path, user_model=get_user_model())
+    registry = Compiler(path=path, user_model=get_user_model())
     if contribute is not None:
         contribute(registry)
     isolate_live_registry(config, registry, path)
@@ -335,42 +334,43 @@ def listed_relationship(factories):
         yield published
 
 
-def replay_recorder(factory, backend_cls, *, filters=True):
-    """Replay an app recorder onto a factory this test owns.
+def replay_recorder(compiler, backend_cls):
+    """Replay an app recorder onto a compiler this test owns."""
 
-    ``filters=False`` skips named-filter rows, so the frozen lookup
-    built from this factory does not contain them.
-    """
-
-    recorder = config_for_class(backend_cls).recorder
-    rows = list(recorder.rows)
-    for entry in rows:
-        if entry[0] == 'condition':
-            factory.set_user_condition(entry[1], entry[2], on=entry[3])
-        elif entry[0] == 'override':
-            factory.set_user_override(entry[1], entry[2], on=entry[3])
-    for entry in rows:
-        if entry[0] == 'filter' and filters:
-            factory.register_permission_condition(entry[1], entry[2], entry[3])
-        elif entry[0] == 'register':
-            factory.register_public(**entry[1])
-    return factory
+    config_for_class(backend_cls).recorder.play(compiler)
+    return compiler
 
 
 @contextmanager
 def unbound_named_filters(backend_cls):
-    """Publish a catalog whose frozen lookup has no named-filter rows."""
+    """Publish a document catalog whose lookup has no named filters."""
+
+    from tests.myapp.models import DocumentDelegation, DocumentGrant
+    from trusts.apps import Recorder
 
     config = config_for_class(backend_cls)
     saved = config.catalog
-    factory = RegistryFactory(
-        compiler=backend_cls.query_compiler,
+    recorder = Recorder()
+    recorder.register(
+        trust=DocumentGrant, user='user', permission='permission',
+        content='document',
+    )
+    recorder.register(
+        trust=DocumentDelegation, delegate='delegate', sponsor='sponsor',
+        content='document',
+        condition=lambda relationship, permission: (
+            relationship.allowed_permissions.contains(permission)
+        ),
+    )
+    recorder.freeze()
+    compiler = Compiler(
+        query_compiler=backend_cls.query_compiler,
         path=saved.path,
         family=backend_cls.family,
         user_model=saved.user_model or get_user_model(),
     )
-    replay_recorder(factory, backend_cls, filters=False)
-    config.catalog = built_catalog(factory)
+    recorder.play(compiler)
+    config.catalog = compiler.compile()
     try:
         yield config.catalog
     finally:

@@ -21,7 +21,7 @@ from django.test.utils import isolate_apps
 from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from tests.support import built_catalog
 
 
@@ -69,10 +69,10 @@ def _folder_models():
 
 def _register_folder_paths(registry, FolderGrant):
     j = Ref(FolderGrant)
-    folder_rec = registry.register(
+    folder_rec = registry.register_relation(
         content=j.folder, user=j.user, permission=j.permission,
     )
-    document_rec = registry.register(
+    document_rec = registry.register_relation(
         content=j.folder.documents, user=j.user, permission=j.permission,
     )
     return folder_rec, document_rec
@@ -116,7 +116,7 @@ def _pks(rows):
 class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
     def test_same_root_different_content_terminals_are_stored_in_order(self):
         Folder, Document, FolderGrant, _permit = _folder_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         folder_rec, document_rec = _register_folder_paths(registry, FolderGrant)
 
         self.assertEqual(folder_rec.content_path, ('folder',))
@@ -141,16 +141,16 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_global_insertion_order_with_interleaved_roots(self):
         Folder, Document, FolderGrant, DocumentPermit = _folder_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
         k = Ref(DocumentPermit)
-        first = registry.register(
+        first = registry.register_relation(
             content=j.folder, user=j.user, permission=j.permission,
         )
-        second = registry.register(
+        second = registry.register_relation(
             content=k.document, user=k.user, permission=k.permission,
         )
-        third = registry.register(
+        third = registry.register_relation(
             content=j.folder.documents, user=j.user, permission=j.permission,
         )
         self.assertEqual(registry.records, (first, second, third))
@@ -166,16 +166,16 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_exact_duplicate_raises_without_mutating_records(self):
         _folder, _document, FolderGrant, _permit = _folder_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         first, second = _register_folder_paths(registry, FolderGrant)
         stored = registry.records
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            registry.register(
+            registry.register_relation(
                 content=j.folder, user=j.user, permission=j.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'Duplicate'):
-            registry.register(
+            registry.register_relation(
                 content=j.folder.documents, user=j.user, permission=j.permission,
             )
         self.assertEqual(registry.records, stored)
@@ -183,11 +183,11 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_same_root_same_content_terminal_is_conflict(self):
         _folder, _document, FolderGrant, _permit = _folder_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         first, second = _register_folder_paths(registry, FolderGrant)
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'Conflicting'):
-            registry.register(
+            registry.register_relation(
                 content=j.folder.alt_documents,
                 user=j.user,
                 permission=j.permission,
@@ -277,13 +277,13 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
         extra = Ref(ExtraGrant)
         pair = Ref(PairGrant)
 
         with self.assertRaisesRegex(TrustsConfigurationError, r'reverse'):
-            registry.register(
+            registry.register_relation(
                 content=extra.notes,
                 user=extra.user,
                 permission=extra.permission,
@@ -291,19 +291,19 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'reverse one-to-one',
         ):
-            registry.register(
+            registry.register_relation(
                 content=extra.folder.profile,
                 user=extra.user,
                 permission=extra.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'multi-valued'):
-            registry.register(
+            registry.register_relation(
                 content=extra.tags,
                 user=extra.user,
                 permission=extra.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'multi-valued'):
-            registry.register(
+            registry.register_relation(
                 content=extra.folder.tags,
                 user=extra.user,
                 permission=extra.permission,
@@ -311,13 +311,13 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'generic foreign key',
         ):
-            registry.register(
+            registry.register_relation(
                 content=extra.target,
                 user=extra.user,
                 permission=extra.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'scalar'):
-            registry.register(
+            registry.register_relation(
                 content=j.folder.documents.title,
                 user=j.user,
                 permission=j.permission,
@@ -325,7 +325,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'forward path ending',
         ):
-            registry.register(
+            registry.register_relation(
                 content=extra.folder.owner,
                 user=extra.user,
                 permission=extra.permission,
@@ -333,13 +333,13 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
         with self.assertRaisesRegex(
             TrustsConfigurationError, r'composite|target fields',
         ):
-            registry.register(
+            registry.register_relation(
                 content=pair.pair,
                 user=pair.user,
                 permission=pair.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct'):
-            registry.register(
+            registry.register_relation(
                 content=extra.folder,
                 user=extra.folder.owner,
                 permission=extra.permission,
@@ -348,16 +348,16 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
 
     def test_user_and_permission_remain_direct_single_valued(self):
         _folder, _document, FolderGrant, _permit = _folder_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct|reverse'):
-            registry.register(
+            registry.register_relation(
                 content=j.folder,
                 user=j.folder.documents,
                 permission=j.permission,
             )
         with self.assertRaisesRegex(TrustsConfigurationError, r'direct|reverse'):
-            registry.register(
+            registry.register_relation(
                 content=j.folder,
                 user=j.user,
                 permission=j.folder.documents,
@@ -413,7 +413,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         self.doc_b1 = self.Document.objects.create(
             folder=self.folder_b, alt_folder=self.folder_a, title='B1',
         )
-        self.registry = RegistryFactory()
+        self.registry = Compiler()
         self.folder_rec, self.document_rec = _register_folder_paths(
             self.registry, self.FolderGrant,
         )
@@ -612,7 +612,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
 
     def test_second_root_ors_for_the_same_document_terminal(self):
         j = Ref(self.DocumentPermit)
-        self.registry.register(
+        self.registry.register_relation(
             content=j.document, user=j.user, permission=j.permission,
         )
         self.FolderGrant.objects.create(
@@ -710,12 +710,12 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(CodedFolder, CodedDocument, CodedGrant):
-            registry = RegistryFactory()
+            registry = Compiler()
             j = Ref(CodedGrant)
-            folder_rec = registry.register(
+            folder_rec = registry.register_relation(
                 content=j.folder, user=j.user, permission=j.permission,
             )
-            document_rec = registry.register(
+            document_rec = registry.register_relation(
                 content=j.folder.documents, user=j.user, permission=j.permission,
             )
             self.assertEqual(folder_rec.content_target, 'code')

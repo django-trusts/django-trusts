@@ -17,14 +17,14 @@ from trusts.compile.factory import RegisteredDelegation
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, install_class_handle
 
 
 def _handle(path='tests.core.issue266'):
-    return RegistryFactory(path=path)
+    return Compiler(path=path)
 
 def _permission(model, codename):
     content_type = ContentType.objects.get_for_model(model)
@@ -42,9 +42,9 @@ def _seal_factory(backend_cls, factory):
 def _document_host_handle():
     """Same registration ``DocumentConfig.ready`` installs on the kernel host."""
     handle = _handle('tests.myapp.backends.DocumentBackend')
-    handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-    handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
-    handle.register_permission_condition(Document, 'non_confidential', lambda user, permission, obj: obj.confidential != True)
+    handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
+    handle.register(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
+    handle.add_named_filter(Document, 'non_confidential', lambda user, permission, obj: obj.confidential != True)
     return handle
 
 @contextmanager
@@ -135,7 +135,7 @@ class DelegationRegistrationTest(TestCase):
             return relationship.allowed_permissions.contains(permission)
         handle = _handle()
         with self.assertNumQueries(0):
-            record = handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=condition)
+            record = handle.register(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=condition)
         self.assertIsInstance(record, RegisteredDelegation)
         self.assertEqual(len(calls), 1)
         self.assertEqual(record.delegate_field, 'delegate')
@@ -147,7 +147,7 @@ class DelegationRegistrationTest(TestCase):
 
     def test_one_argument_condition_is_row_only(self):
         handle = _handle()
-        record = handle.register_public(trust=DocumentDelegation, delegate=lambda d: d.delegate, sponsor=lambda d: d.sponsor, content=lambda d: d.document, condition=lambda d: d.delegate == d.sponsor)
+        record = handle.register(trust=DocumentDelegation, delegate=lambda d: d.delegate, sponsor=lambda d: d.sponsor, content=lambda d: d.document, condition=lambda d: d.delegate == d.sponsor)
         self.assertIsNone(record.condition_permission_model)
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -180,7 +180,7 @@ class DelegationRegistrationTest(TestCase):
                 app_label = 'trusts_tests'
         handle = _handle()
         with self.assertNumQueries(0):
-            record = handle.register_public(trust=PersonalDelegation, delegate='delegate', sponsor='sponsor', content='sponsor__personal_organization_issue266__repositories', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
+            record = handle.register(trust=PersonalDelegation, delegate='delegate', sponsor='sponsor', content='sponsor__personal_organization_issue266__repositories', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
         self.assertEqual(record.content_path, ('sponsor', 'personal_organization_issue266', 'repositories'))
         self.assertIs(record.content_model, Repository)
         self.assertEqual(record.content_field, 'sponsor__personal_organization_issue266__repositories')
@@ -193,7 +193,7 @@ class DelegationRegistrationTest(TestCase):
                 handle = _handle()
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
-                        handle.register_public(trust=DocumentDelegation, content='document', condition=lambda *args: calls.append(args), **extra)
+                        handle.register(trust=DocumentDelegation, content='document', condition=lambda *args: calls.append(args), **extra)
                 self.assertEqual(calls, [])
                 self.assertEqual(built_catalog(handle).records, ())
                 self.assertEqual(built_catalog(handle).delegations, ())
@@ -221,8 +221,8 @@ class ReverseOneToOneDelegationQueryTest(TransactionTestCase):
             relationship = self.AllPersonalDelegation.objects.create(delegate=delegate, sponsor=sponsor)
             relationship.allowed_permissions.add(self.read)
         self.handle = _handle('tests.core.issue266.indirect')
-        self.handle.register_public(trust=self.DirectGrant, user='user', permission='permission', content='repository')
-        self.handle.register_public(trust=self.AllPersonalDelegation, delegate='delegate', sponsor='sponsor', content='sponsor__personal_organization_issue266_query__repositories', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
+        self.handle.register(trust=self.DirectGrant, user='user', permission='permission', content='repository')
+        self.handle.register(trust=self.AllPersonalDelegation, delegate='delegate', sponsor='sponsor', content='sponsor__personal_organization_issue266_query__repositories', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
 
     def tearDown(self):
         ContentType.objects.clear_cache()
@@ -397,10 +397,10 @@ class TwoRootDelegationTest(TransactionTestCase):
         self.DirectGrant.objects.create(user=self.sponsor, repository=self.foreign, permission=self.read)
         self.PersonalDelegation.objects.create(delegate=self.delegate, sponsor=self.sponsor)
         self.handle = _handle('tests.core.issue266.two-roots')
-        self.handle.register_public(trust=self.NoteGrant, user='user', permission='permission', content='note')
-        self.handle.register_public(trust=self.DirectGrant, user='user', permission='permission', content='repository')
-        self.personal = self.handle.register_public(trust=self.PersonalDelegation, delegate='delegate', sponsor='sponsor', content=_TWO_PREFIX)
-        self.approved = self.handle.register_public(trust=self.ApprovedDelegation, delegate='delegate', sponsor='sponsor', content='repository', condition=_approved_condition)
+        self.handle.register(trust=self.NoteGrant, user='user', permission='permission', content='note')
+        self.handle.register(trust=self.DirectGrant, user='user', permission='permission', content='repository')
+        self.personal = self.handle.register(trust=self.PersonalDelegation, delegate='delegate', sponsor='sponsor', content=_TWO_PREFIX)
+        self.approved = self.handle.register(trust=self.ApprovedDelegation, delegate='delegate', sponsor='sponsor', content='repository', condition=_approved_condition)
 
     def tearDown(self):
         ContentType.objects.clear_cache()
@@ -473,8 +473,8 @@ class TwoRootDelegationTest(TransactionTestCase):
 
     def test_unrelated_ordinary_root_does_not_grant(self):
         lone = _handle('tests.core.issue266.unrelated')
-        lone.register_public(trust=self.NoteGrant, user='user', permission='permission', content='note')
-        lone.register_public(trust=self.PersonalDelegation, delegate='delegate', sponsor='sponsor', content=_TWO_PREFIX)
+        lone.register(trust=self.NoteGrant, user='user', permission='permission', content='note')
+        lone.register(trust=self.PersonalDelegation, delegate='delegate', sponsor='sponsor', content=_TWO_PREFIX)
         with _listed(lone):
             self.assertFalse(self.delegate.has_perm(self.code, self.own))
             with self.assertRaisesRegex(TrustsConfigurationError, 'no applicable auth.Permission plan'):
@@ -579,7 +579,7 @@ class OrdinaryReverseOneToOneGrantTest(TransactionTestCase):
         self.foreign = self.Repository.objects.create(organization=other_org, title='ord-foreign')
         self.ProfileGrant.objects.create(user=self.user, profile=self.profile, permission=self.read)
         self.handle = _handle('tests.core.issue266.ordinary-prefix')
-        self.record = self.handle.register_public(trust=self.ProfileGrant, user='user', permission='permission', content=_ORDINARY_PREFIX)
+        self.record = self.handle.register(trust=self.ProfileGrant, user='user', permission='permission', content=_ORDINARY_PREFIX)
 
     def tearDown(self):
         ContentType.objects.clear_cache()
@@ -673,7 +673,7 @@ class ReverseOneToOneGrammarTest(TestCase):
                 handle = _handle()
                 with self.assertNumQueries(0):
                     with self.assertRaisesRegex(TrustsConfigurationError, 'not a valid content terminal or gateway'):
-                        handle.register_public(trust=trust, content=content, **extra)
+                        handle.register(trust=trust, content=content, **extra)
                 self.assertEqual(built_catalog(handle).records, ())
                 self.assertEqual(built_catalog(handle).delegations, ())
 
@@ -681,7 +681,7 @@ class ReverseOneToOneGrammarTest(TestCase):
         _principal, _profile, _organization, repository, delegation, _grant = self._models()
         handle = _handle()
         with self.assertNumQueries(0):
-            record = handle.register_public(trust=delegation, delegate='delegate', sponsor='sponsor', content='sponsor__personal_profile_grammar__personal_organization_grammar__repositories', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
+            record = handle.register(trust=delegation, delegate='delegate', sponsor='sponsor', content='sponsor__personal_profile_grammar__personal_organization_grammar__repositories', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
         self.assertEqual(record.content_path, ('sponsor', 'personal_profile_grammar', 'personal_organization_grammar', 'repositories'))
         self.assertIs(record.content_model, repository)
 
@@ -691,7 +691,7 @@ class DelegationRootGuardTest(TestCase):
     def _register(self, handle, **extra):
         payload = {'trust': DocumentDelegation, 'delegate': 'delegate', 'sponsor': 'sponsor', 'content': 'document', 'condition': lambda relationship, permission: relationship.allowed_permissions.contains(permission)}
         payload.update(extra)
-        return handle.register_public(**payload)
+        return handle.register(**payload)
 
     def test_registry_after_build_accepts_delegation(self):
         handle = _handle()
@@ -709,7 +709,7 @@ class DelegationRootGuardTest(TestCase):
         self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
-        registry = RegistryFactory()
+        registry = Compiler()
         delegation = Ref(DocumentDelegation)
         grant = Ref(DocumentGrant)
         with self.assertNumQueries(0):
@@ -831,8 +831,8 @@ class DelegatedAuthorityLiveTest(TestCase):
 
     def test_policy_lock_exports_delegation_and_correlated_sql(self):
         handle = _handle('tests.core.issue266.policy')
-        handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        handle.register_public(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
+        handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
+        handle.register(trust=DocumentDelegation, delegate='delegate', sponsor='sponsor', content='document', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
         document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
         delegation = content['delegations'][0]

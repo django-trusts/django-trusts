@@ -18,14 +18,14 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, install_class_handle
 
 
 def _handle(path='tests.core.issue282'):
-    return RegistryFactory(path=path)
+    return Compiler(path=path)
 
 def _contribute_m2m(field, model):
     if not hasattr(field, 'm2m_field_name'):
@@ -148,14 +148,14 @@ class DelegatedAlongTest(TransactionTestCase):
     def _register(self, *, sponsor_along=None, delegation_along=None, sponsor='permission'):
         handle = _handle()
         if sponsor == 'permission':
-            handle.register_public(trust=self.Grant, user='user', permission='permission', content='issue', along=sponsor_along)
+            handle.register(trust=self.Grant, user='user', permission='permission', content='issue', along=sponsor_along)
         elif sponsor == 'group':
-            handle.register_public(trust=self.GroupGrant, user='group__user', group='group', content='issue', along=sponsor_along)
+            handle.register(trust=self.GroupGrant, user='group__user', group='group', content='issue', along=sponsor_along)
         elif sponsor == 'collection':
-            handle.register_public(trust=self.CollectionGrant, user='user', permission='permissions', content='issue', along=sponsor_along)
+            handle.register(trust=self.CollectionGrant, user='user', permission='permissions', content='issue', along=sponsor_along)
         else:
             raise AssertionError(sponsor)
-        handle.register_public(trust=self.Delegation, delegate='delegate', sponsor='sponsor', content='issue', along=delegation_along)
+        handle.register(trust=self.Delegation, delegate='delegate', sponsor='sponsor', content='issue', along=delegation_along)
         return handle
 
     def _agree(self, handle, issues):
@@ -414,8 +414,8 @@ class DelegatedAlongTest(TransactionTestCase):
 
     def _register_linked(self, delegation):
         handle = _handle()
-        handle.register_public(trust=self.Grant, user='user', permission='permission', content='issue', along=('issue__parent', 1))
-        handle.register_public(trust=delegation, delegate='delegate', sponsor='sponsor_link__user', content='issue')
+        handle.register(trust=self.Grant, user='user', permission='permission', content='issue', along=('issue__parent', 1))
+        handle.register(trust=delegation, delegate='delegate', sponsor='sponsor_link__user', content='issue')
         return handle
 
     def _assert_linked_agreement(self, handle, issue, allowed):
@@ -508,8 +508,8 @@ class DelegatedAlongTest(TransactionTestCase):
             AttachmentGrant.objects.create(user=self.sponsor, attachment=attachment, permission=change)
             SuffixDelegation.objects.create(delegate=self.delegate, sponsor=self.sponsor, issue=self.child)
             handle = _handle()
-            handle.register_public(trust=AttachmentGrant, user='user', permission='permission', content='attachment')
-            handle.register_public(trust=SuffixDelegation, delegate='delegate', sponsor='sponsor', content='issue__notes__attachment', along=('issue__parent', 2))
+            handle.register(trust=AttachmentGrant, user='user', permission='permission', content='attachment')
+            handle.register(trust=SuffixDelegation, delegate='delegate', sponsor='sponsor', content='issue__notes__attachment', along=('issue__parent', 2))
             with _listed(handle):
                 with self.assertRaises(TrustsConfigurationError) as raised:
                     self.delegate.has_perm(code, attachment)

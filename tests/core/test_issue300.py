@@ -20,7 +20,7 @@ from trusts.plan.rewrites import BIND_ALIAS, BindRef, BindTable, SqlInt, bind_on
 from trusts.plan.walk import _render_reach_sql
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
@@ -397,10 +397,10 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_note_a', defaults={'name': 'read_note_a'})
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
-            registry = RegistryFactory()
+            registry = Compiler()
             registry.path = 'tests.annotation.a'
             handle = registry
-            handle.register_public(trust=NoteGrant, user='user', permission='permission', content='note')
+            handle.register(trust=NoteGrant, user='user', permission='permission', content='note')
             candidates = Note.objects.annotate(a=Value(1, output_field=CharField()))
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
                 plain = built_catalog(handle).filter_authorized(candidates, user, permission)
@@ -450,10 +450,10 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget_retargetnode', defaults={'name': 'read_retarget_retargetnode'})
             node = RetargetNode.objects.create()
             RetargetGrant.objects.create(node=node, user=user, permission=permission)
-            registry = RegistryFactory()
+            registry = Compiler()
             registry.path = 'tests.along.retarget'
             handle = registry
-            handle.register_public(trust=RetargetGrant, user='user', permission='permission', content='node', along=('node__parent', 4))
+            handle.register(trust=RetargetGrant, user='user', permission='permission', content='node', along=('node__parent', 4))
             candidates = RetargetNode.objects.order_by('pk')
             with patch('trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -522,9 +522,9 @@ class Issue300ManagerAnnotationTest(SimpleTestCase):
         for enabled in (True, False):
             with self.subTest(TRUSTS_SQL_BIND_ONCE=enabled):
                 with override_settings(TRUSTS_SQL_BIND_ONCE=enabled):
-                    handle = RegistryFactory(path='documents.backends.ReviewBackend')
-                    handle.register_public(trust=ReviewGrant, user='user', permission='permission', content='document')
-                    handle.register_permission_condition(ReviewDocument, 'published', _published)
+                    handle = Compiler(path='documents.backends.ReviewBackend')
+                    handle.register(trust=ReviewGrant, user='user', permission='permission', content='document')
+                    handle.add_named_filter(ReviewDocument, 'published', _published)
                     document = _load_policy_sql_document(render_configured_policy(handle))
                     content = document['backends'][0]['contents'][0]
                     permitted = content['permitted']

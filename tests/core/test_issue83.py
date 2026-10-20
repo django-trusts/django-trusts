@@ -20,7 +20,7 @@ from trusts.plan.aggregates import _compile_common_permissions, all_match
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from tests.support import built_catalog
 
 
@@ -317,9 +317,9 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_j1_registers_forward_reverse_forward(self):
         Folder, Payload, Row, FolderGrant, _group = _j1_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
-        record = registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        record = registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         _assert_record(self, record, root=FolderGrant, path=('folder', 'rows', 'content'), model=Payload, lookup='folder__rows__content')
         self.assertEqual(built_catalog(registry).plan_for(Payload).records, (record,))
         self.assertEqual(registry.records, (record,))
@@ -327,10 +327,10 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_d1_registers_gateway_plus_reverse_o2m_suffix(self):
         Holder, _owner, _tag, Item, Image, _meta, _extra, _profile, Grant, _w, _wg = _d1_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(Grant)
-        item_rec = registry.register(content=j.holder.items, user=j.user, permission=j.permission)
-        image_rec = registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
+        item_rec = registry.register_relation(content=j.holder.items, user=j.user, permission=j.permission)
+        image_rec = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         _assert_record(self, item_rec, root=Grant, path=('holder', 'items'), model=Item, lookup='holder__items')
         _assert_record(self, image_rec, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
         self.assertEqual(
@@ -340,17 +340,17 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_d1o_registers_gateway_plus_reverse_o2o_suffix(self):
         _holder, _owner, _tag, _item, Image, _meta, _extra, _profile, Grant, _w, _wg = _d1o_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(Grant)
-        record = registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
+        record = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         _assert_record(self, record, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
 
     def _assert_both_dependent_depths(self, factory):
         _holder, _owner, _tag, _item, Image, ImageMeta, _extra, _profile, Grant, _w, _wg = factory()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(Grant)
-        depth1 = registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
-        depth2 = registry.register(content=j.holder.items.image.image, user=j.user, permission=j.permission)
+        depth1 = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        depth2 = registry.register_relation(content=j.holder.items.image.image, user=j.user, permission=j.permission)
         _assert_record(self, depth1, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
         _assert_record(self, depth2, root=Grant, path=('holder', 'items', 'image', 'image'), model=ImageMeta, lookup='holder__items__image__image')
         self.assertEqual(built_catalog(registry).plan_for(Image).records, (depth1,))
@@ -367,26 +367,26 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_two_forward_hops_then_gateway_remain_expressible(self):
         Holder, _owner, _tag, Item, _image, _meta, _extra, _profile, _g, Wrapper, WrapperGrant = _d1_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(WrapperGrant)
-        record = registry.register(content=j.wrapper.holder.items, user=j.user, permission=j.permission)
+        record = registry.register_relation(content=j.wrapper.holder.items, user=j.user, permission=j.permission)
         _assert_record(self, record, root=WrapperGrant, path=('wrapper', 'holder', 'items'), model=Item, lookup='wrapper__holder__items')
 
     def test_direct_and_trailing_reverse_still_register(self):
         Folder, Payload, Row, FolderGrant, _group = _j1_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
-        folder_rec = registry.register(content=j.folder, user=j.user, permission=j.permission)
-        row_rec = registry.register(content=j.folder.rows, user=j.user, permission=j.permission)
+        folder_rec = registry.register_relation(content=j.folder, user=j.user, permission=j.permission)
+        row_rec = registry.register_relation(content=j.folder.rows, user=j.user, permission=j.permission)
         _assert_record(self, folder_rec, root=FolderGrant, path=('folder',), model=Folder, lookup='folder')
         _assert_record(self, row_rec, root=FolderGrant, path=('folder', 'rows'), model=Row, lookup='folder__rows')
 
     def test_rejections_are_deterministic_and_leave_records_unchanged(self):
         Holder, _owner, _tag, _item, _image, _meta, _extra, _profile, Grant, Wrapper, WrapperGrant = _d2_models()
         _pair, PairGrant = _composite_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(Grant)
-        first = registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
+        first = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         stored = registry.records
         wrapper = Ref(WrapperGrant)
         pair = Ref(PairGrant)
@@ -399,60 +399,60 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with self.assertRaisesRegex(TrustsConfigurationError, 'reverse'):
-            registry.register(content=j.notes, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.notes, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'before the gateway'):
-            registry.register(content=j.notes.holder, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.notes.holder, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'reverse one-to-one'):
-            registry.register(content=j.holder.profile, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.holder.profile, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'multi-valued'):
-            registry.register(content=j.holder.items.tags, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.holder.items.tags, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'generic foreign key'):
-            registry.register(content=j.target, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.target, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'more than two hops'):
-            registry.register(content=j.holder.items.image.image.extra, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.holder.items.image.image.extra, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'forward path ending'):
-            registry.register(content=wrapper.wrapper.holder, user=wrapper.user, permission=wrapper.permission)
+            registry.register_relation(content=wrapper.wrapper.holder, user=wrapper.user, permission=wrapper.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'composite|target fields'):
-            registry.register(content=pair.pair, user=pair.user, permission=pair.permission)
+            registry.register_relation(content=pair.pair, user=pair.user, permission=pair.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'direct|reverse'):
-            registry.register(content=j.holder, user=j.holder.items, permission=j.permission)
+            registry.register_relation(content=j.holder, user=j.holder.items, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'missing field'):
-            registry.register(content=j.holder.item_set, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.holder.item_set, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'same root'):
-            registry.register(content=j.holder.items, user=wrapper.user, permission=j.permission)
+            registry.register_relation(content=j.holder.items, user=wrapper.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
-            registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         self.assertEqual(registry.records, stored)
         self.assertEqual(registry.records, (first,))
         self.assertIs(registry.records[0], first)
 
     def test_same_root_same_terminal_via_alt_suffix_is_conflict(self):
         Folder, Payload, _row, FolderGrant, _group = _j1_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
-        first = registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        first = registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
-            registry.register(content=j.folder.rows.alt_content, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.folder.rows.alt_content, user=j.user, permission=j.permission)
         self.assertEqual(registry.records, (first,))
         self.assertEqual(first.content_path, ('folder', 'rows', 'content'))
 
     def test_user_and_permission_remain_direct(self):
         _folder, _payload, _row, FolderGrant, _group = _j1_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'direct|reverse'):
-            registry.register(content=j.folder, user=j.folder.rows, permission=j.permission)
+            registry.register_relation(content=j.folder, user=j.folder.rows, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'direct|reverse'):
-            registry.register(content=j.folder, user=j.user, permission=j.folder.rows.content)
+            registry.register_relation(content=j.folder, user=j.user, permission=j.folder.rows.content)
         self.assertEqual(registry.records, ())
 
     def test_registration_executes_zero_queries(self):
         _folder, _payload, _row, FolderGrant, _group = _j1_models()
-        registry = RegistryFactory()
+        registry = Compiler()
         j = Ref(FolderGrant)
-        registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         with self.assertRaises(TrustsConfigurationError):
-            registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
+            registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
 
 class _TerminalProjectionMixin(object):
     """Shared object / queryset / enumeration / all-match assertions."""
@@ -520,9 +520,9 @@ class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         extras = [self.Payload.objects.create(title='X%s' % i) for i in range(6)]
         for payload in extras:
             self.Row.objects.create(folder=self.folder_b, content=payload, alt_content=self.pay_a1)
-        self.registry = RegistryFactory()
+        self.registry = Compiler()
         j = Ref(self.FolderGrant)
-        self.registry.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        self.registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         self.FolderGrant.objects.create(folder=self.folder_a, user=self.alice, permission=self.read)
         self.FolderGrant.objects.create(folder=self.folder_b, user=self.alice, permission=self.write)
         self.FolderGrant.objects.create(folder=self.folder_b, user=self.bob, permission=self.read)
@@ -557,9 +557,9 @@ class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         for i in range(6):
             item = self.Item.objects.create(holder=self.h_b, owner=self.owner, title='X%s' % i)
             self.Image.objects.create(item=item, title='X%s' % i)
-        self.registry = RegistryFactory()
+        self.registry = Compiler()
         j = Ref(self.Grant)
-        self.registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
+        self.registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         self.Grant.objects.create(holder=self.h_a, user=self.alice, permission=self.read, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_a.pk)
         self.Grant.objects.create(holder=self.h_b, user=self.alice, permission=self.write, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_b.pk)
         self.Grant.objects.create(holder=self.h_b, user=self.bob, permission=self.read, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_b.pk)
@@ -588,9 +588,9 @@ class TrustsRegistryD1oProjectionTest(_TerminalProjectionMixin, TransactionTestC
         self.img_a1 = self.Image.objects.create(item=self.item_a1, title='A1')
         self.img_a2 = self.Image.objects.create(item=self.item_a2, title='A2')
         self.img_b1 = self.Image.objects.create(item=self.item_b1, title='B1')
-        self.registry = RegistryFactory()
+        self.registry = Compiler()
         j = Ref(self.Grant)
-        self.registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
+        self.registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         self.Grant.objects.create(holder=self.h_a, user=self.alice, permission=self.read, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_a.pk)
         self.Grant.objects.create(holder=self.h_b, user=self.alice, permission=self.write, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_b.pk)
 
@@ -639,9 +639,9 @@ def _seed_depth2(self, factory, suffix, reverse_meta=True):
             meta = self.ImageMeta.objects.create(title='X%s' % i)
             image = self.Image.objects.create(title='X%s' % i, image=meta)
             self.Item.objects.create(holder=self.h_b, image=image)
-    self.registry = RegistryFactory()
+    self.registry = Compiler()
     j = Ref(self.Grant)
-    self.registry.register(content=j.holder.items.image.image, user=j.user, permission=j.permission)
+    self.registry.register_relation(content=j.holder.items.image.image, user=j.user, permission=j.permission)
     extra_kwargs = {}
     if 'content_type' in {f.name for f in self.Grant._meta.fields}:
         extra_kwargs = {'content_type': ContentType.objects.get_for_model(self.Holder)}
@@ -709,12 +709,12 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         self.Row.objects.create(folder=self.folder_b, content=self.pay_b, alt_content=self.pay_a)
         for payload in extras:
             self.Row.objects.create(folder=self.folder_b, content=payload, alt_content=self.pay_a)
-        self.group = RegistryFactory()
+        self.group = Compiler()
         k = Ref(self.FolderGroupGrant)
-        self.group.register(content=k.folder.rows.content, user=k.user, permission=k.permission)
-        self.direct = RegistryFactory(compiler=_SplitCompiler(self.group))
+        self.group.register_relation(content=k.folder.rows.content, user=k.user, permission=k.permission)
+        self.direct = Compiler(query_compiler=_SplitCompiler(self.group))
         j = Ref(self.FolderGrant)
-        self.direct.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        self.direct.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         self.direct.path = 'tests.s5.split'
         self.handle = self.direct
         self.FolderGrant.objects.create(folder=self.folder_a, user=self.alice, permission=self.read)
@@ -782,9 +782,9 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with _tables(CodedHolder, CodedItem, CodedImage, CodedGrant):
-            registry = RegistryFactory()
+            registry = Compiler()
             j = Ref(CodedGrant)
-            record = registry.register(content=j.holder.items.image, user=j.user, permission=j.permission)
+            record = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
             self.assertEqual(record.content_field, 'holder__items__image')
             self.assertEqual(record.content_target, CodedImage._meta.pk.attname)
             self.assertNotEqual(record.content_target, 'code')

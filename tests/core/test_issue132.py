@@ -28,7 +28,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.relations import PlanQueryCompiler
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.query import AuthorizedQuerySet
 PERM = 'myapp.change_document'
 
@@ -42,19 +42,19 @@ def _replay_listed(path):
     from django.utils.module_loading import import_string
 
     cls = import_string(path)
-    factory = RegistryFactory(
+    factory = Compiler(
         path=path,
         family=cls.family,
-        compiler=cls.query_compiler,
+        query_compiler=cls.query_compiler,
         user_model=get_user_model(),
     )
     return replay_recorder(factory, cls)
 
 def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
-    handle = RegistryFactory(path='tests.core.issue132-extra')
-    handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-    handle.register_permission_condition(Repository, 'always', lambda u, p, o: o.name != '')
+    handle = Compiler(path='tests.core.issue132-extra')
+    handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
+    handle.add_named_filter(Repository, 'always', lambda u, p, o: o.name != '')
     return handle
 
 class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):

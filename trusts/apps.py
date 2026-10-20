@@ -24,18 +24,14 @@ if 'permission_conditions' not in model_options.DEFAULT_NAMES:
 class Recorder(object):
     """Ordered log of registration calls for one app config.
 
-    The log stores the call arguments. ``ready`` freezes the log and
-    is the only build.
+    ``play`` replays each call, in order, as the same method on
+    ``target``. The recorder must already be frozen. A later ``play``
+    replays those same calls onto the new target.
     """
 
     def __init__(self):
         self._rows = []
         self.frozen = False
-
-    @property
-    def rows(self):
-        """Recorded calls, in registration order."""
-        return self._rows
 
     def register(
         self, *,
@@ -52,7 +48,7 @@ class Recorder(object):
         along=None,
     ):
         self._open()
-        self._rows.append(('register', {
+        self._rows.append(('register', (), {
             'trust': trust,
             'user': user,
             'permission': permission,
@@ -67,18 +63,33 @@ class Recorder(object):
     def add_named_filter(self, model, code, predicate):
         """Record a named-filter builder for ``ready``."""
         self._open()
-        self._rows.append(('filter', model, code, predicate))
+        self._rows.append((
+            'add_named_filter', (model, code, predicate), {},
+        ))
 
     def set_user_condition(self, name, expr, on='*'):
         self._open()
-        self._rows.append(('condition', name, expr, on))
+        self._rows.append(('set_user_condition', (name, expr), {'on': on}))
 
     def set_user_override(self, name, expr, on='user'):
         self._open()
-        self._rows.append(('override', name, expr, on))
+        self._rows.append(('set_user_override', (name, expr), {'on': on}))
 
     def freeze(self):
         self.frozen = True
+
+    def play(self, target):
+        """Replay this log on ``target``.
+
+        An unfrozen recorder raises. A second play replays the same
+        calls onto that target.
+        """
+        if not self.frozen:
+            raise TrustsConfigurationError(
+                'play refused: this recorder is not frozen.'
+            )
+        for name, args, kwargs in self._rows:
+            getattr(target, name)(*args, **kwargs)
 
     def _open(self):
         if self.frozen:
@@ -129,21 +140,21 @@ class TrustsConfigMixin(django.apps.AppConfig):
         # ``AppRegistryNotReady`` at module level during phase 1, so they
         # stay here as well. ``install_policy_commands`` is idempotent.
         from django.contrib.auth import get_user_model
-        from trusts.compile.catalogs import Catalog
-        from trusts.compile.factory import compile_recorder
+        from trusts.compile.factory import Compiler
         from trusts.inspect.commands import install_policy_commands
         import trusts.inspect.checks  # noqa: F401
 
         install_policy_commands()
         user_model = get_user_model()
-        shape = compile_recorder(
-            self.recorder,
+        compiler = Compiler(
+            user_model=user_model,
             path=self.catalog_path(),
             family=self.family,
-            compiler=self.query_compiler,
-            user_model=user_model,
+            query_compiler=self.query_compiler,
         )
-        self.catalog = Catalog(shape, user_model=user_model)
+        self.recorder.freeze()
+        self.recorder.play(compiler)
+        self.catalog = compiler.compile()
 
 
 def installed_user_model():

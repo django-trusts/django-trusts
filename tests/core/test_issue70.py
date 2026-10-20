@@ -18,7 +18,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 
 
 class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCase):
@@ -49,7 +49,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
     def test_frozen_recorder_is_not_rewritten(self):
         from tests.myapp.backends import DocumentBackend
 
-        isolated = RegistryFactory()
+        isolated = Compiler()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
         recorder = DocumentBackend().recorder
         self.contributor.ready()
@@ -58,9 +58,9 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertTrue(self.live_catalog.plan_for(Document).records)
 
     def test_conflicting_contribution_does_not_reach_the_frozen_recorder(self):
-        isolated = RegistryFactory()
+        isolated = Compiler()
         j = Ref(DocumentGrant)
-        isolated.register(
+        isolated.register_relation(
             content=j.document,
             user=j.permission,
             permission=j.user,

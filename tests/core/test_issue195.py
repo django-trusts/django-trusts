@@ -5,7 +5,7 @@ from django.test import SimpleTestCase
 import trusts
 import trusts.inspect.checks as trusts_checks
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.compile.factory import RegistryFactory
+from trusts.compile.factory import Compiler
 from trusts.plan.aggregates import _compiler_applies
 from trusts.plan.relations import PlanQueryCompiler, QueryCompiler, RelationPlan
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,11 +39,11 @@ class CoreOrderedFoldDeletedTest(SimpleTestCase):
 
     def test_declaration_reexports_and_register_are_gone(self):
         for name in FOLD_NAMES:
-            self.assertFalse(hasattr(RegistryFactory, name))
+            self.assertFalse(hasattr(Compiler, name))
             self.assertFalse(hasattr(PlanQueryCompiler, name))
             self.assertFalse(hasattr(RelationPlan, name))
-        self.assertFalse(hasattr(RegistryFactory, 'register_strategy'))
-        self.assertFalse(hasattr(RegistryFactory, 'strategies'))
+        self.assertFalse(hasattr(Compiler, 'register_strategy'))
+        self.assertFalse(hasattr(Compiler, 'strategies'))
         fields = getattr(RelationPlan, '__dataclass_fields__', {})
         self.assertNotIn('strategy', fields)
 

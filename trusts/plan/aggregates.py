@@ -101,7 +101,7 @@ def _compile_common_permissions(catalog, candidates, user, *, kind='complete',
     """Permission queryset for ``catalog``. It sponsors itself."""
     qs = candidate_queryset(candidates)
     perm_expr = OuterRef(OuterRef('pk'))
-    compiler = catalog.compiler
+    compiler = catalog.query_compiler
     plan = catalog.plan_for(candidates, user=user)
     if not _compiler_applies(compiler, plan):
         return None
