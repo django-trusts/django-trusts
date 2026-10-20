@@ -822,7 +822,10 @@ class RegistryFactory(object):
                     continue
                 seen.add(concrete)
                 if field_state(concrete, slot.expr) != 'ok':
-                    raise TrustsConfigurationError('User override %r needs a concrete BooleanField on %s.' % (slot.name, concrete._meta.label))
+                    raise TrustsConfigurationError(
+                        'User override %r needs a concrete BooleanField on %s.'
+                        % (slot.name, concrete._meta.label)
+                    )
             override_q = compile_override_q(model, '', slot, {})
         self.frozen = True
         return CatalogShape(
@@ -844,15 +847,12 @@ class RegistryFactory(object):
     def _require_user_model(self):
         if self.user_model is None:
             raise TrustsConfigurationError(
-                'RegistryFactory has no user model. Pass user_model '
-                'at construction.'
+                'RegistryFactory has no user model. Pass user_model at construction.'
             )
 
     def _open(self, method):
         if self.frozen:
-            raise TrustsConfigurationError(
-                '%s refused: this factory is frozen.' % method
-            )
+            raise TrustsConfigurationError('%s refused: this factory is frozen.' % method)
 
     def _open_for_rules(self, kind):
         if self._order or self._delegation_order:
