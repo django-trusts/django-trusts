@@ -27,8 +27,6 @@ from trusts.errors import TrustsConfigurationError
 from trusts.plan.aggregates import _compile_common_permissions
 from trusts.decorators import authorization_required
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.support import built_registries
-
 
 
 def _request(user):
@@ -77,7 +75,7 @@ def _assert_lock_matches_executed(test, handle, prefix_model, content_model):
         _role_sentinel(record, 'user', 'default'),
         _role_sentinel(record, 'permission', 'default'),
         content=content_model,
-        registries=built_registries((handle,)),
+        registry=handle.build_registry(),
     )
     recorded = []
 
@@ -231,7 +229,7 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
                 )
             listed = filter_by_permitted_content(
                 self.Cabinet.objects.all(), user, permission,
-                content=self.Sheet, registries=built_registries((handle,)),
+                content=self.Sheet, registry=handle.build_registry(),
                 skip_is_active=skip_is_active,
             )
             self.assertIsNone(listed._result_cache)
@@ -330,12 +328,12 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             )
             folders = set(filter_by_permitted_content(
                 Folder.objects.all(), self.alice, change,
-                content=Payload, registries=built_registries((handle,)),
+                content=Payload, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(folders, {root.pk, child.pk})
             found_rows = set(filter_by_permitted_content(
                 Row.objects.all(), self.alice, change,
-                content=Payload, registries=built_registries((handle,)),
+                content=Payload, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(
                 found_rows, {rows[root.pk].pk, rows[child.pk].pk},
@@ -429,13 +427,13 @@ class PermittedContentAlongAgreementTest(TransactionTestCase):
             )
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.alice, change,
-                content=AncSheet, registries=built_registries((handle,)),
+                content=AncSheet, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 AncCabinet.objects.all(), self.alice, change,
-                content=AncSheet, registries=built_registries((handle,)),
+                content=AncSheet, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk, child.pk})
             self.assertNotIn(past.pk, cabinets)
@@ -555,7 +553,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
     def _permitted_content(self, handle, user, *, skip_is_active=False):
         return set(filter_by_permitted_content(
             self.Cabinet.objects.all(), user, self.change,
-            content=self.Sheet, registries=built_registries((handle,)),
+            content=self.Sheet, registry=handle.build_registry(),
             skip_is_active=skip_is_active,
         ).values_list('pk', flat=True))
 
@@ -740,7 +738,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             with self.assertRaises(TrustsConfigurationError):
                 filter_by_permitted_content(
                     self.Cabinet.objects.all(), self.delegate, change,
-                    content=Attachment, registries=built_registries((handle,)),
+                    content=Attachment, registry=handle.build_registry(),
                 )
 
     def test_delegation_without_an_ordinary_grant_lists_nothing(self):
@@ -864,13 +862,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             self.assertEqual(authorized, {sheets[root.pk].pk})
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=AncSheet, registries=built_registries((handle,)),
+                content=AncSheet, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 AncCabinet.objects.all(), self.delegate, change,
-                content=AncSheet, registries=built_registries((handle,)),
+                content=AncSheet, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk})
             self.assertNotIn(child.pk, cabinets)
@@ -987,13 +985,13 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             self.assertIn(self.delegate.pk, permitted)
             offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=WalkSheet, registries=built_registries((handle,)),
+                content=WalkSheet, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(offices, {office.pk})
             self.assertNotIn(other.pk, offices)
             cabinets = set(filter_by_permitted_content(
                 WalkCabinet.objects.all(), self.delegate, change,
-                content=WalkSheet, registries=built_registries((handle,)),
+                content=WalkSheet, registry=handle.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(cabinets, {root.pk})
             both = _handle('tests.core.issue282-sponsor-ancestor-both')
@@ -1021,7 +1019,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
             )
             both_offices = set(filter_by_permitted_content(
                 Office.objects.all(), self.delegate, change,
-                content=WalkSheet, registries=built_registries((both,)),
+                content=WalkSheet, registry=both.build_registry(),
             ).values_list('pk', flat=True))
             self.assertEqual(both_offices, {office.pk})
             self.assertNotIn(other.pk, both_offices)
@@ -1122,7 +1120,7 @@ class DelegatedPermittedContentAgreementTest(TransactionTestCase):
                 with self.assertRaises(TrustsConfigurationError):
                     filter_by_permitted_content(
                         model.objects.all(), self.delegate, change,
-                        content=Payload, registries=built_registries((handle,)),
+                        content=Payload, registry=handle.build_registry(),
                     )
 
     def test_delegated_grant_lockfile_matches_the_executed_statement(self):

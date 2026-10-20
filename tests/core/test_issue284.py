@@ -26,7 +26,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.query import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import built_registries, install_class_handle
+from tests.support import install_class_handle
 from trusts.compile.catalogs import Catalog
 
 PERM = 'myapp.change_document'
@@ -254,10 +254,10 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             scope_grant = Ref(FolderGrant)
             scope_registry.register(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
             handle = scope_registry
-            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), alice, read, content=Note, registries=built_registries((handle,)))), {folder.pk})
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), alice, read, content=Note, registry=handle.build_registry())), {folder.pk})
             with self.assertNumQueries(1):
-                self.assertFalse(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registries=built_registries((handle,))).exists())
-            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registries=built_registries((handle,)), skip_is_active=True)), {folder.pk})
+                self.assertFalse(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registry=handle.build_registry()).exists())
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), inactive, read, content=Note, registry=handle.build_registry(), skip_is_active=True)), {folder.pk})
         finally:
             with connection.schema_editor() as editor:
                 for model in (FolderGrant, AccountGrant, NoteGrant, Account, Row, Folder, Note):
@@ -350,7 +350,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             scope_grant = Ref(FolderGrant)
             scope_registry.register(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
             handle = scope_registry
-            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), visible, read, content=Note, registries=built_registries((handle,)))), {folder.pk})
+            self.assertEqual(_pks(filter_by_permitted_content(Folder.objects.all(), visible, read, content=Note, registry=handle.build_registry())), {folder.pk})
             backend = DocumentBackend()
             for holder in (anonymous, guest):
                 with self.assertNumQueries(0):
@@ -358,7 +358,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                         self.assertEqual(list(built_catalog(registry).permissions_for(holder, note, skip_is_active=include_inactive)), [])
                         self.assertFalse(built_catalog(registry).has_perm(holder, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=include_inactive))
                         self.assertFalse(registry.build_registry().filter_authorized(Note.objects.all(), holder, read, skip_is_active=include_inactive).exists())
-                        self.assertFalse(filter_by_permitted_content(Folder.objects.all(), holder, read, content=Note, registries=built_registries((handle,)), skip_is_active=include_inactive).exists())
+                        self.assertFalse(filter_by_permitted_content(Folder.objects.all(), holder, read, content=Note, registry=handle.build_registry(), skip_is_active=include_inactive).exists())
                         self.assertFalse(backend.has_perm(holder, 'myapp.change_document', note, skip_is_active=include_inactive))
                         self.assertEqual(backend.get_all_permissions(holder, note, skip_is_active=include_inactive), set())
                         self.assertEqual(backend.get_group_permissions(holder, note, skip_is_active=include_inactive), set())
@@ -495,7 +495,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
         return set(self.sheet.get_permitted_users(perm, **kwargs).values_list('pk', flat=True))
 
     def _scope_pks(self, user, **kwargs):
-        return set(filter_by_permitted_content(self.Cabinet.objects.all(), user, self.read, content=self.Sheet, registries=built_registries((self.handle,)), **kwargs).values_list('pk', flat=True))
+        return set(filter_by_permitted_content(self.Cabinet.objects.all(), user, self.read, content=self.Sheet, registry=self.handle.build_registry(), **kwargs).values_list('pk', flat=True))
 
     def test_both_inactive_delegate_and_sponsor_need_the_optional_keyword(self):
         self.assertTrue(self.backend.has_perm(self.delegate, self.code, self.sheet))

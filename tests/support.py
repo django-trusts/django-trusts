@@ -32,50 +32,22 @@ def built_catalog(factory):
 
 
 def built_registries(items):
-    """Build factories for a direct ``granted`` / filter call.
-
-    A factory is built now. A catalog is returned as itself. A registry
-    is returned as itself. ``None`` and other objects pass through so a
-    caller can still prove a missing registry fails closed.
-    """
-
-    if items is None:
-        return None
-    if isinstance(items, (str, bytes)) or not isinstance(items, (list, tuple)):
-        items = (items,)
-    built = []
-    for item in items:
-        if item is None or isinstance(item, (Catalog, Registry)):
-            built.append(item)
-        elif isinstance(item, RegistryFactory):
-            built.append(item.build_registry())
-        else:
-            built.append(item)
-    return tuple(built)
+    """Build each factory. Callers pass factories."""
+    return tuple(item.build_registry() for item in items)
 
 
 def scoped_permitted_content(queryset, user, permission, *, content,
-                             registries, **skip_flags):
+                             registry, **skip_flags):
     """Prefix filter for one explicit registry in a unit test.
 
     The public filter walks ``get_catalog()`` and takes no registry
     argument. This helper is the direct registry question.
     """
-    parts = []
-    for registry in built_registries(registries) or ():
-        if registry.family != 'relationship':
-            continue
-        parts.append(registry.filter_by_permitted_content(
-            queryset, user, permission, content=content, **skip_flags,
-        ))
-    if not parts:
+    if registry.family != 'relationship':
         return queryset.none()
-    if len(parts) == 1:
-        return parts[0]
-    combined = parts[0]
-    for part in parts[1:]:
-        combined = combined | part
-    return combined
+    return registry.filter_by_permitted_content(
+        queryset, user, permission, content=content, **skip_flags,
+    )
 
 
 @contextmanager
@@ -86,7 +58,7 @@ def override_catalog(backend_cls, factory, path):
     catalogs[backend_cls] = Catalog(
         cls=backend_cls,
         path=path,
-        family=getattr(factory, 'family', 'relationship'),
+        family=factory.family,
         registry=factory.build_registry(),
     )
     try:
@@ -306,8 +278,6 @@ def listed_relationship(factories):
             )
         if isinstance(factory, Registry):
             subject = factory
-        elif isinstance(factory, RegistryFactory):
-            subject = factory.build_registry()
         else:
             subject = factory.build_registry()
         prepared.append((cls, subject.path or listing, subject))

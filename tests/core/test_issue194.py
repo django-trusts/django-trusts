@@ -7,7 +7,7 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase, override_settings
 import tests as tests_module
-from tests.support import live_config, override_apps_ready, built_registries, built_catalog, bound_handle, replay_recorder, configured_catalog
+from tests.support import live_config, override_apps_ready, built_catalog, bound_handle, replay_recorder, configured_catalog
 from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -161,8 +161,8 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             self.assertIsNotNone(mixed)
             with self.assertNumQueries(1):
                 self.assertEqual(set(Document.objects.filter(mixed).values_list('pk', flat=True)), {self.rel_doc.pk})
-            rel_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.rel_doc, registries=built_registries((self.rel_handle,)))
-            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registries=built_registries((self.fold_handle,)))
+            rel_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.rel_doc, registry=self.rel_handle)
+            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registry=self.fold_handle.build_registry())
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
             from trusts.query import relationship_catalogs
