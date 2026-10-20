@@ -15,7 +15,12 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import live_config, built_registries, scoped_permitted_content
+from tests.apps import (
+    built_registries,
+    listed_relationship,
+    live_config,
+    scoped_permitted_content,
+)
 from tests.core import kernel_host_listed
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
@@ -497,6 +502,82 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                 registries=built_registries((self.handle,)),
             ).exists()
         )
+
+    def test_public_filter_reads_listed_catalogs(self):
+        from trusts.decorators import filter_authorized_scopes
+
+        with self.assertNumQueries(0):
+            with self.assertRaises(TrustsConfigurationError):
+                filter_by_permitted_content(
+                    object(), self.alice, self.add, content=self.Payload,
+                )
+            with self.assertRaises(TrustsConfigurationError):
+                filter_by_permitted_content(
+                    self.Folder.objects.all(), object(), self.add,
+                    content=self.Payload,
+                )
+        built = built_registries((self.handle,))
+        with listed_relationship(built):
+            self.assertEqual(
+                _pks(filter_by_permitted_content(
+                    self.Folder.objects.all(),
+                    self.alice,
+                    self.add,
+                    content=self.Payload,
+                )),
+                {self.folder_a.pk},
+            )
+        with listed_relationship(()):
+            with self.assertNumQueries(0):
+                empty = filter_by_permitted_content(
+                    self.Folder.objects.all(),
+                    self.alice,
+                    self.add,
+                    content=self.Payload,
+                )
+                self.assertFalse(empty.exists())
+
+        class Ghost(models.Model):
+            class Meta:
+                app_label = 'trusts_tests'
+
+        ghost = Ghost()
+        ghost.is_anonymous = True
+        with listed_relationship(built + built):
+            with self.assertNumQueries(0):
+                denied = filter_by_permitted_content(
+                    self.Folder.objects.all(),
+                    ghost,
+                    self.add,
+                    content=self.Payload,
+                    skip_is_active=True,
+                )
+                self.assertFalse(denied.exists())
+            self.assertEqual(
+                _pks(filter_by_permitted_content(
+                    self.Folder.objects.all(),
+                    self.alice,
+                    self.add,
+                    content=self.Payload,
+                )),
+                {self.folder_a.pk},
+            )
+            with self.assertNumQueries(0):
+                self.assertFalse(filter_by_permitted_content(
+                    self.Payload.objects.all(),
+                    self.alice,
+                    self.add,
+                    content=self.Payload,
+                ).exists())
+            self.assertEqual(
+                _pks(filter_authorized_scopes(
+                    self.Folder.objects.all(),
+                    self.alice,
+                    self.add,
+                    content=self.Payload,
+                )),
+                {self.folder_a.pk},
+            )
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
