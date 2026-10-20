@@ -12,11 +12,13 @@ import dataclasses
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
-from django.db import models
-from django.test import SimpleTestCase
+from django.contrib.contenttypes.models import ContentType
+from django.db import connection, models
+from django.db.models import Q
+from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from trusts.compile.catalogs import CatalogShape
+from trusts.compile.catalogs import Catalog, CatalogShape
 from trusts.compile.factory import (
     PublicRegistration,
     RegisteredDelegation,
@@ -26,7 +28,7 @@ from trusts.compile.factory import (
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.conditions import ConditionRegistry, FrozenConditionLookup
-from tests.support import built_catalog
+from tests.support import built_catalog, forget_models
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -412,3 +414,129 @@ def _other_grant_models():
             app_label = 'trusts_tests'
 
     return OtherDocument, OtherGrant
+
+
+class CatalogFromShapeTest(TransactionTestCase):
+    """A catalog answers from a shape built in the test, not from a factory."""
+
+    def test_shape_answers_and_an_empty_shape_denies(self):
+        Scope, Payload, Row, Grant = _prefix_models()
+        with connection.schema_editor() as editor:
+            editor.create_model(Scope)
+            editor.create_model(Payload)
+            editor.create_model(Row)
+            editor.create_model(Grant)
+        try:
+            User = get_user_model()
+            holder = User.objects.create_user('shape-holder', password='x')
+            outsider = User.objects.create_user('shape-outsider', password='x')
+            scope = Scope.objects.create(title='scope')
+            payload = Payload.objects.create(title='payload')
+            Row.objects.create(scope=scope, content=payload)
+            content_type = ContentType.objects.get_for_model(Payload)
+            read, _created = Permission.objects.get_or_create(
+                content_type=content_type, codename='read_payload',
+                defaults={'name': 'read'},
+            )
+            Grant.objects.create(scope=scope, user=holder, permission=read)
+            code = '%s.%s' % (content_type.app_label, read.codename)
+            factory = RegistryFactory(user_model=User, path='shape-answers')
+            grant = Ref(Grant)
+            factory.register(
+                content=grant.scope.rows.content, user=grant.user,
+                permission=grant.permission,
+            )
+            frozen = factory.build()
+            shape = CatalogShape(
+                records=frozen.records,
+                delegations=frozen.delegations,
+                conditions=frozen.conditions,
+                user_conditions=frozen.user_conditions,
+                user_override=frozen.user_override,
+                filter_lookup=frozen.filter_lookup,
+                compiler=frozen.compiler,
+                cls=frozen.cls,
+                path=frozen.path,
+                family=frozen.family,
+                user_model=frozen.user_model,
+                user_rules=frozen.user_rules,
+                override_q=frozen.override_q,
+            )
+            catalog = Catalog(shape)
+            self.assertTrue(catalog.has_perm(holder, code, payload))
+            self.assertFalse(catalog.has_perm(outsider, code, payload))
+            self.assertEqual(
+                set(catalog.filter_authorized(
+                    Payload.objects.all(), holder, read,
+                ).values_list('pk', flat=True)),
+                {payload.pk},
+            )
+            self.assertEqual(
+                set(catalog.permitted_users(payload, read).values_list(
+                    'pk', flat=True,
+                )),
+                {holder.pk},
+            )
+            self.assertEqual(
+                set(catalog.filter_by_permitted_content(
+                    Scope.objects.all(), holder, read, content=payload,
+                ).values_list('pk', flat=True)),
+                {scope.pk},
+            )
+            empty = Catalog(CatalogShape(
+                records=(), delegations=(), conditions=(),
+                user_conditions=None, user_override=None, filter_lookup=None,
+                compiler=None, cls=RegistryFactory, path='empty-shape',
+                family='relationship', user_model=User,
+                user_rules=(Q(), Q()), override_q=None,
+            ))
+            self.assertFalse(empty.has_perm(holder, code, payload))
+            self.assertFalse(empty.filter_authorized(
+                Payload.objects.all(), holder, read,
+            ).exists())
+            self.assertEqual(list(empty.permitted_users(payload, read)), [])
+            self.assertFalse(empty.filter_by_permitted_content(
+                Scope.objects.all(), holder, read, content=payload,
+            ).exists())
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(Grant)
+                editor.delete_model(Row)
+                editor.delete_model(Payload)
+                editor.delete_model(Scope)
+            forget_models(Grant, Row, Payload, Scope)
+
+
+def _prefix_models():
+    class Scope(models.Model):
+        title = models.CharField(max_length=20)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Payload(models.Model):
+        title = models.CharField(max_length=20)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Row(models.Model):
+        scope = models.ForeignKey(
+            Scope, related_name='rows', on_delete=models.CASCADE,
+        )
+        content = models.ForeignKey(Payload, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    class Grant(models.Model):
+        scope = models.ForeignKey(Scope, on_delete=models.CASCADE)
+        user = models.ForeignKey(
+            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        )
+        permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = 'trusts_tests'
+
+    return Scope, Payload, Row, Grant

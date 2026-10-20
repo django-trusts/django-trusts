@@ -11,7 +11,6 @@ import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar, get_args, get_origin, get_type_hints
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -21,8 +20,7 @@ from django.test import SimpleTestCase, TestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from trusts.compile.resolution import _resolve_path
-from trusts.compile.factory import RegisteredDelegation, RegisteredRelation, _public_path_segments, _validate_condition
+from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
@@ -286,13 +284,8 @@ class RegisterFailClosedTest(TestCase):
         def user(trust):
             calls.append(trust)
             return trust.user
-        with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
-            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
-                with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
-                    record = handle.register_public(trust=DocumentGrant, user=user, permission=lambda t: t.permission, content=lambda t: t.document)
+        record = handle.register_public(trust=DocumentGrant, user=user, permission=lambda t: t.permission, content=lambda t: t.document)
         self.assertEqual(len(calls), 1)
-        segments.assert_called()
-        resolve.assert_called()
-        validate.assert_called()
-        self.assertEqual(registry.records, (record,))
-        self.assertEqual(built_catalog(registry).records, (record,))
+        shape = registry.build()
+        self.assertEqual(shape.records, (record,))
+        self.assertEqual(record.user_path, ('user',))

@@ -9,7 +9,6 @@ import inspect
 import types
 from collections.abc import Callable
 from typing import TypeVar, get_args, get_origin, get_type_hints
-from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
@@ -21,8 +20,7 @@ from tests.myapp.models import Document, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.plan.conditions import Eq as IrEq
 from trusts.plan.conditions import Ref as IrRef
-from trusts.compile.resolution import _resolve_path
-from trusts.compile.factory import RegisteredDelegation, RegisteredRelation, _normalize_public_condition, _public_path_segments, _validate_condition
+from trusts.compile.factory import RegisteredDelegation, RegisteredRelation
 from trusts.compile.nodes import Along, permission_in
 from trusts.compile.nodes import All, Equal, PermissionIn, Ref
 from trusts.plan.relations import PlanQueryCompiler
@@ -225,17 +223,11 @@ class RegisterConditionFailClosedTest(TestCase):
         def condition(trust):
             calls.append(trust)
             return trust.user == trust.user
-        with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
-            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
-                with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
-                    with patch('trusts.compile.factory._normalize_public_condition', wraps=_normalize_public_condition) as normalize:
-                        record = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', condition=condition)
+        record = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document', condition=condition)
         self.assertEqual(len(calls), 1)
-        segments.assert_called()
-        resolve.assert_called()
-        validate.assert_called()
-        normalize.assert_called()
-        self.assertEqual(registry.records, (record,))
+        shape = registry.build()
+        self.assertEqual(shape.records, (record,))
+        self.assertIsNotNone(record.condition)
 
 class RegisterConditionUnchangedNeighborsTest(SimpleTestCase):
 
