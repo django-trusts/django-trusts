@@ -28,7 +28,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
+from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, install_class_handle
 
 

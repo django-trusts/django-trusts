@@ -15,7 +15,7 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
-from trusts.apps import TrustsConfigMixin
+from trusts.apps import TrustsConfigMixin, installed_catalogs
 from trusts.backends import TrustModelBackendMixin
 from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import QueryCompiler
@@ -155,7 +155,6 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registry=self.fold_handle)
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
-            from trusts.apps import installed_catalogs
             listed = installed_catalogs()
             self.assertIn(DocumentBackend().catalog, listed)
             self.assertIn(self.fold_handle, listed)

@@ -29,7 +29,7 @@ from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
-from trusts.query import AuthorizedQuerySet
+from trusts.models import AuthorizedQuerySet
 PERM = 'myapp.change_document'
 
 def _change_document():

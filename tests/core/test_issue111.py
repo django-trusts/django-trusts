@@ -18,7 +18,9 @@ from tests.kernel_host.backends import HostTrustModelBackend
 from tests.support import configured_catalog
 from trusts.apps import TrustsConfigMixin, installed_catalogs
 from trusts.backends import TrustModelBackendMixin
+from trusts.decorators import filter_by_permitted_content
 from trusts.errors import TrustsConfigurationError
+from trusts.models import AuthorizedQuerySet
 
 
 MIXIN = 'tests.backends.MixinOnlyBackend'
@@ -131,9 +133,6 @@ class OwnerResolutionTest(SimpleTestCase):
         self.assertIn(handle, installed_catalogs())
 
     def test_authorized_and_filter_scopes_use_owners(self):
-        from trusts.decorators import filter_by_permitted_content
-        from trusts.query import AuthorizedQuerySet
-
         registries = installed_catalogs()
         self.assertTrue(registries)
         self.assertEqual(

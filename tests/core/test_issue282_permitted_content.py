@@ -26,7 +26,7 @@ from tests.support import (
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.aggregates import _compile_common_permissions
 from trusts.decorators import authorization_required
-from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
+from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 
 
 def _request(user):

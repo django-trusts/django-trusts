@@ -188,7 +188,7 @@ def main() -> int:
     from trusts.compile.nodes import Ref
     from trusts.decorators import filter_by_permitted_content
     from trusts.plan.relations import RelationPlan
-    from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
+    from trusts.models import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
         PermissionConditionError,
         permission_condition_code,

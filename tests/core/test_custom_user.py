@@ -1,4 +1,4 @@
-"""Custom AUTH_USER_MODEL imports trusts.query while its module loads.
+"""Custom AUTH_USER_MODEL imports trusts.models while its module loads.
 
 The documented manager mixin is imported at model-definition time, before
 the swappable user model is registered. Startup must finish, migrate, and
@@ -41,7 +41,7 @@ import django
 django.setup()
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
-from trusts.query import PermittedUsersManagerMixin
+from trusts.models import PermittedUsersManagerMixin
 user = get_user_model()
 assert user._meta.label == 'custom_user.User', user._meta.label
 assert issubclass(user.objects.__class__, PermittedUsersManagerMixin)

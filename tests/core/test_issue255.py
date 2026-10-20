@@ -32,7 +32,7 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
+from trusts.models import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog
 
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'

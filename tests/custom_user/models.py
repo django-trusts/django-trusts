@@ -1,4 +1,4 @@
-from trusts.query import PermittedUsersManagerMixin
+from trusts.models import PermittedUsersManagerMixin
 from django.contrib.auth.models import AbstractUser
 from django.contrib.auth.models import UserManager as DjangoUserManager
 

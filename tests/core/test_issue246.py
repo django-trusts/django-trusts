@@ -30,7 +30,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import AuthorizedManager
+from trusts.models import AuthorizedManager
 
 
 class _ProbeBackend(TrustModelBackendMixin, ModelBackend):
