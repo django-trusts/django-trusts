@@ -25,7 +25,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager
-from tests.apps import built_registries
+from tests.apps import listed_relationship, built_registries
 
 
 class _ProbeBackend(TrustModelBackendMixin, ModelBackend):
@@ -303,7 +303,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -330,7 +330,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_c), {self.change_code})
         granted = self.registry.filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
         self.assertEqual(list(granted), [self.paper_a, self.paper_c, self.paper_d])
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((self.handle,))):
+        with listed_relationship(built_registries((self.handle,))):
             listed = sorted(self.Paper.objects.authorized(self.alice, self.change), key=lambda row: row.pk)
         self.assertEqual(listed, [self.paper_a, self.paper_c, self.paper_d])
         folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registries=built_registries((self.handle,)))
@@ -347,7 +347,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertEqual(self.backend.get_all_permissions(self.alice, self.paper_b), {self.write_code})
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_b), set())
             self.assertTrue(self.backend.has_perm(self.alice, self.write_code, self.paper_b))
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((self.handle,))):
+        with listed_relationship(built_registries((self.handle,))):
             self.assertEqual(list(self.Paper.objects.authorized(self.carol, self.add)), [self.paper_a])
             self.assertEqual(list(self.Paper.objects.authorized(self.alice, self.write)), [self.paper_b])
 
@@ -464,7 +464,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         cls = type(self.backend)
         saved = catalogs.get(cls)
         factory = self.handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
         try:
             with bound_handle(self.backend, self.handle):
                 yield
@@ -474,8 +474,10 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
             else:
                 catalogs[cls] = saved
 
+    @contextmanager
     def _handles(self):
-        return patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((self.handle,)))
+        with listed_relationship((self.handle,)):
+            yield
 
     def _permission_codes(self, rows):
         return {_code(row) for row in rows}
@@ -664,7 +666,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         cls = type(backend)
         saved = catalogs.get(cls)
         factory = handle
-        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+        catalogs[cls] = Catalog(cls=cls, path='%s.%s' % (cls.__module__, cls.__qualname__), family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
         try:
             with bound_handle(backend, handle):
                 for perm in granted:
@@ -689,7 +691,7 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
                 catalogs[cls] = saved
 
     def _authorized(self, handle, expectations):
-        with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((handle,))):
+        with listed_relationship(built_registries((handle,))):
             for user, perm, expected in expectations:
                 with self.subTest(user=user.username, perm=perm.codename, authorized=True):
                     rows = self.Paper.objects.authorized(user, perm)

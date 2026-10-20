@@ -46,7 +46,7 @@ def _seal_factory(backend_cls, factory, family_registries=()):
     from trusts.apps import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
-    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, factory=factory, registry=built, family_registries=built_registries(tuple(family_registries)))
+    catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(tuple(family_registries)))
     return built
 
 def _document_host_handle():
@@ -63,7 +63,7 @@ def _listed(handle):
     from trusts.apps import catalogs
     install_class_handle(_PairDocumentBackend, handle)
     _seal_factory(_PairDocumentBackend, handle)
-    with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',)), patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((handle,))):
+    with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',)):
         try:
             yield
         finally:
@@ -801,9 +801,6 @@ class DelegatedAuthorityLiveTest(TestCase):
             settings_override = override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._PairDocumentBackend',))
             settings_override.enable()
             self.addCleanup(settings_override.disable)
-            relationship_handles = patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((handle,)))
-            relationship_handles.start()
-            self.addCleanup(relationship_handles.stop)
         User = get_user_model()
         self.sponsor = User.objects.create_user('sponsor-266', password='x')
         self.delegate = User.objects.create_user('delegate-266', password='x')
@@ -899,7 +896,7 @@ class DelegatedAuthorityLiveTest(TestCase):
         _seal_factory(_PairDocumentBackend, delegation_handle, family_registries=built_registries((grant_built,)))
         self.addCleanup(lambda: catalogs.pop(_PairDocumentBackend, None))
         self.addCleanup(lambda: catalogs.pop(_GrantBackend, None))
-        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._GrantBackend', 'tests.core.test_issue266._PairDocumentBackend')), patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries((grant_handle, delegation_handle))):
+        with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue266._GrantBackend', 'tests.core.test_issue266._PairDocumentBackend')):
             self.assertTrue(self.delegate.has_perm('myapp.change_document', self.document))
             self.assertFalse(self.second_delegate.has_perm('myapp.change_document', self.document))
         document = _load_policy_sql_document(render_policy_sql_bytes(registries=[(grant_handle).build_registry(), (delegation_handle).build_registry()]))

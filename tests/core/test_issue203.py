@@ -52,7 +52,7 @@ class _BoundBackend(TrustModelBackendMixin, ModelBackend):
         cls = type(self)
         if cls not in catalogs:
             factory = self._factory
-            catalogs[cls] = Catalog(cls=cls, path='tests.core.issue203', family=self.family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(()))
+            catalogs[cls] = Catalog(cls=cls, path='tests.core.issue203', family=self.family, registry=factory.build_registry(), family_registries=built_registries(()))
         return super().has_perm(user_obj, perm, obj, **skip_flags)
 
 class _BuilderLog(object):

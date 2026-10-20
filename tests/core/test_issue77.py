@@ -10,9 +10,10 @@ from django.test import TestCase
 from tests.apps import configured_catalog, live_config, built_registries
 from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
+from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import implementation_for_path
+
 from trusts.plan.aggregates import common_permissions, compiler_for_class
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsCompilerError
@@ -49,17 +50,16 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
             compiler_for_class(MissingCompilerBackend)
 
     def test_unconfigured_and_ambiguous_path_fail_loud(self):
-        live = live_config()
         with self.assertRaises(Exception):
-            configured_catalog(live, 'tests.backends.MixinOnlyBackend')
+            configured_catalog('tests.backends.MixinOnlyBackend')
 
 class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
 
     def test_document_grant_is_not_inherited_by_host(self):
-        host = configured_catalog(live_config())
-        document = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
-        self.assertFalse(host.registry.plan_for(Document).records)
-        self.assertTrue(document.registry.plan_for(Document).records)
+        host = configured_catalog(HOST_BACKEND)
+        document = configured_catalog(DOCUMENT_BACKEND)
+        self.assertFalse(host.plan_for(Document).records)
+        self.assertTrue(document.plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
         mixin = RegistryFactory(path='tests.backends.MixinOnlyBackend')
@@ -74,16 +74,16 @@ class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):
         self.change = _change_document()
         self.doc = Document.objects.create(title='coord')
         DocumentGrant.objects.create(document=self.doc, user=self.alice, permission=self.change)
-        self.host = configured_catalog(live_config())
-        self.document = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
+        self.host = configured_catalog(HOST_BACKEND)
+        self.document = configured_catalog(DOCUMENT_BACKEND)
 
     def test_coordinator_one_sql_noncoordinator_zero(self):
         qs = Document.objects.all()
-        pred = granted(built_registries((self.host.registry, self.document.registry)), qs, self.alice, self.change, kind='complete')
+        pred = granted(built_registries((self.host, self.document)), qs, self.alice, self.change, kind='complete')
         self.assertIsNotNone(pred)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs.filter(pred).distinct()), {self.doc.pk})
-        empty = granted(built_registries((self.host.registry,)), qs, self.alice, self.change, kind='complete')
+        empty = granted(built_registries((self.host,)), qs, self.alice, self.change, kind='complete')
         self.assertIsNone(empty)
 
 class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
@@ -95,20 +95,20 @@ class CoreCommonPermissionsProjectionTest(KernelHostRequiredMixin, TestCase):
         self.change = _change_document()
         self.doc = Document.objects.create(title='proj')
         DocumentGrant.objects.create(document=self.doc, user=self.alice, permission=self.change)
-        self.handle = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
+        self.handle = configured_catalog(DOCUMENT_BACKEND)
 
     def test_plan_and_handle_common_permissions_are_one_sql(self):
-        plan = self.handle.registry.plan_for(self.doc, user=self.alice)
+        plan = self.handle.plan_for(self.doc, user=self.alice)
         with self.assertNumQueries(1):
             codes = set(plan.common_permissions(self.alice, self.doc).values_list('codename', flat=True))
         self.assertIn('change_document', codes)
         qs = Document.objects.filter(pk=self.doc.pk)
         with self.assertNumQueries(1):
-            rows = list(common_permissions(built_registries((self.handle.registry,)), qs, self.alice))
+            rows = list(common_permissions(built_registries((self.handle,)), qs, self.alice))
         self.assertTrue(any((row.codename == 'change_document' for row in rows)))
         empty = Document.objects.none()
         with self.assertNumQueries(1):
-            self.assertFalse(list(common_permissions(built_registries((self.handle.registry,)), empty, self.alice)))
+            self.assertFalse(list(common_permissions(built_registries((self.handle,)), empty, self.alice)))
 
 class RegisteredOrdinaryModelTest(KernelHostRequiredMixin, TestCase):
 

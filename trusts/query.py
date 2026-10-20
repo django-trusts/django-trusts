@@ -2,7 +2,7 @@
 
 from django.db.models import Manager, Model, QuerySet
 
-import trusts.apps as trusts_apps
+from trusts.backends import configured_catalogs
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.contents import granted
 from trusts.plan.relations import bind_checked_user
@@ -40,7 +40,7 @@ class AuthorizedQuerySet(QuerySet):
                 'permission must be a model instance, not %r.' % (permission,)
             )
 
-        registries = trusts_apps.relationship_registries()
+        registries = _relationship_catalogs()
         inquiry = bind_checked_user(
             user, skip_flags=skip_flags, registries=registries)
         if user is None:
@@ -103,7 +103,7 @@ class PermittedQuerySetMixin:
             permission,
             user,
             conditions,
-            registries=trusts_apps.relationship_registries(),
+            registries=_relationship_catalogs(),
             **skip_flags,
         )
 
@@ -143,6 +143,14 @@ class PermittedUsersManagerMixin:
         return compile_permitted_users(
             content, perm, user_queryset=self.get_queryset(), **skip_flags,
         )
+
+
+def _relationship_catalogs():
+    """Relationship catalogs of the listed mixin backends."""
+    return tuple(
+        catalog for catalog in configured_catalogs()
+        if catalog.family == 'relationship'
+    )
 
 
 AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)

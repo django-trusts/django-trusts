@@ -21,8 +21,10 @@ from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from trusts.apps import catalogs, listed_backend_class
-from trusts.errors import PermissionConditionError, TrustsConfigurationError
+from django.contrib.auth import get_backends
+
+from trusts.backends import TrustModelBackendMixin
+from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
@@ -123,7 +125,7 @@ def check_query_compilers(app_configs, **kwargs):
 
     messages = []
     seen = []
-    listed = getattr(settings, 'AUTHENTICATION_BACKENDS', ()) or ()
+    listed = settings.AUTHENTICATION_BACKENDS
     for path in listed:
         if path in seen:
             continue
@@ -132,7 +134,7 @@ def check_query_compilers(app_configs, **kwargs):
             cls = import_string(path)
         except ImportError:
             continue
-        if not issubclass(cls, TrustModelBackendMixin):
+        if not isinstance(cls, type) or not issubclass(cls, TrustModelBackendMixin):
             continue
         try:
             compiler_for_class(cls)
@@ -164,37 +166,36 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
-def _owned_catalogs(config):
-    """Catalogs for this owner's listed paths. Missing catalogs are skipped."""
+def _built_catalogs():
+    """Catalogs of listed mixin backends. Missing catalogs are skipped."""
     found = []
-    try:
-        paths = config._configured_trusts_paths()
-    except TrustsConfigurationError:
-        return found
-    for path in paths:
-        cls = listed_backend_class(path)
-        if not isinstance(cls, type):
+    seen = set()
+    for backend in get_backends():
+        if not isinstance(backend, TrustModelBackendMixin):
             continue
-        catalog = catalogs.get(cls)
+        cls = type(backend)
+        if cls in seen:
+            continue
+        seen.add(cls)
+        catalog = backend.get_catalog()
         if catalog is None:
             continue
         found.append(catalog)
-    return found
+    return tuple(found)
 
 
-def _covered_content_models(config):
-    """Content terminals that already have a plan record on any owned catalog.
+def _covered_content_models():
+    """Content terminals that already have a plan record on a built catalog.
 
-    Path-scoped: coverage on one configured catalog is enough. Does not
-    register, does not invent union authority, and does not require
-    every backend to hold the declaration.
+    Coverage on one configured catalog is enough. Does not register,
+    does not invent union authority, and does not require every backend
+    to hold the declaration.
     """
     covered = set()
-    for catalog in _owned_catalogs(config):
-        registry = catalog.registry
-        for record in registry.records:
+    for catalog in _built_catalogs():
+        for record in catalog.records:
             covered.add(record.content_model)
-        for record in registry.delegations:
+        for record in catalog.delegations:
             covered.add(record.content_model)
     return covered
 
@@ -240,15 +241,10 @@ def check_missing_declarations(app_configs, **kwargs):
     """
     from django.apps import apps as django_apps
 
-    from trusts.apps import implementation_configs
-
-    owners = implementation_configs()
-    if not owners:
+    if not _built_catalogs():
         return []
 
-    covered = set()
-    for config in owners:
-        covered.update(_covered_content_models(config))
+    covered = _covered_content_models()
     messages = []
     seen = set()
 
@@ -302,10 +298,10 @@ def check_missing_declarations(app_configs, **kwargs):
     return messages
 
 
-def _iter_catalog_permission_conditions(config):
-    """Yield condition records from one implementation owner's catalogs."""
-    for catalog in _owned_catalogs(config):
-        yield from catalog.registry.iter_permission_conditions()
+def _iter_catalog_permission_conditions():
+    """Yield condition records from built catalogs."""
+    for catalog in _built_catalogs():
+        yield from catalog.iter_permission_conditions()
 
 
 def iter_live_permission_conditions(apps_registry=None):
@@ -321,16 +317,13 @@ def iter_live_permission_conditions(apps_registry=None):
     """
     from django.apps import apps as django_apps
 
-    from trusts.apps import implementation_configs
-
     seen_records = set()
-    for config in implementation_configs(apps_registry):
-        for model, cond_code, record in _iter_catalog_permission_conditions(config):
-            marker = id(record)
-            if marker in seen_records:
-                continue
-            seen_records.add(marker)
-            yield model, cond_code, record
+    for model, cond_code, record in _iter_catalog_permission_conditions():
+        marker = id(record)
+        if marker in seen_records:
+            continue
+        seen_records.add(marker)
+        yield model, cond_code, record
 
     registry = django_apps if apps_registry is None else apps_registry
     Content = _historical_content_class(registry)
@@ -364,10 +357,9 @@ def check_obsolete_legacy_callback_setting(app_configs, **kwargs):
 
 
 def _authorization_check_registries():
-    """Relationship-family built registries for E008."""
+    """Relationship-family catalogs for E008, via ``get_catalog()``."""
     return tuple(
-        catalog.registry
-        for catalog in catalogs.values()
+        catalog for catalog in _built_catalogs()
         if catalog.family == 'relationship'
     )
 
@@ -464,10 +456,10 @@ _E005_HINT = (
 )
 
 
-def _live_along_records(config):
+def _live_along_records():
     found = []
-    for catalog in _owned_catalogs(config):
-        for record in catalog.registry.records:
+    for catalog in _built_catalogs():
+        for record in catalog.records:
             if record.along is not None:
                 found.append(record)
     return found
@@ -493,16 +485,12 @@ def check_along_renderer(app_configs, **kwargs):
     from django.db import connections
     from django.db.utils import OperationalError
 
-    from trusts.apps import implementation_configs
     from trusts.compile.factory import probe_along_capabilities
     from trusts.plan.walk import along_connection_supported
 
-    owners = implementation_configs()
-    if not owners:
+    if not _built_catalogs():
         return []
-    along_records = []
-    for config in owners:
-        along_records.extend(_live_along_records(config))
+    along_records = _live_along_records()
     if not along_records:
         return []
 

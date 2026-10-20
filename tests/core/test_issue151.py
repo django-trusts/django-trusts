@@ -19,7 +19,7 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document
-from trusts.apps import TrustsImplementationConfig, implementation_for_path
+from trusts.apps import TrustsImplementationConfig
 from trusts.conditions import (
     PermissionConditionError,
     permission_condition_code,
@@ -246,8 +246,7 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
 
 class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
     def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
-        owner = implementation_for_path(DOCUMENT_BACKEND)
-        registry = configured_catalog(owner).registry
+        registry = configured_catalog(DOCUMENT_BACKEND)._registry
         lookup = registry.condition_lookup
         self.assertIsInstance(lookup, RegistryConditionLookup)
         self.assertIs(lookup.conditions, registry.conditions)
@@ -276,7 +275,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         backend = DocumentBackend()
         document = Document(title='probe')
         user = get_user_model()(username='probe-151')
-        record, extra_q = backend._answered_catalog()._condition_overlay(
+        record, extra_q = backend.get_catalog()._condition_overlay(
             'myapp.change_document:missing', document, user,
         )
         self.assertIsNone(record)
@@ -284,14 +283,14 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
 
     def test_explicit_unbind_fail_closes_named_condition_overlay(self):
         backend = DocumentBackend()
-        registry = backend.registry
+        registry = backend.get_catalog()._registry
         previous = registry.condition_lookup
         document = Document(title='unbind')
         user = get_user_model()(username='unbind-151')
         try:
             registry.condition_lookup = None
             with self.assertRaises(AttributeError):
-                backend._answered_catalog()._condition_overlay(
+                backend.get_catalog()._condition_overlay(
                     'myapp.change_document:non_confidential',
                     document,
                     user,

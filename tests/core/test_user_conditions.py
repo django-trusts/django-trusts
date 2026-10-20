@@ -46,7 +46,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
     def test_is_active_name_does_not_bypass_expression_validation(self):
         for expr in (lambda u: u.username, lambda u: u.is_authenticated, lambda u: u.does_not_exist):
             with self.subTest(expr=expr):
-                registry = RegistryFactory()
+                registry = RegistryFactory(user_model=get_user_model())
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         registry.set_user_condition('is_active', expr)
@@ -55,7 +55,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
     def test_tuple_targets_are_rejected_without_mutation(self):
         for target in ((), ('user',), ('sponsor',), ('user', 'sponsor')):
             with self.subTest(target=target):
-                registry = RegistryFactory()
+                registry = RegistryFactory(user_model=get_user_model())
                 with self.assertNumQueries(0):
                     with self.assertRaises(TrustsConfigurationError):
                         registry.set_user_condition('staff', lambda u: u.is_staff, on=target)
@@ -90,7 +90,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
             read = _permission(Note, 'read_note_user_condition')
             Grant.objects.create(note=note, user=alice, permission=read)
             Grant.objects.create(note=note, user=inactive, permission=read)
-            registry = RegistryFactory()
+            registry = RegistryFactory(user_model=get_user_model())
             registry.set_user_condition('staff', lambda u: u.is_active & u.is_superuser)
             replaced = registry.set_user_condition('staff', lambda u: ~u.is_superuser, on='user')
             self.assertEqual(replaced.on, 'user')
@@ -116,7 +116,7 @@ class UserConditionRegistrationTest(TransactionTestCase):
             self.assertEqual(skipped.query.sql_with_params()[0], plain.query.sql_with_params()[0])
             self.assertIn('is_superuser', str(skipped.query))
             self.assertIn('is_active', str(skipped.query))
-            open_registry = RegistryFactory()
+            open_registry = RegistryFactory(user_model=get_user_model())
             open_registry.set_user_condition('is_active', None)
             open_registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             allowed = open_registry.permissions_for(inactive, note)
@@ -173,7 +173,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
 
             def register(registry):
                 registry.register(content=grant.note, user=grant.user, permission=grant.permission)
-            added = RegistryFactory()
+            added = RegistryFactory(user_model=get_user_model())
             built = added.build_registry()
             built.plan_for(Note, user=plain)
             self.assertTrue(built._rule_fragments)
@@ -183,7 +183,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             register(added)
             self.assertFalse(added.has_permission(plain, note, read))
             self.assertIn('is_staff', str(added.permissions_for(plain, note).query))
-            replaced = RegistryFactory()
+            replaced = RegistryFactory(user_model=get_user_model())
             replaced.set_user_condition('staff', lambda u: u.is_staff)
             replaced.plan_for(Note, user=staff)
             replaced.set_user_condition('staff', lambda u: u.is_superuser)
@@ -193,20 +193,20 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             replaced_sql = str(replaced.permissions_for(staff, note).query)
             self.assertIn('is_superuser', replaced_sql)
             self.assertNotIn('is_staff', replaced_sql)
-            removed = RegistryFactory()
+            removed = RegistryFactory(user_model=get_user_model())
             removed.plan_for(Note, user=inactive)
             removed.set_user_condition('is_active', None)
             self.assertFalse(removed._rule_fragments)
             register(removed)
             self.assertTrue(removed.has_permission(inactive, note, read))
             self.assertNotIn('is_active', str(removed.permissions_for(inactive, note).query))
-            override = RegistryFactory()
+            override = RegistryFactory(user_model=get_user_model())
             override.plan_for(Note, user=plain)
             override.set_user_override('superuser', lambda u: u.is_superuser)
             self.assertFalse(override._override_fragments)
             register(override)
             self.assertTrue(override.has_permission(superuser, note, read))
-            replaced_override = RegistryFactory()
+            replaced_override = RegistryFactory(user_model=get_user_model())
             replaced_override.set_user_override('staff', lambda u: u.is_staff)
             replaced_override.plan_for(Note, user=staff_only)
             replaced_override.set_user_override('superuser', lambda u: u.is_superuser)
@@ -214,7 +214,7 @@ class PreRegistrationPlanFragmentTest(TransactionTestCase):
             register(replaced_override)
             self.assertFalse(replaced_override.has_permission(staff_only, note, read))
             self.assertTrue(replaced_override.has_permission(superuser, note, read))
-            cleared = RegistryFactory()
+            cleared = RegistryFactory(user_model=get_user_model())
             cleared.set_user_override('superuser', lambda u: u.is_superuser)
             cleared.plan_for(Note, user=superuser)
             cleared.set_user_override('superuser', None)
@@ -268,7 +268,7 @@ class UserOverrideTest(TransactionTestCase):
             other = _permission(User, 'view_user_override_other')
             Grant.objects.create(note=note, user=holder, permission=read)
             Link.objects.create(note=note, delegate=delegate, sponsor=superuser)
-            registry = RegistryFactory()
+            registry = RegistryFactory(user_model=get_user_model())
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_user_override('superuser', lambda u: u.is_superuser, on='sponsor')
             with self.assertRaises(TrustsConfigurationError):
@@ -317,7 +317,7 @@ class UserOverrideTest(TransactionTestCase):
             Grant.objects.create(note=note, user=superuser, permission=read)
             self.assertTrue(holds(delegate))
             Grant.objects.filter(user=superuser).delete()
-            plain = RegistryFactory()
+            plain = RegistryFactory(user_model=get_user_model())
             plain.register(content=grant.note, user=grant.user, permission=grant.permission)
             plain.register_delegation(content=link.note, delegate=link.delegate, sponsor=link.sponsor)
             self.assertFalse(plain.has_permission(superuser, note, read))
@@ -381,7 +381,7 @@ class UserConditionTargetTest(TransactionTestCase):
             link = Ref(TargetLink)
 
             def open_registry(configure):
-                registry = RegistryFactory()
+                registry = RegistryFactory(user_model=get_user_model())
                 configure(registry)
                 registry.register(content=grant.note, user=grant.user, permission=grant.permission)
                 registry.register_delegation(content=link.note, delegate=link.delegate, sponsor=link.sponsor)
@@ -486,7 +486,7 @@ class UserRuleOrderTest(TestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-        registry = RegistryFactory()
+        registry = RegistryFactory(user_model=get_user_model())
         registry.set_user_condition('staff', lambda u: u.is_staff)
         grant = Ref(OrderGrant)
         registry.register(content=grant.note, user=grant.user, permission=grant.permission)
@@ -501,7 +501,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(tuple((rule.name for rule in registry.user_conditions())), names)
         self.assertIsNone(registry._user_override)
         self.assertEqual(len(registry.records), 1)
-        delegation_only = RegistryFactory()
+        delegation_only = RegistryFactory(user_model=get_user_model())
         link = Ref(OrderLink)
         delegation_only.register_delegation(content=link.note, delegate=link.delegate, sponsor=link.sponsor)
         with self.assertRaises(TrustsConfigurationError):
@@ -566,7 +566,7 @@ class UserRuleOrderTest(TestCase):
 
             class Meta:
                 app_label = 'trusts_tests'
-        registry = RegistryFactory()
+        registry = RegistryFactory(user_model=get_user_model())
         registry.set_user_condition('superuser', lambda u: u.is_superuser)
         fit = Ref(FitGrant)
         registry.register(content=fit.note, user=fit.user, permission=fit.permission)
@@ -577,21 +577,21 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(len(registry._by_root[FitGrant]), 1)
         self.assertEqual(registry._delegation_order, [])
         self.assertEqual(registry._delegations_by_root, {})
-        fresh = RegistryFactory()
+        fresh = RegistryFactory(user_model=get_user_model())
         fresh.set_user_condition('superuser', lambda u: u.is_superuser)
         bare = Ref(BareGrant)
         with self.assertRaises(TrustsConfigurationError):
             fresh.register(content=bare.note, user=bare.user, permission=bare.permission)
         self.assertEqual(fresh._order, [])
         self.assertEqual(fresh._by_root, {})
-        override_only = RegistryFactory()
+        override_only = RegistryFactory(user_model=get_user_model())
         override_only.set_user_override('superuser', lambda u: u.is_superuser)
         with self.assertRaises(TrustsConfigurationError):
             override_only.register(content=bare.note, user=bare.user, permission=bare.permission)
         self.assertEqual(override_only._order, [])
         self.assertEqual(override_only._by_root, {})
         self.assertEqual(override_only._user_override.name, 'superuser')
-        delegated = RegistryFactory()
+        delegated = RegistryFactory(user_model=get_user_model())
         delegated.set_user_condition('staff', lambda u: u.is_staff, on='sponsor')
         fit_link = Ref(FitLink)
         delegated.register_delegation(content=fit_link.note, delegate=fit_link.delegate, sponsor=fit_link.sponsor)
@@ -602,7 +602,7 @@ class UserRuleOrderTest(TestCase):
         self.assertEqual(list(delegated._delegations_by_root), [FitLink])
         self.assertNotIn(BareLink, delegated._delegations_by_root)
         self.assertEqual(delegated._order, [])
-        empty_delegation = RegistryFactory()
+        empty_delegation = RegistryFactory(user_model=get_user_model())
         empty_delegation.set_user_condition('staff', lambda u: u.is_staff, on='sponsor')
         with self.assertRaises(TrustsConfigurationError):
             empty_delegation.register_delegation(content=bare_link.note, delegate=bare_link.delegate, sponsor=bare_link.sponsor)
@@ -635,7 +635,7 @@ class SkipKeywordTest(TransactionTestCase):
             note = SkipNote.objects.create(title='n')
             read = _permission(SkipNote, 'read_note_skip_keyword')
             SkipGrant.objects.create(note=note, user=alice, permission=read)
-            registry = RegistryFactory()
+            registry = RegistryFactory(user_model=get_user_model())
             registry.set_user_condition('staff', lambda u: u.is_superuser)
             grant = Ref(SkipGrant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
@@ -680,7 +680,7 @@ class SkipKeywordTest(TransactionTestCase):
             note = UnknownNote.objects.create(title='n')
             read = _permission(UnknownNote, 'read_note_unknown_skip')
             UnknownGrant.objects.create(note=note, user=alice, permission=read)
-            registry = RegistryFactory()
+            registry = RegistryFactory(user_model=get_user_model())
             grant = Ref(UnknownGrant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
             for value in (True, False):
@@ -690,7 +690,7 @@ class SkipKeywordTest(TransactionTestCase):
             with self.assertRaises(TypeError) as ctx:
                 registry.permissions_for(inactive, note, skip_nope=True)
             self.assertIn('skip_nope', str(ctx.exception))
-            removed = RegistryFactory()
+            removed = RegistryFactory(user_model=get_user_model())
             removed.set_user_condition('is_active', None)
             removed.register(content=grant.note, user=grant.user, permission=grant.permission)
             with self.assertRaises(TypeError) as ctx:
@@ -734,7 +734,7 @@ class SkipKeywordTest(TransactionTestCase):
             superuser.save(update_fields=['is_superuser', 'is_staff'])
             note = OverrideNote.objects.create(title='n')
             read = _permission(OverrideNote, 'read_note_override_skip')
-            registry = RegistryFactory()
+            registry = RegistryFactory(user_model=get_user_model())
             registry.set_user_override('superuser', lambda u: u.is_superuser)
             registry.set_user_override('staff', lambda u: u.is_staff)
             grant = Ref(OverrideGrant)
@@ -758,7 +758,7 @@ class SkipKeywordTest(TransactionTestCase):
 class SkipKeywordNameTest(TestCase):
 
     def test_condition_name_must_be_an_identifier(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(user_model=get_user_model())
         with self.assertRaises(TrustsConfigurationError) as ctx:
             registry.set_user_condition('not-a-name', lambda u: u.is_active)
         self.assertIn('identifier', str(ctx.exception))
@@ -775,7 +775,7 @@ class SkipKeywordNameTest(TestCase):
         self.assertEqual(tuple((rule.name for rule in registry.user_conditions())), ('is_active', 'staff'))
 
     def test_condition_and_override_cannot_share_a_name(self):
-        registry = RegistryFactory()
+        registry = RegistryFactory(user_model=get_user_model())
         with self.assertRaises(TrustsConfigurationError) as ctx:
             registry.set_user_override('is_active', lambda u: u.is_superuser)
         self.assertIn('collides', str(ctx.exception))
@@ -794,7 +794,7 @@ class SkipKeywordNameTest(TestCase):
         with self.assertRaises(TrustsConfigurationError):
             registry.set_user_override('staff', lambda u: u.is_staff)
         self.assertEqual(registry._user_override.name, 'superuser')
-        opened = RegistryFactory()
+        opened = RegistryFactory(user_model=get_user_model())
         opened.set_user_condition('is_active', None)
         opened.set_user_override('is_active', lambda u: u.is_superuser)
         self.assertEqual(opened._user_override.name, 'is_active')
@@ -831,7 +831,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.config = apps.get_app_config('myapp')
         self.original = catalogs.get(DocumentBackend)
         self.original_sentinel = getattr(self.config, '_document_grant_registry_id', None)
-        registry = RegistryFactory(path=DOCUMENT_BACKEND)
+        registry = RegistryFactory(path=DOCUMENT_BACKEND, user_model=get_user_model())
         registry.set_user_condition('staff', lambda u: u.is_staff)
         registry.set_user_override('superuser', lambda u: u.is_superuser)
         _donate_document(registry)
@@ -904,7 +904,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
 
     def test_lockfile_records_staff_and_the_override(self):
         handle = configured_catalog(self.config, DOCUMENT_BACKEND)
-        raw = render_policy_sql_bytes(registries=[handle.registry])
+        raw = render_policy_sql_bytes(registries=[handle._registry])
         self.assertIn(b'user.is_staff=True', raw)
         self.assertIn(b'user.is_superuser=True', raw)
         self.assertIn(b'skip_is_active=False', raw)
@@ -963,7 +963,7 @@ class StaffPrefixFilterTest(TransactionTestCase):
             read = _permission(Payload, 'read_payload_staff')
             Grant.objects.create(scope=scope, user=plain, permission=read)
             Grant.objects.create(scope=scope, user=staff, permission=read)
-            registry = RegistryFactory()
+            registry = RegistryFactory(user_model=get_user_model())
             registry.set_user_condition('staff', lambda u: u.is_staff, on='user')
             grant = Ref(Grant)
             registry.register(content=grant.scope.rows.content, user=grant.user, permission=grant.permission)
@@ -986,7 +986,7 @@ def _seal_document_factory(factory):
     from trusts.compile.catalogs import Catalog
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
-    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(() if previous is None else previous.family_registries))
+    catalogs[DocumentBackend] = Catalog(cls=DocumentBackend, path=DOCUMENT_BACKEND, family=family, registry=factory.build_registry(), family_registries=built_registries(() if previous is None else previous.family_registries))
     return previous
 
 def _restore_document_catalog(previous):
@@ -1028,7 +1028,7 @@ def _install_document_registry(*, override):
     config = apps.get_app_config('myapp')
     original = catalogs.get(DocumentBackend)
     sentinel = getattr(config, '_document_grant_registry_id', None)
-    registry = RegistryFactory(path=DOCUMENT_BACKEND)
+    registry = RegistryFactory(path=DOCUMENT_BACKEND, user_model=get_user_model())
     if override:
         registry.set_user_override('superuser', lambda u: u.is_active & u.is_superuser)
     _donate_document(registry)
@@ -1042,8 +1042,8 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
     """
     permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
     held = common_permissions(built_registries((handle,)), doc, user, **flags)
-    listed = handle.registry.permissions_for(user, doc, **flags)
-    return {'has_perm': backend.has_perm(user, perm, doc, **flags), 'authorized': Document.objects.authorized(user, change, **flags).filter(pk=doc.pk).exists(), 'permitted': permitted.permitted(change, user, **flags).filter(pk=doc.pk).exists(), 'common': change.pk in set(held.values_list('pk', flat=True)), 'reverse': user.pk in set(doc.get_permitted_users(change, **flags).values_list('pk', flat=True)), 'enumerated': perm in backend.get_all_permissions(user, doc, **flags), 'permissions_for': change.pk in set(listed.values_list('pk', flat=True)), 'has_permission': handle.registry.has_permission(user, doc, change, **flags)}
+    listed = handle._registry.permissions_for(user, doc, **flags)
+    return {'has_perm': backend.has_perm(user, perm, doc, **flags), 'authorized': Document.objects.authorized(user, change, **flags).filter(pk=doc.pk).exists(), 'permitted': permitted.permitted(change, user, **flags).filter(pk=doc.pk).exists(), 'common': change.pk in set(held.values_list('pk', flat=True)), 'reverse': user.pk in set(doc.get_permitted_users(change, **flags).values_list('pk', flat=True)), 'enumerated': perm in backend.get_all_permissions(user, doc, **flags), 'permissions_for': change.pk in set(listed.values_list('pk', flat=True)), 'has_permission': handle._registry.has_permission(user, doc, change, **flags)}
 
 class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
     """Active and inactive superusers, with and without the override."""
@@ -1071,7 +1071,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         handle = configured_catalog(config, DOCUMENT_BACKEND)
         self.assertIsNone(registry._user_override)
-        raw = render_policy_sql_bytes(registries=[handle.registry])
+        raw = render_policy_sql_bytes(registries=[handle._registry])
         document = _load_policy_sql_document(raw)
         for content in document['backends'][0]['contents']:
             for row in content.values():
@@ -1095,7 +1095,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         handle = configured_catalog(config, DOCUMENT_BACKEND)
         self.assertEqual(registry._user_override.name, 'superuser')
-        raw = render_policy_sql_bytes(registries=[handle.registry])
+        raw = render_policy_sql_bytes(registries=[handle._registry])
         self.assertIn(b'user.is_superuser=True', raw)
         where = str(self.doc.get_permitted_users(self.change).query)
         self.assertIn('is_superuser', where.split('WHERE', 1)[-1])
@@ -1233,7 +1233,7 @@ class SuperuserPrefixFilterTest(TransactionTestCase):
             PrefixGrant.objects.create(scope=scope, user=peer, permission=read)
 
             def allows(user, *, override, **flags):
-                registry = RegistryFactory()
+                registry = RegistryFactory(user_model=get_user_model())
                 if override:
                     registry.set_user_override('superuser', lambda u: u.is_active & u.is_superuser)
                 grant = Ref(PrefixGrant)
@@ -1295,7 +1295,7 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             editor.create_model(PlainNote)
             editor.create_model(PlainNoteGrant)
         try:
-            registry = RegistryFactory(path=DOCUMENT_BACKEND)
+            registry = RegistryFactory(path=DOCUMENT_BACKEND, user_model=get_user_model())
             registry.register_public(trust=PlainNoteGrant, user='user', permission='permission', content='note')
             _seal_document_factory(registry)
             permission = _permission(PlainNote, 'change_plainnote')
@@ -1364,7 +1364,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
         note_model = type('TextActiveNote', (models.Model,), {'__module__': __name__, 'title': models.CharField(max_length=40), 'Meta': meta()})
         grant_model = type('TextActiveGrant', (models.Model,), {'__module__': __name__, 'user': models.ForeignKey(user_model, on_delete=models.CASCADE), 'note': models.ForeignKey(note_model, on_delete=models.CASCADE), 'permission': models.ForeignKey(Permission, on_delete=models.CASCADE), 'Meta': meta()})
         self.assertEqual(builtin_user_conditions(user_model), ())
-        registry = RegistryFactory()
+        registry = RegistryFactory(user_model=get_user_model())
         grant = Ref(grant_model)
         with self.assertNumQueries(0):
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
@@ -1372,16 +1372,17 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
 
     def test_explicit_is_active_requires_a_boolean_field(self):
         """Only the implicit default is optional when the field is absent."""
-        from unittest.mock import patch
         user_model, note_model, grant_model, link_model = self._create('Replaced')
         try:
-            registry = RegistryFactory()
-            with patch('trusts.plan.standards.get_user_model', return_value=user_model):
-                with self.assertNumQueries(0):
-                    with self.assertRaises(TrustsConfigurationError):
-                        registry.set_user_condition('is_active', lambda u: u.is_active)
-            self.assertIsNone(registry._user_conditions)
-            self.assertEqual(len(registry.records), 0)
+            rejected = RegistryFactory(user_model=user_model)
+            with self.assertNumQueries(0):
+                with self.assertRaises(TrustsConfigurationError):
+                    rejected.set_user_condition(
+                        'is_active', lambda u: u.is_active,
+                    )
+            self.assertIsNone(rejected._user_conditions)
+            self.assertEqual(len(rejected.records), 0)
+            registry = RegistryFactory(user_model=get_user_model())
             registry.set_user_condition('is_active', lambda u: u.is_active)
             grant, link = (Ref(grant_model), Ref(link_model))
             with self.assertNumQueries(0):
@@ -1412,7 +1413,7 @@ class UserModelWithoutIsActiveColumnTest(TransactionTestCase):
             grant_model.objects.create(user=holder, note=note, permission=permission)
             grant_model.objects.create(user=sponsor, note=note, permission=permission)
             link_model.objects.create(note=note, delegate=delegate, sponsor=sponsor)
-            registry = RegistryFactory()
+            registry = RegistryFactory(user_model=get_user_model())
             self.assertIsNone(registry._user_conditions)
             grant = Ref(grant_model)
             link = Ref(link_model)

@@ -28,8 +28,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertIsInstance(self.contributor, DocumentConfig)
         self._document_cls = DocumentBackend
         self.saved_catalog = catalogs.get(DocumentBackend)
-        self.live_registry = configured_catalog(self.contributor).registry
-        self.saved_sentinel = self.contributor._document_grant_registry_id
+        self.live_registry = configured_catalog(DOCUMENT_BACKEND)._registry
 
     def tearDown(self):
         from trusts.apps import catalogs
@@ -38,7 +37,6 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
             catalogs.pop(self._document_cls, None)
         else:
             catalogs[self._document_cls] = self.saved_catalog
-        self.contributor._document_grant_registry_id = self.saved_sentinel
 
     def test_reenter_same_contributor_ready_is_noop(self):
         before = self.live_registry.records
@@ -46,27 +44,22 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertEqual(self.live_registry.records, before)
 
     def test_ready_does_not_replace_registry(self):
-        first = configured_catalog(self.contributor).registry
+        first = configured_catalog(DOCUMENT_BACKEND)._registry
         self.contributor.ready()
-        self.assertIs(configured_catalog(self.contributor).registry, first)
+        self.assertIs(configured_catalog(DOCUMENT_BACKEND)._registry, first)
 
-    def test_new_registry_receives_declaration_again(self):
+    def test_frozen_recorder_is_not_rewritten(self):
         from tests.myapp.backends import DocumentBackend
 
         isolated = RegistryFactory()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
         recorder = DocumentBackend().get_registry()
-        self.contributor._document_grant_registry_id = None
-        with override_apps_ready(False, self.contributor.apps):
-            self.contributor.ready()
-        self.assertIs(self.contributor._document_grant_registry_id, recorder)
+        self.contributor.ready()
         self.assertTrue(recorder.frozen)
         self.assertEqual(isolated.records, ())
         self.assertTrue(self.live_registry.plan_for(Document).records)
 
-    def test_conflicting_contribution_fails_closed_without_sentinel(self):
-        from tests.myapp.backends import DocumentBackend
-
+    def test_conflicting_contribution_does_not_reach_the_frozen_recorder(self):
         isolated = RegistryFactory()
         j = Ref(DocumentGrant)
         isolated.register(
@@ -75,12 +68,8 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
             permission=j.user,
         )
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
-        recorder = DocumentBackend().get_registry()
         before = self.live_registry.records
-        self.contributor._document_grant_registry_id = None
-        with override_apps_ready(False, self.contributor.apps):
-            self.contributor.ready()
-        self.assertIs(self.contributor._document_grant_registry_id, recorder)
+        self.contributor.ready()
         self.assertEqual(len(isolated.records), 1)
         self.assertEqual(self.live_registry.records, before)
 
@@ -99,7 +88,7 @@ class IsolatedAppsDoesNotDonateDocumentContributionTest(
         from tests.apps import TestsConfig
         import tests as tests_module
 
-        live = configured_catalog(apps.get_app_config('myapp')).registry
+        live = configured_catalog(DOCUMENT_BACKEND)._registry
         before = live.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps

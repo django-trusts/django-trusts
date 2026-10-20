@@ -17,7 +17,7 @@ from tests.backends import HostTrustModelBackend, MalformedCompilerBackend, Mixi
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import implementation_for_path
+
 from trusts.plan.aggregates import compiler_for_class
 from trusts.apps import catalogs
 from trusts.backends import TrustModelBackendMixin
@@ -57,61 +57,49 @@ def _evaluate(handle, queryset, user, permission):
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_one_path_registry_alias_is_exact_store(self):
-        live = live_config()
-        catalog = configured_catalog(live)
+        catalog = configured_catalog(HOST)
         self.assertEqual(catalog.path, HOST)
         self.assertIs(catalog, catalogs[HostTrustModelBackend])
-        self.assertIs(catalog.registry.compiler, HostTrustModelBackend.query_compiler)
-        self.assertIsInstance(catalog.registry.compiler, PlanQueryCompiler)
+        self.assertIs(catalog.compiler, HostTrustModelBackend.query_compiler)
+        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_dedupe(self):
-        live = live_config()
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
-            paths = live._configured_trusts_paths()
-            self.assertEqual(paths, (HOST,))
-            self.assertIs(catalogs[HostTrustModelBackend], configured_catalog(live))
-            self.assertEqual(configured_catalog(live).path, HOST)
+        from tests.apps import empty_catalogs, sweep_listed_backends
+        with empty_catalogs():
+            with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    sweep_listed_backends()
+        self.assertIn('multiple paths', str(ctx.exception))
+        self.assertEqual(configured_catalog(HOST).path, HOST)
 
     def test_same_class_alias_is_ambiguity_error(self):
-        live = live_config()
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, ALIASED)):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                live._configured_trusts_paths()
-            self.assertIn('multiple paths', str(ctx.exception))
-            with self.assertRaises(TrustsConfigurationError):
-                configured_catalog(live)
-            with self.assertRaises(TrustsConfigurationError):
-                live.path_for_class(HostTrustModelBackend)
+        from tests.apps import empty_catalogs, sweep_listed_backends
+        with empty_catalogs():
+            with override_settings(AUTHENTICATION_BACKENDS=(HOST, ALIASED)):
+                with self.assertRaises(TrustsConfigurationError) as ctx:
+                    sweep_listed_backends()
+        self.assertIn('multiple paths', str(ctx.exception))
+        self.assertIsNone(MixinOnlyBackend().get_catalog())
 
     def test_unconfigured_path_fails_loud(self):
-        live = live_config()
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            configured_catalog(live, MIXIN)
+            configured_catalog(MIXIN)
         self.assertIn(MIXIN, str(ctx.exception))
-        with self.assertRaises(TrustsConfigurationError):
-            live.path_for_class(MixinOnlyBackend)
-        with self.assertRaises(TrustsConfigurationError):
-            live.path_for_backend(MixinOnlyBackend())
+        self.assertIsNone(MixinOnlyBackend().get_catalog())
 
     def test_zero_and_multiple_alias_access_fail(self):
-        live = live_config()
-        with override_settings(AUTHENTICATION_BACKENDS=('django.contrib.auth.backends.ModelBackend',)):
-            self.assertEqual(live._configured_trusts_paths(), ())
-            with self.assertRaises(TrustsConfigurationError):
-                configured_catalog(live)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, DOCUMENT)):
-            self.assertEqual(configured_catalog(live).path, HOST)
-            handle_doc = configured_catalog(live, DOCUMENT)
-            self.assertEqual(handle_doc.path, DOCUMENT)
-            from tests.myapp.backends import DocumentBackend
-            self.assertIs(handle_doc, catalogs[DocumentBackend])
+        self.assertEqual(configured_catalog(HOST).path, HOST)
+        handle_doc = configured_catalog(DOCUMENT)
+        self.assertEqual(handle_doc.path, DOCUMENT)
+        from tests.myapp.backends import DocumentBackend
+        self.assertIs(handle_doc, catalogs[DocumentBackend])
 
     def test_ready_does_not_replace_store_or_registry(self):
         live = live_config()
         first = catalogs[HostTrustModelBackend]
         live.ready()
         self.assertIs(catalogs[HostTrustModelBackend], first)
-        self.assertIs(catalogs[HostTrustModelBackend].registry, first.registry)
+        self.assertIs(catalogs[HostTrustModelBackend]._registry, first._registry)
 
     def test_compiler_is_class_owned_not_instance_state(self):
         first = HostTrustModelBackend()
@@ -127,37 +115,29 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 class IsolatedAppsPathStoreTest(SimpleTestCase):
 
     def test_isolate_apps_without_owner_does_not_donate(self):
-        before = catalogs[HostTrustModelBackend].registry.records
+        before = catalogs[HostTrustModelBackend].records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
-        self.assertEqual(catalogs[HostTrustModelBackend].registry.records, before)
+        self.assertEqual(catalogs[HostTrustModelBackend].records, before)
 
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_explicit_path_contribution_writes_one_registry(self):
-        host = live_config()
-        document = implementation_for_path(DOCUMENT)
-        self.assertTrue(configured_catalog(document).registry.plan_for(Document).records)
-        self.assertFalse(configured_catalog(host).registry.plan_for(Document).records)
+        self.assertTrue(configured_catalog(DOCUMENT).plan_for(Document).records)
+        self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
 
     def test_omitted_ambiguous_path_fails_before_writing(self):
-        from tests.core.test_issue108 import HostImplConfig, _bind
-
-        class DualImpl(HostImplConfig):
-            label = 'trusts_impl_dual'
-            trusts_backend_paths = (HOST, MIXIN)
-        dual = _bind(DualImpl, ready=False)
-        with override_settings(AUTHENTICATION_BACKENDS=(HOST, MIXIN)):
-            with self.assertRaises(TrustsConfigurationError):
-                configured_catalog(dual)
+        with self.assertRaises(TrustsConfigurationError):
+            configured_catalog(MIXIN)
 
     def test_no_mixin_fan_out(self):
         live = live_config()
         with self.assertRaises(TrustsConfigurationError):
-            configured_catalog(live, MIXIN)
+            configured_catalog(MIXIN)
         self.assertFalse(hasattr(live, 'registries'))
+        self.assertFalse(hasattr(live, 'trusts_backend_paths'))
 
 class _LiveRegistryRestoreMixin(object):
 
@@ -225,8 +205,8 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.doc_a = Document.objects.create(title='a')
         self.doc_b = Document.objects.create(title='b')
         DocumentGrant.objects.create(document=self.doc_a, user=self.alice, permission=self.change)
-        self.host = configured_catalog(live_config()).registry
-        self.document = configured_catalog(implementation_for_path(DOCUMENT)).registry
+        self.host = configured_catalog(HOST)._registry
+        self.document = configured_catalog(DOCUMENT)._registry
 
     def test_grant_only_through_document_path(self):
         self.assertFalse(self.host.build_registry().plan_for(Document).records)
@@ -280,10 +260,9 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
         handle = [registry, setattr(registry, 'path', RAISING)][0]
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((configured_catalog(live).registry, handle)), Document, User(), Permission(), kind='complete')
+            granted(built_registries((configured_catalog(HOST)._registry, handle)), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):
-        live = live_config()
-        self.assertFalse(configured_catalog(live).registry.plan_for(Document).records)
-        self.assertTrue(configured_catalog(implementation_for_path(DOCUMENT)).registry.plan_for(Document).records)
+        self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
+        self.assertTrue(configured_catalog(DOCUMENT).plan_for(Document).records)

@@ -22,6 +22,7 @@ INSTALLED_APPS = (
     'tests.myapp.apps.DocumentConfig',
     'tests.gh_permissions.apps.GhPermissionsConfig',
     'tests.apps.TestsConfig',
+    'trusts.apps.TrustsImplementationConfig',
 )
 
 # Test-app migrations depend on trusts.0001_initial (Zero-owned after C2).

@@ -11,7 +11,7 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.test import TestCase, override_settings
-from tests.apps import configured_catalog, live_config, built_registries
+from tests.apps import listed_relationship, configured_catalog, live_config, built_registries
 from tests.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
 from tests.gh_permissions.models import Repository
@@ -19,7 +19,7 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import implementation_for_path, relationship_registries
+
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import RegistryFactory
 from trusts.query import AuthorizedQuerySet
@@ -47,8 +47,9 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         self.document = Document.objects.create(title='registered')
         DocumentGrant.objects.create(document=self.document, user=self.alice, permission=self.change)
         self.report = Repository.objects.create(name='unregistered')
-        self.host_handle = configured_catalog(live_config())
-        self.document_handle = configured_catalog(implementation_for_path(DOCUMENT_BACKEND))
+        from tests.kernel_host.apps import HOST_BACKEND
+        self.host_handle = configured_catalog(HOST_BACKEND)
+        self.document_handle = configured_catalog(DOCUMENT_BACKEND)
         self.host_backend = HostTrustModelBackend()
         self.document_backend = DocumentBackend()
 
@@ -71,7 +72,8 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
     def test_unregistered_content_is_rejected_before_sql(self):
         self.assertTrue(self.alice.has_perm(PERM, self.document))
         self.assertIn(PERM, self.alice.get_all_permissions(self.document))
-        handles = relationship_registries()
+        from trusts.backends import configured_catalogs
+        handles = configured_catalogs()
         self.assertGreaterEqual(len(handles), 2)
         extra = _extra_handle()
         with self.assertNumQueries(0):
@@ -82,7 +84,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
             cls = type(self.document_backend)
             saved = catalogs.get(cls)
             factory = extra
-            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, factory=factory, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
+            catalogs[cls] = Catalog(cls=cls, path=extra.path, family=cls.family if saved is None else saved.family, registry=factory.build_registry(), family_registries=built_registries(() if saved is None else saved.family_registries))
             try:
                 with bound_handle(self.document_backend, extra):
                     self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))
@@ -92,7 +94,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
                 else:
                     catalogs[cls] = saved
             for bundled in ((self.host_handle, self.document_handle, extra), (extra, self.host_handle, self.document_handle)):
-                with patch('trusts.apps.relationship_registries', side_effect=lambda: built_registries(bundled)):
+                with listed_relationship(built_registries(bundled)):
                     qs = Repository.objects.authorized(self.alice, self.change)
                     self.assertIsInstance(qs, AuthorizedQuerySet)
                     self.assertIsNone(qs._result_cache)

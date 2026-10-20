@@ -1,36 +1,43 @@
 """Generic Trusts backend mixin.
 
-Registration is a per-class ``Recorder``. ``ready()`` compiles every
-configured class, then stores ``catalogs[cls]`` with that class's
-family registries fixed. Peers are fixed at that first sweep. A class
-compiled after the sweep is not a supported production path, and
-earlier peer tuples are not rewritten. Registration closes when the
-catalog is built.
+Registration is a per-class ``Recorder``. Inquiry reads the catalog
+``TrustsImplementationConfig.ready`` stored for this class. A class with no catalog
+denies: ``has_perm`` is false and permission or user queries are empty.
+This module does not build a registry or a catalog.
 """
 
-from django.contrib.auth import get_backends
-from django.contrib.auth.models import Permission
+from collections.abc import Callable
+from typing import TypeVar
+
+from django.conf import settings
+from django.contrib.auth import get_backends, get_user_model
 from django.db.models import Model, QuerySet
 
-from trusts.apps import (
-    catalogs,
-    implementation_configs,
-    implementation_for_class,
-    listed_backend_class,
-    recorders,
+from trusts.apps import catalogs, recorders, user_model
+from trusts.compile.rows import (
+    build_delegation,
+    build_public_registration,
+    build_relation,
+    validate_delegation,
+    validate_named_filter,
+    validate_principal,
 )
-from trusts.compile.catalogs import Catalog
-from trusts.compile.factory import RegistryFactory
 from trusts.errors import TrustsConfigurationError
-from trusts.inspect.commands import install_policy_commands
-import trusts.inspect.checks  # noqa: F401
-from trusts.plan.relations import PlanQueryCompiler, bind_checked_user
+from trusts.plan.relations import PlanQueryCompiler
+from trusts.plan.standards import (
+    UserCondition,
+    builtin_user_conditions,
+    concrete_rule,
+    normalize_on,
+    normalize_override_on,
+    validate_user_rule_name,
+)
 
-install_policy_commands()
+T = TypeVar('T', bound=Model)
 
 
 class TrustModelBackendMixin(object):
-    """Object-permission backend. One recorder and one built registry per class."""
+    """Object-permission backend. One recorder per class; one catalog after ready."""
 
     query_compiler = PlanQueryCompiler()
     family = 'relationship'
@@ -39,106 +46,75 @@ class TrustModelBackendMixin(object):
         cls = type(self)
         if cls not in recorders:
             recorders[cls] = Recorder()
-        self.recorder = recorders[cls]
 
     def get_registry(self):
-        """The application registry: this class's recorder, still open until ``ready``."""
-        cls = type(self)
-        if cls not in recorders:
-            recorders[cls] = Recorder()
-            self.recorder = recorders[cls]
-        return recorders[cls]
+        """Open recorder for registration. Not the built catalog."""
+        return recorders[type(self)]
 
-    def ready(self):
-        """Build this class's catalog when it is not stored yet."""
-        _materialize_configured_catalogs(self)
-        return catalogs[type(self)]
-
-    def _answered_catalog(self):
-        """Catalog stored for this class. ``ready()`` only if it is missing."""
-        cls = type(self)
-        if cls not in catalogs:
-            return self.ready()
-        return catalogs[cls]
-
-    def _answered_registry(self):
-        return self._answered_catalog().registry
-
-    @property
-    def registry(self):
-        """Built registry stored on this class's catalog."""
-        return self._answered_registry()
-
-    def get_group_permissions(self, user_obj, obj=None, **skip_flags):
-        return self._listed_permissions(
-            user_obj, obj, skip_flags, kind='group',
-        )
-
-    def get_all_permissions(self, user_obj, obj=None, **skip_flags):
-        return self._listed_permissions(
-            user_obj, obj, skip_flags, kind='complete', cache=True,
-        )
+    def get_catalog(self):
+        """Catalog stored at ready, or ``None`` when this class was not built."""
+        return catalogs.get(type(self))
 
     def has_perm(self, user_obj, permext, obj=None, **skip_flags):
-        """Object check. The catalog prepares the answer; this executes it."""
-        inquiry = self._skip_inquiry(user_obj, skip_flags)
-        if obj is None or inquiry.denied:
+        """Object check. No catalog, or no object, denies."""
+        catalog = self.get_catalog()
+        if catalog is None or obj is None:
             return False
         if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return False
-        catalog = self._answered_catalog()
-        entry = catalog.prepare_has_perm(
-            user_obj, permext, obj, skipped=inquiry.values,
+        return catalog.has_perm(user_obj, permext, obj, **skip_flags)
+
+    def get_all_permissions(self, user_obj, obj=None, **skip_flags):
+        return self._permission_codes(
+            user_obj, obj, skip_flags, kind='complete',
         )
-        return entry.execute()
+
+    def get_group_permissions(self, user_obj, obj=None, **skip_flags):
+        return self._permission_codes(
+            user_obj, obj, skip_flags, kind='group',
+        )
+
+    def get_permitted_users(self, content, perm, **skip_flags):
+        """Users permitted on ``content``. No catalog yields no users."""
+        catalog = self.get_catalog()
+        if catalog is None:
+            return _no_users()
+        return catalog.permitted_users(content, perm, **skip_flags)
+
+    def with_perm(self, perm, is_active=True, include_superusers=True, obj=None):
+        """Users holding ``perm`` on ``obj``. No catalog or no object yields no users."""
+        del is_active, include_superusers
+        catalog = self.get_catalog()
+        if catalog is None or obj is None:
+            return _no_users()
+        return catalog.permitted_users(obj, perm)
 
     def singular_permission_accepted(self, perm):
         """``auth.Permission`` only, unless a backend overrides this."""
+        from django.contrib.auth.models import Permission
+
         return isinstance(perm, Permission)
 
     def permitted_users_predicate(self, content, perm, *, skipped=()):
         """``Q`` over candidate users, or ``None`` when this path does not apply."""
-        catalog = self._answered_catalog()
-        return catalog.registry.permitted_users_predicate(
-            content, perm,
-            family_registries=catalog.family_registries,
-            skipped=skipped,
-            condition_lookup=catalog.registry.condition_lookup,
+        catalog = self.get_catalog()
+        if catalog is None:
+            return None
+        return catalog.permitted_users_predicate(
+            content, perm, skipped=skipped,
             accepts_permission=self.singular_permission_accepted,
+            owner_name=type(self).__name__,
         )
 
-    def _trusts_config(self):
-        """Implementation owner for this class, if one is installed."""
-        return implementation_for_class(type(self), required=True)
-
-    def _skip_inquiry(self, user_obj, skip_flags):
-        return bind_checked_user(
-            user_obj, skip_flags=skip_flags,
-            registry=self._answered_registry(),
-        )
-
-    def _listed_permissions(self, user_obj, obj, skip_flags, *, kind, cache=False):
-        inquiry = self._skip_inquiry(user_obj, skip_flags)
-        if obj is None or inquiry.denied:
+    def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
+        catalog = self.get_catalog()
+        if catalog is None or obj is None:
             return set()
-        if cache:
-            self._ensure_perm_cache(user_obj)
-        if isinstance(obj, QuerySet) or isinstance(obj, Model):
-            return self._path_permissions(
-                user_obj, obj, kind=kind, skipped=inquiry.values,
-            )
-        return set()
-
-    def _path_permissions(self, user_obj, obj, *, kind, skipped):
-        catalog = self._answered_catalog()
-        qs = catalog.registry.permissions_for(
-            user_obj, obj, kind=kind,
-            family_registries=catalog.family_registries,
-            skipped=dict(skipped) if isinstance(skipped, dict) else {},
-        )
-        if qs is None or qs == ():
+        if not isinstance(obj, QuerySet) and not isinstance(obj, Model):
             return set()
-        return _perm_codes(qs)
+        if kind == 'group':
+            return catalog.get_group_permissions(user_obj, obj, **skip_flags)
+        return catalog.get_all_permissions(user_obj, obj, **skip_flags)
 
     def _ensure_perm_cache(self, user_obj):
         """Documented ``_trust_perm_cache`` attribute; not an auth source."""
@@ -148,36 +124,55 @@ class TrustModelBackendMixin(object):
 
 
 class Recorder(object):
-    """Registrations for one backend class. Does not answer questions."""
+    """One ordered log of rows for a backend class, plus the frozen flag.
+
+    ``register`` validates the new row against the rows already recorded
+    and appends it. It does not build a registry. The ready-time sweep
+    is the only build.
+    """
 
     def __init__(self):
-        self.principals = {}
-        self.delegates = {}
-        self.named_filters = []
-        self.user_conditions = []
-        self.user_overrides = []
         self._rows = []
-        self._factory = RegistryFactory()
         self.frozen = False
 
-    def register(self, *, trust, content, user=None, permission=None,
-                 group=None, delegate=None, sponsor=None, condition=None,
-                 along=None):
+    @property
+    def rows(self):
+        """Recorded rows, in registration order."""
+        return self._rows
+
+    def register(
+        self, *,
+        trust: type[T],
+        user: str | Callable[[T], object] | None = None,
+        permission: str | Callable[[T], object] | None = None,
+        content: str | Callable[[T], object],
+        group: str | Callable[[T], object] | None = None,
+        delegate: str | Callable[[T], object] | None = None,
+        sponsor: str | Callable[[T], object] | None = None,
+        condition: (
+            Callable[[T], object] | Callable[[T, object], object] | None
+        ) = None,
+        along=None,
+    ):
         self._open()
-        shape = self._factory.build_public_registration(
+        shape = build_public_registration(
             trust=trust, user=user, permission=permission, content=content,
             group=group, delegate=delegate, sponsor=sponsor,
             condition=condition, along=along,
         )
+        conditions, override = self._recorded_rules()
         if shape.delegate is not None:
             payload = {
                 'content': shape.content, 'delegate': shape.delegate,
                 'sponsor': shape.sponsor, 'condition': shape.condition,
                 'along': shape.along,
             }
-            record = self._factory.register_delegation(**payload)
-            self.delegates.setdefault(record.content_model, []).append(payload)
-            self._rows.append(('delegate', record.content_model, payload))
+            record = build_delegation(**payload)
+            record = validate_delegation(
+                record, self._kind('delegate'),
+                conditions=conditions, override=override,
+            )
+            self._rows.append(('delegate', record, payload))
             return record
         payload = {
             'content': shape.content, 'user': shape.user,
@@ -187,45 +182,88 @@ class Recorder(object):
             payload['group'] = shape.group
         else:
             payload['permission'] = shape.permission
-        record = self._factory.register(**payload)
-        self.principals.setdefault(record.content_model, []).append(payload)
-        self._rows.append(('principal', record.content_model, payload))
+        record = build_relation(**payload)
+        record = validate_principal(
+            record, self._kind('principal'),
+            conditions=conditions, override=override,
+        )
+        self._rows.append(('principal', record, payload))
         return record
 
     def add_named_filter(self, model, code, predicate):
+        """Validate the builder once and record it for the compile replay."""
         self._open()
         once = _Once(predicate)
-        record = self._factory.register_permission_condition(model, code, once)
-        self.named_filters.append((model, code, once))
+        record = validate_named_filter(model, code, once)
+        self._rows.append(('filter', model, code, once))
         return record
 
     def set_user_condition(self, name, expr, on='*'):
         self._open()
-        result = self._factory.set_user_condition(name, expr, on=on)
-        self.user_conditions.append((name, expr, on))
-        return result
+        self._rules_before_rows()
+        model = get_user_model()
+        validate_user_rule_name(name, kind='condition')
+        target = normalize_on(on)
+        conditions, override = self._folded(model)
+        if (
+            expr is not None and override is not None
+            and override.name == name
+        ):
+            raise TrustsConfigurationError(
+                'User condition name %r collides with the user override.'
+                % (name,)
+            )
+        if conditions is None:
+            conditions = {
+                rule.name: rule
+                for rule in builtin_user_conditions(model)
+            }
+        if expr is None:
+            if name not in conditions:
+                raise TrustsConfigurationError(
+                    'User condition %r is not registered.' % (name,)
+                )
+            self._rows.append(('condition', name, None, on))
+            return None
+        rule = UserCondition(
+            name, concrete_rule(expr, name, model), target,
+        )
+        self._rows.append(('condition', name, expr, on))
+        return rule
 
     def set_user_override(self, name, expr, on='user'):
         self._open()
-        result = self._factory.set_user_override(name, expr, on=on)
-        self.user_overrides.append((name, expr, on))
-        return result
+        self._rules_before_rows()
+        model = get_user_model()
+        validate_user_rule_name(name, kind='override')
+        normalize_override_on(on)
+        conditions, override = self._folded(model)
+        if conditions is None:
+            names = tuple(
+                rule.name for rule in builtin_user_conditions(model)
+            )
+        else:
+            names = tuple(conditions)
+        if expr is not None and name in names:
+            raise TrustsConfigurationError(
+                'User override name %r collides with a user condition.'
+                % (name,)
+            )
+        if expr is None:
+            if override is None or override.name != name:
+                raise TrustsConfigurationError(
+                    'User override %r is not the current override.' % (name,)
+                )
+            self._rows.append(('override', name, None, on))
+            return None
+        rule = UserCondition(
+            name, concrete_rule(expr, name, model), 'user',
+        )
+        self._rows.append(('override', name, expr, on))
+        return rule
 
     def freeze(self):
         self.frozen = True
-
-    def play(self, visitor):
-        for name, expr, on in self.user_conditions:
-            visitor.set_user_condition(name, expr, on=on)
-        for name, expr, on in self.user_overrides:
-            visitor.set_user_override(name, expr, on=on)
-        for model, code, predicate in self.named_filters:
-            visitor.add_named_filter(model, code, predicate)
-        for kind, _model, payload in self._rows:
-            if kind == 'principal':
-                visitor.register_principal(**payload)
-            else:
-                visitor.register_delegate(**payload)
 
     def _open(self):
         if self.frozen:
@@ -233,9 +271,61 @@ class Recorder(object):
                 'register refused: this recorder is frozen.'
             )
 
+    def _rules_before_rows(self):
+        if self._kind('principal') or self._kind('delegate'):
+            raise TrustsConfigurationError(
+                'Set user conditions and the user override before '
+                'register() or register_delegation().'
+            )
+
+    def _kind(self, kind):
+        return tuple(entry[1] for entry in self._rows if entry[0] == kind)
+
+    def _recorded_rules(self, model=None):
+        """Rule tuple passed to validation. ``None`` means the built-in rule."""
+        conditions, override = self._folded(model)
+        if conditions is None:
+            return None, override
+        return tuple(conditions.values()), override
+
+    def _folded(self, model=None):
+        """Current condition map and override, folded from the log."""
+        conditions = None
+        override = None
+        for entry in self._rows:
+            if entry[0] == 'condition':
+                name, expr, on = entry[1], entry[2], entry[3]
+                if conditions is None:
+                    if model is None:
+                        model = get_user_model()
+                    conditions = {
+                        rule.name: rule
+                        for rule in builtin_user_conditions(model)
+                    }
+                if expr is None:
+                    conditions.pop(name, None)
+                else:
+                    if model is None:
+                        model = get_user_model()
+                    conditions[name] = UserCondition(
+                        name, concrete_rule(expr, name, model),
+                        normalize_on(on),
+                    )
+            elif entry[0] == 'override':
+                name, expr = entry[1], entry[2]
+                if expr is None:
+                    override = None
+                else:
+                    if model is None:
+                        model = get_user_model()
+                    override = UserCondition(
+                        name, concrete_rule(expr, name, model), 'user',
+                    )
+        return conditions, override
+
 
 class _Once(object):
-    """Invoke ``fn`` once. ``add_named_filter`` and ``play`` both call it."""
+    """Invoke ``fn`` once. Registration and the sweep both call it."""
 
     def __init__(self, fn):
         self.fn = fn
@@ -249,84 +339,35 @@ class _Once(object):
         return self.cached
 
 
-def seal_configured_backends(apps_registry=None):
-    """Compile every owned backend class. Safe to call more than once."""
-    classes = set()
-    loaded = list(get_backends())
-    for config in implementation_configs(apps_registry):
-        for path in config.owned_backend_paths():
-            cls = listed_backend_class(path)
-            if isinstance(cls, type):
-                classes.add(cls)
-    for backend in loaded:
-        if type(backend) in classes and isinstance(backend, TrustModelBackendMixin):
-            backend.ready()
+def configured_catalogs():
+    """Catalogs of listed mixin backends, in ``get_backends()`` order.
 
-
-def _perm_codes(permission_qs):
-    return set(
-        '%s.%s' % (app, code)
-        for app, code in permission_qs.values_list(
-            'content_type__app_label', 'codename',
-        )
-    )
-
-
-def _canonical_path(cls):
-    return '%s.%s' % (cls.__module__, cls.__qualname__)
-
-
-def _sponsorship_family(cls):
-    """Family of the implementation owner, or the class attribute when none."""
-    config = implementation_for_class(cls, required=False)
-    if config is None:
-        return cls.family
-    return config._authorization_family
-
-
-def _materialize_configured_catalogs(extra):
-    """Compile every missing class, then fix each catalog's family registries."""
-    backends = list(get_backends())
-    if extra is not None:
-        backends.append(extra)
-    chosen = []
+    An empty ``AUTHENTICATION_BACKENDS`` is no catalogs. Django's
+    ``get_backends()`` raises in that case; this inquiry does not.
+    A class that was not built contributes nothing. Callers treat a
+    missing catalog as no grants.
+    """
+    if not tuple(settings.AUTHENTICATION_BACKENDS):
+        return ()
+    found = []
     seen = set()
-    for backend in backends:
+    for backend in get_backends():
         if not isinstance(backend, TrustModelBackendMixin):
             continue
         cls = type(backend)
         if cls in seen:
             continue
         seen.add(cls)
-        chosen.append(backend)
-    pending = []
-    for backend in chosen:
-        cls = type(backend)
-        if cls in catalogs:
+        catalog = backend.get_catalog()
+        if catalog is None:
             continue
-        recorder = recorders.get(cls)
-        if recorder is None:
-            recorder = Recorder()
-            recorders[cls] = recorder
-        backend.recorder = recorder
-        path = _canonical_path(cls)
-        family = _sponsorship_family(cls)
-        factory, registry = Catalog.compile(
-            path=path, family=family,
-            compiler=backend.query_compiler, recorder=recorder,
-        )
-        pending.append((cls, path, family, factory, registry))
-    pool = [(catalog.family, catalog.registry) for catalog in catalogs.values()]
-    pool.extend(
-        (family, registry)
-        for _cls, _path, family, _factory, registry in pending
-    )
-    for cls, path, family, factory, registry in pending:
-        peers = tuple(
-            other for other_family, other in pool
-            if other_family == family and other is not registry
-        )
-        catalogs[cls] = Catalog(
-            cls=cls, path=path, family=family,
-            factory=factory, registry=registry, family_registries=peers,
-        )
+        found.append(catalog)
+    return tuple(found)
+
+
+def _no_users():
+    """Empty user queryset after ready, or an empty tuple before it."""
+    model = user_model()
+    if model is None:
+        return ()
+    return model._default_manager.none()

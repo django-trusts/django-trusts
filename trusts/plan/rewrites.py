@@ -27,6 +27,7 @@ from django.db.models.query_utils import Q
 from django.db.models.sql.query import Query
 from django.db.models.sql.where import ExtraWhere, NothingNode, WhereNode
 
+from trusts.apps import user_model
 from trusts.errors import TrustsConfigurationError
 
 
@@ -819,9 +820,16 @@ def _model_is_content(model):
 
 
 def _user_concrete():
-    from django.contrib.auth import get_user_model
+    """Concrete user model stored by ``TrustsImplementationConfig.ready``.
 
-    return get_user_model()._meta.concrete_model
+    Classification runs while SQL is compiled, after ready. A missing
+    model means ready has not stored one; user and content labels would
+    not match a ready process.
+    """
+    model = user_model()
+    if model is None:
+        return None
+    return model._meta.concrete_model
 
 
 def _permission_concrete():

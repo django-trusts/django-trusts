@@ -21,7 +21,7 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
-from trusts.apps import implementation_for_path
+
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import RegistryFactory
 PERM = 'myapp.change_document'
@@ -131,15 +131,50 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         one = self._granted_qs(self.open_one)
         two = self._granted_qs(self.open_two)
         both = self._granted_qs(self.open_one, self.open_two)
-        owner = implementation_for_path(DOCUMENT_BACKEND)
-        saved = owner.trusts_backend_paths
-        alt = _AltGrantBackend()
-        alt.get_registry().register(trust=DocumentAltGrant, user='user', permission='permission', content='document')
-        alt.ready()
+        from trusts.apps import catalogs, recorders, user_model
+        from trusts.compile.catalogs import Catalog
+        from trusts.compile.factory import compile_recorder
+
+        alt_path = 'tests.core.test_issue181._AltGrantBackend'
+        recorder = _AltGrantBackend().get_registry()
+        if not recorder.frozen:
+            recorder.register(
+                trust=DocumentAltGrant, user='user',
+                permission='permission', content='document',
+            )
+        built = compile_recorder(
+            recorder,
+            path=alt_path,
+            family=_AltGrantBackend.family,
+            compiler=_AltGrantBackend.query_compiler,
+            user_model=user_model(),
+        )
+        saved_document = catalogs[DocumentBackend]
+        saved_host = catalogs[HostTrustModelBackend]
+        catalogs[_AltGrantBackend] = Catalog(
+            cls=_AltGrantBackend,
+            path=alt_path,
+            family=_AltGrantBackend.family,
+            registry=built,
+            family_registries=(saved_document._registry, saved_host._registry),
+        )
+        catalogs[DocumentBackend] = Catalog(
+            cls=DocumentBackend,
+            path=saved_document.path,
+            family=saved_document.family,
+            registry=saved_document._registry,
+            family_registries=(saved_host._registry, built),
+        )
+        catalogs[HostTrustModelBackend] = Catalog(
+            cls=HostTrustModelBackend,
+            path=saved_host.path,
+            family=saved_host.family,
+            registry=saved_host._registry,
+            family_registries=(saved_document._registry, built),
+        )
         mixin = _AltGrantBackend()
         try:
-            owner.trusts_backend_paths = (DOCUMENT_BACKEND, MIXIN)
-            with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, DOCUMENT_BACKEND, 'tests.core.test_issue181._AltGrantBackend')):
+            with override_settings(AUTHENTICATION_BACKENDS=(HOST_BACKEND, DOCUMENT_BACKEND, alt_path)):
                 with self.assertNumQueries(1):
                     self.assertTrue(self.document_backend.has_perm(self.alice, PERM, one))
                 with self.assertNumQueries(1):
@@ -166,8 +201,8 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
                 self.assertTrue(self.alice.has_perm(PERM, one))
                 self.assertTrue(self.alice.has_perm(PERM, two))
         finally:
-            owner.trusts_backend_paths = saved
-            from trusts.apps import catalogs, recorders
+            catalogs[DocumentBackend] = saved_document
+            catalogs[HostTrustModelBackend] = saved_host
             catalogs.pop(_AltGrantBackend, None)
             recorders.pop(_AltGrantBackend, None)
 

@@ -13,7 +13,6 @@ __all__ = []
 import copy
 from collections import namedtuple
 
-from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import BooleanField, Q
 from django.db.models.expressions import RawSQL
@@ -176,10 +175,10 @@ def assert_concrete_booleans(model, expr, name):
         )
 
 
-def concrete_rule(expr, name):
-    """Walk ``expr`` and require concrete booleans on the user model."""
+def concrete_rule(expr, name, user_model):
+    """Walk ``expr`` and require concrete booleans on ``user_model``."""
     walked = walk_user_lambda(expr)
-    assert_concrete_booleans(get_user_model(), walked, name)
+    assert_concrete_booleans(user_model, walked, name)
     return walked
 
 

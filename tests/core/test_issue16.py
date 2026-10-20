@@ -392,17 +392,11 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         registry = RegistryFactory()
         _store_expr(registry, Note, 'typo', u == o.nope)
 
-        class _Config(object):
-
-            def _configured_trusts_paths(self):
-                return ('tests.backends.HostTrustModelBackend',)
-
         with override_catalog(
             HostTrustModelBackend, registry,
             'tests.backends.HostTrustModelBackend',
         ):
-            with patch('trusts.apps.implementation_configs', return_value=(_Config(),)):
-                messages = check_permission_conditions(None)
+            messages = check_permission_conditions(None)
         errors = [m for m in messages if m.id == CHECK_ID_INVALID_EXPR]
         self.assertTrue(any(("'typo'" in m.msg for m in errors)))
 
@@ -417,27 +411,18 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         owner_a.register_permission_condition(Note, 'own', lambda u, p, o: u == o.owner)
         _store_expr(owner_b, Note, 'own', u == o.nope)
 
-        class _Config(object):
-
-            def __init__(self, path):
-                self._path = path
-
-            def _configured_trusts_paths(self):
-                return (self._path,)
-
-        configs = (
-            _Config('tests.backends.HostTrustModelBackend'),
-            _Config('tests.backends.MixinOnlyBackend'),
-        )
-        with override_catalog(
-            HostTrustModelBackend, owner_a,
+        with override_settings(AUTHENTICATION_BACKENDS=(
             'tests.backends.HostTrustModelBackend',
-        ):
+            'tests.backends.MixinOnlyBackend',
+        )):
             with override_catalog(
-                MixinOnlyBackend, owner_b,
-                'tests.backends.MixinOnlyBackend',
+                HostTrustModelBackend, owner_a,
+                'tests.backends.HostTrustModelBackend',
             ):
-                with patch('trusts.apps.implementation_configs', return_value=configs):
+                with override_catalog(
+                    MixinOnlyBackend, owner_b,
+                    'tests.backends.MixinOnlyBackend',
+                ):
                     live = list(iter_live_permission_conditions())
                     messages = check_permission_conditions(None)
         own_rows = [record for model, code, record in live if model is Note and code == 'own']
