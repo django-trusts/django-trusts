@@ -218,7 +218,7 @@ def plan_table(records, delegations, catalog_user, user_conditions,
         for content in order
         for user in (None, *users[content])
         for perm in (None, *perms[content])}
-    table[None] = relation_plan(records, delegations, None, catalog_user, None, catalog_user, user_conditions, user_rules, override_q)
+    table[None] = relation_plan(records, delegations, None, None, None, catalog_user, user_conditions, user_rules, override_q)
     return table
 
 
