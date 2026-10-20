@@ -1,9 +1,10 @@
-"""Pass 1: ``build_*`` methods return testable shapes without storing.
+"""``build_*`` and ``build()`` return testable shapes.
 
 ``RegistryFactory.build_relation``, ``build_delegation``, and
 ``build_public_registration`` are the pure shape-building halves of
 ``register``, ``register_delegation``, and ``_register_public``. The
 register methods own duplicate/rule checks and append the shapes.
+``build()`` freezes those stored rows into one ``CatalogShape``.
 """
 
 import dataclasses
@@ -15,6 +16,7 @@ from django.db import models
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
+from trusts.compile.catalogs import CatalogShape
 from trusts.compile.factory import (
     PublicRegistration,
     RegisteredDelegation,
@@ -23,6 +25,7 @@ from trusts.compile.factory import (
 )
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.plan.conditions import ConditionRegistry, FrozenConditionLookup
 from tests.support import built_catalog
 
 
@@ -280,6 +283,48 @@ class BuildPublicRegistrationTest(SimpleTestCase):
                 permission='permission',
             )
         self.assertEqual(registry.records, ())
+
+
+@isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
+class BuildCatalogShapeTest(SimpleTestCase):
+    def test_build_freezes_rows_and_fragments(self):
+        Document, DocumentGrant = _document_models()
+        registry = RegistryFactory()
+        root = Ref(DocumentGrant)
+        record = registry.register(
+            content=root.document, user=root.user,
+            permission=root.permission,
+        )
+        condition = registry.register_permission_condition(
+            Document, 'owned', lambda u, p, o: o.title == 'keep',
+        )
+
+        shape = registry.build()
+
+        self.assertIsInstance(shape, CatalogShape)
+        self.assertTrue(dataclasses.is_dataclass(shape))
+        self.assertTrue(registry.frozen)
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            shape.records = ()
+        self.assertIs(shape.records[0], record)
+        self.assertEqual(shape.records, registry.records)
+        self.assertEqual(shape.delegations, ())
+        self.assertIsInstance(shape.conditions, tuple)
+        self.assertNotIsInstance(shape.conditions, ConditionRegistry)
+        self.assertIsNot(shape.conditions, registry.conditions)
+        self.assertEqual(shape.conditions, ((Document, 'owned', condition),))
+        self.assertIs(shape.conditions[0][2], condition)
+        registry.conditions._records.clear()
+        self.assertEqual(shape.conditions, ((Document, 'owned', condition),))
+        self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
+        self.assertIsNot(shape.filter_lookup, registry.filter_lookup)
+        self.assertIs(
+            shape.filter_lookup.record_for(Document, 'owned'), condition,
+        )
+        self.assertEqual(len(shape.user_rules), 2)
+        self.assertTrue(all(isinstance(part, models.Q) for part in shape.user_rules))
+        self.assertNotEqual(str(shape.user_rules[0]), str(shape.user_rules[1]))
+        self.assertIsNone(shape.override_q)
 
 
 def _document_models():
