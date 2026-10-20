@@ -26,7 +26,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
-from trusts.plan.aggregates import all_match, common_permissions, instance_match
+from trusts.plan.aggregates import _compile_common_permissions, all_match, instance_match
 from trusts.query import AuthorizedManager
 from tests.support import listed_relationship, built_registries
 
@@ -260,7 +260,8 @@ class LongPathRegistrationTest(TestCase):
         Placement = models_[-1]
         via_ref = RegistryFactory()
         via_handle = RegistryFactory()
-        handle = [via_handle, setattr(via_handle, 'path', 'tests.core.longpath')][0]
+        via_handle.path = 'tests.core.longpath'
+        handle = via_handle
         with self.assertNumQueries(0):
             ref_direct = _direct_ceiling(via_ref, Placement)
             ref_cluster = _cluster_ceiling(via_ref, Placement)
@@ -367,7 +368,8 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        return ([self.registry, setattr(self.registry, 'path', 'issue18')][0],)
+        self.registry.path = 'issue18'
+        return (self.registry,)
 
     def _agree(self, principal, token, obj, expected):
         with self.assertNumQueries(1):
@@ -538,7 +540,8 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handle(self, registry):
-        return [registry, setattr(registry, 'path', 'issue18-group')][0]
+        registry.path = 'issue18-group'
+        return registry
 
     def test_membership_user_hop_is_not_a_group_slice(self):
         handle = self._handle(self.membership)
@@ -547,11 +550,11 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.assertFalse(plan.records[0].via_group)
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.member, self.read))
-            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.member, self.read, kind='group'))
-            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.stranger, self.read, kind='group'))
-            self.assertEqual(list(common_permissions(built_registries((handle,)), self.folder, self.member, kind='group')), [])
+            self.assertIsNone(all_match(handle.build_registry(), self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(handle.build_registry(), self.folder, self.stranger, self.read, kind='group'))
+            self.assertEqual(list(_compile_common_permissions(handle.build_registry(), self.folder, self.member, kind='group')), [])
         with self.assertNumQueries(1):
-            self.assertIs(all_match(built_registries((handle,))[0], self.folder, self.member, self.read), True)
+            self.assertIs(all_match(handle.build_registry(), self.folder, self.member, self.read), True)
 
     def test_fk_user_hop_is_not_group_slice(self):
         handle = self._handle(self.trustee)
@@ -559,23 +562,23 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.assertEqual(plan.records[0].user_path, ('owner',))
         with self.assertNumQueries(0):
             self.assertIsNone(self.compiler.group_exists(plan, self.folder, self.owner, self.read))
-            self.assertIsNone(granted(built_registries((handle,))[0], self.folder, self.owner, self.read, kind='group'))
+            self.assertIsNone(granted(handle.build_registry(), self.folder, self.owner, self.read, kind='group'))
         self.assertTrue(self.trustee.build_registry().has_permission(self.owner, self.folder, self.read))
         with self.assertNumQueries(0):
-            self.assertEqual(list(common_permissions(built_registries((handle,)), self.folder, self.owner, kind='group')), [])
+            self.assertEqual(list(_compile_common_permissions(handle.build_registry(), self.folder, self.owner, kind='group')), [])
 
     def test_mixed_plan_group_slice_omits_permission_records(self):
         handle = self._handle(self.mixed)
         with self.assertNumQueries(0):
-            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.member, self.read, kind='group'))
-            self.assertIsNone(all_match(built_registries((handle,))[0], self.folder, self.owner, self.read, kind='group'))
-            self.assertIsNone(instance_match(built_registries((handle,))[0], self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(handle.build_registry(), self.folder, self.member, self.read, kind='group'))
+            self.assertIsNone(all_match(handle.build_registry(), self.folder, self.owner, self.read, kind='group'))
+            self.assertIsNone(instance_match(handle.build_registry(), self.folder, self.member, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertIs(all_match(built_registries((handle,))[0], self.folder, self.owner, self.read), True)
+            self.assertIs(all_match(handle.build_registry(), self.folder, self.owner, self.read), True)
         with self.assertNumQueries(1):
-            self.assertIs(all_match(built_registries((handle,))[0], self.folder, self.member, self.read), True)
+            self.assertIs(all_match(handle.build_registry(), self.folder, self.member, self.read), True)
         with self.assertNumQueries(1):
-            self.assertIs(instance_match(built_registries((handle,))[0], self.other, self.member, self.read), False)
+            self.assertIs(instance_match(handle.build_registry(), self.other, self.member, self.read), False)
 
     def test_empty_records_have_no_group_slice(self):
         plan = RelationPlan(records=self.membership.records, permission_model=self.Token)
@@ -604,7 +607,8 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.registry = RegistryFactory()
         g = Ref(self.NodeGrant)
         self.registry.register(content=g.node.children, user=g.holder, permission=g.token)
-        self.handle = [self.registry, setattr(self.registry, 'path', 'issue18-prefix')][0]
+        self.registry.path = 'issue18-prefix'
+        self.handle = self.registry
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
@@ -625,7 +629,8 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         registry = RegistryFactory()
         g = Ref(self.NodeGrant)
         registry.register(content=g.node, user=g.holder, permission=g.token)
-        handle = [registry, setattr(registry, 'path', 'issue18-terminal')][0]
+        registry.path = 'issue18-terminal'
+        handle = registry
         qs = filter_by_permitted_content(self.Node.objects.all(), self.holder, self.add, content=self.Node, registries=built_registries((handle,)))
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())

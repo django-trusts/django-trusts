@@ -337,7 +337,8 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        return ([self.registry, setattr(self.registry, 'path', 'issue98')][0],)
+        self.registry.path = 'issue98'
+        return (self.registry,)
 
     def _object_list_agree(self, principal, operation, obj, expected):
         with self.assertNumQueries(1):

@@ -27,7 +27,7 @@ from trusts.plan.contents import _compile_granted
 from trusts.plan.registry import Question
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.rewrites import bind_once
-from tests.support import built_registries, built_catalog
+from tests.support import built_catalog
 
 
 def _permission(model, codename):
@@ -123,7 +123,8 @@ class RegistryQuestionsTest(TransactionTestCase):
         return registry
 
     def _production_handle(self, registry):
-        return [registry, setattr(registry, 'path', 'tests.core.registry-questions')][0]
+        registry.path = 'tests.core.registry-questions'
+        return registry
 
     def test_q1_to_q4_ordinary_sql_matches_production(self):
         registry = self._registry()
@@ -133,9 +134,9 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertFalse(built_catalog(built).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a))
         self.assertFalse(built_catalog(built).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         handle = self._production_handle(registry)
-        self.assertEqual(built_catalog(built).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(built_registries((handle,))[0], self.doc_a, self.alice, self.read))
+        self.assertEqual(built_catalog(built).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(handle.build_registry(), self.doc_a, self.alice, self.read))
         built_qs = built.build_registry().filter_authorized(self.Document.objects.all(), self.alice, self.read)
-        granted_q = _compile_granted(built_registries((handle,))[0], self.Document.objects.all(), self.alice, self.read)
+        granted_q = _compile_granted(handle.build_registry(), self.Document.objects.all(), self.alice, self.read)
         production_qs = bind_once(self.Document.objects.filter(granted_q).distinct())
         self.assertEqual(str(built_qs.query), str(production_qs.query))
         self.assertEqual(_pks(built_qs), {self.doc_a.pk})
@@ -160,11 +161,11 @@ class RegistryQuestionsTest(TransactionTestCase):
         built = registry.build_registry()
         handle = self._production_handle(registry)
         self.assertTrue(built_catalog(built).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
-        self.assertEqual(built_catalog(built).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(built_registries((handle,))[0], self.doc_a, self.bob, self.read))
+        self.assertEqual(built_catalog(built).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(handle.build_registry(), self.doc_a, self.bob, self.read))
         self.assertFalse(built_catalog(built).has_perm(self.outsider, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertEqual(_pks(built.build_registry().filter_authorized(self.Document.objects.all(), self.bob, self.read)), {self.doc_a.pk})
         self.assertEqual(_pks(built_catalog(built).permissions_for(self.bob, self.doc_a)), {self.read.pk})
-        production_permissions = _compile_common_permissions(built_registries((handle,))[0], self.doc_a, self.bob, kind='complete')
+        production_permissions = _compile_common_permissions(handle.build_registry(), self.doc_a, self.bob, kind='complete')
         self.assertEqual(str(built_catalog(built).permissions_for(self.bob, self.doc_a).query), str(production_permissions.query))
         self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk, self.bob.pk})
         self.assertTrue(built_catalog(registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))

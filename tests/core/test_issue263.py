@@ -83,7 +83,8 @@ def _code(permission):
 def _handle(registry=None, path='tests.core.issue263'):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _collection_models():
 

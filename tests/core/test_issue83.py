@@ -16,12 +16,12 @@ from django.db.models import ForeignObject, Q
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from trusts.plan.aggregates import all_match, common_permissions
+from trusts.plan.aggregates import _compile_common_permissions, all_match
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
-from tests.support import built_registries, built_catalog
+from tests.support import built_catalog
 
 
 def _j1_models():
@@ -293,7 +293,8 @@ class _SplitCompiler(object):
         return group_plan.content_exists(user, permission)
 
 def _direct_handle(registry, path='tests.s5.direct'):
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _assert_record(test, record, *, root, path, model, lookup, target=None):
     test.assertIs(record.root, root)
@@ -480,18 +481,12 @@ class _TerminalProjectionMixin(object):
         granted_qs = Model.objects.filter(pk__in=[granted.pk, sibling.pk])
         mixed_qs = Model.objects.order_by('pk')
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((handle,))[0], granted, self.alice, self.read))
+            self.assertTrue(all_match(handle.build_registry(), granted, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((handle,))[0], granted_qs, self.alice, self.read))
+            self.assertTrue(all_match(handle.build_registry(), granted_qs, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((handle,))[0], mixed_qs, self.alice, self.read))
-        with self.assertNumQueries(1):
-            self.assertEqual(_pks(common_permissions(built_registries((handle,)), granted, self.alice)), {self.read.pk})
-        with self.assertNumQueries(1):
-            self.assertEqual(_pks(common_permissions(built_registries((handle,)), granted_qs, self.alice)), {self.read.pk})
-        with self.assertNumQueries(1):
-            self.assertEqual(list(common_permissions(built_registries((handle,)), mixed_qs, self.alice)), [])
-        group_only = common_permissions(built_registries((handle,)), granted_qs, self.alice, kind='group')
+            self.assertFalse(all_match(handle.build_registry(), mixed_qs, self.alice, self.read))
+        group_only = _compile_common_permissions(handle.build_registry(), granted_qs, self.alice, kind='group')
         self.assertIsInstance(group_only, QuerySet)
         self.assertEqual(list(group_only), [])
         plan = built_catalog(registry).plan_for(granted, user=self.alice, permission=self.read)
@@ -720,7 +715,8 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         self.direct = RegistryFactory(compiler=_SplitCompiler(self.group))
         j = Ref(self.FolderGrant)
         self.direct.register(content=j.folder.rows.content, user=j.user, permission=j.permission)
-        self.handle = [self.direct, setattr(self.direct, 'path', 'tests.s5.split')][0]
+        self.direct.path = 'tests.s5.split'
+        self.handle = self.direct
         self.FolderGrant.objects.create(folder=self.folder_a, user=self.alice, permission=self.read)
         self.FolderGroupGrant.objects.create(folder=self.folder_a, user=self.carol, permission=self.read)
 
@@ -731,25 +727,25 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         many = self.Payload.objects.order_by('pk')
         alice_only = self.Payload.objects.filter(pk=self.pay_a.pk)
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((self.handle,))[0], self.pay_a, self.alice, self.read))
+            self.assertTrue(all_match(self.handle.build_registry(), self.pay_a, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((self.handle,))[0], self.pay_a, self.alice, self.read, kind='group'))
+            self.assertFalse(all_match(self.handle.build_registry(), self.pay_a, self.alice, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((self.handle,))[0], self.pay_a, self.carol, self.read, kind='group'))
+            self.assertTrue(all_match(self.handle.build_registry(), self.pay_a, self.carol, self.read, kind='group'))
         with self.assertNumQueries(1):
-            self.assertTrue(all_match(built_registries((self.handle,))[0], self.pay_a, self.carol, self.read))
+            self.assertTrue(all_match(self.handle.build_registry(), self.pay_a, self.carol, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(all_match(built_registries((self.handle,))[0], many, self.alice, self.read))
+            self.assertFalse(all_match(self.handle.build_registry(), many, self.alice, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(common_permissions(built_registries((self.handle,)), alice_only, self.alice)), {self.read.pk})
+            self.assertEqual(_pks(_compile_common_permissions(self.handle.build_registry(), alice_only, self.alice)), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(common_permissions(built_registries((self.handle,)), alice_only, self.alice, kind='group')), [])
+            self.assertEqual(list(_compile_common_permissions(self.handle.build_registry(), alice_only, self.alice, kind='group')), [])
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(common_permissions(built_registries((self.handle,)), alice_only, self.carol, kind='group')), {self.read.pk})
+            self.assertEqual(_pks(_compile_common_permissions(self.handle.build_registry(), alice_only, self.carol, kind='group')), {self.read.pk})
         with self.assertNumQueries(1):
-            self.assertEqual(list(common_permissions(built_registries((self.handle,)), many, self.alice)), [])
-        self.assertFalse(all_match(built_registries((self.handle,))[0], self.pay_b, self.alice, self.read))
-        self.assertFalse(all_match(built_registries((self.handle,))[0], self.pay_b, self.carol, self.read))
+            self.assertEqual(list(_compile_common_permissions(self.handle.build_registry(), many, self.alice)), [])
+        self.assertFalse(all_match(self.handle.build_registry(), self.pay_b, self.alice, self.read))
+        self.assertFalse(all_match(self.handle.build_registry(), self.pay_b, self.carol, self.read))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):

@@ -406,7 +406,8 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
             registry.register(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
         self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, operation))
         self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, operation))
-        handle = [registry, setattr(registry, 'path', 'tests.core.issue267-operation')][0]
+        registry.path = 'tests.core.issue267-operation'
+        handle = registry
         document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
@@ -426,7 +427,8 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, repo_permit))
         self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, repo_permit))
         self.assertTrue(registry.build_registry().has_permission(self.owner, self.repo, org_permit))
-        handle = [registry, setattr(registry, 'path', 'tests.core.issue267-typed')][0]
+        registry.path = 'tests.core.issue267-typed'
+        handle = registry
         document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])

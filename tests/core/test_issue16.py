@@ -166,14 +166,16 @@ class ConditionRegistryShapeTest(SimpleTestCase):
     def test_handle_add_named_filter_after_build_still_registers(self):
         Note, _Memo = _note_models()
         registry = RegistryFactory()
-        handle = [registry, setattr(registry, 'path', 'tests.backends.HostTrustModelBackend')][0]
+        registry.path = 'tests.backends.HostTrustModelBackend'
+        handle = registry
         log = _BuilderLog()
         record = handle.register_permission_condition(Note, 'own', log)
         self.assertIs(registry.get_permission_condition_record(Note, 'own'), record)
         self.assertEqual(len(log.calls), 1)
         registry.build_registry()
         late_factory = RegistryFactory()
-        late_handle = [late_factory, setattr(late_factory, 'path', handle.path)][0]
+        late_factory.path = handle.path
+        late_handle = late_factory
         late = _BuilderLog()
         late_record = late_handle.register_permission_condition(Note, 'late', late)
         self.assertEqual(len(late.calls), 1)

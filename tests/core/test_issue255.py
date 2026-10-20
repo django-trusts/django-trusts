@@ -33,7 +33,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_registries, built_catalog
+from tests.support import render_configured_policy, built_catalog
 from trusts.compile.catalogs import Catalog
 
 HOST = 'tests.backends.HostTrustModelBackend'
@@ -209,7 +209,8 @@ def _document_registry():
             catalogs.pop(DocumentBackend, None)
 
 def _handle(registry):
-    return [registry, setattr(registry, 'path', DOCUMENT_BACKEND)][0]
+    registry.path = DOCUMENT_BACKEND
+    return registry
 
 class Issue255SuiteRegistrationTest(SimpleTestCase):
 
@@ -246,7 +247,7 @@ class Issue255PolicySqlTest(SimpleTestCase):
         handle.register_public(trust=FolderGrant, user='user', permission='permission', content='folder', along=('folder__parent', 2))
         handle.register_public(trust=FolderPermit, user='user', permission='permission', content='directory', along=('directory__parent', 2))
         folder = Folder(pk=1)
-        queryset = lock_permitted_users_queryset(built_registries((handle,))[0], folder, Permission(pk=1))
+        queryset = lock_permitted_users_queryset(handle.build_registry(), folder, Permission(pk=1))
         self.assertIn('WITH RECURSIVE', str(queryset.query))
         document = _load_policy_sql_document(render_configured_policy(handle))
         content = document['backends'][0]['contents'][0]
@@ -851,7 +852,7 @@ class Issue255RegisteredRootsTest(KernelHostRequiredMixin, TransactionTestCase):
                     found = _pks(folder.get_permitted_users(permission))
                 expected = {user.pk for user in candidates if _object_backend_allows(user, permission.user_perm_str, folder)}
                 self.assertEqual(found, expected)
-                locked = _pks(lock_permitted_users_queryset(built_registries((self.handle,))[0], folder, permission))
+                locked = _pks(lock_permitted_users_queryset(self.handle.build_registry(), folder, permission))
                 self.assertEqual(locked, found)
         self.assertIn(self.alice.pk, _pks(at_bound.get_permitted_users(permission)))
         self.assertNotIn(self.alice.pk, _pks(beyond.get_permitted_users(permission)))
@@ -914,7 +915,7 @@ def _reverse_agrees(test, handle, content, perm, candidates):
     expected = {user.pk for user in candidates if _object_backend_allows(user, code, content)}
     test.assertEqual(found, expected)
     test.assertEqual(_pks(_user_manager().permitted(content, perm)), found)
-    test.assertEqual(_pks(lock_permitted_users_queryset(built_registries((handle,))[0], content, perm)), found)
+    test.assertEqual(_pks(lock_permitted_users_queryset(handle.build_registry(), content, perm)), found)
     return found
 
 def _assert_along_lock(test, handle, specs, *, group=False):

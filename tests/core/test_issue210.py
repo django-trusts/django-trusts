@@ -33,7 +33,8 @@ from tests.support import built_catalog
 def _handle(registry=None, path='tests.core.issue210'):
     if registry is None:
         registry = RegistryFactory()
-    return [registry, setattr(registry, 'path', path)][0]
+    registry.path = path
+    return registry
 
 def _team_condition(t):
     return t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization)
