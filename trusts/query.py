@@ -146,9 +146,6 @@ class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
     """Concrete queryset for ``permitted(permission, user, conditions=())``."""
 
 
-PermittedManager = Manager.from_queryset(PermittedQuerySet)
-
-
 class PermittedUsersMixin:
     """Content-instance adapter for the reverse permission inquiry.
 
@@ -179,6 +176,8 @@ class PermittedUsersManagerMixin:
         )
 
 
+PermittedManager = Manager.from_queryset(PermittedQuerySet)
+AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)
 
 
 def _normalize_permitted_permission(permission, *, api):
@@ -223,8 +222,3 @@ def _condition_permission_label(model, normalized):
     if normalized[0] == 'string':
         return normalized[3]
     return '%s.%s' % (model._meta.app_label, normalized[2])
-
-
-
-
-AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)

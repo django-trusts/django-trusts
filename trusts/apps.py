@@ -8,20 +8,6 @@ from django.db.models import options as model_options
 import trusts.plan.standards as standards
 
 
-def _ensure_permission_conditions_option():
-    """Register ``Meta.permission_conditions`` once, before host models load."""
-    names = model_options.DEFAULT_NAMES
-    if 'permission_conditions' in names:
-        return
-    if isinstance(names, tuple):
-        model_options.DEFAULT_NAMES = names + ('permission_conditions',)
-    else:
-        names.append('permission_conditions')
-
-
-_ensure_permission_conditions_option()
-
-
 class TrustsImplementationConfig(django.apps.AppConfig):
     """One sweep after other apps have registered on their recorders.
 
@@ -49,3 +35,17 @@ class TrustsImplementationConfig(django.apps.AppConfig):
             tuple(settings.AUTHENTICATION_BACKENDS),
             model,
         )
+
+
+def _ensure_permission_conditions_option():
+    """Register ``Meta.permission_conditions`` once, before host models load."""
+    names = model_options.DEFAULT_NAMES
+    if 'permission_conditions' in names:
+        return
+    if isinstance(names, tuple):
+        model_options.DEFAULT_NAMES = names + ('permission_conditions',)
+    else:
+        names.append('permission_conditions')
+
+
+_ensure_permission_conditions_option()

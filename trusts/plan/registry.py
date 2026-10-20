@@ -173,14 +173,6 @@ class Registry(object):
         """Return ``self``: a built registry is already query-time data."""
         return self
 
-    @property
-    def _user_override(self):
-        return self.user_override
-
-    def _stored_user_conditions(self):
-        """``None`` when this registry still uses the built-in rule."""
-        return self.user_conditions
-
     def compile_registered_condition_q(self, model, perm, user):
         """Compile a registered ``:condition`` to ``Q`` from this registry."""
         return self.conditions.compile_registered_condition_q(model, perm, user)
@@ -202,17 +194,6 @@ class Registry(object):
         if callable(applies):
             return bool(applies(plan))
         return bool(plan.records)
-
-    def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
-        if skip_flags:
-            inquiry = bind_checked_user(
-                subject, skip_flags=skip_flags, registry=self,
-                require_user=require_user,
-            )
-            return inquiry.denied, inquiry.values
-        if isinstance(skipped, dict):
-            return False, skipped
-        return False, {}
 
     # -- the four canonical questions -----------------------------------
     # Production semantics live in plan.contents / plan.aggregates /
@@ -389,6 +370,48 @@ class Registry(object):
     # tuple in the same order; a visitor may return ``None`` for a
     # question it omits (for example an empty prefix statement).
 
+    def walk_questions(self, visitor):
+        """Walk every possible question, per content group, in order.
+
+        See the section comment above for the visitor protocol.
+        Conditional questions are included only when they can arise:
+        ``get_group_permissions`` only for a group with a ``group=``
+        (``via_group``) record, and ``filter_by_permitted_content``
+        only for a group whose content path has a proper prefix.
+        """
+        visit = getattr(visitor, 'visit', None)
+        if not callable(visit):
+            raise TypeError(
+                'walk_questions visitor must supply a callable '
+                'visit(question), not %r.' % (visitor,)
+            )
+        results = []
+        for model, records, delegations in self._content_groups():
+            for descriptor in self._descriptors_for(
+                model, records, delegations,
+            ):
+                results.append(visit(descriptor))
+        return tuple(results)
+
+    @property
+    def _user_override(self):
+        return self.user_override
+
+    def _stored_user_conditions(self):
+        """``None`` when this registry still uses the built-in rule."""
+        return self.user_conditions
+
+    def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
+        if skip_flags:
+            inquiry = bind_checked_user(
+                subject, skip_flags=skip_flags, registry=self,
+                require_user=require_user,
+            )
+            return inquiry.denied, inquiry.values
+        if isinstance(skipped, dict):
+            return False, skipped
+        return False, {}
+
     def _content_groups(self):
         """``(content_model, records, delegations)`` in document order."""
         order = []
@@ -482,29 +505,6 @@ class Registry(object):
                 ),
             ))
         return tuple(descriptors)
-
-    def walk_questions(self, visitor):
-        """Walk every possible question, per content group, in order.
-
-        See the section comment above for the visitor protocol.
-        Conditional questions are included only when they can arise:
-        ``get_group_permissions`` only for a group with a ``group=``
-        (``via_group``) record, and ``filter_by_permitted_content``
-        only for a group whose content path has a proper prefix.
-        """
-        visit = getattr(visitor, 'visit', None)
-        if not callable(visit):
-            raise TypeError(
-                'walk_questions visitor must supply a callable '
-                'visit(question), not %r.' % (visitor,)
-            )
-        results = []
-        for model, records, delegations in self._content_groups():
-            for descriptor in self._descriptors_for(
-                model, records, delegations,
-            ):
-                results.append(visit(descriptor))
-        return tuple(results)
 
     def _records_for(self, content_model, user_model, permission_model):
         chosen = []
