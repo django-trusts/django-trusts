@@ -17,6 +17,7 @@ diagnostics live in ``django-trusts-ordered-fold`` as
 
 __all__ = []
 
+from django.apps import apps as django_apps
 from django.core import checks as django_checks
 
 # Importing the lockfile module registers the trusts.E009 model check.
@@ -24,6 +25,7 @@ import trusts.inspect.snapshot  # noqa: F401
 from django.contrib.auth import get_backends
 
 from trusts.backends import TrustModelBackendMixin
+from trusts.decorators import _declared_authorization_guards
 from trusts.errors import PermissionConditionError
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
@@ -379,11 +381,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    from django.apps import apps as django_apps
-    from trusts._permitted import _authorization_preflight_state
-    from trusts.decorators import _declared_authorization_guards
-
-    registries = _authorization_check_registries()
+    catalogs = _authorization_check_registries()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -396,9 +394,16 @@ def check_authorization_required_conditions(app_configs, **kwargs):
         if key in seen:
             continue
         seen.add(key)
-        participating, complete = _authorization_preflight_state(
-            registries, model, conditions,
-        )
+        participating = False
+        complete = False
+        for catalog in catalogs:
+            has_plan, owns = catalog.authorization_preflight(model, conditions)
+            if not has_plan:
+                continue
+            participating = True
+            if owns:
+                complete = True
+                break
         if participating and complete:
             continue
         if not participating:

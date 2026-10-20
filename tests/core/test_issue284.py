@@ -20,7 +20,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from trusts.decorators import filter_by_permitted_content
+from tests.apps import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -95,7 +95,7 @@ class InactiveInquiryLiveTest(KernelHostRequiredMixin, TestCase):
         with self.assertNumQueries(0):
             self.assertEqual(_pks(permitted.permitted(self.change, anonymous, skip_is_active=True)), set())
             self.assertFalse(self.backend.has_perm(anonymous, PERM, self.open_doc, skip_is_active=True))
-            with patch('trusts.query.granted') as compiled:
+            with patch('trusts.compile.catalogs.granted') as compiled:
                 denied = Document.objects.authorized(anonymous, self.change)
                 audited = Document.objects.authorized(anonymous, self.change, skip_is_active=True)
                 self.assertEqual(_pks(denied), set())
@@ -330,11 +330,11 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             for holder in (visible, anonymous, guest):
                 LocalUserGrant.objects.create(note=note, holder=holder, action=read)
                 FolderGrant.objects.create(folder=folder, holder=holder, permission=read)
-            with patch('trusts.query.granted', return_value=Q(pk=note.pk)) as compiled:
+            with patch('trusts.compile.catalogs.granted', return_value=Q(pk=note.pk)) as compiled:
                 kept = AuthorizedQuerySet(Note).authorized(bare, read)
                 self.assertEqual(_pks(kept), {note.pk})
             compiled.assert_called()
-            with patch('trusts.query.granted') as compiled:
+            with patch('trusts.compile.catalogs.granted') as compiled:
                 with self.assertNumQueries(0):
                     for holder in (anonymous, guest):
                         for include_inactive in (False, True):

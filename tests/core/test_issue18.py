@@ -20,7 +20,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from trusts.compile.nodes import permission_in
-from trusts.decorators import filter_by_permitted_content
+from tests.apps import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -222,16 +222,16 @@ class CoreImportBoundaryTest(SimpleTestCase):
 
 class PermissionConditionsMetaOptionTest(SimpleTestCase):
 
-    def test_generic_option_is_registered_idempotently(self):
-        from trusts.plan.conditions import _ensure_permission_conditions_option
+    def test_generic_option_is_registered_once(self):
+        import trusts.apps
+
         self.assertIn('permission_conditions', model_options.DEFAULT_NAMES)
-        before = model_options.DEFAULT_NAMES
-        count = before.count('permission_conditions')
-        _ensure_permission_conditions_option()
-        _ensure_permission_conditions_option()
-        self.assertIs(model_options.DEFAULT_NAMES, before)
-        self.assertEqual(model_options.DEFAULT_NAMES.count('permission_conditions'), count)
-        self.assertEqual(count, 1)
+        self.assertEqual(
+            model_options.DEFAULT_NAMES.count('permission_conditions'), 1,
+        )
+        self.assertEqual(
+            trusts.apps.TrustsImplementationConfig.name, 'trusts.apps',
+        )
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class LongPathRegistrationTest(TestCase):

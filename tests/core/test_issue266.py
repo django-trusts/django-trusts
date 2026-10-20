@@ -21,7 +21,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts._permitted import permitted_queryset
+from trusts.compile.catalogs import Catalog
 from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from trusts.plan.users import lock_permitted_users_queryset
 from tests.apps import built_registries
@@ -864,8 +864,33 @@ class DelegatedAuthorityLiveTest(TestCase):
         granted = _compile_granted(built_registries((delegation_handle,)), Document.objects.all(), self.delegate, self.change, family_registries=built_registries(handles))
         self.assertIsNotNone(granted)
         self.assertTrue(Document.objects.filter(granted).exists())
-        permitted = permitted_queryset(Document.objects.all(), self.change, self.delegate, registries=built_registries(handles))
-        self.assertEqual(list(permitted), [self.document])
+        built = built_registries(handles)
+        catalogs = tuple(
+            Catalog(
+                cls=type(registry),
+                path=registry.path,
+                family=registry.family,
+                registry=registry,
+                family_registries=tuple(
+                    other for other in built if other is not registry
+                ),
+            )
+            for registry in built
+        )
+        parts = []
+        for catalog in catalogs:
+            part = catalog.complete_grant_q(
+                Document.objects.all(), self.delegate, self.change,
+            )
+            if part is not None:
+                parts.append(part)
+        self.assertTrue(parts)
+        permitted_q = parts[0]
+        for part in parts[1:]:
+            permitted_q = permitted_q | part
+        self.assertEqual(
+            list(Document.objects.filter(permitted_q)), [self.document],
+        )
         permissions = _compile_common_permissions(built_registries((delegation_handle,)), self.document, self.delegate, family_registries=built_registries(handles))
         self.assertEqual(list(permissions), [self.change])
         users = lock_permitted_users_queryset(built_registries((delegation_handle,))[0], self.document, self.change, registries=built_registries(handles))

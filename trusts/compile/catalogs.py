@@ -3,18 +3,13 @@
 from django.contrib.auth.models import Permission
 from django.db.models import Model, QuerySet, Subquery
 
-from trusts._permitted import (
-    _auth_permission_plan,
-    _auth_permission_plan_for_model,
-    _backend_has_selected_conditions,
-    _overlay_for_backend,
-)
-from trusts.errors import PermissionConditionError
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import (
     evaluate_registered_expression,
     permission_has_condition,
 )
-from trusts.plan.contents import granted
+from trusts.plan.contents import _ordinary_records, granted
+from trusts.plan.delegations import _sponsor_record_matches
 from trusts.plan.relations import bind_checked_user
 from trusts.utils import parse_perm_code
 
@@ -112,7 +107,7 @@ class Catalog(object):
         plan = _auth_permission_plan_for_model(self._registry, model, family)
         if plan is None:
             return False, False
-        return True, _backend_has_selected_conditions(
+        return True, _owns_selected_conditions(
             self._registry, model, conditions,
         )
 
@@ -129,7 +124,7 @@ class Catalog(object):
         if _auth_permission_plan(registry, candidates, user, family) is None:
             return None, False
         if conditions:
-            overlay = _overlay_for_backend(
+            overlay = _selected_condition_q(
                 registry, model, permission, conditions, user, api=api,
             )
             if overlay is None:
@@ -150,6 +145,15 @@ class Catalog(object):
         if part is None:
             return None, False
         return part, False
+
+    def complete_grant_q(self, candidates, user, permission, *, skipped=()):
+        """This catalog's complete grant predicate, or None when it grants nothing."""
+        return granted(
+            (self._registry,), candidates, user, permission,
+            kind='complete',
+            family_registries=(self._registry,) + tuple(self.family_registries),
+            skipped=skipped,
+        )
 
     def permissions_for(self, user, content, *, kind='complete', skipped=None,
                         **skip_flags):
@@ -275,32 +279,6 @@ class Catalog(object):
         return record, lookup.compile_q(obj.model, permext, user_obj)
 
 
-def explicit_catalogs(entries):
-    """Front an explicit sequence as catalogs. Does not compile.
-
-    A ``Catalog`` is kept. Any other object becomes the registry of a
-    new catalog; its peers are the other non-catalog objects. This does
-    not read ``AUTHENTICATION_BACKENDS``.
-    """
-    kept = []
-    loose = []
-    for entry in entries:
-        if isinstance(entry, Catalog):
-            kept.append(entry)
-        else:
-            loose.append(entry)
-    for entry in loose:
-        peers = tuple(other for other in loose if other is not entry)
-        kept.append(Catalog(
-            cls=type(entry),
-            path=entry.path,
-            family=entry.family,
-            registry=entry,
-            family_registries=peers,
-        ))
-    return tuple(kept)
-
-
 class PreparedInquiry(object):
     def __init__(self, model, result=_NO_PRESET, qs=None):
         self.model = model
@@ -331,6 +309,74 @@ def _perm_codes(permission_qs):
             'content_type__app_label', 'codename',
         )
     )
+
+
+def _plan_is_auth_permission(plan, sponsor_records=()):
+    """True when ``plan`` terminates on ``auth.Permission``."""
+    permission_model = plan.permission_model
+    if (
+        plan.records
+        and permission_model is not None
+        and permission_model._meta.concrete_model is Permission
+    ):
+        return True
+    for delegation in plan.delegations:
+        for ordinary in sponsor_records:
+            if not _sponsor_record_matches(ordinary, delegation):
+                continue
+            if ordinary.permission_model._meta.concrete_model is Permission:
+                return True
+    return False
+
+
+def _auth_permission_plan(registry, candidates, user, peers):
+    """Applicable plan only when the permission terminal is auth.Permission."""
+    plan = registry.plan_for(candidates, user=user)
+    if not _plan_is_auth_permission(plan, _ordinary_records(peers, candidates)):
+        return None
+    return plan
+
+
+def _auth_permission_plan_for_model(registry, model, peers):
+    """Zero-SQL applicable auth.Permission plan for this content model."""
+    plan = registry.plan_for(model)
+    if not _plan_is_auth_permission(plan, _ordinary_records(peers, model)):
+        return None
+    return plan
+
+
+def _owns_selected_conditions(registry, model, conditions):
+    """True when every selected name is registered with a queryable expr."""
+    if not conditions:
+        return True
+    lookup = registry.condition_lookup
+    if lookup is None:
+        return False
+    for name in conditions:
+        record = lookup.record_for(model, name)
+        if record is None or record.expr is None:
+            return False
+    return True
+
+
+def _selected_condition_q(registry, model, permission, conditions, user, *, api):
+    """AND this registry's selected names, or None when any name is missing."""
+    lookup = registry.condition_lookup
+    if lookup is None:
+        return None
+    extra_q = None
+    for name in conditions:
+        record = lookup.record_for(model, name)
+        if record is None:
+            return None
+        if record.expr is None:
+            raise TrustsConfigurationError(
+                '%s condition %r on %s is unsupported.'
+                % (api, name, model._meta.label)
+            )
+        part = lookup.compile_q(model, '%s:%s' % (permission, name), user)
+        extra_q = part if extra_q is None else extra_q & part
+    return extra_q
 
 
 def _permission_binding(perm, model):

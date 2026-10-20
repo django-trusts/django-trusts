@@ -15,7 +15,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import live_config, built_registries
+from tests.apps import live_config, built_registries, scoped_permitted_content
 from tests.core import kernel_host_listed
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
@@ -159,19 +159,18 @@ class FilterAuthorizedScopesAliasTest(SimpleTestCase):
         queryset, user, permission, content = (
             object(), object(), object(), object(),
         )
-        handles = (object(),)
         with patch(
             'trusts.decorators.filter_by_permitted_content',
             return_value=sentinel,
         ) as called:
             result = filter_authorized_scopes(
                 queryset, user, permission, content=content,
-                registries=built_registries(handles), skip_is_active=True,
+                skip_is_active=True,
             )
         self.assertIs(result, sentinel)
         called.assert_called_once_with(
             queryset, user, permission, content=content,
-            registries=built_registries(handles), skip_is_active=True,
+            skip_is_active=True,
         )
 
 
@@ -424,7 +423,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
     def _filter(self, queryset, user=None, permission=None, content=None, registries=None):
         if registries is None:
             registries = (self.handle,)
-        return filter_by_permitted_content(
+        return scoped_permitted_content(
             queryset,
             self.alice if user is None else user,
             self.add if permission is None else permission,
@@ -469,7 +468,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
     def test_wrong_permission_type_is_zero_sql(self):
         with self.assertNumQueries(0):
             with self.assertRaises(TrustsConfigurationError):
-                filter_by_permitted_content(
+                scoped_permitted_content(
                     self.Folder.objects.all(),
                     self.alice,
                     'add_payload',
@@ -477,7 +476,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     registries=built_registries((self.handle,)),
                 )
             with self.assertRaises(TrustsConfigurationError):
-                filter_by_permitted_content(
+                scoped_permitted_content(
                     self.Folder.objects.all(),
                     self.alice,
                     None,
@@ -568,7 +567,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             Grant.objects.create(scope=scope_a, user=alice, permission=add)
 
             handle = registry
-            qs = filter_by_permitted_content(
+            qs = scoped_permitted_content(
                 Scope.objects.order_by('pk'), alice, add,
                 content=Payload, registries=built_registries((handle,)),
             )
@@ -582,7 +581,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             self.assertEqual(pks, {scope_a.pk})
             self.assertNotIn(scope_b.pk, pks)
             self.assertFalse(
-                filter_by_permitted_content(
+                scoped_permitted_content(
                     Scope.objects.all(), bob, add,
                     content=Payload, registries=built_registries((handle,)),
                 ).exists()

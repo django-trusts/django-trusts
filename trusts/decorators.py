@@ -1,12 +1,11 @@
 """View guard and the public permitted-content filter.
 
-Answers come from the catalogs built at ``ready()``, in
+Answers come from each configured backend's catalog, in
 ``get_backends()`` order. A listed backend with no catalog contributes
 nothing.
 """
 
-from functools import reduce, wraps
-from operator import or_
+from functools import wraps
 
 from django.apps import apps as django_apps
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -14,17 +13,18 @@ from django.db.models import Model
 from django.db.models.query import QuerySet
 from django.http import Http404
 
-from trusts._permitted import (
-    _guard_conditions,
-    _guard_permission_string,
-    _permission_binding,
-)
-from trusts.backends import configured_catalogs
 from trusts.commons import _require_instance
-from trusts.compile.catalogs import explicit_catalogs
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user
 from trusts.plan.rewrites import bind_once
+from trusts.query import (
+    _assert_authorization_preflight,
+    _authorization_grant_q,
+    _codename_binding,
+    _guard_conditions,
+    _guard_permission_string,
+    _relationship_catalogs,
+)
 
 
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
@@ -33,7 +33,7 @@ _declared_authorization_guards = []
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content,
-                                registries=None, **skip_flags):
+                                **skip_flags):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -60,11 +60,9 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     list, or a scope model not on the path also return ``none()``.
     ``permission`` must be a model instance. Construction of a
     fail-closed result issues zero SQL; SQL runs only when a compiled
-    predicate is evaluated. The default list is the relationship-family
-    catalogs from the ready-time sweep, in ``get_backends()`` order. An
-    explicit ``registries`` sequence is fronted as catalogs. A backend
-    with no catalog contributes nothing. Only relationship-family
-    catalogs participate.
+    predicate is evaluated. Only relationship-family catalogs from the
+    ready-time sweep participate, in ``get_backends()`` order. A backend
+    with no catalog contributes nothing.
 
     Noun-blind: this builder does not import or name Zero schema models
     and does not use a compiler's historical group
@@ -76,7 +74,7 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
             'filter_by_permitted_content requires a QuerySet, not %r.'
             % (queryset,)
         )
-    catalogs = _relationship_catalogs(registries)
+    catalogs = _relationship_catalogs()
     user = _require_instance(user, 'user')
     permission = _require_instance(permission, 'permission')
     inquiry = bind_checked_user(
@@ -84,13 +82,16 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     )
     if not catalogs or inquiry.denied:
         return queryset.none()
-    compiled = [
-        catalog.filter_by_permitted_content(
+    compiled = []
+    for catalog in catalogs:
+        part = catalog.filter_by_permitted_content(
             queryset, user, permission, content=content,
             skipped=inquiry.values,
         )
-        for catalog in catalogs
-    ]
+        if not part.query.is_empty():
+            compiled.append(part)
+    if not compiled:
+        return queryset.none()
     if len(compiled) == 1:
         return compiled[0]
     combined = compiled[0]
@@ -100,10 +101,9 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
 
 
 def filter_authorized_scopes(queryset, user, permission, *, content,
-                             registries=None, **skip_flags):
+                             **skip_flags):
     return filter_by_permitted_content(
-        queryset, user, permission, content=content, registries=registries,
-        **skip_flags,
+        queryset, user, permission, content=content, **skip_flags,
     )
 
 
@@ -196,17 +196,6 @@ def _coerce_pk(model, raw):
     return value
 
 
-def _relationship_catalogs(registries=None):
-    """Relationship catalogs, in listed-backend order when not explicit."""
-    if registries is None:
-        found = configured_catalogs()
-    else:
-        found = explicit_catalogs(registries)
-    return tuple(
-        catalog for catalog in found if catalog.family == 'relationship'
-    )
-
-
 def _authorize_candidate(request, view_kwargs, model, permission, conditions,
                          skip_flags):
     catalogs = _relationship_catalogs()
@@ -221,7 +210,9 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
             'authorization_required cannot authorize before Django apps '
             'are ready.'
         )
-    _assert_catalog_preflight(catalogs, model, conditions)
+    _assert_authorization_preflight(
+        catalogs, model, conditions, api='authorization_required',
+    )
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, registries=catalogs,
     )
@@ -230,10 +221,10 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
 
     candidates = model._default_manager.filter(pk=pk)
     app_label, codename = permission.split('.', 1)
-    binding = _permission_binding(model, app_label, codename)
-    granted_q = _catalog_grant_q(
+    binding = _codename_binding(model, app_label, codename)
+    granted_q = _authorization_grant_q(
         catalogs, candidates, user, model, permission, conditions, binding,
-        skipped=inquiry.values,
+        api='authorization_required', skipped=inquiry.values,
     )
     if granted_q is None:
         matched = None
@@ -248,48 +239,3 @@ def _authorize_candidate(request, view_kwargs, model, permission, conditions,
     if candidates.exists():
         raise PermissionDenied
     raise Http404
-
-
-def _assert_catalog_preflight(catalogs, model, conditions):
-    participating = False
-    for catalog in catalogs:
-        has_plan, owns = catalog.authorization_preflight(model, conditions)
-        if not has_plan:
-            continue
-        participating = True
-        if owns:
-            return
-    if not participating:
-        raise TrustsConfigurationError(
-            'authorization_required has no applicable auth.Permission plan '
-            'for %s.' % (model._meta.label,)
-        )
-    raise TrustsConfigurationError(
-        'authorization_required condition %r is not registered on %s.'
-        % (conditions[0], model._meta.label)
-    )
-
-
-def _catalog_grant_q(catalogs, candidates, user, model, permission,
-                     conditions, binding, *, skipped):
-    parts = []
-    complete = 0
-    for catalog in catalogs:
-        predicate, owned = catalog.authorization_grant(
-            candidates, user, model, permission, conditions, binding,
-            api='authorization_required', skipped=skipped,
-        )
-        if owned:
-            complete += 1
-        if predicate is not None:
-            parts.append(predicate)
-    if conditions and complete == 0:
-        raise TrustsConfigurationError(
-            'authorization_required condition %r is not registered on %s.'
-            % (conditions[0], model._meta.label)
-        )
-    if not parts:
-        return None
-    if len(parts) == 1:
-        return parts[0]
-    return reduce(or_, parts)
