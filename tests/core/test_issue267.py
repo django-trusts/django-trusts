@@ -194,13 +194,14 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
 
     def test_same_model_grants_and_crossed_pairs_deny(self):
         cases = ((self.manage_code, self.manage, self.acme, True), (self.read_code, self.read, self.specs, True), (self.read_code, self.read, self.acme, False), (self.manage_code, self.manage, self.specs, False), (self.manage_code, self.manage, self.team, False), (self.read_code, self.read, self.widget, False))
+        catalog = Catalog(cls=type(self.handle), path=self.handle.path, family=self.handle.family, registry=self.handle.build_registry())
         with _installed(self.handle):
             for code, permission, obj, expected in cases:
                 with self.subTest(code=code, obj=obj._meta.model_name):
                     queries = 0 if obj in (self.team, self.widget) else 1
                     with self.assertNumQueries(queries):
                         self.assertIs(self.owner.has_perm(code, obj), expected)
-                    self.assertIs(self.handle.build_registry().has_permission(self.owner, obj, permission), expected)
+                    self.assertIs(catalog.has_perm(self.owner, code, obj), expected)
 
     def test_enumeration_drops_the_other_models_codenames(self):
         with _installed(self.handle):
@@ -435,8 +436,9 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         registry = RegistryFactory()
         grant = self._ref(self.DirectGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permission)
-        self.assertTrue(registry.build_registry().has_permission(self.owner, self.org, manage))
-        self.assertFalse(registry.build_registry().has_permission(self.owner, self.org, read))
+        catalog = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry())
+        self.assertTrue(catalog.has_perm(self.owner, _code(manage), self.org))
+        self.assertFalse(catalog.has_perm(self.owner, _code(read), self.org))
 
     def _ref(self, model):
         from trusts.compile.nodes import Ref
