@@ -450,16 +450,14 @@ class PolicySqlGoldenTest(SimpleTestCase):
         self.assertNotIn('{{', permitted['sql'])
         self.assertNotIn('composition', document['backends'][0])
 
-    def test_empty_relationship_backend_is_still_emitted(self):
+    def test_empty_relationship_backend_is_omitted(self):
         populated = _document_handle('aaa.backends.DocumentBackend')
         empty = _handle('zzz.backends.EmptyBackend')
         document = _load_policy_sql_document(render_configured_policy(empty, populated))
         paths = [row['path'] for row in document['backends']]
-        self.assertEqual(paths, ['aaa.backends.DocumentBackend', 'zzz.backends.EmptyBackend'])
-        self.assertEqual(document['backends'][1]['contents'], [])
-        self.assertNotIn('composition', document['backends'][1])
+        self.assertEqual(paths, ['aaa.backends.DocumentBackend'])
+        self.assertTrue(all(row['contents'] for row in document['backends']))
         self.assertNotIn('composition', document['backends'][0])
-        self.assertIn('contents', document['backends'][0])
 
     def test_unsupported_family_fails_closed(self):
         factory = _document_handle()

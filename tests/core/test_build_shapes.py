@@ -628,7 +628,7 @@ class CatalogFromShapeTest(TransactionTestCase):
                 user_model=User,
                 user_rules=(Q(), Q()),
                 override_q=None,
-                plans=(),
+                plans=_shape_plans((record,), User),
             ), user_model=User)
             self.assertTrue(catalog.has_perm(holder, code, payload))
             self.assertFalse(catalog.has_perm(outsider, code, payload))
@@ -656,7 +656,8 @@ class CatalogFromShapeTest(TransactionTestCase):
                 filter_lookup=FrozenConditionLookup(()),
                 compiler=None, path='empty-shape',
                 family='relationship', user_model=User,
-                user_rules=(Q(), Q()), override_q=None, plans=(),
+                user_rules=(Q(), Q()), override_q=None,
+                plans=_shape_plans((), User),
             ), user_model=User)
             self.assertFalse(empty.has_perm(holder, code, payload))
             self.assertFalse(empty.filter_authorized(
@@ -673,6 +674,24 @@ class CatalogFromShapeTest(TransactionTestCase):
                 editor.delete_model(Payload)
                 editor.delete_model(Scope)
             forget_models(Grant, Row, Payload, Scope)
+
+
+def _shape_plans(records, user_model):
+    """Plans a hand-built catalog would have stored at compile()."""
+    rules = (Q(), Q())
+    table = {
+        None: relation_plan(
+            records, (), None, None, None, user_model, None, rules, None,
+        ),
+    }
+    for content in {record.content_model for record in records}:
+        for principal in (None, user_model):
+            for terminal in (None, Permission):
+                table[content, principal, terminal] = relation_plan(
+                    records, (), content, principal, terminal,
+                    user_model, None, rules, None,
+                )
+    return table
 
 
 def _prefix_models():

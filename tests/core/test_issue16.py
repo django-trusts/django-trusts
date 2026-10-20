@@ -193,7 +193,7 @@ class ConditionRegistryShapeTest(SimpleTestCase):
         self.assertIsInstance(lookup, FrozenConditionLookup)
         self.assertIs(lookup.record_for(Note, 'spy'), record)
         self.assertFalse(hasattr(lookup, 'conditions'))
-        q = lookup.compile_q(Note, 'trusts_tests.change_note:spy', None)
+        q = lookup.compile_q(Note, 'trusts_tests.change_note:spy', None, get_user_model())
         self.assertIsNotNone(q)
         self.assertEqual(len(log.calls), 1)
 
@@ -352,7 +352,7 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         Note, _Memo = _note_models()
         log = _BuilderLog()
         registry = ConditionRegistry()
-        registry.register_permission_condition(Note, 'own', log)
+        registry.register_permission_condition(Note, 'own', log, get_user_model())
         messages = permission_condition_check_messages(registry.iter_permission_conditions())
         self.assertEqual(len(log.calls), 1)
         self.assertEqual([m for m in messages if m.id == CHECK_ID_OBSOLETE_CALLBACK_SETTING], [])

@@ -517,17 +517,15 @@ def _build_document(catalogs, alias):
         raise TrustsConfigurationError(
             'Policy SQL render alias %r has no DATABASES ENGINE.' % (alias,)
         )
-    projected = []
+    projected, seen = [], set()
     for catalog in catalogs:
         row = _project_backend(catalog, alias)
+        if row['path'] in seen:
+            raise TrustsConfigurationError('Policy SQL render found duplicate backend paths.')
+        seen.add(row['path'])
         if row['contents']:
             projected.append(row)
     projected.sort(key=lambda row: row['path'])
-    paths = [row['path'] for row in projected]
-    if len(paths) != len(set(paths)):
-        raise TrustsConfigurationError(
-            'Policy SQL render found duplicate backend paths.'
-        )
     return {
         'schema_version': SCHEMA_VERSION,
         'database': {'engine': engine},

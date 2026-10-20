@@ -199,8 +199,10 @@ class IsolatedImplementationStoreTest(SimpleTestCase):
         contributor.ready()
         config = apps.get_app_config('trusts_kernel_host')
         config.ready()
-        self.assertIs(HostTrustModelBackend().catalog, before)
-        self.assertEqual(before.records, before_records)
+        rebuilt = HostTrustModelBackend().catalog
+        self.assertEqual(rebuilt.records, before_records)
+        self.assertEqual(rebuilt.path, before.path)
+        self.assertIsNot(rebuilt, before)
         self.assertFalse(hasattr(config, 'registries'))
 
     def test_isolate_apps_without_implementation_does_not_donate(self):

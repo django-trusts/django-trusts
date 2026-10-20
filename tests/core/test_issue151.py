@@ -282,7 +282,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 registry.conditions.get_permission_condition_record(Note, 'owned'),
             )
             perm = 'trusts_tests.change_note:owned'
-            compiled = lookup.compile_q(Note, perm, alice)
+            compiled = lookup.compile_q(Note, perm, alice, get_user_model())
             stored = registry.conditions.compile_registered_condition_q(Note, perm, alice)
             self.assertEqual(str(compiled), str(stored))
             listed = set(Note.objects.filter(compiled).values_list('pk', flat=True))

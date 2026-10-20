@@ -926,7 +926,7 @@ class AlongRuntimeGateTest(TransactionTestCase):
             j = Ref(NodeGrant)
             record = registry.register_relation(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=4))
             expr = GrantReach(record, alice, read)
-            compiler = Node.objects.filter(pk=node.pk).query.get_compiler('default')
+            sql_compiler = Node.objects.filter(pk=node.pk).query.get_compiler('default')
 
             class Stub(object):
 
@@ -939,14 +939,14 @@ class AlongRuntimeGateTest(TransactionTestCase):
                     raise AssertionError('probe')
             oracle = Stub('oracle', 'django.db.backends.oracle', 'legacy')
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                expr.as_sql(compiler, oracle)
+                expr.as_sql(sql_compiler, oracle)
             self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertIn('oracle', str(ctx.exception).lower())
             self.assertIn('legacy', str(ctx.exception))
             maria = Stub('mysql', 'django.db.backends.mysql', 'maria')
             maria.mysql_is_mariadb = True
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                expr.as_sql(compiler, maria)
+                expr.as_sql(sql_compiler, maria)
             self.assertNotIsInstance(ctx.exception, TrustsCompilerError)
             self.assertEqual(str(ctx.exception), 'Along reachability requires a recursive CTE on Django sqlite3, postgresql, or mysql; got ENGINE=%r vendor=%r alias=%r.' % ('django.db.backends.mysql', 'mysql', 'maria'))
             rendered_qs = built_catalog(registry).filter_authorized(Node.objects.all(), alice, read)
