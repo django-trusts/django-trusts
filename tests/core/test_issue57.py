@@ -4,7 +4,6 @@ Registration only. Does not exercise object authorization, authorized-content
 filtering, permission enumeration, backends, conditions, or compatibility.
 """
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -42,7 +41,7 @@ def _mock_models():
             Document, related_name='alt_grants', on_delete=models.CASCADE,
         )
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         permission = models.ForeignKey(
             Permission, on_delete=models.CASCADE,
@@ -60,7 +59,7 @@ def _mock_models():
     class OtherGrant(models.Model):
         document = models.ForeignKey(Document, on_delete=models.CASCADE)
         user = models.ForeignKey(
-            settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+            get_user_model(), on_delete=models.CASCADE,
         )
         permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
@@ -204,7 +203,7 @@ class TrustsRegistryTest(SimpleTestCase):
                 on_delete=models.CASCADE,
             )
             path = models.ForeignKey(
-                settings.AUTH_USER_MODEL, related_name='collision_path_grants',
+                get_user_model(), related_name='collision_path_grants',
                 on_delete=models.CASCADE,
             )
             permission = models.ForeignKey(
