@@ -44,12 +44,12 @@ def _as_q(predicate):
     return Q(predicate)
 
 
-def _plan_for_permission(registry, candidates, user, permission):
+def _plan_for_permission(catalog, candidates, user, permission):
     if isinstance(permission, Model):
-        return registry.plan_for(
+        return catalog.plan_for(
             candidates, user=user, permission=permission,
         )
-    return registry.plan_for(candidates, user=user)
+    return catalog.plan_for(candidates, user=user)
 
 
 def relationship_family(items):
@@ -76,17 +76,17 @@ def _apply_checked_user(grant, plan, user, values, permission, content_identity,
     ).predicate
 
 
-def _compile_granted(registry, candidates, user, permission, *, kind='complete',
+def _compile_granted(catalog, candidates, user, permission, *, kind='complete',
                      permission_model=None, skipped=()):
-    """Ordinary predicate and one-level delegated predicate for ``registry``.
+    """Ordinary predicate and one-level delegated predicate for ``catalog``.
 
-    A delegation's sponsor rows are this registry's ordinary records.
+    A delegation's sponsor rows are this catalog's ordinary records.
     """
     if permission_model is None and isinstance(permission, Model):
         permission_model = permission._meta.concrete_model
     content_identity = _candidate_model(candidates)
-    compiler = answering_compiler(registry)
-    plan = _plan_for_permission(registry, candidates, user, permission)
+    compiler = answering_compiler(catalog)
+    plan = _plan_for_permission(catalog, candidates, user, permission)
     if kind == 'complete':
         fn = compiler.complete_exists
     else:
@@ -96,7 +96,7 @@ def _compile_granted(registry, candidates, user, permission, *, kind='complete',
     if kind == 'complete' and plan.delegations:
         delegated = _delegated_content_exists(
             tuple(plan.delegations),
-            _ordinary_records(registry, candidates, permission_model),
+            _ordinary_records(catalog, candidates, permission_model),
             user, permission,
             content_identity=content_identity,
             skipped=skipped,
@@ -107,22 +107,22 @@ def _compile_granted(registry, candidates, user, permission, *, kind='complete',
     )
 
 
-def granted(registry, candidates, user, permission, *, kind='complete',
+def granted(catalog, candidates, user, permission, *, kind='complete',
             permission_model=None, skipped=()):
-    """This relationship-family registry's complete (or group) predicate.
+    """This relationship-family catalog's complete (or group) predicate.
 
     A valid compiler returning ``None`` is inapplicable. Compiler
-    exceptions propagate. An empty result is ``None``. A registry whose
+    exceptions propagate. An empty result is ``None``. A catalog whose
     family is not relationship returns ``None``.
 
     ``permission`` may be a permission instance or an unevaluated lookup
     (``Subquery`` / ``OuterRef``). Expressions are not passed to
     ``plan_for``; the plan is selected by content and user terminals.
     """
-    if registry.family != 'relationship':
+    if catalog.family != 'relationship':
         return None
     return _compile_granted(
-        registry, candidates, user, permission, kind=kind,
+        catalog, candidates, user, permission, kind=kind,
         permission_model=permission_model,
         skipped=skipped,
     )
@@ -314,16 +314,16 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
 
 
 def _compile_permitted_content_queryset(
-    queryset, user, permission, *, content, registry, skipped=(),
+    queryset, user, permission, *, content, catalog, skipped=(),
 ):
-    """Compile the permitted-content queryset for one registry.
+    """Compile the permitted-content queryset for one catalog.
 
-    A delegation uses this registry's ordinary grants. Callers apply the
+    A delegation uses this catalog's ordinary grants. Callers apply the
     inactive-user gate before this helper runs.
     """
     scope_model = queryset.model._meta.concrete_model
     content_identity = _candidate_model(content)
-    plan = _plan_for_permission(registry, content, user, permission)
+    plan = _plan_for_permission(catalog, content, user, permission)
     if plan.content_identity is not None:
         content_identity = plan.content_identity
     plan_parts = []
@@ -339,7 +339,7 @@ def _compile_permitted_content_queryset(
         plan_parts.extend(_delegated_prefix_predicates(
             tuple(plan.delegations),
             _ordinary_records(
-                registry, content, permission._meta.concrete_model,
+                catalog, content, permission._meta.concrete_model,
             ),
             user, permission, scope_model,
             content_identity=content_identity,
@@ -369,10 +369,10 @@ def _shift_outer_ref(value):
     return value
 
 
-def _ordinary_records(registry, content, permission_model=None):
-    """Applicable ordinary records on this registry's own plan."""
+def _ordinary_records(catalog, content, permission_model=None):
+    """Applicable ordinary records on this catalog's own plan."""
     records = []
-    plan = registry.plan_for(content)
+    plan = catalog.plan_for(content)
     for record in plan.records:
         if (
             permission_model is not None
