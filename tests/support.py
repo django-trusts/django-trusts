@@ -29,15 +29,15 @@ def built_registries(items):
 
 
 def scoped_permitted_content(queryset, user, permission, *, content,
-                             registry, **skip_flags):
-    """Prefix filter for one explicit registry in a unit test.
+                             compiler, **skip_flags):
+    """Prefix filter for one explicit catalog in a unit test.
 
-    The public filter walks ``get_catalog()`` and takes no registry
-    argument. This helper is the direct registry question.
+    The public filter walks ``get_catalog()`` and takes no catalog
+    argument. This helper is the direct catalog question.
     """
-    if registry.family != 'relationship':
+    if compiler.family != 'relationship':
         return queryset.none()
-    return registry.filter_by_permitted_content(
+    return compiler.filter_by_permitted_content(
         queryset, user, permission, content=content, **skip_flags,
     )
 
@@ -296,23 +296,23 @@ def install_class_handle(backend_cls, factory):
     _publish_catalog(backend_cls, factory)
 
 
-def isolate_live_registry(config, registry, path):
-    """Publish a standalone registry as the catalog for one backend path."""
+def isolate_live_compiler(config, compiler, path):
+    """Publish a standalone compiler as the catalog for one backend path."""
 
     del config
     cls = import_string(path)
-    _publish_catalog(cls, registry, path=path)
-    return registry
+    _publish_catalog(cls, compiler, path=path)
+    return compiler
 
 
-def install_writable_registry(config, path, contribute=None):
+def install_writable_compiler(config, path, contribute=None):
     """Install a standalone factory as the catalog for one live path."""
 
-    registry = Compiler(path=path, user_model=get_user_model())
+    compiler = Compiler(path=path, user_model=get_user_model())
     if contribute is not None:
-        contribute(registry)
-    isolate_live_registry(config, registry, path)
-    return registry
+        contribute(compiler)
+    isolate_live_compiler(config, compiler, path)
+    return compiler
 
 
 @contextmanager

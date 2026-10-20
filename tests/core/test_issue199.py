@@ -113,7 +113,7 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             self.document_backend.has_perm(inactive, PERM, self.document),
         )
 
-    def test_unowned_backend_rejects_identity_before_registry(self):
+    def test_unowned_backend_rejects_identity_before_compiler(self):
         from django.apps import apps
 
         backend = MixinOnlyBackend()

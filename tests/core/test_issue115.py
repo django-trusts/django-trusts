@@ -1,7 +1,7 @@
 """#115: user-facing README and package metadata for the final core library.
 
 The README consumer is ``tests.myapp``. Behavioral tests load that
-exact documented configuration and use the owner ``ready()`` registry.
+exact documented configuration and use the owner ``ready()`` recorder.
 """
 
 from pathlib import Path
@@ -77,7 +77,7 @@ class ReadmeExampleAuthorizationTest(TestCase):
             permission=self.change_permission,
         )
 
-    def test_ready_contributed_the_documented_ref_to_the_owner_registry(self):
+    def test_ready_contributed_the_documented_ref_to_the_owner_compiler(self):
         from django.apps import apps as django_apps
 
         owner = django_apps.get_app_config('myapp')

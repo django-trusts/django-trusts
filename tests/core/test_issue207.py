@@ -29,11 +29,11 @@ from trusts.compile.factory import Compiler
 from tests.support import built_catalog
 ROOT = Path(__file__).resolve().parents[2]
 
-def _handle(registry=None, path='tests.core.issue207'):
-    if registry is None:
-        registry = Compiler()
-    registry.path = path
-    return registry
+def _handle(compiler=None, path='tests.core.issue207'):
+    if compiler is None:
+        compiler = Compiler()
+    compiler.path = path
+    return compiler
 
 class _Count:
 
@@ -228,8 +228,8 @@ class RegisterOnceAtRegistrationTest(TestCase):
     def test_builders_run_once_and_never_during_projections(self):
         if 'myapp_document' not in connection.introspection.table_names():
             self.skipTest('myapp tables exist only on the kernel host')
-        registry = Compiler()
-        handle = _handle(registry)
+        compiler = Compiler()
+        handle = _handle(compiler)
         user = _Count('user')
         permission = _Count('permission')
         content = _Count('document')
@@ -241,12 +241,12 @@ class RegisterOnceAtRegistrationTest(TestCase):
         ct = ContentType.objects.get_for_model(Document)
         perm, _created = Permission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'Can change document'})
         DocumentGrant.objects.create(document=document, user=alice, permission=perm)
-        self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (perm.content_type.app_label, perm.codename), document))
-        list(built_catalog(registry).permissions_for(alice, document))
-        list(built_catalog(registry).filter_authorized(Document.objects.all(), alice, perm))
+        self.assertTrue(built_catalog(compiler).has_perm(alice, '%s.%s' % (perm.content_type.app_label, perm.codename), document))
+        list(built_catalog(compiler).permissions_for(alice, document))
+        list(built_catalog(compiler).filter_authorized(Document.objects.all(), alice, perm))
         self.assertEqual((user.calls, permission.calls, content.calls), (1, 1, 1))
-        self.assertEqual(registry.records[0].user_path, ('user',))
-        self.assertIsInstance(registry.records[0].user_field, str)
+        self.assertEqual(compiler.records[0].user_path, ('user',))
+        self.assertIsInstance(compiler.records[0].user_field, str)
 
 class RegisterFailClosedTest(TestCase):
 
@@ -278,8 +278,8 @@ class RegisterFailClosedTest(TestCase):
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_register_after_build_invokes_builder(self):
-        registry = Compiler()
-        handle = _handle(registry)
+        compiler = Compiler()
+        handle = _handle(compiler)
         calls = []
 
         def user(trust):
@@ -287,6 +287,6 @@ class RegisterFailClosedTest(TestCase):
             return trust.user
         record = handle.register(trust=DocumentGrant, user=user, permission=lambda t: t.permission, content=lambda t: t.document)
         self.assertEqual(len(calls), 1)
-        shape = registry.compile()
+        shape = compiler.compile()
         self.assertEqual(shape.records, (record,))
         self.assertEqual(record.user_path, ('user',))

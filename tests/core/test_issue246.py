@@ -56,11 +56,11 @@ def _perm(model, codename):
 def _code(permission):
     return '%s.%s' % (permission.content_type.app_label, permission.codename)
 
-def _handle(registry=None, path='tests.core.issue246'):
-    if registry is None:
-        registry = Compiler()
-    registry.path = path
-    return registry
+def _handle(compiler=None, path='tests.core.issue246'):
+    if compiler is None:
+        compiler = Compiler()
+    compiler.path = path
+    return compiler
 
 def _behavior_models():
 
@@ -157,12 +157,12 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             handle.register(trust=Grant, user='group__user', permission='paper', group='group', content='paper')
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
             handle.register(trust=Grant, user=boom, permission=boom, group=boom, content=boom)
-        registry = Compiler()
+        compiler = Compiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
-            registry.register_relation(content=ref.paper, user=ref.group.user, permission=ref.paper, group=ref.group)
+            compiler.register_relation(content=ref.paper, user=ref.group.user, permission=ref.paper, group=ref.group)
         self.assertEqual(built_catalog(handle).records, ())
-        self.assertEqual(registry.records, ())
+        self.assertEqual(compiler.records, ())
 
     def test_one_of_permission_or_group_is_required(self):
         Grant = self._grant_model()
@@ -171,12 +171,12 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             handle.register(trust=Grant, user='group__user', content='paper')
         with self.assertRaises(TypeError):
             handle.register(trust=Grant, user='group__user')
-        registry = Compiler()
+        compiler = Compiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'requires permission= or group='):
-            registry.register_relation(content=ref.paper, user=ref.group.user)
+            compiler.register_relation(content=ref.paper, user=ref.group.user)
         self.assertEqual(built_catalog(handle).records, ())
-        self.assertEqual(registry.records, ())
+        self.assertEqual(compiler.records, ())
 
     def test_group_path_must_end_at_auth_group(self):
 
@@ -286,8 +286,8 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         self.DirectPaperGrant.objects.create(user=self.alice, paper=self.paper_b, permission=self.write)
         self.station = self.Station.objects.create(title='desk', group=self.editors)
         self.StationPaperGrant.objects.create(station=self.station, paper=self.paper_d)
-        self.registry = Compiler()
-        self.handle = _handle(self.registry)
+        self.compiler = Compiler()
+        self.handle = _handle(self.compiler)
         self.handle.register(trust=self.GroupPaperGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper)
         self.handle.register(trust=self.GroupFolderGrant, user='group__user', group='group', content='folder__papers')
         self.handle.register(trust=self.DeskPaperGrant, user='desk__holders', permission='permission', content='paper')
@@ -321,12 +321,12 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
             self.assertFalse(self.backend.has_perm(self.alice, self.change_code, mixed))
             self.assertEqual(self.backend.get_group_permissions(self.alice, mixed), set())
             self.assertEqual(self.backend.get_group_permissions(self.alice, self.paper_c), {self.change_code})
-        granted = built_catalog(self.registry).filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
+        granted = built_catalog(self.compiler).filter_authorized(self.Paper.objects.order_by('pk'), self.alice, self.change)
         self.assertEqual(list(granted), [self.paper_a, self.paper_c, self.paper_d])
         with listed_relationship((self.handle,)):
             listed = sorted(self.Paper.objects.authorized(self.alice, self.change), key=lambda row: row.pk)
         self.assertEqual(listed, [self.paper_a, self.paper_c, self.paper_d])
-        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=built_catalog(self.handle))
+        folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, compiler=built_catalog(self.handle))
         self.assertEqual(list(folders), [self.folder_a])
 
     def test_permission_and_membership_do_not_feed_group_permissions(self):
@@ -440,8 +440,8 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         self.other = self.Paper.objects.create(title='other', folder=self.Folder.objects.create(title='other'))
         grant = self.Grant.objects.create(group=self.editors, folder=self.folder)
         grant.grants.add(self.read)
-        self.registry = Compiler()
-        self.handle = _handle(self.registry, path='tests.core.issue246-ceiling')
+        self.compiler = Compiler()
+        self.handle = _handle(self.compiler, path='tests.core.issue246-ceiling')
         self.handle.register(trust=self.Grant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.folder.papers, condition=lambda t: t.grants.contains(t.group.permissions))
         self.backend = _ProbeBackend()
         self.one = self.Paper.objects.filter(pk=self.paper.pk)
@@ -488,8 +488,8 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 sql = str(rows.query)
                 with self.subTest(authorized_sql=label):
                     self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
-        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, registry=built_catalog(self.handle))
-        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, registry=built_catalog(self.handle))
+        read_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.read, content=self.Paper, compiler=built_catalog(self.handle))
+        change_folders = filter_by_permitted_content(self.Folder.objects.order_by('pk'), self.alice, self.change, content=self.Paper, compiler=built_catalog(self.handle))
         with self.subTest('scope read'):
             self.assertEqual(list(read_folders), [self.folder])
         with self.subTest('scope change'):
@@ -500,7 +500,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
                 self.assertEqual(len(_group_permission_aliases(sql)), 1, sql)
 
     def test_common_permissions_omit_change(self):
-        plan = built_catalog(self.registry).plan_for(self.paper, user=self.alice)
+        plan = built_catalog(self.compiler).plan_for(self.paper, user=self.alice)
         for label, target in (('instance', self.paper), ('queryset', self.one)):
             with self.subTest(label):
                 self.assertEqual(self._permission_codes(plan.common_permissions(self.alice, target)), {self.read_code})

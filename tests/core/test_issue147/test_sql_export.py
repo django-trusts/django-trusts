@@ -184,11 +184,11 @@ class FolderGrant(models.Model):
     class Meta:
         app_label = 'documents'
 
-def _handle(path, registry=None):
-    if registry is None:
-        registry = Compiler()
-    registry.path = path
-    return registry
+def _handle(path, compiler=None):
+    if compiler is None:
+        compiler = Compiler()
+    compiler.path = path
+    return compiler
 
 def _non_confidential(user, permission, obj):
     del user, permission

@@ -19,16 +19,16 @@ from trusts.compile.factory import Compiler
 class IsolatedHostDoesNotReceiveDocumentContributionTest(
     KernelHostRequiredMixin, SimpleTestCase,
 ):
-    def test_host_registry_stays_empty_of_document_terminal(self):
+    def test_host_compiler_stays_empty_of_document_terminal(self):
         host = apps.get_app_config('trusts_kernel_host')
         self.assertEqual(
             configured_catalog(HOST_BACKEND).path, host.catalog_path(),
         )
-        registry = configured_catalog(HOST_BACKEND)
-        self.assertFalse(registry.plan_for(Document).records)
-        before = registry.records
+        compiler = configured_catalog(HOST_BACKEND)
+        self.assertFalse(compiler.plan_for(Document).records)
+        before = compiler.records
         host.ready()
-        self.assertEqual(registry.records, before)
+        self.assertEqual(compiler.records, before)
 
 
 @isolate_apps(

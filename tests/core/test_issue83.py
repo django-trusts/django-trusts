@@ -1,8 +1,8 @@
 """S5: bounded Ref dependent-content grammar (issue #83).
 
 Isolated generic mock models only. No production historical nouns, no
-Group/Junction contribution, and no deletion of legacy registry
-machinery. Structural and behavioral tests only — no source-token or
+Group/Junction contribution, and no deletion of legacy machinery.
+Structural and behavioral tests only — no source-token or
 ``inspect.getsource`` assertions.
 """
 from contextlib import contextmanager
@@ -259,11 +259,11 @@ def _pks(rows):
     return {row.pk for row in rows}
 
 class _SplitCompiler(PlanQueryCompiler):
-    """Direct plan OR group-registry plan. Group-only uses the group plan."""
+    """Direct plan OR group plan. Group-only uses the group plan."""
     historical_fallback = False
 
-    def __init__(self, group_registry):
-        self.group_registry = group_registry
+    def __init__(self, group_compiler):
+        self.group_compiler = group_compiler
 
     def complete_exists(self, plan, candidates, user, permission):
         parts = []
@@ -282,16 +282,16 @@ class _SplitCompiler(PlanQueryCompiler):
 
     def group_exists(self, plan, candidates, user, permission):
         if isinstance(permission, models.Model):
-            group_plan = built_catalog(self.group_registry).plan_for(candidates, user=user, permission=permission)
+            group_plan = built_catalog(self.group_compiler).plan_for(candidates, user=user, permission=permission)
         else:
-            group_plan = built_catalog(self.group_registry).plan_for(candidates, user=user)
+            group_plan = built_catalog(self.group_compiler).plan_for(candidates, user=user)
         if not group_plan.records:
             return None
         return group_plan.content_exists(user, permission)
 
-def _direct_handle(registry, path='tests.s5.direct'):
-    registry.path = path
-    return registry
+def _direct_handle(compiler, path='tests.s5.direct'):
+    compiler.path = path
+    return compiler
 
 def _assert_record(test, record, *, root, path, model, lookup, target=None):
     test.assertIs(record.root, root)
@@ -313,48 +313,48 @@ def _assert_no_historical_names(*models_):
             raise AssertionError('mock %s is not isolated (%s)' % (model.__name__, model.__module__))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
+class TrustsCompilerDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_j1_registers_forward_reverse_forward(self):
         Folder, Payload, Row, FolderGrant, _group = _j1_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(FolderGrant)
-        record = registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        record = compiler.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         _assert_record(self, record, root=FolderGrant, path=('folder', 'rows', 'content'), model=Payload, lookup='folder__rows__content')
-        self.assertEqual(built_catalog(registry).plan_for(Payload).records, (record,))
-        self.assertEqual(registry.records, (record,))
+        self.assertEqual(built_catalog(compiler).plan_for(Payload).records, (record,))
+        self.assertEqual(compiler.records, (record,))
         _assert_no_historical_names(Folder, Payload, Row, FolderGrant)
 
     def test_d1_registers_gateway_plus_reverse_o2m_suffix(self):
         Holder, _owner, _tag, Item, Image, _meta, _extra, _profile, Grant, _w, _wg = _d1_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(Grant)
-        item_rec = registry.register_relation(content=j.holder.items, user=j.user, permission=j.permission)
-        image_rec = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        item_rec = compiler.register_relation(content=j.holder.items, user=j.user, permission=j.permission)
+        image_rec = compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         _assert_record(self, item_rec, root=Grant, path=('holder', 'items'), model=Item, lookup='holder__items')
         _assert_record(self, image_rec, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
         self.assertEqual(
-            tuple(row for row in registry.records if row.root is Grant),
+            tuple(row for row in compiler.records if row.root is Grant),
             (item_rec, image_rec),
         )
 
     def test_d1o_registers_gateway_plus_reverse_o2o_suffix(self):
         _holder, _owner, _tag, _item, Image, _meta, _extra, _profile, Grant, _w, _wg = _d1o_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(Grant)
-        record = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        record = compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         _assert_record(self, record, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
 
     def _assert_both_dependent_depths(self, factory):
         _holder, _owner, _tag, _item, Image, ImageMeta, _extra, _profile, Grant, _w, _wg = factory()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(Grant)
-        depth1 = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
-        depth2 = registry.register_relation(content=j.holder.items.image.image, user=j.user, permission=j.permission)
+        depth1 = compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        depth2 = compiler.register_relation(content=j.holder.items.image.image, user=j.user, permission=j.permission)
         _assert_record(self, depth1, root=Grant, path=('holder', 'items', 'image'), model=Image, lookup='holder__items__image')
         _assert_record(self, depth2, root=Grant, path=('holder', 'items', 'image', 'image'), model=ImageMeta, lookup='holder__items__image__image')
-        self.assertEqual(built_catalog(registry).plan_for(Image).records, (depth1,))
-        self.assertEqual(built_catalog(registry).plan_for(ImageMeta).records, (depth2,))
+        self.assertEqual(built_catalog(compiler).plan_for(Image).records, (depth1,))
+        self.assertEqual(built_catalog(compiler).plan_for(ImageMeta).records, (depth2,))
 
     def test_d2_registers_both_documented_depths(self):
         self._assert_both_dependent_depths(_d2_models)
@@ -367,27 +367,27 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
 
     def test_two_forward_hops_then_gateway_remain_expressible(self):
         Holder, _owner, _tag, Item, _image, _meta, _extra, _profile, _g, Wrapper, WrapperGrant = _d1_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(WrapperGrant)
-        record = registry.register_relation(content=j.wrapper.holder.items, user=j.user, permission=j.permission)
+        record = compiler.register_relation(content=j.wrapper.holder.items, user=j.user, permission=j.permission)
         _assert_record(self, record, root=WrapperGrant, path=('wrapper', 'holder', 'items'), model=Item, lookup='wrapper__holder__items')
 
     def test_direct_and_trailing_reverse_still_register(self):
         Folder, Payload, Row, FolderGrant, _group = _j1_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(FolderGrant)
-        folder_rec = registry.register_relation(content=j.folder, user=j.user, permission=j.permission)
-        row_rec = registry.register_relation(content=j.folder.rows, user=j.user, permission=j.permission)
+        folder_rec = compiler.register_relation(content=j.folder, user=j.user, permission=j.permission)
+        row_rec = compiler.register_relation(content=j.folder.rows, user=j.user, permission=j.permission)
         _assert_record(self, folder_rec, root=FolderGrant, path=('folder',), model=Folder, lookup='folder')
         _assert_record(self, row_rec, root=FolderGrant, path=('folder', 'rows'), model=Row, lookup='folder__rows')
 
     def test_rejections_are_deterministic_and_leave_records_unchanged(self):
         Holder, _owner, _tag, _item, _image, _meta, _extra, _profile, Grant, Wrapper, WrapperGrant = _d2_models()
         _pair, PairGrant = _composite_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(Grant)
-        first = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
-        stored = registry.records
+        first = compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        stored = compiler.records
         wrapper = Ref(WrapperGrant)
         pair = Ref(PairGrant)
 
@@ -399,60 +399,60 @@ class TrustsRegistryDependentGrammarRegistrationTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with self.assertRaisesRegex(TrustsConfigurationError, 'reverse'):
-            registry.register_relation(content=j.notes, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.notes, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'before the gateway'):
-            registry.register_relation(content=j.notes.holder, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.notes.holder, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'reverse one-to-one'):
-            registry.register_relation(content=j.holder.profile, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.holder.profile, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'multi-valued'):
-            registry.register_relation(content=j.holder.items.tags, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.holder.items.tags, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'generic foreign key'):
-            registry.register_relation(content=j.target, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.target, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'more than two hops'):
-            registry.register_relation(content=j.holder.items.image.image.extra, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.holder.items.image.image.extra, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'forward path ending'):
-            registry.register_relation(content=wrapper.wrapper.holder, user=wrapper.user, permission=wrapper.permission)
+            compiler.register_relation(content=wrapper.wrapper.holder, user=wrapper.user, permission=wrapper.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'composite|target fields'):
-            registry.register_relation(content=pair.pair, user=pair.user, permission=pair.permission)
+            compiler.register_relation(content=pair.pair, user=pair.user, permission=pair.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'direct|reverse'):
-            registry.register_relation(content=j.holder, user=j.holder.items, permission=j.permission)
+            compiler.register_relation(content=j.holder, user=j.holder.items, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'missing field'):
-            registry.register_relation(content=j.holder.item_set, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.holder.item_set, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'same root'):
-            registry.register_relation(content=j.holder.items, user=wrapper.user, permission=j.permission)
+            compiler.register_relation(content=j.holder.items, user=wrapper.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
-            registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
-        self.assertEqual(registry.records, stored)
-        self.assertEqual(registry.records, (first,))
-        self.assertIs(registry.records[0], first)
+            compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        self.assertEqual(compiler.records, stored)
+        self.assertEqual(compiler.records, (first,))
+        self.assertIs(compiler.records[0], first)
 
     def test_same_root_same_terminal_via_alt_suffix_is_conflict(self):
         Folder, Payload, _row, FolderGrant, _group = _j1_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(FolderGrant)
-        first = registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        first = compiler.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'Conflicting'):
-            registry.register_relation(content=j.folder.rows.alt_content, user=j.user, permission=j.permission)
-        self.assertEqual(registry.records, (first,))
+            compiler.register_relation(content=j.folder.rows.alt_content, user=j.user, permission=j.permission)
+        self.assertEqual(compiler.records, (first,))
         self.assertEqual(first.content_path, ('folder', 'rows', 'content'))
 
     def test_user_and_permission_remain_direct(self):
         _folder, _payload, _row, FolderGrant, _group = _j1_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(FolderGrant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'direct|reverse'):
-            registry.register_relation(content=j.folder, user=j.folder.rows, permission=j.permission)
+            compiler.register_relation(content=j.folder, user=j.folder.rows, permission=j.permission)
         with self.assertRaisesRegex(TrustsConfigurationError, 'direct|reverse'):
-            registry.register_relation(content=j.folder, user=j.user, permission=j.folder.rows.content)
-        self.assertEqual(registry.records, ())
+            compiler.register_relation(content=j.folder, user=j.user, permission=j.folder.rows.content)
+        self.assertEqual(compiler.records, ())
 
     def test_registration_executes_zero_queries(self):
         _folder, _payload, _row, FolderGrant, _group = _j1_models()
-        registry = Compiler()
+        compiler = Compiler()
         j = Ref(FolderGrant)
-        registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        compiler.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         with self.assertRaises(TrustsConfigurationError):
-            registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
+            compiler.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
 
 class _TerminalProjectionMixin(object):
     """Shared object / queryset / enumeration / all-match assertions."""
@@ -464,17 +464,17 @@ class _TerminalProjectionMixin(object):
         self.read = _perm(read_codename, content_model)
         self.write = _perm(write_codename, content_model)
 
-    def _assert_terminal(self, registry, Model, granted, sibling, other):
-        handle = _direct_handle(registry)
-        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted))
-        self.assertTrue(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), sibling))
-        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), granted))
-        self.assertFalse(built_catalog(registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted))
-        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
-        self.assertEqual(_pks(built_catalog(registry).permissions_for(self.alice, granted)), {self.read.pk})
-        self.assertEqual(_pks(built_catalog(registry).permissions_for(self.alice, other)), {self.write.pk})
+    def _assert_terminal(self, compiler, Model, granted, sibling, other):
+        handle = _direct_handle(compiler)
+        self.assertTrue(built_catalog(compiler).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted))
+        self.assertTrue(built_catalog(compiler).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), sibling))
+        self.assertFalse(built_catalog(compiler).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), granted))
+        self.assertFalse(built_catalog(compiler).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), granted))
+        self.assertFalse(built_catalog(compiler).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other))
+        self.assertEqual(_pks(built_catalog(compiler).permissions_for(self.alice, granted)), {self.read.pk})
+        self.assertEqual(_pks(built_catalog(compiler).permissions_for(self.alice, other)), {self.write.pk})
         expected = [granted, sibling]
-        qs = built_catalog(registry).filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
+        qs = built_catalog(compiler).filter_authorized(Model.objects.order_by('pk'), self.alice, self.read)
         self.assertIsInstance(qs, QuerySet)
         with self.assertNumQueries(1):
             self.assertEqual(list(qs), expected)
@@ -489,7 +489,7 @@ class _TerminalProjectionMixin(object):
         group_only = _compile_common_permissions(built_catalog(handle), granted_qs, self.alice, kind='group')
         self.assertIsInstance(group_only, QuerySet)
         self.assertEqual(list(group_only), [])
-        plan = built_catalog(registry).plan_for(granted, user=self.alice, permission=self.read)
+        plan = built_catalog(compiler).plan_for(granted, user=self.alice, permission=self.read)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(plan.common_permissions(self.alice, granted)), {self.read.pk})
         with self.assertNumQueries(1):
@@ -497,12 +497,12 @@ class _TerminalProjectionMixin(object):
         with self.assertNumQueries(1):
             self.assertEqual(list(plan.common_permissions(self.alice, mixed_qs)), [])
 
-    def _assert_shared_row(self, registry, granted, other_scope):
-        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), granted))
-        self.assertFalse(built_catalog(registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other_scope))
+    def _assert_shared_row(self, compiler, granted, other_scope):
+        self.assertFalse(built_catalog(compiler).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), granted))
+        self.assertFalse(built_catalog(compiler).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), other_scope))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
+class TrustsCompilerJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
 
     def setUp(self):
         self.Folder, self.Payload, self.Row, self.FolderGrant, self.FolderGroupGrant = _j1_models()
@@ -520,9 +520,9 @@ class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         extras = [self.Payload.objects.create(title='X%s' % i) for i in range(6)]
         for payload in extras:
             self.Row.objects.create(folder=self.folder_b, content=payload, alt_content=self.pay_a1)
-        self.registry = Compiler()
+        self.compiler = Compiler()
         j = Ref(self.FolderGrant)
-        self.registry.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
+        self.compiler.register_relation(content=j.folder.rows.content, user=j.user, permission=j.permission)
         self.FolderGrant.objects.create(folder=self.folder_a, user=self.alice, permission=self.read)
         self.FolderGrant.objects.create(folder=self.folder_b, user=self.alice, permission=self.write)
         self.FolderGrant.objects.create(folder=self.folder_b, user=self.bob, permission=self.read)
@@ -531,13 +531,13 @@ class TrustsRegistryJ1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         self._table_cm.__exit__(None, None, None)
 
     def test_j1_projections_agree_and_stay_one_sql(self):
-        self._assert_terminal(self.registry, self.Payload, self.pay_a1, self.pay_a2, self.pay_b1)
-        self._assert_shared_row(self.registry, self.pay_a1, self.pay_b1)
-        self.assertTrue(built_catalog(self.registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.pay_b1))
-        self.assertTrue(built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.pay_b1))
+        self._assert_terminal(self.compiler, self.Payload, self.pay_a1, self.pay_a2, self.pay_b1)
+        self._assert_shared_row(self.compiler, self.pay_a1, self.pay_b1)
+        self.assertTrue(built_catalog(self.compiler).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.pay_b1))
+        self.assertTrue(built_catalog(self.compiler).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.pay_b1))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
+class TrustsCompilerD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
 
     def setUp(self):
         self.Holder, _owner, _tag, self.Item, self.Image, _meta, _extra, _profile, self.Grant, _w, _wg = _d1_models()
@@ -557,9 +557,9 @@ class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         for i in range(6):
             item = self.Item.objects.create(holder=self.h_b, owner=self.owner, title='X%s' % i)
             self.Image.objects.create(item=item, title='X%s' % i)
-        self.registry = Compiler()
+        self.compiler = Compiler()
         j = Ref(self.Grant)
-        self.registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        self.compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         self.Grant.objects.create(holder=self.h_a, user=self.alice, permission=self.read, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_a.pk)
         self.Grant.objects.create(holder=self.h_b, user=self.alice, permission=self.write, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_b.pk)
         self.Grant.objects.create(holder=self.h_b, user=self.bob, permission=self.read, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_b.pk)
@@ -568,11 +568,11 @@ class TrustsRegistryD1ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         self._table_cm.__exit__(None, None, None)
 
     def test_d1_projections_agree_and_stay_one_sql(self):
-        self._assert_terminal(self.registry, self.Image, self.img_a1, self.img_a2, self.img_b1)
-        self._assert_shared_row(self.registry, self.img_a1, self.img_b1)
+        self._assert_terminal(self.compiler, self.Image, self.img_a1, self.img_a2, self.img_b1)
+        self._assert_shared_row(self.compiler, self.img_a1, self.img_b1)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryD1oProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
+class TrustsCompilerD1oProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
 
     def setUp(self):
         self.Holder, owner, _tag, self.Item, self.Image, _meta, _extra, _profile, self.Grant, _w, _wg = _d1o_models()
@@ -588,9 +588,9 @@ class TrustsRegistryD1oProjectionTest(_TerminalProjectionMixin, TransactionTestC
         self.img_a1 = self.Image.objects.create(item=self.item_a1, title='A1')
         self.img_a2 = self.Image.objects.create(item=self.item_a2, title='A2')
         self.img_b1 = self.Image.objects.create(item=self.item_b1, title='B1')
-        self.registry = Compiler()
+        self.compiler = Compiler()
         j = Ref(self.Grant)
-        self.registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+        self.compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
         self.Grant.objects.create(holder=self.h_a, user=self.alice, permission=self.read, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_a.pk)
         self.Grant.objects.create(holder=self.h_b, user=self.alice, permission=self.write, content_type=ContentType.objects.get_for_model(self.Holder), object_id=self.h_b.pk)
 
@@ -598,8 +598,8 @@ class TrustsRegistryD1oProjectionTest(_TerminalProjectionMixin, TransactionTestC
         self._table_cm.__exit__(None, None, None)
 
     def test_d1o_projections_agree_and_stay_one_sql(self):
-        self._assert_terminal(self.registry, self.Image, self.img_a1, self.img_a2, self.img_b1)
-        self._assert_shared_row(self.registry, self.img_a1, self.img_b1)
+        self._assert_terminal(self.compiler, self.Image, self.img_a1, self.img_a2, self.img_b1)
+        self._assert_shared_row(self.compiler, self.img_a1, self.img_b1)
 
 def _seed_depth2(self, factory, suffix, reverse_meta=True):
     models_ = factory()
@@ -639,9 +639,9 @@ def _seed_depth2(self, factory, suffix, reverse_meta=True):
             meta = self.ImageMeta.objects.create(title='X%s' % i)
             image = self.Image.objects.create(title='X%s' % i, image=meta)
             self.Item.objects.create(holder=self.h_b, image=image)
-    self.registry = Compiler()
+    self.compiler = Compiler()
     j = Ref(self.Grant)
-    self.registry.register_relation(content=j.holder.items.image.image, user=j.user, permission=j.permission)
+    self.compiler.register_relation(content=j.holder.items.image.image, user=j.user, permission=j.permission)
     extra_kwargs = {}
     if 'content_type' in {f.name for f in self.Grant._meta.fields}:
         extra_kwargs = {'content_type': ContentType.objects.get_for_model(self.Holder)}
@@ -651,7 +651,7 @@ def _seed_depth2(self, factory, suffix, reverse_meta=True):
     return (extra, profile)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryD2ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
+class TrustsCompilerD2ProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
 
     def setUp(self):
         _seed_depth2(self, _d2_models, 'd2', reverse_meta=True)
@@ -660,11 +660,11 @@ class TrustsRegistryD2ProjectionTest(_TerminalProjectionMixin, TransactionTestCa
         self._table_cm.__exit__(None, None, None)
 
     def test_d2_projections_agree_and_stay_one_sql(self):
-        self._assert_terminal(self.registry, self.ImageMeta, self.meta_a1, self.meta_a2, self.meta_b1)
-        self._assert_shared_row(self.registry, self.meta_a1, self.meta_b1)
+        self._assert_terminal(self.compiler, self.ImageMeta, self.meta_a1, self.meta_a2, self.meta_b1)
+        self._assert_shared_row(self.compiler, self.meta_a1, self.meta_b1)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryD2oProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
+class TrustsCompilerD2oProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
 
     def setUp(self):
         _seed_depth2(self, _d2o_models, 'd2o', reverse_meta=True)
@@ -673,11 +673,11 @@ class TrustsRegistryD2oProjectionTest(_TerminalProjectionMixin, TransactionTestC
         self._table_cm.__exit__(None, None, None)
 
     def test_d2o_projections_agree_and_stay_one_sql(self):
-        self._assert_terminal(self.registry, self.ImageMeta, self.meta_a1, self.meta_a2, self.meta_b1)
-        self._assert_shared_row(self.registry, self.meta_a1, self.meta_b1)
+        self._assert_terminal(self.compiler, self.ImageMeta, self.meta_a1, self.meta_a2, self.meta_b1)
+        self._assert_shared_row(self.compiler, self.meta_a1, self.meta_b1)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryD2fProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
+class TrustsCompilerD2fProjectionTest(_TerminalProjectionMixin, TransactionTestCase):
 
     def setUp(self):
         _seed_depth2(self, _d2f_models, 'd2f', reverse_meta=False)
@@ -686,11 +686,11 @@ class TrustsRegistryD2fProjectionTest(_TerminalProjectionMixin, TransactionTestC
         self._table_cm.__exit__(None, None, None)
 
     def test_d2f_projections_agree_and_stay_one_sql(self):
-        self._assert_terminal(self.registry, self.ImageMeta, self.meta_a1, self.meta_a2, self.meta_b1)
-        self._assert_shared_row(self.registry, self.meta_a1, self.meta_b1)
+        self._assert_terminal(self.compiler, self.ImageMeta, self.meta_a1, self.meta_a2, self.meta_b1)
+        self._assert_shared_row(self.compiler, self.meta_a1, self.meta_b1)
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
+class TrustsCompilerDependentGrammarGroupSplitTest(TransactionTestCase):
 
     def setUp(self):
         self.Folder, self.Payload, self.Row, self.FolderGrant, self.FolderGroupGrant = _j1_models()
@@ -748,7 +748,7 @@ class TrustsRegistryDependentGrammarGroupSplitTest(TransactionTestCase):
         self.assertFalse(all_match(built_catalog(self.handle), self.pay_b, self.carol, self.read))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
+class TrustsCompilerDependentGrammarToFieldTest(TransactionTestCase):
 
     def test_to_field_on_forward_prefix_retains_suffix_correlation(self):
         User = get_user_model()
@@ -782,9 +782,9 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
             class Meta:
                 app_label = 'trusts_tests'
         with _tables(CodedHolder, CodedItem, CodedImage, CodedGrant):
-            registry = Compiler()
+            compiler = Compiler()
             j = Ref(CodedGrant)
-            record = registry.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
+            record = compiler.register_relation(content=j.holder.items.image, user=j.user, permission=j.permission)
             self.assertEqual(record.content_field, 'holder__items__image')
             self.assertEqual(record.content_target, CodedImage._meta.pk.attname)
             self.assertNotEqual(record.content_target, 'code')
@@ -802,13 +802,13 @@ class TrustsRegistryDependentGrammarToFieldTest(TransactionTestCase):
             img_a2 = CodedImage.objects.create(item=item_a2, title='A2')
             img_b1 = CodedImage.objects.create(item=item_b1, title='B1')
             CodedGrant.objects.create(holder=holder_a, user=alice, permission=read)
-            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_a1))
-            self.assertTrue(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_a2))
-            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_b1))
-            self.assertFalse(built_catalog(registry).has_perm(bob, '%s.%s' % (read.content_type.app_label, read.codename), img_a1))
-            self.assertFalse(built_catalog(registry).has_perm(alice, '%s.%s' % (write.content_type.app_label, write.codename), img_a1))
-            sql = str(built_catalog(registry).filter_authorized(CodedImage.objects.order_by('pk'), alice, read).query).lower()
+            self.assertTrue(built_catalog(compiler).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_a1))
+            self.assertTrue(built_catalog(compiler).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_a2))
+            self.assertFalse(built_catalog(compiler).has_perm(alice, '%s.%s' % (read.content_type.app_label, read.codename), img_b1))
+            self.assertFalse(built_catalog(compiler).has_perm(bob, '%s.%s' % (read.content_type.app_label, read.codename), img_a1))
+            self.assertFalse(built_catalog(compiler).has_perm(alice, '%s.%s' % (write.content_type.app_label, write.codename), img_a1))
+            sql = str(built_catalog(compiler).filter_authorized(CodedImage.objects.order_by('pk'), alice, read).query).lower()
             self.assertIn('exists', sql)
             self.assertIn('holder', sql)
             with self.assertNumQueries(1):
-                self.assertEqual(list(built_catalog(registry).filter_authorized(CodedImage.objects.order_by('pk'), alice, read)), [img_a1, img_a2])
+                self.assertEqual(list(built_catalog(compiler).filter_authorized(CodedImage.objects.order_by('pk'), alice, read)), [img_a1, img_a2])

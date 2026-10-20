@@ -120,7 +120,7 @@ def _is_condition_operand(value):
 class Equal(object):
     """Closed equality of two root-relative single-valued refs.
 
-    Isolated registry tests may pass ``Ref`` operands. Public
+    Isolated compiler tests may pass ``Ref`` operands. Public
     ``register(*, trust=..., condition=...)`` does not accept a prebuilt
     ``Equal``; it lowers a trust-rooted ``==`` expression to this node.
     """

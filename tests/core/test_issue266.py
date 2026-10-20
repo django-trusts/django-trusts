@@ -693,7 +693,7 @@ class DelegationRootGuardTest(TestCase):
         payload.update(extra)
         return handle.register(**payload)
 
-    def test_registry_after_build_accepts_delegation(self):
+    def test_compiler_after_build_accepts_delegation(self):
         handle = _handle()
         self.assertEqual(handle.delegations, ())
         with self.assertNumQueries(0):
@@ -709,13 +709,13 @@ class DelegationRootGuardTest(TestCase):
         self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
-        registry = Compiler()
+        compiler = Compiler()
         delegation = Ref(DocumentDelegation)
         grant = Ref(DocumentGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'same root model'):
-                registry.register_delegation(content=delegation.document, delegate=delegation.delegate, sponsor=grant.user)
-        self.assertEqual(registry.delegations, ())
+                compiler.register_delegation(content=delegation.document, delegate=delegation.delegate, sponsor=grant.user)
+        self.assertEqual(compiler.delegations, ())
 
     def test_exact_duplicate_on_one_root_is_rejected(self):
         handle = _handle()

@@ -235,7 +235,7 @@ class PolicyYamlRejectionTest(SimpleTestCase):
 
 
 class PolicyLockConfigurationTest(SimpleTestCase):
-    def test_render_rejects_bad_alias_engine_path_and_registry(self):
+    def test_render_rejects_bad_alias_engine_path_and_compiler(self):
         for alias in (True, '', 1, 'missing-alias'):
             with self.subTest(alias=alias):
                 with self.assertRaises(TrustsConfigurationError) as ctx:
@@ -278,7 +278,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
         handle = _document_handle('documents.backends.FilterlessBackend')
         populated = built_catalog(handle)
 
-        class _NoFilterRegistry(object):
+        class _NoFilterCatalog(object):
             def __init__(self, inner):
                 self._inner = inner
                 self.path = inner.path
@@ -300,7 +300,7 @@ class PolicyLockConfigurationTest(SimpleTestCase):
             def __getattr__(self, name):
                 return getattr(self._inner, name)
 
-        bare = _NoFilterRegistry(populated)
+        bare = _NoFilterCatalog(populated)
         omitted = _load_policy_sql_document(
             render_published_subjects(bare),
         )
@@ -575,11 +575,11 @@ class PolicyLockSentinelTest(SimpleTestCase):
         )
         from trusts.plan.aggregates import _compile_common_permissions
 
-        def hide_group(registry, instance, user, kind='complete'):
+        def hide_group(compiler, instance, user, kind='complete'):
             if kind == 'group':
                 return None
             return _compile_common_permissions(
-                registry, instance, user, kind=kind,
+                compiler, instance, user, kind=kind,
             )
 
         with patch(

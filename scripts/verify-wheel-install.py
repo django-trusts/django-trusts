@@ -347,6 +347,7 @@ def main() -> int:
         'ConditionLookup',
         'ConditionRecord',
         'ConditionRegistry',
+        'ConditionStore',
         'ModelIdentity',
         'RegistryConditionLookup',
         'compile_expression_q',

@@ -42,6 +42,7 @@ HIDDEN_PUBLIC_NAMES = (
     'ConditionLookup',
     'ConditionRecord',
     'ConditionRegistry',
+    'ConditionStore',
     'ModelIdentity',
     'RegistryConditionLookup',
     'compile_expression_q',
@@ -76,7 +77,7 @@ class StageBPublicSurfaceTest(SimpleTestCase):
         with self.assertRaises(ImportError):
             from trusts.conditions import condition_refs  # noqa: F401
         with self.assertRaises(ImportError):
-            from trusts.conditions import ConditionRegistry  # noqa: F401
+            from trusts.conditions import ConditionStore  # noqa: F401
         with self.assertRaises(ImportError):
             from trusts.conditions import validate_expression  # noqa: F401
         with self.assertRaises(ImportError):
@@ -107,11 +108,11 @@ class StageBRegisterCallableOnlyTest(SimpleTestCase):
                 app_label = 'trusts_tests'
 
         u, _p, o = condition_refs()
-        registry = Compiler()
+        compiler = Compiler()
         with self.assertRaises(TypeError):
-            registry.add_named_filter(Note, 'own', u == o.owner)
-        self.assertIsNone(registry.conditions.get_permission_condition_record(Note, 'own'))
-        record = registry.add_named_filter(
+            compiler.add_named_filter(Note, 'own', u == o.owner)
+        self.assertIsNone(compiler.conditions.get_permission_condition_record(Note, 'own'))
+        record = compiler.add_named_filter(
             Note, 'own', lambda u, p, o: u == o.owner,
         )
         self.assertIsNotNone(record)
