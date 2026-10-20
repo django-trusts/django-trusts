@@ -18,7 +18,7 @@ import trusts.plan.standards as standards
 from trusts.plan.relations import PlanQueryCompiler
 
 catalogs = {}
-recorders = {}
+recorders: dict[type, "Recorder"] = {}
 
 T = TypeVar('T', bound=Model)
 
