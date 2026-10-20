@@ -17,9 +17,10 @@ from trusts.compile.factory import RegisteredDelegation
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+from trusts.compile.catalogs import compile_permitted_users
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import PermittedManager, PermittedQuerySet, PermittedUsersMixin
+from trusts.models import PermittedManager, PermittedQuerySet, PermittedUsersMixin
 from tests.support import render_configured_policy, built_catalog, install_class_handle
 
 
@@ -89,7 +90,6 @@ def _indirect_content_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -314,7 +314,6 @@ def _two_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:
@@ -538,7 +537,6 @@ def _ordinary_prefix_models():
         objects = PermittedManager()
 
         def get_permitted_users(self, perm):
-            from trusts.query import compile_permitted_users
             return compile_permitted_users(self, perm, user_queryset=Principal.objects.all())
 
         class Meta:

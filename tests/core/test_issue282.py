@@ -20,7 +20,7 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
+from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
 from tests.support import render_configured_policy, install_class_handle
 
 

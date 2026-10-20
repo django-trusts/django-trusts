@@ -31,8 +31,9 @@ from trusts.compile.catalogs import Catalog
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
+import trusts.models as models_mod
 from trusts.compile.factory import Compiler
-from trusts.query import (
+from trusts.models import (
     AuthorizedManager,
     AuthorizedManagerMixin,
     AuthorizedQuerySet,
@@ -133,12 +134,10 @@ class KernelConfigTest(SimpleTestCase):
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
     def test_legacy_query_helpers_are_removed(self):
-        import trusts.query as query
-
-        self.assertFalse(hasattr(query, 'trust_grant_q'))
-        self.assertFalse(hasattr(query, 'historical_group_grant_exists'))
-        self.assertFalse(hasattr(query, 'group_local_grant_exists'))
-        self.assertFalse(hasattr(query, 'permission_granted_via_group_exists'))
+        self.assertFalse(hasattr(models_mod, 'trust_grant_q'))
+        self.assertFalse(hasattr(models_mod, 'historical_group_grant_exists'))
+        self.assertFalse(hasattr(models_mod, 'group_local_grant_exists'))
+        self.assertFalse(hasattr(models_mod, 'permission_granted_via_group_exists'))
         self.assertTrue(callable(filter_by_permitted_content))
 
 

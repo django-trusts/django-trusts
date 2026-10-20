@@ -20,8 +20,8 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
-from trusts.query import AuthorizedManager, AuthorizedQuerySet, PermittedManager, PermittedQuerySet, PermittedQuerySetMixin
-from trusts import query as query_mod
+import trusts.models as query_mod
+from trusts.models import AuthorizedManager, AuthorizedQuerySet, PermittedManager, PermittedQuerySet, PermittedQuerySetMixin
 
 def _request(user):
     request = HttpRequest()

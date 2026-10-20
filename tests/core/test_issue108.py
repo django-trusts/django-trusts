@@ -22,7 +22,7 @@ from trusts.compile.factory import Compiler
 from trusts.compile.nodes import Ref
 from trusts.decorators import filter_by_permitted_content
 from trusts.errors import TrustsConfigurationError
-from trusts.query import AuthorizedManager, AuthorizedQuerySet
+from trusts.models import AuthorizedManager, AuthorizedQuerySet
 
 
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'

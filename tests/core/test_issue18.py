@@ -31,7 +31,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import _compile_common_permissions, all_match, instance_match
-from trusts.query import AuthorizedManager
+from trusts.models import AuthorizedManager
 from tests.support import listed_relationship
 
 

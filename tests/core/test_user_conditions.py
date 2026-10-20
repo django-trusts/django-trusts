@@ -26,7 +26,7 @@ from trusts.compile.factory import Compiler
 from trusts.plan.contents import granted
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
-from trusts.query import PermittedQuerySet, PermittedUsersManagerMixin
+from trusts.models import PermittedQuerySet, PermittedUsersManagerMixin
 urlpatterns = [path('admin/', admin.site.urls)]
 
 def _permission(model, codename):
@@ -788,7 +788,6 @@ class SkipKeywordInquiryTest(KernelHostRequiredMixin, TestCase):
 
     def test_unknown_skip_keyword_on_inquiry_apis(self):
         from django.contrib.auth.models import Permission as AuthPermission
-        from trusts.query import PermittedQuerySet
         User = get_user_model()
         alice = User.objects.create_user('skip-inquiry', password='x')
         ct = ContentType.objects.get_for_model(Document)

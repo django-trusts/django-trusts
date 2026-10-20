@@ -1,20 +1,7 @@
-"""Authorized queryset and manager."""
-
-from django.contrib.auth.models import Permission
-from django.db.models import Manager, Model, QuerySet
+from django.db.models import Model, QuerySet
 
 from trusts.apps import catalog_for_model
-from trusts.compile.catalogs import (
-    assert_authorization_preflight,
-    authorization_grant_q,
-    codename_binding,
-    compile_permitted_users,
-    guard_conditions,
-    guard_permission_string,
-)
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.relations import bind_checked_user, known_skip_names
-from trusts.plan.rewrites import bind_once
 
 
 class AuthorizedQuerySet(QuerySet):
@@ -41,6 +28,11 @@ class AuthorizedQuerySet(QuerySet):
     """
 
     def authorized(self, user, permission, extra_q=None, **skip_flags):
+        # Catalog imports stay in the method. Module import must not need
+        # the app registry or the swappable user model.
+        from trusts.plan.relations import bind_checked_user, known_skip_names
+        from trusts.plan.rewrites import bind_once
+
         if not isinstance(permission, Model):
             raise TrustsConfigurationError(
                 'permission must be a model instance, not %r.' % (permission,)
@@ -67,16 +59,6 @@ class AuthorizedQuerySet(QuerySet):
             granted_q = granted_q & extra_q
         return bind_once(
             self.filter(granted_q).distinct(), user_model=catalog.user_model,
-        )
-
-
-class AuthorizedManagerMixin:
-    """Add ``authorized()`` without replacing an application's manager."""
-
-    def authorized(self, user, permission, extra_q=None, **skip_flags):
-        return AuthorizedQuerySet.authorized(
-            self.get_queryset(), user, permission, extra_q=extra_q,
-            **skip_flags,
         )
 
 
@@ -108,6 +90,14 @@ class PermittedQuerySetMixin:
         active-superuser shortcut. A listed backend with no catalog
         contributes nothing.
         """
+        from trusts.compile.catalogs import (
+            assert_authorization_preflight,
+            authorization_grant_q,
+            guard_conditions,
+        )
+        from trusts.plan.relations import bind_checked_user, known_skip_names
+        from trusts.plan.rewrites import bind_once
+
         model = self.model
         normalized = _normalize_permitted_permission(permission, api='permitted')
         conditions = guard_conditions(conditions, api='permitted')
@@ -143,42 +133,11 @@ class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
     """Concrete queryset for ``permitted(permission, user, conditions=())``."""
 
 
-class PermittedUsersMixin:
-    """Content-instance adapter for the reverse permission inquiry.
-
-    ``content.get_permitted_users(perm)`` is the path that exists on
-    every protected model that mixes this in. It is not a content-manager
-    method: ``Content.objects`` keeps returning content rows.
-    """
-
-    def get_permitted_users(self, perm, **skip_flags):
-        return compile_permitted_users(self, perm, **skip_flags)
-
-
-class PermittedUsersManagerMixin:
-    """Optional adapter on an application's existing user manager.
-
-    ``User.objects.permitted(content, perm)`` returns a lazy user
-    queryset. The name is ``permitted`` because the manager already
-    identifies the user model, and Django's ``get`` convention implies
-    one row. Does not replace that manager or its queryset class. Stock
-    ``auth.User`` does not acquire this method. The content adapter
-    ``get_permitted_users`` remains the path that does not require a
-    user-manager change.
-    """
-
-    def permitted(self, content, perm, **skip_flags):
-        return compile_permitted_users(
-            content, perm, user_queryset=self.get_queryset(), **skip_flags,
-        )
-
-
-PermittedManager = Manager.from_queryset(PermittedQuerySet)
-AuthorizedManager = Manager.from_queryset(AuthorizedQuerySet)
-
-
 def _normalize_permitted_permission(permission, *, api):
     """String or saved ``auth.Permission``. Does not read ``content_type``."""
+    from django.contrib.auth.models import Permission
+    from trusts.compile.catalogs import guard_permission_string
+
     if isinstance(permission, str):
         app_label, codename = guard_permission_string(permission, api=api)
         return ('string', app_label, codename, permission)
@@ -206,9 +165,9 @@ def _normalize_permitted_permission(permission, *, api):
     )
 
 
-
-
 def _permitted_binding(model, normalized):
+    from trusts.compile.catalogs import codename_binding
+
     if normalized[0] == 'string':
         return codename_binding(model, normalized[1], normalized[2])
     return normalized[1]

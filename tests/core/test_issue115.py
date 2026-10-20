@@ -23,7 +23,7 @@ from tests.myapp.settings import AUTHENTICATION_BACKENDS, INSTALLED_APPS
 from tests.myapp.views import edit_document
 from trusts.apps import TrustsConfigMixin
 from trusts.backends import TrustModelBackendMixin
-from trusts.query import AuthorizedQuerySet
+from trusts.models import AuthorizedQuerySet
 
 
 ROOT = Path(__file__).resolve().parents[2]
