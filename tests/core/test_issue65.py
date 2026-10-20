@@ -22,7 +22,7 @@ from trusts.compile.nodes import Ref
 from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
-from trusts.compile.catalogs import Catalog
+from tests.support import built_catalog
 
 
 def _folder_models():
@@ -134,8 +134,8 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
             registry.records_for_root(FolderGrant),
             (folder_rec, document_rec),
         )
-        plan_folder = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Folder)
-        plan_document = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document)
+        plan_folder = built_catalog(registry).plan_for(Folder)
+        plan_document = built_catalog(registry).plan_for(Document)
         self.assertEqual(plan_folder.records, (folder_rec,))
         self.assertEqual(plan_document.records, (document_rec,))
 
@@ -167,7 +167,7 @@ class TrustsRegistrySameRootRegistrationTest(SimpleTestCase):
         self.assertEqual(registry.records, (first, second, third))
         self.assertEqual(registry.records_for_root(FolderGrant), (first, third))
         self.assertEqual(registry.records_for_root(DocumentPermit), (second,))
-        self.assertEqual(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document).records, (second, third))
+        self.assertEqual(built_catalog(registry).plan_for(Document).records, (second, third))
 
     def test_exact_duplicate_raises_without_mutating_records(self):
         _folder, _document, FolderGrant, _permit = _folder_models()
@@ -438,51 +438,51 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         )
 
         self.assertEqual(
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.folder_a)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.folder_a)),
             {self.folder_read.pk},
         )
         self.assertEqual(
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_a1)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.doc_a1)),
             {self.read.pk},
         )
         self.assertEqual(
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_a2)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.doc_a2)),
             {self.read.pk},
         )
         self.assertEqual(
-            list(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_b1)),
+            list(built_catalog(self.registry).permissions_for(self.alice, self.doc_b1)),
             [],
         )
         self.assertEqual(
-            list(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.folder_b)),
+            list(built_catalog(self.registry).permissions_for(self.alice, self.folder_b)),
             [],
         )
         self.assertTrue(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.folder_read.content_type.app_label, self.folder_read.codename), self.folder_a),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.folder_read.content_type.app_label, self.folder_read.codename), self.folder_a),
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.folder_a),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.folder_a),
         )
         self.assertTrue(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a1),
         )
         self.assertTrue(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a2),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a2),
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_b1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_b1),
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a1),
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a1),
+            built_catalog(self.registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a1),
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.folder_a),
+            built_catalog(self.registry).has_perm(self.bob, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.folder_a),
         )
         self.assertTrue(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.bob, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_b1),
+            built_catalog(self.registry).has_perm(self.bob, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_b1),
         )
 
     def test_three_projections_agree_for_folder_and_document(self):
@@ -498,11 +498,11 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
 
         expected_folders = [
             folder for folder in self.Folder.objects.order_by('pk')
-            if Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.folder_read.content_type.app_label, self.folder_read.codename), folder)
+            if built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.folder_read.content_type.app_label, self.folder_read.codename), folder)
         ]
         expected_docs = [
             document for document in self.Document.objects.order_by('pk')
-            if Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), document)
+            if built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), document)
         ]
         folder_qs = self.registry.build_registry().filter_authorized(
             self.Folder.objects.order_by('pk'), self.alice, self.folder_read,
@@ -517,19 +517,19 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         with self.assertNumQueries(1):
             self.assertEqual(list(document_qs), expected_docs)
         self.assertEqual(
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.folder_a)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.folder_a)),
             {self.folder_read.pk},
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.folder_read.content_type.app_label, self.folder_read.codename), self.doc_a1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.folder_read.content_type.app_label, self.folder_read.codename), self.doc_a1),
         )
         self.assertEqual(
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_a1)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.doc_a1)),
             {self.read.pk},
         )
         self.assertNotIn(
             self.write.pk,
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_a1)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.doc_a1)),
         )
 
     def test_authorized_content_is_lazy_set_based_and_one_query(self):
@@ -540,12 +540,12 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             qs = self.registry.build_registry().filter_authorized(
                 self.Document.objects.all(), self.alice, self.read,
             )
-            plan = Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).plan_for(
+            plan = built_catalog(self.registry).plan_for(
                 self.Document.objects.all(),
                 user=self.alice,
                 permission=self.read,
             )
-            enumerated = Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_a1)
+            enumerated = built_catalog(self.registry).permissions_for(self.alice, self.doc_a1)
             exists = plan.content_exists(self.alice, self.read)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(plan, RelationPlan)
@@ -563,7 +563,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.read,
         )
-        plan = Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).plan_for(
+        plan = built_catalog(self.registry).plan_for(
             self.Document.objects.all(),
             user=self.alice,
             permission=self.read,
@@ -596,7 +596,7 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.read,
         )
-        plan = Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).plan_for(
+        plan = built_catalog(self.registry).plan_for(
             self.Document, user=self.alice, permission=self.read,
         )
         exists = plan.content_exists(self.alice, self.read)
@@ -628,13 +628,13 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
         )
 
         self.assertTrue(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a1),
         )
         self.assertTrue(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_b1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_b1),
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a1),
         )
         self.assertEqual(
             _pks(self.registry.build_registry().filter_authorized(
@@ -649,11 +649,11 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             {self.doc_b1.pk},
         )
         self.assertEqual(
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_a1)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.doc_a1)),
             {self.read.pk},
         )
         self.assertEqual(
-            _pks(Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).permissions_for(self.alice, self.doc_b1)),
+            _pks(built_catalog(self.registry).permissions_for(self.alice, self.doc_b1)),
             {self.write.pk},
         )
         sql = str(self.registry.build_registry().filter_authorized(
@@ -670,10 +670,10 @@ class TrustsRegistryTrailingReverseProjectionTest(TransactionTestCase):
             folder=self.folder_b, user=self.alice, permission=self.write,
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.write.content_type.app_label, self.write.codename), self.doc_a1),
         )
         self.assertFalse(
-            Catalog(cls=type(self.registry), path=self.registry.path, family=self.registry.family, registry=self.registry.build_registry()).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_b1),
+            built_catalog(self.registry).has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_b1),
         )
         self.assertEqual(
             _pks(self.registry.build_registry().filter_authorized(
@@ -749,11 +749,11 @@ class TrustsRegistryToFieldHopTest(TransactionTestCase):
             )
 
             self.assertEqual(
-                _pks(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, folder_alpha)),
+                _pks(built_catalog(registry).permissions_for(alice, folder_alpha)),
                 {read_folder.pk},
             )
             self.assertEqual(
-                list(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, folder_beta)),
+                list(built_catalog(registry).permissions_for(alice, folder_beta)),
                 [],
             )
             self.assertTrue(

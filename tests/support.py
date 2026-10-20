@@ -21,6 +21,16 @@ import trusts.plan.standards as standards
 ZERO_BACKEND = 'trusts.zero.backends.TrustModelBackend'
 
 
+def built_catalog(factory):
+    """Catalog for one factory. The factory is built here."""
+    return Catalog(
+        cls=type(factory),
+        path=factory.path,
+        family=factory.family,
+        registry=factory.build_registry(),
+    )
+
+
 def built_registries(items):
     """Build factories for a direct ``granted`` / filter call.
 

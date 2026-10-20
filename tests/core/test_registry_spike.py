@@ -19,7 +19,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Along, Ref
 from trusts.plan.recursions import GrantReach
 from trusts.plan.registry import Registry
-from trusts.compile.catalogs import Catalog
+from tests.support import built_catalog
 
 
 def _sql(expr, model):
@@ -63,7 +63,7 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         registry = RegistryFactory()
         record = _register_document(registry, DocumentGrant)
         self.assertEqual(registry.records, (record,))
-        self.assertIs(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document).records[0], record)
+        self.assertIs(built_catalog(registry).plan_for(Document).records[0], record)
 
     def test_injected_plan_matches_live_registry(self):
         Document, DocumentGrant = _document_models()
@@ -75,8 +75,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
         self.assertEqual(built_registry.records, registry.records)
         self.assertEqual(built_registry.delegations, registry.delegations)
 
-        live = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Document)
-        built = Catalog(cls=type(built_registry), path=built_registry.path, family=built_registry.family, registry=built_registry.build_registry()).plan_for(Document)
+        live = built_catalog(registry).plan_for(Document)
+        built = built_catalog(built_registry).plan_for(Document)
         self.assertEqual(built.records, live.records)
         self.assertIs(built.records[0], live.records[0])
         self.assertEqual(built.delegations, live.delegations)
@@ -109,8 +109,8 @@ class RegistryInjectionSpikeTest(SimpleTestCase):
             along=Along(root.folder.parent, 2),
         )
         built_registry = _built_from(registry)
-        live = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).plan_for(Folder)
-        built = Catalog(cls=type(built_registry), path=built_registry.path, family=built_registry.family, registry=built_registry.build_registry()).plan_for(Folder)
+        live = built_catalog(registry).plan_for(Folder)
+        built = built_catalog(built_registry).plan_for(Folder)
         self.assertIsNotNone(built.records[0].along)
         User = get_user_model()
         user = User(pk=1)

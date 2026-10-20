@@ -29,7 +29,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy
+from tests.support import render_configured_policy, built_catalog
 from trusts.compile.catalogs import Catalog
 
 
@@ -194,7 +194,7 @@ class ContentTypeMismatchMatrixTest(TransactionTestCase):
 
     def test_same_model_grants_and_crossed_pairs_deny(self):
         cases = ((self.manage_code, self.manage, self.acme, True), (self.read_code, self.read, self.specs, True), (self.read_code, self.read, self.acme, False), (self.manage_code, self.manage, self.specs, False), (self.manage_code, self.manage, self.team, False), (self.read_code, self.read, self.widget, False))
-        catalog = Catalog(cls=type(self.handle), path=self.handle.path, family=self.handle.family, registry=self.handle.build_registry())
+        catalog = built_catalog(self.handle)
         with _installed(self.handle):
             for code, permission, obj, expected in cases:
                 with self.subTest(code=code, obj=obj._meta.model_name):
@@ -436,7 +436,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         registry = RegistryFactory()
         grant = self._ref(self.DirectGrant)
         registry.register(content=grant.organization, user=grant.user, permission=grant.permission)
-        catalog = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry())
+        catalog = built_catalog(registry)
         self.assertTrue(catalog.has_perm(self.owner, _code(manage), self.org))
         self.assertFalse(catalog.has_perm(self.owner, _code(read), self.org))
 

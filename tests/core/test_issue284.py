@@ -20,7 +20,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from tests.support import scoped_permitted_content as filter_by_permitted_content
+from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -228,28 +228,28 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             registry = RegistryFactory()
             grant = Ref(NoteGrant)
             registry.register(content=grant.note, user=grant.user, permission=grant.permission)
-            self.assertEqual(_pks(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note)), {read.pk})
+            self.assertEqual(_pks(built_catalog(registry).permissions_for(alice, note)), {read.pk})
             self.assertTrue(registry.build_registry().has_permission(alice, note, read))
             self.assertEqual(_pks(registry.build_registry().filter_authorized(Note.objects.all(), alice, read)), {note.pk})
             with self.assertNumQueries(3):
-                self.assertEqual(list(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(inactive, note)), [])
+                self.assertEqual(list(built_catalog(registry).permissions_for(inactive, note)), [])
                 self.assertFalse(registry.build_registry().has_permission(inactive, note, read))
                 self.assertFalse(registry.build_registry().filter_authorized(Note.objects.all(), inactive, read).exists())
-            self.assertEqual(_pks(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
+            self.assertEqual(_pks(built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
             self.assertTrue(registry.build_registry().has_permission(inactive, note, read, skip_is_active=True))
             self.assertEqual(_pks(registry.build_registry().filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
             account_registry = RegistryFactory()
             account_grant = Ref(AccountGrant)
             account_registry.register(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
-            self.assertEqual(_pks(Catalog(cls=type(account_registry), path=account_registry.path, family=account_registry.family, registry=account_registry.build_registry()).permissions_for(account, note)), {read.pk})
+            self.assertEqual(_pks(built_catalog(account_registry).permissions_for(account, note)), {read.pk})
             self.assertTrue(account_registry.build_registry().has_permission(account, note, read))
-            account_sql = str(Catalog(cls=type(account_registry), path=account_registry.path, family=account_registry.family, registry=account_registry.build_registry()).permissions_for(account, note).query)
+            account_sql = str(built_catalog(account_registry).permissions_for(account, note).query)
             self.assertNotIn('is_active', account_sql)
-            active_sql = str(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note).query)
+            active_sql = str(built_catalog(registry).permissions_for(alice, note).query)
             self.assertIn('"is_active"', active_sql)
-            skipped = Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(inactive, note, skip_is_active=True)
+            skipped = built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)
             self.assertEqual(_pks(skipped), {read.pk})
-            self.assertEqual(skipped.query.sql_with_params()[0], Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(alice, note).query.sql_with_params()[0])
+            self.assertEqual(skipped.query.sql_with_params()[0], built_catalog(registry).permissions_for(alice, note).query.sql_with_params()[0])
             self.assertIn('is_active', str(skipped.query))
             scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
@@ -345,7 +345,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             registry = RegistryFactory()
             grant = Ref(LocalUserGrant)
             registry.register(content=grant.note, user=grant.holder, permission=grant.action)
-            self.assertEqual(_pks(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(visible, note)), {read.pk})
+            self.assertEqual(_pks(built_catalog(registry).permissions_for(visible, note)), {read.pk})
             self.assertTrue(registry.build_registry().has_permission(visible, note, read))
             scope_registry = RegistryFactory()
             scope_grant = Ref(FolderGrant)
@@ -356,7 +356,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             for holder in (anonymous, guest):
                 with self.assertNumQueries(0):
                     for include_inactive in (False, True):
-                        self.assertEqual(list(Catalog(cls=type(registry), path=registry.path, family=registry.family, registry=registry.build_registry()).permissions_for(holder, note, skip_is_active=include_inactive)), [])
+                        self.assertEqual(list(built_catalog(registry).permissions_for(holder, note, skip_is_active=include_inactive)), [])
                         self.assertFalse(registry.build_registry().has_permission(holder, note, read, skip_is_active=include_inactive))
                         self.assertFalse(registry.build_registry().filter_authorized(Note.objects.all(), holder, read, skip_is_active=include_inactive).exists())
                         self.assertFalse(filter_by_permitted_content(Folder.objects.all(), holder, read, content=Note, registries=built_registries((handle,)), skip_is_active=include_inactive).exists())
