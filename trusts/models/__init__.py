@@ -7,7 +7,7 @@ from trusts.models.manager import (
     PermittedManager,
     PermittedUsersManagerMixin,
 )
-from trusts.models.mixins import PermittedUsersMixin
+from trusts.models.base import PermittedUsersMixin
 from trusts.models.query import (
     AuthorizedQuerySet,
     PermittedQuerySet,
