@@ -49,7 +49,7 @@ from trusts.plan.relations import (
     known_skip_names,
 )
 from trusts.plan.rewrites import bind_once
-from trusts.plan.standards import builtin_user_conditions, field_state
+from trusts.plan.standards import builtin_user_conditions
 from trusts.plan.users import (
     _named_filter_q,
     _permission_binding_for_plan,
@@ -195,7 +195,7 @@ class Catalog(object):
         if subject is not None:
             rules = self._rule_fragment(subject)
             closed = rules
-            override = self._override_fragment(subject)
+            override = self._override_q
         return RelationPlan(
             records=records,
             delegations=delegations,
@@ -725,18 +725,6 @@ class Catalog(object):
         if builtin_user_conditions(model):
             return primary
         return absent
-
-    def _override_fragment(self, model):
-        slot = self.user_override
-        if slot is None:
-            return None
-        model = model._meta.concrete_model
-        if field_state(model, slot.expr) != 'ok':
-            raise TrustsConfigurationError(
-                'User override %r needs a concrete BooleanField on %s.'
-                % (slot.name, model._meta.label)
-            )
-        return self._override_q
 
 
 class PreparedInquiry(object):

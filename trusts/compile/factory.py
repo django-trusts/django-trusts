@@ -72,6 +72,7 @@ from trusts.plan.standards import (
     builtin_user_conditions,
     compile_override_q,
     compile_user_rules,
+    field_state,
     concrete_rule,
     normalize_on,
     normalize_override_on,
@@ -834,9 +835,23 @@ class RegistryFactory(object):
         absent = primary if stored is not None else compile_user_rules(
             model, '', (), role='user', values={},
         )
-        override_q = None if self._user_override is None else compile_override_q(
-            model, '', self._user_override, {},
-        )
+        slot = self._user_override
+        override_q = None
+        if slot is not None:
+            seen = set()
+            candidates = [model] if model is not None else []
+            candidates.extend(record.user_model for record in self.records)
+            candidates.extend(
+                record.delegate_model for record in self.delegations
+            )
+            for candidate in candidates:
+                concrete = candidate._meta.concrete_model
+                if concrete in seen:
+                    continue
+                seen.add(concrete)
+                if field_state(concrete, slot.expr) != 'ok':
+                    raise TrustsConfigurationError('User override %r needs a concrete BooleanField on %s.' % (slot.name, concrete._meta.label))
+            override_q = compile_override_q(model, '', slot, {})
         self.frozen = True
         return CatalogShape(
             records=self.records, delegations=self.delegations, conditions=rows,

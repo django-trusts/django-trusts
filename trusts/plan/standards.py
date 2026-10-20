@@ -253,10 +253,5 @@ def compile_override_q(model, path, slot, values):
     """``(NOT skip_<override> AND override)``, or ``None`` when unset."""
     if slot is None:
         return None
-    if field_state(model, slot.expr) != 'ok':
-        raise TrustsConfigurationError(
-            'User override %r needs a concrete BooleanField on %s.'
-            % (slot.name, model._meta.label)
-        )
     flag = SkipFlag(slot.name, (values or {}).get(slot.name, False))
     return ~Q(flag) & _compile(path, slot.expr)
