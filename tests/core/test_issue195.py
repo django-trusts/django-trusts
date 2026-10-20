@@ -80,7 +80,8 @@ class RelationshipOnlyCompilerTest(SimpleTestCase):
         self.assertFalse(compiler.applies(empty))
         self.assertFalse(protocol.applies(empty))
         self.assertFalse(_compiler_applies(compiler, empty))
-        self.assertFalse(_compiler_applies(object(), empty))
+        with self.assertRaises(AttributeError):
+            _compiler_applies(object(), empty)
         self.assertTrue(compiler.applies(filled))
         self.assertTrue(_compiler_applies(compiler, filled))
 

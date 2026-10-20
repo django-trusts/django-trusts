@@ -155,6 +155,21 @@ class _LiveRegistryRestoreMixin(object):
 
 class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, SimpleTestCase):
 
+    def test_compiler_without_applies_is_not_query_capable(self):
+        class _Methods(object):
+            def complete_exists(self, plan, candidates, user, permission):
+                return None
+
+            def group_exists(self, plan, candidates, user, permission):
+                return None
+
+        class Backend(object):
+            query_compiler = _Methods()
+
+        with self.assertRaises(TrustsCompilerError) as ctx:
+            compiler_for_class(Backend)
+        self.assertIn('not query-capable', str(ctx.exception))
+
     def test_malformed_compiler_is_e004(self):
         with override_settings(AUTHENTICATION_BACKENDS=(MISSING,)):
             messages = check_query_compilers(None)

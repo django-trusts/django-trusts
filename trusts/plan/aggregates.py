@@ -37,17 +37,15 @@ def compiler_for_class(cls):
         raise TrustsCompilerError('%r is not query-capable' % (cls,))
     complete = getattr(compiler, 'complete_exists', None)
     group = getattr(compiler, 'group_exists', None)
-    if not callable(complete) or not callable(group):
+    applies = getattr(compiler, 'applies', None)
+    if not callable(complete) or not callable(group) or not callable(applies):
         raise TrustsCompilerError('%r is not query-capable' % (cls,))
     return compiler
 
 
 def _compiler_applies(compiler, plan):
-    """Route applicability through ``compiler.applies`` when present."""
-    applies = getattr(compiler, 'applies', None)
-    if callable(applies):
-        return bool(applies(plan))
-    return bool(plan.records)
+    """Applicability is ``compiler.applies``."""
+    return bool(compiler.applies(plan))
 
 
 def all_match(catalog, candidates, user, permission, *, kind='complete',
