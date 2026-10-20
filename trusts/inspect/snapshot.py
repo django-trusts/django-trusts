@@ -479,7 +479,7 @@ class _PolicyVisitor(object):
                 user,
                 permission,
                 content=model,
-                registry=subject,
+                catalog=subject,
             )
             if queryset.query.is_empty():
                 continue
@@ -495,11 +495,11 @@ class _PolicyVisitor(object):
 
     def _compile_get_group_permissions(self, records, model):
 
-        registry, alias = self.subject, self.alias
+        catalog, alias = self.subject, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
-            registry, instance, user, kind='group',
+            catalog, instance, user, kind='group',
         )
         if queryset is None:
             raise TrustsConfigurationError(
@@ -534,34 +534,34 @@ def _build_document(catalogs, alias):
     }
 
 
-def _project_backend(registry, alias):
-    path = registry.path
+def _project_backend(catalog, alias):
+    path = catalog.path
     if not isinstance(path, str) or path == '':
         raise TrustsConfigurationError(
             'Policy SQL render catalog is missing a configured path: %r.'
             % (path,)
         )
-    family = registry.family
+    family = catalog.family
     if family != 'relationship':
         raise TrustsConfigurationError(
             'Policy SQL render only serializes family %r; backend path '
             '%r has unsupported family %r.'
             % ('relationship', path, family)
         )
-    records = tuple(registry.records)
-    delegations = tuple(registry.delegations)
+    records = tuple(catalog.records)
+    delegations = tuple(catalog.delegations)
     all_records = records + delegations
     ids = _assign_ids(all_records)
-    named_filters = _project_named_filters(registry, alias)
+    named_filters = _project_named_filters(catalog, alias)
     return {
         'path': path,
         'contents': _project_contents(
-            registry, alias, all_records, ids, named_filters,
+            catalog, alias, all_records, ids, named_filters,
         ),
     }
 
 
-def _project_contents(registry, alias, records, ids, named_filters):
+def _project_contents(catalog, alias, records, ids, named_filters):
     groups = []
     index = {}
     for record, trust_id in zip(records, ids):
@@ -588,13 +588,13 @@ def _project_contents(registry, alias, records, ids, named_filters):
     contents = []
     seen = set()
     visitor = _PolicyVisitor(
-        registry, alias,
+        catalog, alias,
         trust_ids={
             id(record): trust_id for record, trust_id in zip(records, ids)
         },
     )
     if groups:
-        registry.walk_questions(visitor)
+        catalog.walk_questions(visitor)
         for group in groups:
             seen.add(group['label'])
             content = visitor.content_for(group['label'])
@@ -823,14 +823,14 @@ def _compile_get_permitted_users(subject, alias, records, model):
         records, model)
 
 
-def _permitted_content_prefix_models(registry, model):
+def _permitted_content_prefix_models(catalog, model):
     """Concrete models that are a proper prefix of this backend's content path.
 
     Order is registration order, then path order. A model is listed once.
     The protected model is included only when an earlier hop on the same
     path also uses it.
     """
-    plan = registry.plan_for(model)
+    plan = catalog.plan_for(model)
     legs = tuple(plan.records) + tuple(plan.delegations)
     found = []
     seen = set()
@@ -1030,9 +1030,9 @@ def _base_id(record):
     return label.replace('.', '__')
 
 
-def _project_named_filters(registry, alias):
+def _project_named_filters(catalog, alias):
     rows = []
-    iterator = getattr(registry, 'iter_permission_conditions', None)
+    iterator = catalog.iter_permission_conditions
     if not callable(iterator):
         return rows
     for model, code, record in iterator():

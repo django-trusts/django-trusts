@@ -39,22 +39,22 @@ def _reverse_checked(plan, exists, user_model, permission, content, values,
     return _trusts_eligibility_q(user_model) & checked.predicate
 
 
-def permitted_users_predicate_for_registry(registry, content, perm, *,
+def permitted_users_predicate_for_registry(catalog, content, perm, *,
                                            skipped=(),
                                            filter_lookup=None,
                                            accepts_permission=None):
-    """Reverse predicate for one built registry.
+    """Reverse predicate for one built catalog.
 
-    ``filter_lookup`` is that registry's named-filter lookup.
+    ``filter_lookup`` is that catalog's named-filter lookup.
     ``accepts_permission`` is the backend's singular-permission
     callable; omitted means the mixin default (``auth.Permission``).
-    Ordinary rows come from this registry.
+    Ordinary rows come from this catalog.
     """
-    plan = registry.plan_for(content)
+    plan = catalog.plan_for(content)
     if not plan.records and not plan.delegations:
         return None
     if filter_lookup is None:
-        filter_lookup = registry.filter_lookup
+        filter_lookup = catalog.filter_lookup
     binding, condition = _permission_binding_for_plan(
         accepts_permission, content, perm, plan,
     )
@@ -65,7 +65,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
             if isinstance(binding, Model) else Permission
         )
         sponsor_records = _ordinary_records(
-            registry, content, permission_model,
+            catalog, content, permission_model,
         )
         delegated = _delegated_user_exists(
             plan.delegations, sponsor_records, content, binding,
@@ -95,7 +95,7 @@ def permitted_users_predicate_for_registry(registry, content, perm, *,
 
 
 
-def lock_permitted_users_queryset(registry, content, permission):
+def lock_permitted_users_queryset(catalog, content, permission):
     """Backend-local reverse queryset compiled into the policy lock.
 
     This is the backend branch (eligibility and complete grants), not
@@ -103,7 +103,7 @@ def lock_permitted_users_queryset(registry, content, permission):
     is the permission-row sentinel, classified as ``permission.<target>``.
     Content is classified as ``content.<target>``.
     """
-    plan = registry.plan_for(content)
+    plan = catalog.plan_for(content)
     if not plan.records and not plan.delegations:
         raise TrustsConfigurationError(
             'Policy SQL found no permitted-users query for %s.'
@@ -119,7 +119,7 @@ def lock_permitted_users_queryset(registry, content, permission):
         delegated = _delegated_user_exists(
             plan.delegations,
             _ordinary_records(
-                registry, content, permission_model,
+                catalog, content, permission_model,
             ),
             content,
             permission,

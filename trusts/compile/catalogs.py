@@ -280,7 +280,7 @@ class Catalog(object):
         if denied:
             return queryset.none()
         return _compile_permitted_content_queryset(
-            queryset, user, permission, content=content, registry=self,
+            queryset, user, permission, content=content, catalog=self,
             skipped=values,
         )
 
@@ -429,7 +429,7 @@ class Catalog(object):
 
     def has_perm(self, user_obj, permext, obj, **skip_flags):
         inquiry = bind_checked_user(
-            user_obj, skip_flags=skip_flags, registry=self,
+            user_obj, skip_flags=skip_flags, catalog=self,
         )
         if inquiry.denied:
             return False
@@ -492,7 +492,7 @@ class Catalog(object):
 
     def _permission_codes(self, user_obj, obj, skip_flags, *, kind):
         inquiry = bind_checked_user(
-            user_obj, skip_flags=skip_flags, registry=self,
+            user_obj, skip_flags=skip_flags, catalog=self,
         )
         if inquiry.denied:
             return set()
@@ -525,7 +525,7 @@ class Catalog(object):
     def _resolve_skipped(self, subject, skip_flags, skipped, *, require_user=True):
         if skip_flags:
             inquiry = bind_checked_user(
-                subject, skip_flags=skip_flags, registry=self,
+                subject, skip_flags=skip_flags, catalog=self,
                 require_user=require_user,
             )
             return inquiry.denied, inquiry.values

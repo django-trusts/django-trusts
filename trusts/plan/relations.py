@@ -88,11 +88,11 @@ class PlanQueryCompiler(object):
         ).content_exists(user, permission)
 
 
-def answering_compiler(registry):
-    """Compiler bound when ``registry`` was built."""
-    compiler = registry.compiler
-    complete = getattr(compiler, 'complete_exists', None)
-    group = getattr(compiler, 'group_exists', None)
+def answering_compiler(catalog):
+    """Compiler bound when ``catalog`` was built."""
+    compiler = catalog.compiler
+    try: complete, group = compiler.complete_exists, compiler.group_exists
+    except AttributeError: complete = group = None
     if not callable(complete) or not callable(group):
         raise TrustsCompilerError('%r is not query-capable' % (compiler,))
     return compiler
@@ -157,7 +157,7 @@ def known_skip_names(subjects):
     return frozenset(names)
 
 
-def user_skip_params(user, skip_flags, *, subjects=None, registry=None,
+def user_skip_params(user, skip_flags, *, subjects=None, catalog=None,
                      require_user=True, skip_names=None):
     """Validate ``skip_*`` keywords and return their bound values.
 
@@ -178,8 +178,8 @@ def user_skip_params(user, skip_flags, *, subjects=None, registry=None,
         return SkipParams(True, {})
     if skip_names is not None:
         known = frozenset(skip_names)
-    elif registry is not None:
-        known = known_skip_names((registry,))
+    elif catalog is not None:
+        known = known_skip_names((catalog,))
     else:
         known = known_skip_names(subjects or ())
     unknown = next((name for name in selected if name not in known), None)
@@ -260,7 +260,7 @@ def _user_identity_denied(user):
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,
                       identity=None, values=None, plan=None, closed=False,
                       with_override=True, skip_flags=None, require_user=True,
-                      registry=None, subjects=None, skip_names=None):
+                      catalog=None, subjects=None, skip_names=None):
     """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
     ``skip_flags`` is a public inquiry. ``values`` means that inquiry
@@ -269,7 +269,7 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     """
     if skip_flags is not None:
         inquiry = user_skip_params(
-            subject, skip_flags, subjects=subjects, registry=registry,
+            subject, skip_flags, subjects=subjects, catalog=catalog,
             require_user=require_user, skip_names=skip_names,
         )
         if inquiry.denied:
