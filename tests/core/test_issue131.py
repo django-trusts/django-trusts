@@ -20,11 +20,11 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog
 
-def _handle(compiler=None, path='tests.core.handle-a'):
-    if compiler is None:
-        compiler = Compiler()
-    compiler.path = path
-    return compiler
+def _handle(registry=None, path='tests.core.handle-a'):
+    if registry is None:
+        registry = Compiler()
+    registry.path = path
+    return registry
 
 class HandleRegisterSurfaceTest(SimpleTestCase):
 
@@ -77,12 +77,12 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
                     handle.register(trust=DocumentGrant, user=path, permission='permission', content='document')
         self.assertEqual(built_catalog(handle).records, ())
 
-    def test_string_condition_is_not_legal_on_bare_compiler(self):
-        compiler = Compiler()
+    def test_string_condition_is_not_legal_on_bare_registry(self):
+        registry = Compiler()
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
-            compiler.register_relation(content=j.document, user=j.user, permission=j.permission, condition=Equal('user', 'permission'))
-        self.assertEqual(compiler.records, ())
+            registry.register_relation(content=j.document, user=j.user, permission=j.permission, condition=Equal('user', 'permission'))
+        self.assertEqual(registry.records, ())
 
     def test_duplicate_and_conflict_leave_store_unchanged(self):
         handle = _handle()
@@ -97,23 +97,23 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
 class HandleAfterBuildOrderTest(SimpleTestCase):
 
     def test_register_after_build_resolves_paths(self):
-        compiler = Compiler()
-        handle = _handle(compiler)
-        self.assertEqual(compiler.records, ())
+        registry = Compiler()
+        handle = _handle(registry)
+        self.assertEqual(registry.records, ())
         record = handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
-        shape = compiler.compile()
+        shape = registry.compile()
         self.assertEqual(shape.records, (record,))
         self.assertEqual(record.content_path, ('document',))
         self.assertEqual(record.user_path, ('user',))
         self.assertEqual(record.permission_path, ('permission',))
 
     def test_invalid_grammar_after_build_raises_its_own_error(self):
-        compiler = Compiler()
-        handle = _handle(compiler)
+        registry = Compiler()
+        handle = _handle(registry)
         with self.assertRaises(TrustsConfigurationError) as ctx:
             handle.register(trust=DocumentGrant, user='', permission='permission', content='document')
         self.assertNotIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
 class HandleIsolationTest(SimpleTestCase):
 
@@ -262,15 +262,15 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
 class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
 
     def test_relationship_and_filter_register_after_build(self):
-        compiler = Compiler()
-        backend = _handle(compiler)
+        registry = Compiler()
+        backend = _handle(registry)
         log = _PredicateLog()
         record = backend.register(trust=DocumentGrant, user='user', permission='permission', content='document')
         named_record = backend.add_named_filter(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
-        self.assertEqual(compiler.records, (record,))
-        self.assertEqual(built_catalog(compiler).records, (record,))
-        self.assertIs(compiler.conditions.get_permission_condition_record(Document, 'non_confidential'), named_record)
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(built_catalog(registry).records, (record,))
+        self.assertIs(registry.conditions.get_permission_condition_record(Document, 'non_confidential'), named_record)
 
     def test_dual_backend_relationship_does_not_leak(self):
         left = _handle(path='tests.core.cmethods-left')

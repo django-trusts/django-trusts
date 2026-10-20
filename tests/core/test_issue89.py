@@ -1,10 +1,10 @@
-"""#89: build-on-demand / projection lifecycle on standalone and live catalogs.
+"""#89: build-on-demand / projection lifecycle on standalone and live registries.
 
 Constructing a catalog freezes that class's recorder. A later
 ``register`` on the frozen recorder is refused. That freeze-at-build
 rule still needs confirmation.
 
-The catalog stores the built rows. There is no path dict on the
+The catalog stores the built registry. There is no path dict on the
 owner. Registration after the catalog is built is refused.
 
 Missing-declaration E003 on Content/Junction stays on Zero ``tests/legacy/``.
@@ -39,9 +39,9 @@ HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
 
-def _contribute_document(compiler):
+def _contribute_document(registry):
     j = Ref(DocumentGrant)
-    compiler.register_relation(content=j.document, user=j.user, permission=j.permission)
+    registry.register_relation(content=j.document, user=j.user, permission=j.permission)
 
 def _contribute_recorder(recorder):
     recorder.register(
@@ -63,51 +63,51 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
-        compiler = Compiler()
-        _contribute_document(compiler)
-        before = compiler.records
-        first_build = built_catalog(compiler)
-        second_build = built_catalog(compiler)
+        registry = Compiler()
+        _contribute_document(registry)
+        before = registry.records
+        first_build = built_catalog(registry)
+        second_build = built_catalog(registry)
         self.assertIsNot(first_build, second_build)
         self.assertEqual(first_build.records, before)
         self.assertEqual(second_build.records, before)
         self.assertTrue(apps.ready)
         with patch.object(apps, 'ready', True):
             with self.assertRaises(TrustsConfigurationError):
-                compiler.register_relation(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
-        self.assertEqual(compiler.records, before)
-        self.assertIs(built_catalog(compiler).plan_for(Document).records[0], before[0])
+                registry.register_relation(content=Ref(DocumentGrant).document, user=Ref(DocumentGrant).user, permission=Ref(DocumentGrant).permission)
+        self.assertEqual(registry.records, before)
+        self.assertIs(built_catalog(registry).plan_for(Document).records[0], before[0])
 
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
     def test_valid_duplicate_conflict_and_malformed_all_raise(self):
-        compiler = Compiler()
+        registry = Compiler()
         j = Ref(DocumentGrant)
-        compiler.register_relation(content=j.document, user=j.user, permission=j.permission)
-        before = compiler.records
+        registry.register_relation(content=j.document, user=j.user, permission=j.permission)
+        before = registry.records
         attempts = (dict(content=j.document, user=j.user, permission=j.permission), dict(content=j.document, user=j.permission, permission=j.user), dict(content='not-a-ref', user=j.user, permission=j.permission))
         for kwargs in attempts:
             with self.assertRaises(TrustsConfigurationError) as ctx:
-                compiler.register_relation(**kwargs)
+                registry.register_relation(**kwargs)
             self.assertNotIn('frozen', str(ctx.exception).lower())
-        self.assertEqual(compiler.records, before)
-        self.assertEqual(len(built_catalog(compiler).plan_for(Document).records), 1)
+        self.assertEqual(registry.records, before)
+        self.assertEqual(len(built_catalog(registry).plan_for(Document).records), 1)
 
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
-        compiler = Compiler()
-        _contribute_document(compiler)
-        before = built_catalog(compiler).plan_for(Document)
-        built_catalog(compiler)
-        plan = built_catalog(compiler).plan_for(Document)
+        registry = Compiler()
+        _contribute_document(registry)
+        before = built_catalog(registry).plan_for(Document)
+        built_catalog(registry)
+        plan = built_catalog(registry).plan_for(Document)
         self.assertEqual(plan.records, before.records)
         user = get_user_model()(pk=1)
         permission = Permission(pk=1)
         exists = plan.content_exists(user, permission)
         self.assertIsNotNone(exists)
         qs = Document.objects.all()
-        filtered = built_catalog(compiler).filter_authorized(qs, user, permission)
+        filtered = built_catalog(registry).filter_authorized(qs, user, permission)
         self.assertIs(filtered.model, Document)
 
 class _CatalogRestoreMixin(object):
@@ -266,12 +266,12 @@ class BackendQuestionAfterLateRegistrationTest(SimpleTestCase):
             recorder.register(trust=DocumentGrant, user='user', permission='permission', content='document')
         self.assertEqual(str(caught.exception), 'register refused: this recorder is frozen. The catalog was already built by TrustsConfigMixin.ready().')
 
-class HandleBuildCompilerSignalTest(SimpleTestCase):
-    """A configured path holds a catalog. The compiler builds it."""
+class HandleBuildRegistrySignalTest(SimpleTestCase):
+    """A configured path holds a registry. The registry builds itself."""
 
-    def test_factory_builds_a_fresh_compiler(self):
-        compiler = Compiler(path='tests.core.builder')
-        handle = compiler
+    def test_factory_builds_a_fresh_registry(self):
+        registry = Compiler(path='tests.core.builder')
+        handle = registry
         first = built_catalog(handle)
         second = built_catalog(handle)
         self.assertIsNot(first, second)

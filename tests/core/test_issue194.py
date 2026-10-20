@@ -34,7 +34,7 @@ class FoldFamilyConfig(TrustsConfigMixin):
     name = 'tests'
     label = 'trusts_impl_194_fold'
 
-class RecordingCompiler(Compiler):
+class RecordingRegistry(Compiler):
     created = True
 
 class RecordingConfig(TrustsConfigMixin):
@@ -100,7 +100,7 @@ class ProtectedFactorySurfaceTest(SimpleTestCase):
         self.assertFalse(protocol.applies(strategy_only))
         self.assertFalse(_compiler_applies(compiler, strategy_only))
 
-    def test_ready_stores_the_built_compiler_on_the_catalog(self):
+    def test_ready_stores_the_built_registry_on_the_catalog(self):
         from tests.kernel_host.backends import HostTrustModelBackend
         catalog = HostTrustModelBackend().get_catalog()
         self.assertIs(HostTrustModelBackend().catalog, catalog)
@@ -122,13 +122,13 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(document=self.rel_doc, user=self.alice, permission=self.change)
         DocumentAltGrant.objects.create(document=self.fold_doc, user=self.alice, permission=self.change)
         self.rel_handle = DocumentBackend().catalog
-        self.fold_compiler = Compiler(path=MIXIN, family='ordered_fold')
-        self.fold_handle = self.fold_compiler
+        self.fold_registry = Compiler(path=MIXIN, family='ordered_fold')
+        self.fold_handle = self.fold_registry
         self.fold_handle.register(trust=DocumentAltGrant, user='user', permission='permission', content='document')
         self.fold_owner = _bind(FoldFamilyConfig, ready=False)
         self._fold_config = config_for_class(MixinOnlyBackend)
         self._saved_fold_catalog = self._fold_config.catalog
-        self.fold_handle = built_catalog(self.fold_compiler)
+        self.fold_handle = built_catalog(self.fold_registry)
         self._fold_config.catalog = self.fold_handle
         self.mixin = MixinOnlyBackend()
         self.document_backend = DocumentBackend()
@@ -151,8 +151,8 @@ class FamilyLocalAggregateTest(KernelHostRequiredMixin, TestCase):
             self.assertIsNotNone(mixed)
             with self.assertNumQueries(1):
                 self.assertEqual(set(Document.objects.filter(mixed).values_list('pk', flat=True)), {self.rel_doc.pk})
-            rel_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.rel_doc, compiler=self.rel_handle)
-            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, compiler=self.fold_handle)
+            rel_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.rel_doc, registry=self.rel_handle)
+            fold_scopes = filter_by_permitted_content(Document.objects.all(), self.alice, self.change, content=self.fold_doc, registry=self.fold_handle)
             self.assertEqual(list(rel_scopes), [])
             self.assertEqual(list(fold_scopes), [])
             from trusts.apps import installed_catalogs
@@ -220,7 +220,7 @@ class MixinAppliesHookTest(KernelHostRequiredMixin, TestCase):
 
 class FactoryBuildOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
 
-    def test_standalone_factory_rebuilds_and_a_published_compiler_does_not(self):
+    def test_standalone_factory_rebuilds_and_a_published_registry_does_not(self):
         from tests.kernel_host.backends import HostTrustModelBackend
         isolated = Compiler()
         first_build = built_catalog(isolated)

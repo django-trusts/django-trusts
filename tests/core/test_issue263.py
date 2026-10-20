@@ -33,7 +33,7 @@ from tests.support import (
     install_class_handle,
 )
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
-    """Settings-listed probe. The test installs a compiler for one block."""
+    """Settings-listed probe. The test installs a registry for one block."""
 
 @contextmanager
 def _listed(handle):
@@ -66,11 +66,11 @@ def _perm(model, codename):
 def _code(permission):
     return '%s.%s' % (permission.content_type.app_label, permission.codename)
 
-def _handle(compiler=None, path='tests.core.issue263'):
-    if compiler is None:
-        compiler = Compiler()
-    compiler.path = path
-    return compiler
+def _handle(registry=None, path='tests.core.issue263'):
+    if registry is None:
+        registry = Compiler()
+    registry.path = path
+    return registry
 
 def _collection_models():
 
@@ -151,12 +151,12 @@ class PermissionCollectionRegistrationTest(TestCase):
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
         User = get_user_model()
-        compiler = Compiler()
+        registry = Compiler()
         team = Ref(Team)
         access = Ref(Access)
         with self.assertNumQueries(0):
-            direct = compiler.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
-            prefixed = compiler.register_relation(content=access.repository, user=access.team.members, permission=access.team.permissions)
+            direct = registry.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
+            prefixed = registry.register_relation(content=access.repository, user=access.team.members, permission=access.team.permissions)
             strings = _handle().register(trust=Team, user='members', permission='permissions', content='organization__repositories')
             calls = _handle(path='tests.core.issue263-call').register(trust=Access, user=lambda row: row.team.members, permission=lambda row: row.team.permissions, content=lambda row: row.repository)
         self.assertFalse(direct.via_group)
@@ -302,13 +302,13 @@ class PermissionCollectionRegistrationTest(TestCase):
 
     def test_duplicate_collection_registration_does_not_mutate(self):
         Team = _collection_models()['Team']
-        compiler = Compiler()
+        registry = Compiler()
         team = Ref(Team)
         with self.assertNumQueries(0):
-            first = compiler.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
+            first = registry.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
             with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
-                compiler.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
-        self.assertEqual(compiler.records, (first,))
+                registry.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
+        self.assertEqual(registry.records, (first,))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class PermissionCollectionAuthorizationTest(TransactionTestCase):

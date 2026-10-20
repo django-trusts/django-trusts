@@ -397,9 +397,9 @@ class Issue300UserAnnotationTest(TransactionTestCase):
             permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_note_a', defaults={'name': 'read_note_a'})
             note = Note.objects.create(title='kept')
             NoteGrant.objects.create(note=note, user=user, permission=permission)
-            compiler = Compiler()
-            compiler.path = 'tests.annotation.a'
-            handle = compiler
+            registry = Compiler()
+            registry.path = 'tests.annotation.a'
+            handle = registry
             handle.register(trust=NoteGrant, user='user', permission='permission', content='note')
             candidates = Note.objects.annotate(a=Value(1, output_field=CharField()))
             with override_settings(TRUSTS_SQL_BIND_ONCE=False):
@@ -450,9 +450,9 @@ class Issue300AlongRetargetFallbackTest(TransactionTestCase):
             permission, _created = Permission.objects.get_or_create(content_type=content_type, codename='read_retarget_retargetnode', defaults={'name': 'read_retarget_retargetnode'})
             node = RetargetNode.objects.create()
             RetargetGrant.objects.create(node=node, user=user, permission=permission)
-            compiler = Compiler()
-            compiler.path = 'tests.along.retarget'
-            handle = compiler
+            registry = Compiler()
+            registry.path = 'tests.along.retarget'
+            handle = registry
             handle.register(trust=RetargetGrant, user='user', permission='permission', content='node', along=('node__parent', 4))
             candidates = RetargetNode.objects.order_by('pk')
             with patch('trusts.plan.recursions._render_reach_sql', _render_parenthesized_depth):

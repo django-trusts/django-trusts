@@ -27,7 +27,7 @@ from trusts.compile.factory import (
 )
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.conditions import ConditionStore, FrozenConditionLookup
+from trusts.plan.conditions import ConditionRegistry, FrozenConditionLookup
 from tests.support import built_catalog, forget_models
 
 
@@ -35,10 +35,10 @@ from tests.support import built_catalog, forget_models
 class BuildRelationTest(SimpleTestCase):
     def test_build_relation_returns_frozen_shape_without_storing(self):
         Document, DocumentGrant = _document_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(DocumentGrant)
 
-        built = compiler.build_relation(
+        built = registry.build_relation(
             content=root.document, user=root.user,
             permission=root.permission,
         )
@@ -58,30 +58,30 @@ class BuildRelationTest(SimpleTestCase):
         self.assertFalse(built.via_group)
         self.assertIsNone(built.condition)
         self.assertIsNone(built.along)
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
     def test_build_relation_equality_and_register_appends_same_shape(self):
         _Document, DocumentGrant = _document_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(DocumentGrant)
         kwargs = dict(
             content=root.document, user=root.user,
             permission=root.permission,
         )
 
-        built = compiler.build_relation(**kwargs)
-        self.assertEqual(built, compiler.build_relation(**kwargs))
+        built = registry.build_relation(**kwargs)
+        self.assertEqual(built, registry.build_relation(**kwargs))
 
-        stored = compiler.register_relation(**kwargs)
+        stored = registry.register_relation(**kwargs)
         self.assertEqual(stored, built)
-        self.assertEqual(compiler.records, (stored,))
+        self.assertEqual(registry.records, (stored,))
 
     def test_build_relation_group_shape(self):
         Document, GroupGrant = _group_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(GroupGrant)
 
-        built = compiler.build_relation(
+        built = registry.build_relation(
             content=root.document, user=root.user, group=root.group,
         )
 
@@ -93,55 +93,55 @@ class BuildRelationTest(SimpleTestCase):
         self.assertEqual(built.permission_field, 'group__permissions')
         self.assertIs(built.permission_model, Permission)
         self.assertIs(built.content_model, Document)
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
     def test_build_relation_rejects_bad_permission_source_and_roots(self):
         _Document, DocumentGrant = _document_models()
         _Other, OtherGrant = _other_grant_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(DocumentGrant)
 
         with self.assertRaises(TrustsConfigurationError):
-            compiler.build_relation(
+            registry.build_relation(
                 content=root.document, user=root.user,
                 permission=root.permission, group=root.permission,
             )
         with self.assertRaises(TrustsConfigurationError):
-            compiler.build_relation(content=root.document, user=root.user)
+            registry.build_relation(content=root.document, user=root.user)
         with self.assertRaises(TrustsConfigurationError):
-            compiler.build_relation(
+            registry.build_relation(
                 content=root.document, user=Ref(OtherGrant).user,
                 permission=root.permission,
             )
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
     def test_build_relation_after_build_still_builds_and_registers(self):
         _Document, DocumentGrant = _document_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(DocumentGrant)
-        built = compiler.build_relation(
+        built = registry.build_relation(
             content=root.document, user=root.user,
             permission=root.permission,
         )
         self.assertIsInstance(built, RegisteredRelation)
-        self.assertEqual(compiler.records, ())
-        record = compiler.register_relation(
+        self.assertEqual(registry.records, ())
+        record = registry.register_relation(
             content=root.document, user=root.user,
             permission=root.permission,
         )
         self.assertEqual(record, built)
-        self.assertEqual(compiler.records, (record,))
-        self.assertEqual(built_catalog(compiler).records, (record,))
+        self.assertEqual(registry.records, (record,))
+        self.assertEqual(built_catalog(registry).records, (record,))
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class BuildDelegationTest(SimpleTestCase):
     def test_build_delegation_returns_shape_without_storing(self):
         Document, Share = _share_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(Share)
 
-        built = compiler.build_delegation(
+        built = registry.build_delegation(
             content=root.document, delegate=root.delegate,
             sponsor=root.sponsor,
         )
@@ -156,45 +156,45 @@ class BuildDelegationTest(SimpleTestCase):
         self.assertIs(built.delegate_model, get_user_model())
         self.assertIs(built.sponsor_model, built.delegate_model)
         self.assertIsNone(built.sponsor_rules)
-        self.assertEqual(compiler.delegations, ())
+        self.assertEqual(registry.delegations, ())
 
     def test_register_delegation_appends_shape_with_sponsor_rules(self):
         _Document, Share = _share_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(Share)
         kwargs = dict(
             content=root.document, delegate=root.delegate,
             sponsor=root.sponsor,
         )
 
-        built = compiler.build_delegation(**kwargs)
-        stored = compiler.register_delegation(**kwargs)
+        built = registry.build_delegation(**kwargs)
+        stored = registry.register_delegation(**kwargs)
 
         # sponsor_rules is compare=False: stored still equals the shape.
         self.assertEqual(stored, built)
         self.assertIsNotNone(stored.sponsor_rules)
-        self.assertEqual(compiler.delegations, (stored,))
+        self.assertEqual(registry.delegations, (stored,))
 
     def test_build_delegation_rejects_mismatched_principals(self):
         _Document, Share = _share_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(Share)
 
         with self.assertRaises(TrustsConfigurationError):
-            compiler.build_delegation(
+            registry.build_delegation(
                 content=root.document, delegate=root.delegate,
                 sponsor=root.document,
             )
-        self.assertEqual(compiler.delegations, ())
+        self.assertEqual(registry.delegations, ())
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class BuildPublicRegistrationTest(SimpleTestCase):
     def test_build_public_registration_ordinary_shape(self):
         _Document, DocumentGrant = _document_models()
-        compiler = Compiler()
+        registry = Compiler()
 
-        shape = compiler.build_public_registration(
+        shape = registry.build_public_registration(
             trust=DocumentGrant, content='document', user='user',
             permission='permission',
         )
@@ -210,29 +210,29 @@ class BuildPublicRegistrationTest(SimpleTestCase):
         ))
         self.assertIsNone(shape.group)
         self.assertIsNone(shape.delegate)
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
-        stored = compiler.register(
+        stored = registry.register(
             trust=DocumentGrant, content='document', user='user',
             permission='permission',
         )
         root = Ref(DocumentGrant)
-        self.assertEqual(stored, compiler.build_relation(
+        self.assertEqual(stored, registry.build_relation(
             content=root.document, user=root.user,
             permission=root.permission,
         ))
-        self.assertEqual(compiler.records, (stored,))
+        self.assertEqual(registry.records, (stored,))
 
     def test_build_public_registration_invokes_builder_once(self):
         _Document, DocumentGrant = _document_models()
-        compiler = Compiler()
+        registry = Compiler()
         calls = []
 
         def content_builder(trust):
             calls.append(trust)
             return trust.document
 
-        shape = compiler.build_public_registration(
+        shape = registry.build_public_registration(
             trust=DocumentGrant, content=content_builder, user='user',
             permission='permission',
         )
@@ -240,20 +240,20 @@ class BuildPublicRegistrationTest(SimpleTestCase):
         self.assertEqual(
             shape.content, Ref(DocumentGrant, ('document',)),
         )
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
     def test_build_public_registration_group_and_delegated_shapes(self):
         _Document, GroupGrant = _group_models()
         _Doc2, Share = _share_models()
-        compiler = Compiler()
+        registry = Compiler()
 
-        group_shape = compiler.build_public_registration(
+        group_shape = registry.build_public_registration(
             trust=GroupGrant, content='document', user='user', group='group',
         )
         self.assertEqual(group_shape.group, Ref(GroupGrant, ('group',)))
         self.assertIsNone(group_shape.permission)
 
-        delegated_shape = compiler.build_public_registration(
+        delegated_shape = registry.build_public_registration(
             trust=Share, content='document', delegate='delegate',
             sponsor='sponsor',
         )
@@ -262,60 +262,60 @@ class BuildPublicRegistrationTest(SimpleTestCase):
         )
         self.assertEqual(delegated_shape.sponsor, Ref(Share, ('sponsor',)))
         self.assertIsNone(delegated_shape.user)
-        self.assertEqual(compiler.records, ())
-        self.assertEqual(compiler.delegations, ())
+        self.assertEqual(registry.records, ())
+        self.assertEqual(registry.delegations, ())
 
     def test_build_public_registration_rejects_mixed_modes(self):
         _Document, DocumentGrant = _document_models()
-        compiler = Compiler()
+        registry = Compiler()
 
         with self.assertRaises(TrustsConfigurationError):
-            compiler.build_public_registration(
+            registry.build_public_registration(
                 trust=DocumentGrant, content='document', user='user',
                 permission='permission', delegate='user', sponsor='user',
             )
         with self.assertRaises(TrustsConfigurationError):
-            compiler.build_public_registration(
+            registry.build_public_registration(
                 trust=DocumentGrant, content='document',
                 delegate='user',
             )
         with self.assertRaises(TrustsConfigurationError):
-            compiler.build_public_registration(
+            registry.build_public_registration(
                 trust='not-a-model', content='document', user='user',
                 permission='permission',
             )
-        self.assertEqual(compiler.records, ())
+        self.assertEqual(registry.records, ())
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class BuildCatalogShapeTest(SimpleTestCase):
     def test_build_freezes_rows_and_fragments(self):
         Document, DocumentGrant = _document_models()
-        compiler = Compiler()
+        registry = Compiler()
         root = Ref(DocumentGrant)
-        record = compiler.register_relation(
+        record = registry.register_relation(
             content=root.document, user=root.user,
             permission=root.permission,
         )
-        condition = compiler.add_named_filter(
+        condition = registry.add_named_filter(
             Document, 'owned', lambda u, p, o: o.title == 'keep',
         )
 
-        catalog = compiler.compile()
+        catalog = registry.compile()
 
         self.assertIsInstance(catalog, Catalog)
         self.assertEqual(catalog.path, '')
         self.assertEqual(catalog.family, 'relationship')
-        self.assertTrue(compiler.frozen)
+        self.assertTrue(registry.frozen)
         self.assertIs(catalog.records[0], record)
-        self.assertEqual(catalog.records, compiler.records)
+        self.assertEqual(catalog.records, registry.records)
         self.assertEqual(catalog.delegations, ())
         self.assertIsInstance(catalog.conditions, tuple)
-        self.assertNotIsInstance(catalog.conditions, ConditionStore)
-        self.assertIsNot(catalog.conditions, compiler.conditions)
+        self.assertNotIsInstance(catalog.conditions, ConditionRegistry)
+        self.assertIsNot(catalog.conditions, registry.conditions)
         self.assertEqual(catalog.conditions, ((Document, 'owned', condition),))
         self.assertIs(catalog.conditions[0][2], condition)
-        compiler.conditions._records.clear()
+        registry.conditions._records.clear()
         self.assertEqual(catalog.conditions, ((Document, 'owned', condition),))
         self.assertIsInstance(catalog.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(catalog.filter_lookup, 'conditions'))
@@ -335,21 +335,21 @@ class PlanTableBuildTest(SimpleTestCase):
     def test_records_become_a_plan_table(self):
         User = get_user_model()
         Paper, PaperGrant, Note, NoteGrant, Reader, PaperShare = _plan_models()
-        compiler = Compiler()
-        grant = compiler.register_relation(
+        registry = Compiler()
+        grant = registry.register_relation(
             content=Ref(PaperGrant).paper, user=Ref(PaperGrant).user,
             permission=Ref(PaperGrant).permission,
         )
-        note = compiler.register_relation(
+        note = registry.register_relation(
             content=Ref(NoteGrant).note, user=Ref(NoteGrant).user,
             permission=Ref(NoteGrant).permission,
         )
-        share = compiler.register_delegation(
+        share = registry.register_delegation(
             content=Ref(PaperShare).paper, delegate=Ref(PaperShare).delegate,
             sponsor=Ref(PaperShare).sponsor,
         )
 
-        catalog = compiler.compile()
+        catalog = registry.compile()
 
         paper_keys = tuple(
             (Paper, principal, terminal)
@@ -432,12 +432,12 @@ class PlanTableBuildTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        compiler = Compiler()
-        compiler.register_relation(
+        registry = Compiler()
+        registry.register_relation(
             content=Ref(PaperGrant).paper, user=Ref(PaperGrant).user,
             permission=Ref(PaperGrant).permission,
         )
-        compiler.register_relation(
+        registry.register_relation(
             content=Ref(TokenGrant).paper, user=Ref(TokenGrant).user,
             permission=Ref(TokenGrant).permission,
         )
@@ -446,9 +446,9 @@ class PlanTableBuildTest(SimpleTestCase):
             'Applicable registrations must share one permission model; '
             'got auth.Permission, trusts_tests.Token.',
         ):
-            compiler.compile()
-        self.assertFalse(compiler.frozen)
-        self.assertEqual(len(compiler.records), 2)
+            registry.compile()
+        self.assertFalse(registry.frozen)
+        self.assertEqual(len(registry.records), 2)
 
 
 def _plan_models():

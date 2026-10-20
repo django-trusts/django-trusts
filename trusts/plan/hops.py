@@ -1,4 +1,4 @@
-"""Path and model identity from Django ``_meta``. No catalog and no ``Q``."""
+"""Path and model identity from Django ``_meta``. No registry and no ``Q``."""
 
 from django.db.models import Model
 from django.db.models.base import ModelBase

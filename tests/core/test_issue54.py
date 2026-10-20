@@ -109,9 +109,9 @@ def _scope_models():
     return Folder, Payload, Row, Other, FolderGrant
 
 
-def _register_payload(compiler, grant):
+def _register_payload(registry, grant):
     j = Ref(grant)
-    return compiler.register_relation(
+    return registry.register_relation(
         content=j.folder.rows.content,
         user=j.user,
         permission=j.permission,
@@ -144,16 +144,16 @@ class KernelConfigTest(SimpleTestCase):
 
 class ConditionLookupBindTest(TestCase):
     def test_build_freezes_one_lookup_at_zero_sql(self):
-        compiler = Compiler()
+        registry = Compiler()
         with self.assertNumQueries(0):
-            shape = compiler.compile()
+            shape = registry.compile()
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
         self.assertIsNone(shape.filter_lookup.record_for(Document, 'own'))
         with self.assertNumQueries(0):
-            again = compiler.compile()
+            again = registry.compile()
         self.assertIsNot(again.filter_lookup, shape.filter_lookup)
         with self.assertRaises(TrustsConfigurationError):
-            compiler.add_named_filter(
+            registry.add_named_filter(
                 Document, 'own', lambda u, p, o: o.title == 'keep',
             )
 
@@ -164,12 +164,12 @@ class ConditionLookupBindTest(TestCase):
             called.append((user, perm, obj))
             return obj.title == 'keep'
 
-        compiler = Compiler()
+        registry = Compiler()
         with self.assertNumQueries(0):
-            record = compiler.add_named_filter(
+            record = registry.add_named_filter(
                 Document, 'named', builder,
             )
-            shape = compiler.compile()
+            shape = registry.compile()
         self.assertEqual(len(called), 1)
         lookup = shape.filter_lookup
         self.assertIs(lookup.record_for(Document, 'named'), record)
@@ -340,26 +340,26 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.add,
         )
-        compiler = Compiler()
-        _register_payload(compiler, self.FolderGrant)
-        self.handle = compiler
+        registry = Compiler()
+        _register_payload(registry, self.FolderGrant)
+        self.handle = registry
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
-    def _filter(self, queryset, user=None, permission=None, content=None, compiler=None):
-        if compiler is None:
-            compiler = built_catalog(self.handle)
+    def _filter(self, queryset, user=None, permission=None, content=None, registry=None):
+        if registry is None:
+            registry = built_catalog(self.handle)
         return scoped_permitted_content(
             queryset,
             self.alice if user is None else user,
             self.add if permission is None else permission,
             content=self.Payload if content is None else content,
-            compiler=compiler,
+            registry=registry,
         )
 
     def test_prefix_folder_is_create_under_scope_without_naming_zero(self):
-        qs = self._filter(self.Folder.objects.all(), compiler=built_catalog(self.handle))
+        qs = self._filter(self.Folder.objects.all(), registry=built_catalog(self.handle))
         self.assertIsInstance(qs, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
@@ -369,21 +369,21 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
     def test_prefix_row_correlates_and_terminal_is_none(self):
         self.assertEqual(
-            _pks(self._filter(self.Row.objects.all(), compiler=built_catalog(self.handle))),
+            _pks(self._filter(self.Row.objects.all(), registry=built_catalog(self.handle))),
             {self.row.pk},
         )
-        qs = self._filter(self.Payload.objects.all(), compiler=built_catalog(self.handle))
+        qs = self._filter(self.Payload.objects.all(), registry=built_catalog(self.handle))
         with self.assertNumQueries(0):
             self.assertFalse(qs.exists())
 
     def test_unknown_terminal_empty_handles_and_off_path_are_none(self):
         cases = (
             self._filter(
-                self.Folder.objects.all(), content=self.Other, compiler=built_catalog(self.handle),
+                self.Folder.objects.all(), content=self.Other, registry=built_catalog(self.handle),
             ),
-            self._filter(self.Folder.objects.all(), compiler=built_catalog(Compiler(family='ordered_fold'))),
+            self._filter(self.Folder.objects.all(), registry=built_catalog(Compiler(family='ordered_fold'))),
             self._filter(
-                self.Other.objects.all(), content=self.Payload, compiler=built_catalog(self.handle),
+                self.Other.objects.all(), content=self.Payload, registry=built_catalog(self.handle),
             ),
         )
         for qs in cases:
@@ -400,7 +400,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     'add_payload',
                     content=self.Payload,
-                    compiler=built_catalog(self.handle),
+                    registry=built_catalog(self.handle),
                 )
             with self.assertRaises(TrustsConfigurationError):
                 scoped_permitted_content(
@@ -408,20 +408,20 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
                     self.alice,
                     None,
                     content=self.Payload,
-                    compiler=built_catalog(self.handle),
+                    registry=built_catalog(self.handle),
                 )
 
     def test_wrong_user_and_wrong_permission_deny(self):
         self.assertFalse(
             self._filter(
-                self.Folder.objects.all(), user=self.bob, compiler=built_catalog(self.handle),
+                self.Folder.objects.all(), user=self.bob, registry=built_catalog(self.handle),
             ).exists()
         )
         self.assertFalse(
             self._filter(
                 self.Folder.objects.all(),
                 permission=self.change,
-                compiler=built_catalog(self.handle),
+                registry=built_catalog(self.handle),
             ).exists()
         )
 
@@ -539,9 +539,9 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(Scope, Payload, Row, Grant):
-            compiler = Compiler()
+            registry = Compiler()
             j = Ref(Grant)
-            record = compiler.register_relation(
+            record = registry.register_relation(
                 content=j.scope.rows.content,
                 user=j.user,
                 permission=j.permission,
@@ -566,10 +566,10 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             Row.objects.create(scope=scope_a, content=payload)
             Grant.objects.create(scope=scope_a, user=alice, permission=add)
 
-            handle = compiler
+            handle = registry
             qs = scoped_permitted_content(
                 Scope.objects.order_by('pk'), alice, add,
-                content=Payload, compiler=built_catalog(handle),
+                content=Payload, registry=built_catalog(handle),
             )
             self.assertIsInstance(qs, QuerySet)
             self.assertIsNone(qs._result_cache)
@@ -583,6 +583,6 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
             self.assertFalse(
                 scoped_permitted_content(
                     Scope.objects.all(), bob, add,
-                    content=Payload, compiler=built_catalog(handle),
+                    content=Payload, registry=built_catalog(handle),
                 ).exists()
             )

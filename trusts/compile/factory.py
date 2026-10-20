@@ -59,7 +59,7 @@ from trusts.errors import TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, CatalogShape, plan_table
 from trusts.plan.conditions import (
-    ConditionStore,
+    ConditionRegistry,
     Expr,
     FrozenConditionLookup,
 )
@@ -192,14 +192,14 @@ class PublicRegistration:
 
 
 class Compiler(object):
-    """Compiles one catalog from the registration verbs a recorder plays.
+    """The backend is the registry. Compiler only builds the Catalog.
 
-    ``register`` performs zero SQL. ``compile`` freezes this compiler
-    and returns a ``Catalog``. A later ``compile`` returns another
-    catalog from the same stored rows. After that, ``register``,
-    ``register_delegation``, ``add_named_filter``,
-    ``set_user_condition``, and ``set_user_override`` raise
-    ``TrustsConfigurationError``.
+    It records every registration call through its recorder. ``register``
+    performs zero SQL. ``compile`` freezes this compiler and returns a
+    ``Catalog``. A later ``compile`` returns another catalog from the
+    same stored rows. After that, ``register``, ``register_delegation``,
+    ``add_named_filter``, ``set_user_condition``, and
+    ``set_user_override`` raise ``TrustsConfigurationError``.
     """
 
     def __init__(self, *, query_compiler=None, path='', family='relationship',
@@ -214,7 +214,7 @@ class Compiler(object):
         self.frozen = False
         self._user_conditions = None
         self._user_override = None
-        self.conditions = ConditionStore(user_model=user_model)
+        self.conditions = ConditionRegistry(user_model=user_model)
         self._explicit_compiler = query_compiler is not None
         self.query_compiler = (
             query_compiler if self._explicit_compiler else PlanQueryCompiler()
@@ -837,7 +837,7 @@ class Compiler(object):
         return Catalog(shape, user_model=model)
 
     def _stored_user_conditions(self):
-        """``None`` when the compiler still uses the built-in rule."""
+        """``None`` when the registry still uses the built-in rule."""
         if self._user_conditions is None:
             return None
         return tuple(self._user_conditions.values())

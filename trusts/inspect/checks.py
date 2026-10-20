@@ -216,7 +216,7 @@ def check_missing_declarations(app_configs, **kwargs):
     """Report structurally detectable missing Content/Junction declarations.
 
     Walks already-loaded models from the default Apps registry. Host
-    modules stay unloaded, ``register`` is not called, and the
+    modules stay unloaded, ``registry.register`` is not called, and the
     check issues zero SQL. ``app_configs`` is ignored so a subset
     ``manage.py check trusts`` still reports project models. Abstract
     and proxy models are excluded. Manual dependents that are neither
@@ -290,14 +290,14 @@ def _iter_catalog_permission_conditions():
 
 
 def iter_live_permission_conditions(apps_registry=None):
-    """Yield ``(model, cond_code, record)`` from configured catalogs.
+    """Yield ``(model, cond_code, record)`` from configured registries.
 
-    Implementation-owned catalogs are the source of truth.
-    Every configured owner record is preserved: the same
+    Implementation-owned catalog registries are the source of truth.
+    Every configured owner/registry record is preserved: the same
     model/code on two owners is two records, and both are validated.
     The only skip is the transitional Zero ``Content`` fallback when
     that iterator returns a record object already yielded from a
-    catalog (same record identity, not merely the same
+    catalog registry (same record identity, not merely the same
     model/code).
     """
 
@@ -350,7 +350,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     Uses the same zero-SQL preflight as first use: at least one
     applicable ``auth.Permission`` plan is required, and when names
     are selected one participating backend must own the complete
-    queryable tuple. A global union of names across catalogs is
+    queryable tuple. A global union of names across registries is
     not enough. Guards whose model app is absent are skipped
     so a host that does not load that app (pair Zero, isolated Apps)
     is not failed by imported fixtures. Silencing ``trusts.E008``

@@ -71,8 +71,8 @@ class ImplementationHelperSurfaceTest(SimpleTestCase):
         self.assertTrue(callable(filter_by_permitted_content))
         self.assertTrue(issubclass(AuthorizedQuerySet, object))
         self.assertTrue(issubclass(AuthorizedManager, object))
-        compiler = Compiler()
-        self.assertEqual(compiler.records, ())
+        registry = Compiler()
+        self.assertEqual(registry.records, ())
         self.assertIsNotNone(Ref)
 
 
@@ -191,7 +191,7 @@ class MixinCatalogResolveTest(SimpleTestCase):
     attr_name='isolated_apps',
 )
 class IsolatedImplementationStoreTest(SimpleTestCase):
-    def test_implementation_compiler_does_not_touch_live_owner(self):
+    def test_implementation_registry_does_not_touch_live_owner(self):
         before = HostTrustModelBackend().catalog
         before_records = before.records
         contributor = TestsConfig('tests', tests_module)

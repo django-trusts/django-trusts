@@ -160,16 +160,16 @@ class ConditionGrammarTest(SimpleTestCase):
 
     def test_non_predicate_and_non_callable_rejected_at_register(self):
         u, p, o = condition_refs()
-        compiler = Compiler()
+        registry = Compiler()
         with self.assertRaises(TypeError):
-            compiler.add_named_filter(object, 'bare', o.owner)
+            registry.add_named_filter(object, 'bare', o.owner)
         with self.assertRaises(TypeError):
-            compiler.add_named_filter(object, 'bad', 'not-a-condition')
+            registry.add_named_filter(object, 'bad', 'not-a-condition')
         with self.assertRaises(TypeError):
-            compiler.add_named_filter(object, 'expr', u == o.owner)
-        self.assertIsNone(compiler.conditions.get_permission_condition_record(object, 'expr'))
+            registry.add_named_filter(object, 'expr', u == o.owner)
+        self.assertIsNone(registry.conditions.get_permission_condition_record(object, 'expr'))
         with self.assertRaises(PermissionConditionError):
-            compiler.add_named_filter(
+            registry.add_named_filter(
                 object, 'truth', lambda u, p, o: True,
             )
 
@@ -199,8 +199,8 @@ class ConditionGrammarTest(SimpleTestCase):
             calls.append((u, p, o))
             return u == o.owner
 
-        compiler = Compiler()
-        record = compiler.add_named_filter(Ticket, 'own', owned)
+        registry = Compiler()
+        record = registry.add_named_filter(Ticket, 'own', owned)
         self.assertEqual(len(calls), 1)
         validate_expression(record.expr, Ticket)
         self.assertEqual(len(calls), 1)
