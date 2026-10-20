@@ -3,7 +3,7 @@
 Public ``authorization_required`` declaration, readiness/preflight, and
 supported-path bounds only. Does not restore legacy request decorators,
 patch ``granted`` / ``_authorization_grant_q`` / compiler internals, or
-assert private registry/IR shape.
+assert private IR shape.
 
 ``granted_q is None`` after a complete auth-Permission preflight is
 deferred: ``PlanQueryCompiler.complete_exists`` and

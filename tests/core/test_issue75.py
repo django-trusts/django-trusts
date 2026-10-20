@@ -1,4 +1,4 @@
-"""#75: path-scoped registry, compiler protocol, and two-path aggregation.
+"""#75: path-scoped catalog, compiler protocol, and two-path aggregation.
 
 Live one-path Trust/Content auth stays on Zero ``tests/legacy/``.
 Generic multi-path contracts use KernelHost + DocumentConfig.
@@ -16,8 +16,8 @@ from tests.apps import TestsConfig
 from tests.support import (
     built_catalog,
     configured_catalog,
-    install_writable_registry,
-    isolate_live_registry,
+    install_writable_compiler,
+    isolate_live_compiler,
     live_config,
     override_apps_ready,
     empty_catalogs,
@@ -54,19 +54,19 @@ def _change_document():
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'Can change document'})
     return permission
 
-def _contribute_document(registry):
+def _contribute_document(compiler):
     from trusts.compile.nodes import Ref
     j = Ref(DocumentGrant)
-    registry.register_relation(content=j.document, user=j.user, permission=j.permission)
+    compiler.register_relation(content=j.document, user=j.user, permission=j.permission)
 
 def _evaluate(handle, queryset, user, permission):
     plan = handle.plan_for(queryset, user=user, permission=permission)
-    compiler = handle.query_compiler
+    compiler = handle.compiler
     return compiler.complete_exists(plan, queryset, user, permission)
 
-class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
+class PathScopedCompilerStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 
-    def test_one_path_registry_alias_is_exact_store(self):
+    def test_one_path_compiler_alias_is_exact_store(self):
         from django.apps import apps
 
         catalog = configured_catalog(HOST)
@@ -75,7 +75,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
             apps.get_app_config('trusts_kernel_host').catalog_path(),
         )
         self.assertIs(catalog, HostTrustModelBackend().catalog)
-        self.assertIsInstance(catalog.query_compiler, PlanQueryCompiler)
+        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_do_not_raise(self):
         from django.apps import apps
@@ -108,7 +108,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         )
         self.assertIs(handle_doc, DocumentBackend().catalog)
 
-    def test_ready_does_not_replace_store_or_registry(self):
+    def test_ready_does_not_replace_store_or_compiler(self):
         from django.apps import apps
 
         live = apps.get_app_config('trusts_kernel_host')
@@ -139,7 +139,7 @@ class IsolatedAppsPathStoreTest(SimpleTestCase):
 
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 
-    def test_explicit_path_contribution_writes_one_registry(self):
+    def test_explicit_path_contribution_writes_one_compiler(self):
         self.assertTrue(configured_catalog(DOCUMENT).plan_for(Document).records)
         self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
 
@@ -157,7 +157,7 @@ class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertFalse(hasattr(live, 'registries'))
         self.assertFalse(hasattr(live, 'trusts_backend_paths'))
 
-class _LiveRegistryRestoreMixin(object):
+class _LiveCompilerRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
@@ -165,7 +165,7 @@ class _LiveRegistryRestoreMixin(object):
     def tearDown(self):
         super().tearDown()
 
-class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, SimpleTestCase):
+class CompilerProtocolTest(KernelHostRequiredMixin, _LiveCompilerRestoreMixin, SimpleTestCase):
 
     def test_compiler_without_applies_is_not_query_capable(self):
         class _Methods(object):
@@ -213,9 +213,9 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
 
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
-        registry.path = RAISING
-        handle = registry
+        compiler = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
+        compiler.path = RAISING
+        handle = compiler
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
             granted(built_catalog(handle), Document, User(), Permission(), kind='complete')
@@ -267,8 +267,8 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         extra = isolated
         qs = Document.objects.all()
         parts = [
-            granted(registry, qs, self.alice, self.change, kind='complete')
-            for registry in (self.host, self.document, built_catalog(extra))
+            granted(compiler, qs, self.alice, self.change, kind='complete')
+            for compiler in (self.host, self.document, built_catalog(extra))
         ]
         pred = None
         for part in parts:
@@ -298,9 +298,9 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
-        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
-        registry.path = RAISING
-        handle = registry
+        compiler = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
+        compiler.path = RAISING
+        handle = compiler
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
             granted(configured_catalog(HOST), Document, User(), Permission(), kind='complete')

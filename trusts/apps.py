@@ -153,7 +153,7 @@ class TrustsConfigMixin(django.apps.AppConfig):
             query_compiler=self.query_compiler,
         )
         self.recorder.freeze()
-        self.recorder.play(compiler)
+        self.recorder.play(compiler.get_recorder_target())
         self.catalog = compiler.compile()
 
 

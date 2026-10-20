@@ -29,18 +29,18 @@ def _change_document():
     permission, _created = Permission.objects.get_or_create(content_type=ct, codename='change_document', defaults={'name': 'Can change document'})
     return permission
 
-def _contribute_document(registry):
+def _contribute_document(compiler):
     from trusts.compile.nodes import Ref
     j = Ref(DocumentGrant)
-    registry.register_relation(content=j.document, user=j.user, permission=j.permission)
+    compiler.register_relation(content=j.document, user=j.user, permission=j.permission)
 
 class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
-        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
-        registry.path = 'tests.backends.RaisingCompilerBackend'
-        handle = registry
+        compiler = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
+        compiler.path = 'tests.backends.RaisingCompilerBackend'
+        handle = compiler
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
             granted(built_catalog(handle), Document, User(), Permission(), kind='complete')

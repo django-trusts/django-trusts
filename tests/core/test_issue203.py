@@ -3,7 +3,7 @@
 Public ``BackendHandle.add_named_filter`` registration, mixin
 ``has_perm``, and fixed-query bounds only. Does not assert private
 ``_ir`` helpers, dunder/repr/hash/cache shapes, or read/mutate
-registry/compiler storage to prove cleanup.
+compiler storage to prove cleanup.
 
 Decimal, UUID, date, time, datetime, timedelta, and ``bytes`` compare
 successfully against a matching field type. Those families are omitted
@@ -36,7 +36,7 @@ PERM = 'trusts_tests.change_note'
 OPEN = '%s:open' % PERM
 
 class _BoundBackend(TrustModelBackendMixin, ModelBackend):
-    """Mixin backend bound to one isolated registry for public has_perm."""
+    """Mixin backend bound to one isolated compiler for public has_perm."""
 
     def __new__(cls, handle):
         bound = type('BoundBackend', (cls,), {'query_compiler': PlanQueryCompiler()})

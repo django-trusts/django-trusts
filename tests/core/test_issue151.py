@@ -72,9 +72,9 @@ class _IsolatedTables(object):
 
 
 class ConstructTimeSelfBindTest(SimpleTestCase):
-    def test_new_registry_self_binds_private_store_adapter(self):
-        registry = Compiler()
-        built = built_catalog(registry)
+    def test_new_compiler_self_binds_private_store_adapter(self):
+        compiler = Compiler()
+        built = built_catalog(compiler)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
 
@@ -88,11 +88,11 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         )
 
     def test_build_freezes_a_lookup_the_factory_does_not_keep(self):
-        registry = Compiler()
-        built = built_catalog(registry)
+        compiler = Compiler()
+        built = built_catalog(compiler)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
-        self.assertFalse(hasattr(registry, 'filter_lookup'))
+        self.assertFalse(hasattr(compiler, 'filter_lookup'))
 
     def test_public_conditions_surface_stays_six_names(self):
         import django_trusts
@@ -101,6 +101,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         self.assertEqual(tuple(conditions_mod.__all__), PUBLIC_SURFACE_NAMES)
         self.assertFalse(hasattr(conditions_mod, 'RegistryConditionLookup'))
         self.assertFalse(hasattr(conditions_mod, 'ConditionRegistry'))
+        self.assertFalse(hasattr(conditions_mod, 'ConditionStore'))
         self.assertFalse(hasattr(django_trusts, 'RegistryConditionLookup'))
         self.assertTrue(permission_has_condition('change_note:own'))
         self.assertEqual(permission_condition_code('change_note:own'), 'own')
@@ -199,7 +200,7 @@ class ImportOrderStandaloneConstructionTest(SimpleTestCase):
 
 
 class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
-    def test_live_ensure_registry_is_self_bound_without_host_wiring(self):
+    def test_live_ensure_compiler_is_self_bound_without_host_wiring(self):
         catalog = configured_catalog(DOCUMENT_BACKEND)
         found = {
             (model, code)
@@ -210,12 +211,12 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
 
 class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
     def test_catalog_uses_the_shapes_lookup(self):
-        registry = Compiler()
-        shape = registry.compile()
+        compiler = Compiler()
+        shape = compiler.compile()
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
         self.assertIsNone(shape.filter_lookup.record_for(Document, 'missing'))
         self.assertFalse(hasattr(shape.filter_lookup, 'conditions'))
-        self.assertIsNot(registry.compile().filter_lookup, shape.filter_lookup)
+        self.assertIsNot(compiler.compile().filter_lookup, shape.filter_lookup)
 
     def test_unknown_condition_fail_closes_through_supported_backend_path(self):
         backend = DocumentBackend()
@@ -240,19 +241,19 @@ class NamedConditionCompilationTest(TransactionTestCase):
     def test_zero_sql_construction_registration_and_finalization(self):
         Note = _note_model()
         with self.assertNumQueries(0):
-            registry = Compiler()
-            registry.add_named_filter(
+            compiler = Compiler()
+            compiler.add_named_filter(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
-            built = built_catalog(registry)
+            built = built_catalog(compiler)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
         self.assertIs(
             built.get_permission_condition_record(Note, 'owned'),
-            registry.conditions.get_permission_condition_record(Note, 'owned'),
+            compiler.conditions.get_permission_condition_record(Note, 'owned'),
         )
         self.assertIsNotNone(
-            registry.conditions.get_permission_condition_record(Note, 'owned'),
+            compiler.conditions.get_permission_condition_record(Note, 'owned'),
         )
 
     def test_core_only_named_condition_compiles_through_supported_calls(self):
@@ -267,34 +268,34 @@ class NamedConditionCompilationTest(TransactionTestCase):
             )
             keep = Note.objects.create(title='keep', owner=alice)
             drop = Note.objects.create(title='drop', owner=bob)
-            registry = Compiler()
+            compiler = Compiler()
             with self.assertNumQueries(0):
-                registry.add_named_filter(
+                compiler.add_named_filter(
                     Note, 'owned', lambda u, p, o: u == o.owner,
                 )
-            built = built_catalog(registry)
+            built = built_catalog(compiler)
             lookup = built.filter_lookup
             self.assertIsInstance(lookup, FrozenConditionLookup)
             record = lookup.record_for(Note, 'owned')
             self.assertIsNotNone(record)
             self.assertIs(
                 record,
-                registry.conditions.get_permission_condition_record(Note, 'owned'),
+                compiler.conditions.get_permission_condition_record(Note, 'owned'),
             )
             perm = 'trusts_tests.change_note:owned'
             compiled = lookup.compile_q(Note, perm, alice)
-            stored = registry.conditions.compile_registered_condition_q(Note, perm, alice)
+            stored = compiler.conditions.compile_registered_condition_q(Note, perm, alice)
             self.assertEqual(str(compiled), str(stored))
             listed = set(Note.objects.filter(compiled).values_list('pk', flat=True))
             self.assertEqual(listed, {keep.pk})
             self.assertNotIn(drop.pk, listed)
             self.assertTrue(
-                registry.conditions.evaluate_permission_condition(
+                compiler.conditions.evaluate_permission_condition(
                     Note, 'owned', alice, 'trusts_tests.change_note', keep,
                 )
             )
             self.assertFalse(
-                registry.conditions.evaluate_permission_condition(
+                compiler.conditions.evaluate_permission_condition(
                     Note, 'owned', alice, 'trusts_tests.change_note', drop,
                 )
             )
@@ -307,33 +308,33 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 'alice-151u', 'alice-151u@example.com', 'x',
             )
             note = Note.objects.create(title='n', owner=alice)
-            registry = Compiler()
+            compiler = Compiler()
             lookup = FrozenConditionLookup(())
             self.assertIsNone(lookup.record_for(Note, 'missing'))
             with self.assertRaises(AttributeError) as missing:
-                registry.conditions.compile_registered_condition_q(
+                compiler.conditions.compile_registered_condition_q(
                     Note, 'trusts_tests.change_note:missing', alice,
                 )
             self.assertIn('missing', str(missing.exception))
             with self.assertRaises(TypeError):
-                registry.add_named_filter(
+                compiler.add_named_filter(
                     Note, 'typo', 'not-a-builder',
                 )
             self.assertIsNone(
-                registry.conditions.get_permission_condition_record(Note, 'typo'),
+                compiler.conditions.get_permission_condition_record(Note, 'typo'),
             )
             with self.assertRaises(PermissionConditionError):
-                registry.add_named_filter(
+                compiler.add_named_filter(
                     Note, 'typo', lambda u, p, o: u == o.nope,
                 )
             self.assertIsNone(
-                registry.conditions.get_permission_condition_record(Note, 'typo'),
+                compiler.conditions.get_permission_condition_record(Note, 'typo'),
             )
-            registry.conditions._records[(Note._meta.label, 'empty')] = (
+            compiler.conditions._records[(Note._meta.label, 'empty')] = (
                 ConditionRecord(model=Note)
             )
             with self.assertRaises(PermissionConditionError) as unbound:
-                registry.conditions.evaluate_permission_condition(
+                compiler.conditions.evaluate_permission_condition(
                     Note, 'empty', alice, 'trusts_tests.change_note', note,
                 )
             self.assertIn('unbound', str(unbound.exception))

@@ -17,7 +17,7 @@ registration path issues zero SQL (symbolic refs plus ``_meta``).
 Prebuilt ``Expr`` trees are not accepted at register.
 
 Permission-condition records live on an instantiable
-``ConditionRegistry`` (also exposed on each built registry and the
+``ConditionStore`` (also exposed on each built compiler and the
 recorder's ``add_named_filter``).
 
 V1 grammar: principal/object field refs and relationship traversal
@@ -1141,12 +1141,12 @@ class ConditionRecord(object):
         self.model = model
 
 
-class ConditionRegistry(object):
+class ConditionStore(object):
     """Per-instance store of permission-condition records.
 
     Create a new instance per isolated context. There is no
     process-global singleton. Records are keyed by model identity plus
-    condition code on *this* instance, so two registries never share or
+    condition code on *this* instance, so two stores never share or
     overwrite each other.
 
     A callable argument is a registration-time builder: invoked once

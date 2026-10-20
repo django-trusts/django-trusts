@@ -7,7 +7,7 @@ compares ``auth.Permission.content_type`` to the protected object's
 content identity. It does not read the codename. Any other permission
 terminal, including a custom model with a ``content_type`` foreign key,
 keeps primary-key identity. ``user.has_perm`` is tested with permission
-strings. Permission instances are tested on the registry, ``.authorized()``,
+strings. Permission instances are tested on the compiler, ``.authorized()``,
 and reverse inquiries.
 """
 from contextlib import contextmanager
@@ -399,14 +399,14 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
     def test_terminal_without_content_type_keeps_primary_key_identity(self):
         operation = self.Operation.objects.create(code='review')
         self.OperationGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, operation=operation)
-        registry = Compiler()
+        compiler = Compiler()
         with self.assertNumQueries(0):
-            registry.register_relation(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-            registry.register_relation(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
-        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, operation))
-        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, operation))
-        registry.path = 'tests.core.issue267-operation'
-        handle = registry
+            compiler.register_relation(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
+            compiler.register_relation(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
+        self.assertTrue(built_catalog(compiler).has_permission(self.owner, self.org, operation))
+        self.assertTrue(built_catalog(compiler).has_permission(self.owner, self.repo, operation))
+        compiler.path = 'tests.core.issue267-operation'
+        handle = compiler
         document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
@@ -418,16 +418,16 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         repo_permit = self.TypedPermit.objects.create(content_type=repo_ct, codename='read_repository')
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=repo_permit)
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=org_permit)
-        registry = Compiler()
+        compiler = Compiler()
         grant = self._ref(self.TypedGrant)
-        registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permit)
-        registry.register_relation(content=grant.repository, user=grant.user, permission=grant.permit)
-        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, org_permit))
-        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, repo_permit))
-        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.org, repo_permit))
-        self.assertTrue(built_catalog(registry).has_permission(self.owner, self.repo, org_permit))
-        registry.path = 'tests.core.issue267-typed'
-        handle = registry
+        compiler.register_relation(content=grant.organization, user=grant.user, permission=grant.permit)
+        compiler.register_relation(content=grant.repository, user=grant.user, permission=grant.permit)
+        self.assertTrue(built_catalog(compiler).has_permission(self.owner, self.org, org_permit))
+        self.assertTrue(built_catalog(compiler).has_permission(self.owner, self.repo, repo_permit))
+        self.assertTrue(built_catalog(compiler).has_permission(self.owner, self.org, repo_permit))
+        self.assertTrue(built_catalog(compiler).has_permission(self.owner, self.repo, org_permit))
+        compiler.path = 'tests.core.issue267-typed'
+        handle = compiler
         document = _load_policy_sql_document(render_configured_policy(handle))
         for content in document['backends'][0]['contents']:
             self.assertNotIn('django_content_type', content['has_perm']['sql'])
@@ -437,10 +437,10 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         read = _perm(self.Repository, 'read_repository')
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=manage)
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=read)
-        registry = Compiler()
+        compiler = Compiler()
         grant = self._ref(self.DirectGrant)
-        registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permission)
-        catalog = built_catalog(registry)
+        compiler.register_relation(content=grant.organization, user=grant.user, permission=grant.permission)
+        catalog = built_catalog(compiler)
         self.assertTrue(catalog.has_perm(self.owner, _code(manage), self.org))
         self.assertFalse(catalog.has_perm(self.owner, _code(read), self.org))
 

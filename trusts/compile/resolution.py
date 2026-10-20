@@ -2,7 +2,7 @@
 
 Metadata only: Django ``_meta`` and path info, no SQL. Shared hop math
 lives in ``trusts.plan.hops``. The registration resolvers that need
-registry-shaped validation stay here.
+relation-shaped validation stay here.
 """
 
 from django.contrib.contenttypes.fields import (

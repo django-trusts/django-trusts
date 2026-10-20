@@ -68,7 +68,7 @@ class CatalogShape(object):
     a concrete boolean ``is_active`` and ``absent`` otherwise.
     ``override_q`` is the override compiled against the catalog user
     model, or ``None``. ``plans`` is the build-time ``(key, RelationPlan)``
-    table. ``query_compiler is None`` means the default compiler.
+    table. ``compiler is None`` means the default compiler.
     """
 
     records: tuple
@@ -77,7 +77,7 @@ class CatalogShape(object):
     user_conditions: object
     user_override: object
     filter_lookup: object
-    query_compiler: object
+    compiler: object
     path: str
     family: str
     user_model: object
@@ -129,10 +129,9 @@ class Catalog(object):
         self.family = shape.family
         self.records = shape.records
         self.delegations = shape.delegations
-        self._project = shape.query_compiler is None
-        self.query_compiler = (
-            PlanQueryCompiler()
-            if shape.query_compiler is None else shape.query_compiler
+        self._project = shape.compiler is None
+        self.compiler = (
+            PlanQueryCompiler() if shape.compiler is None else shape.compiler
         )
         self.user_model = user_model
         self.user_conditions = shape.user_conditions
@@ -173,7 +172,7 @@ class Catalog(object):
 
     def applies(self, plan):
         """Whether this catalog's compiler will compile ``plan``."""
-        return bool(self.query_compiler.applies(plan))
+        return bool(self.compiler.applies(plan))
 
     def has_permission(self, user, content, permission, *,
                        extra_q=None, permission_model=None,

@@ -9,7 +9,7 @@ from django.test.utils import isolate_apps
 
 from tests.support import (
     configured_catalog,
-    isolate_live_registry,
+    isolate_live_compiler,
     live_config,
     override_apps_ready,
 )
@@ -41,7 +41,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.contributor.ready()
         self.assertEqual(self.live_catalog.records, before)
 
-    def test_ready_does_not_replace_registry(self):
+    def test_ready_does_not_replace_compiler(self):
         first = configured_catalog(DOCUMENT_BACKEND)
         self.contributor.ready()
         self.assertIs(configured_catalog(DOCUMENT_BACKEND), first)
@@ -50,7 +50,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         from tests.myapp.backends import DocumentBackend
 
         isolated = Compiler()
-        isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
+        isolate_live_compiler(self.contributor, isolated, DOCUMENT_BACKEND)
         recorder = DocumentBackend().recorder
         self.contributor.ready()
         self.assertTrue(recorder.frozen)
@@ -65,7 +65,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
             user=j.permission,
             permission=j.user,
         )
-        isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
+        isolate_live_compiler(self.contributor, isolated, DOCUMENT_BACKEND)
         before = self.live_catalog.records
         self.contributor.ready()
         self.assertEqual(len(isolated.records), 1)
@@ -82,7 +82,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
 class IsolatedAppsDoesNotDonateDocumentContributionTest(
     KernelHostRequiredMixin, SimpleTestCase,
 ):
-    def test_isolate_apps_tests_config_does_not_touch_live_document_registry(self):
+    def test_isolate_apps_tests_config_does_not_touch_live_document_compiler(self):
         from tests.apps import TestsConfig
         import tests as tests_module
 

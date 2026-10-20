@@ -59,7 +59,7 @@ from trusts.errors import TrustsConfigurationError
 T = TypeVar('T', bound=Model)
 from trusts.compile.catalogs import Catalog, CatalogShape, plan_table
 from trusts.plan.conditions import (
-    ConditionRegistry,
+    ConditionStore,
     Expr,
     FrozenConditionLookup,
 )
@@ -214,7 +214,7 @@ class Compiler(object):
         self.frozen = False
         self._user_conditions = None
         self._user_override = None
-        self.conditions = ConditionRegistry(user_model=user_model)
+        self.conditions = ConditionStore(user_model=user_model)
         self._explicit_compiler = query_compiler is not None
         self.query_compiler = (
             query_compiler if self._explicit_compiler else PlanQueryCompiler()
@@ -222,6 +222,9 @@ class Compiler(object):
         self.path = path
         self.family = family
         self.user_model = user_model
+
+    def get_recorder_target(self):
+        return self
 
     def add_named_filter(self, model, code, predicate):
         """Register a ``:code`` condition on ``model`` for this instance.
@@ -827,16 +830,14 @@ class Compiler(object):
             records=self.records, delegations=self.delegations, conditions=rows,
             user_conditions=stored, user_override=self._user_override,
             filter_lookup=lookup,
-            query_compiler=(
-                self.query_compiler if self._explicit_compiler else None
-            ),
+            compiler=self.query_compiler if self._explicit_compiler else None,
             path=self.path or '', family=self.family, user_model=model,
             user_rules=rules, override_q=override_q, plans=plans,
         )
         return Catalog(shape, user_model=model)
 
     def _stored_user_conditions(self):
-        """``None`` when the registry still uses the built-in rule."""
+        """``None`` when the compiler still uses the built-in rule."""
         if self._user_conditions is None:
             return None
         return tuple(self._user_conditions.values())

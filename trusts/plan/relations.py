@@ -32,7 +32,7 @@ from django.contrib.auth.models import Permission
 
 
 class QueryCompiler(object):
-    """Duck-typed compiler protocol. Not a registry or store."""
+    """Duck-typed compiler protocol. Not a catalog or store."""
 
     historical_fallback = False
 
@@ -114,7 +114,7 @@ class SkipParams(object):
 
 
 def known_skip_names(subjects):
-    """Condition and override names on these catalogs or registries.
+    """Condition and override names on these catalogs.
 
     No subject yet means the built-in ``is_active`` condition only.
     """

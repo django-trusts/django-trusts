@@ -232,7 +232,7 @@ def _stored(conditions):
 def compile_user_rules(model, path, conditions, *, role, values):
     """``(skip_<name> OR condition)`` for rules that apply to ``role``.
 
-    ``conditions is None`` is the built-in ``is_active`` rule. The registry
+    ``conditions is None`` is the built-in ``is_active`` rule. The compiler
     passes that rule only when ``model`` has the field, and one fragment
     for every inquiry.
     """

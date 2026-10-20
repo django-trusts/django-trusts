@@ -95,15 +95,15 @@ def _tables(*model_classes):
             for model in reversed(model_classes):
                 editor.delete_model(model)
 
-def _register_team(registry, grant):
+def _register_team(compiler, grant):
     """Accepted GH team spelling. Do not change this registration."""
     from trusts.compile.nodes import All, Equal, Ref, permission_in
     t = Ref(grant)
-    return registry.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=All(permission_in(t.team.permission_bundles.operations), Equal(t.team.organization, t.repository.organization)))
+    return compiler.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=All(permission_in(t.team.permission_bundles.operations), Equal(t.team.organization, t.repository.organization)))
 
-def _register_direct(registry, grant):
+def _register_direct(compiler, grant):
     d = Ref(grant)
-    return registry.register_relation(content=d.repository, user=d.account, permission=d.operation)
+    return compiler.register_relation(content=d.repository, user=d.account, permission=d.operation)
 
 def _pks(rows):
     return {row.pk for row in rows}
@@ -149,19 +149,19 @@ def _to_field_models(*, match):
             app_label = 'trusts_tests'
     return (Holder, Site, Document, Action, SiteGrant)
 
-def _register_site_grant(registry, grant):
+def _register_site_grant(compiler, grant):
     g = Ref(grant)
-    return registry.register_relation(content=g.document, user=g.holder, permission=g.action, condition=Equal(g.left, g.right))
+    return compiler.register_relation(content=g.document, user=g.holder, permission=g.action, condition=Equal(g.left, g.right))
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class ClosedPredicateRegistrationTest(TestCase):
 
     def test_accepted_gh_team_mapping_registers_with_zero_sql(self):
         _Account, _Organization, _Team, _Operation, _Bundle, Repository, TeamRepoGrant, _Direct = _gh_models()
-        registry = Compiler()
+        compiler = Compiler()
         with self.assertNumQueries(0):
-            record = _register_team(registry, TeamRepoGrant)
-        self.assertEqual(len(registry.records), 1)
+            record = _register_team(compiler, TeamRepoGrant)
+        self.assertEqual(len(compiler.records), 1)
         self.assertIs(record.root, TeamRepoGrant)
         self.assertIs(record.content_model, Repository)
         self.assertEqual(record.user_path, ('team', 'members'))
@@ -174,12 +174,12 @@ class ClosedPredicateRegistrationTest(TestCase):
     def test_untyped_condition_still_rejected_with_zero_sql(self):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
-        registry = Compiler()
+        compiler = Compiler()
         t = Ref(TeamRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'not supported'):
-                registry.register_relation(content=t.repository, user=t.team, permission=t.operation, condition=object())
-        self.assertEqual(registry.records, ())
+                compiler.register_relation(content=t.repository, user=t.team, permission=t.operation, condition=object())
+        self.assertEqual(compiler.records, ())
 
     def test_empty_all_and_permission_in_rejected_with_zero_sql(self):
         with self.assertNumQueries(0):
@@ -204,19 +204,19 @@ class ClosedPredicateRegistrationTest(TestCase):
 
     def test_incompatible_equal_and_permission_in_paths_rejected(self):
         Account, _Organization, _Team, _Operation, _Bundle, _Repository, TeamRepoGrant, _Direct = _gh_models()
-        registry = Compiler()
+        compiler = Compiler()
         t = Ref(TeamRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'same model'):
-                registry.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=Equal(t.team.organization, t.repository))
+                compiler.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=Equal(t.team.organization, t.repository))
             with self.assertRaisesRegex(TrustsConfigurationError, 'permission model'):
-                registry.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=permission_in(t.team.members))
-        self.assertEqual(registry.records, ())
+                compiler.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=permission_in(t.team.members))
+        self.assertEqual(compiler.records, ())
         self.assertIs(Account._meta.concrete_model, Account)
 
     def test_equal_rejects_mismatched_to_field_targets_with_zero_sql(self):
         Holder, Site, Document, Action, SiteGrant = _to_field_models(match=False)
-        registry = Compiler()
+        compiler = Compiler()
         with self.assertNumQueries(0):
             site_a = Site(slug='acme', code='x1')
             site_b = Site(slug='other', code='acme')
@@ -225,8 +225,8 @@ class ClosedPredicateRegistrationTest(TestCase):
             self.assertEqual(site_a.slug, site_b.code)
             self.assertNotEqual(site_a.slug, site_b.slug)
             with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
-                _register_site_grant(registry, SiteGrant)
-        self.assertEqual(registry.records, ())
+                _register_site_grant(compiler, SiteGrant)
+        self.assertEqual(compiler.records, ())
         self.assertIs(Holder._meta.concrete_model, Holder)
         self.assertIs(Site._meta.concrete_model, Site)
         self.assertIs(Document._meta.concrete_model, Document)
@@ -234,10 +234,10 @@ class ClosedPredicateRegistrationTest(TestCase):
 
     def test_equal_matching_to_field_registers_with_zero_sql(self):
         _Holder, _Site, Document, _Action, SiteGrant = _to_field_models(match=True)
-        registry = Compiler()
+        compiler = Compiler()
         with self.assertNumQueries(0):
-            record = _register_site_grant(registry, SiteGrant)
-        self.assertEqual(len(registry.records), 1)
+            record = _register_site_grant(compiler, SiteGrant)
+        self.assertEqual(len(compiler.records), 1)
         self.assertIs(record.content_model, Document)
         self.assertIsInstance(record.condition, Equal)
 
@@ -245,51 +245,51 @@ class ClosedPredicateRegistrationTest(TestCase):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
         AccountRepoGrant = _models[7]
-        registry = Compiler()
+        compiler = Compiler()
         t = Ref(TeamRepoGrant)
         d = Ref(AccountRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'multi-valued'):
-                registry.register_relation(content=t.team.members, user=t.team.members, permission=t.operation)
+                compiler.register_relation(content=t.team.members, user=t.team.members, permission=t.operation)
             with self.assertRaisesRegex(TrustsConfigurationError, 'multi-valued'):
-                registry.register_relation(content=t.repository, user=t.team.members.organizations, permission=t.operation)
+                compiler.register_relation(content=t.repository, user=t.team.members.organizations, permission=t.operation)
             with self.assertRaisesRegex(TrustsConfigurationError, 'extra or intermediate multi-valued'):
-                registry.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=Equal(t.team.members, t.repository.organization))
+                compiler.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=Equal(t.team.members, t.repository.organization))
             with self.assertRaisesRegex(TrustsConfigurationError, 'extra or intermediate multi-valued'):
-                registry.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=permission_in(t.team.permission_bundles.operations.bundles))
+                compiler.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=permission_in(t.team.permission_bundles.operations.bundles))
             with self.assertRaisesRegex(TrustsConfigurationError, 'direct single-valued'):
-                registry.register_relation(content=d.repository, user=d.repository.organization, permission=d.operation)
+                compiler.register_relation(content=d.repository, user=d.repository.organization, permission=d.operation)
             with self.assertRaisesRegex(TrustsConfigurationError, 'multi-valued|reverse'):
-                registry.register_relation(content=d.repository, user=d.account.repo_grants.repository, permission=d.operation)
-        self.assertEqual(registry.records, ())
+                compiler.register_relation(content=d.repository, user=d.account.repo_grants.repository, permission=d.operation)
+        self.assertEqual(compiler.records, ())
 
     def test_mixed_root_predicate_refs_rejected(self):
         _models = _gh_models()
         TeamRepoGrant = _models[6]
         AccountRepoGrant = _models[7]
-        registry = Compiler()
+        compiler = Compiler()
         t = Ref(TeamRepoGrant)
         d = Ref(AccountRepoGrant)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'same root|share'):
-                registry.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=Equal(t.team.organization, d.repository.organization))
-        self.assertEqual(registry.records, ())
+                compiler.register_relation(content=t.repository, user=t.team.members, permission=t.operation, condition=Equal(t.team.organization, d.repository.organization))
+        self.assertEqual(compiler.records, ())
 
     def test_direct_user_hop_still_registers(self):
         _models = _gh_models()
         AccountRepoGrant = _models[7]
-        registry = Compiler()
+        compiler = Compiler()
         with self.assertNumQueries(0):
-            record = _register_direct(registry, AccountRepoGrant)
+            record = _register_direct(compiler, AccountRepoGrant)
         self.assertEqual(record.user_path, ('account',))
         self.assertIsNone(record.condition)
 
     def test_condition_none_still_accepted(self):
         _models = _gh_models()
         AccountRepoGrant = _models[7]
-        registry = Compiler()
+        compiler = Compiler()
         d = Ref(AccountRepoGrant)
-        record = registry.register_relation(content=d.repository, user=d.account, permission=d.operation, condition=None)
+        record = compiler.register_relation(content=d.repository, user=d.account, permission=d.operation, condition=None)
         self.assertIsNone(record.condition)
 
     def test_predicates_are_immutable(self):
@@ -329,28 +329,28 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
         self.repo_other = self.Repository.objects.create(organization=self.org_b, title='repo-other')
         self.TeamRepoGrant.objects.create(team=self.writers, repository=self.repo_a, operation=self.read)
         self.AccountRepoGrant.objects.create(account=self.collaborator, repository=self.repo_b, operation=self.write)
-        self.registry = Compiler()
-        _register_direct(self.registry, self.AccountRepoGrant)
-        _register_team(self.registry, self.TeamRepoGrant)
+        self.compiler = Compiler()
+        _register_direct(self.compiler, self.AccountRepoGrant)
+        _register_team(self.compiler, self.TeamRepoGrant)
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
     def _handles(self):
-        self.registry.path = 'issue98'
-        return (self.registry,)
+        self.compiler.path = 'issue98'
+        return (self.compiler,)
 
     def _object_list_agree(self, principal, operation, obj, expected):
         with self.assertNumQueries(1):
-            via_obj = built_catalog(self.registry).has_permission(principal, obj, operation)
+            via_obj = built_catalog(self.compiler).has_permission(principal, obj, operation)
         with self.assertNumQueries(1):
-            via_list = obj in list(built_catalog(self.registry).filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
+            via_list = obj in list(built_catalog(self.compiler).filter_authorized(self.Repository.objects.filter(pk=obj.pk), principal, operation))
         with listed_relationship(self._handles()):
             with self.assertNumQueries(1):
                 via_manager = obj in list(self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation))
             with self.assertNumQueries(1):
                 via_exists = self.Repository.objects.filter(pk=obj.pk).authorized(principal, operation).exists()
-        enumerated = {row.pk for row in built_catalog(self.registry).permissions_for(principal, obj)}
+        enumerated = {row.pk for row in built_catalog(self.compiler).permissions_for(principal, obj)}
         self.assertEqual(via_obj, expected)
         self.assertEqual(via_list, expected)
         self.assertEqual(via_manager, expected)
@@ -406,17 +406,17 @@ class ClosedPredicateAuthorizationTest(TransactionTestCase):
 
     def test_query_construction_is_lazy_and_fixed_count(self):
         with self.assertNumQueries(0):
-            qs = built_catalog(self.registry).filter_authorized(self.Repository.objects.all(), self.member, self.read)
-            enumerated = built_catalog(self.registry).permissions_for(self.member, self.repo_a)
+            qs = built_catalog(self.compiler).filter_authorized(self.Repository.objects.all(), self.member, self.read)
+            enumerated = built_catalog(self.compiler).permissions_for(self.member, self.repo_a)
         self.assertIsInstance(qs, QuerySet)
         self.assertIsInstance(enumerated, QuerySet)
         self.assertIsNone(qs._result_cache)
         with self.assertNumQueries(1):
             self.assertEqual(_pks(qs), {self.repo_a.pk})
-        page = built_catalog(self.registry).filter_authorized(self.Repository.objects.order_by('pk'), self.member, self.read)[:1]
+        page = built_catalog(self.compiler).filter_authorized(self.Repository.objects.order_by('pk'), self.member, self.read)[:1]
         with self.assertNumQueries(1):
             self.assertEqual(list(page), [self.repo_a])
-        sql = str(built_catalog(self.registry).filter_authorized(self.Repository.objects.all(), self.member, self.read).query).lower().replace('_', '').replace('"', '')
+        sql = str(built_catalog(self.compiler).filter_authorized(self.Repository.objects.all(), self.member, self.read).query).lower().replace('_', '').replace('"', '')
         self.assertIn('exists', sql)
         self.assertIn('teamrepogrant', sql)
 
@@ -442,16 +442,16 @@ class ClosedPredicateEqualToFieldAuthorizationTest(TransactionTestCase):
         self.doc_other = self.Document.objects.create(title='split')
         self.SiteGrant.objects.create(holder=self.holder, document=self.doc_same, action=self.read, left=self.site_a, right=self.site_a)
         self.SiteGrant.objects.create(holder=self.holder, document=self.doc_other, action=self.read, left=self.site_a, right=self.site_b)
-        self.registry = Compiler()
-        _register_site_grant(self.registry, self.SiteGrant)
+        self.compiler = Compiler()
+        _register_site_grant(self.compiler, self.SiteGrant)
 
     def tearDown(self):
         self._table_cm.__exit__(None, None, None)
 
     def test_matching_to_field_same_object_allows_and_split_denies(self):
         with self.assertNumQueries(1):
-            self.assertTrue(built_catalog(self.registry).has_permission(self.holder, self.doc_same, self.read))
+            self.assertTrue(built_catalog(self.compiler).has_permission(self.holder, self.doc_same, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(built_catalog(self.registry).has_permission(self.holder, self.doc_other, self.read))
+            self.assertFalse(built_catalog(self.compiler).has_permission(self.holder, self.doc_other, self.read))
         with self.assertNumQueries(1):
-            self.assertEqual(_pks(built_catalog(self.registry).filter_authorized(self.Document.objects.all(), self.holder, self.read)), {self.doc_same.pk})
+            self.assertEqual(_pks(built_catalog(self.compiler).filter_authorized(self.Document.objects.all(), self.holder, self.read)), {self.doc_same.pk})

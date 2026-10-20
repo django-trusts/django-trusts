@@ -28,11 +28,11 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from tests.support import built_catalog
 
-def _handle(registry=None, path='tests.core.issue210'):
-    if registry is None:
-        registry = Compiler()
-    registry.path = path
-    return registry
+def _handle(compiler=None, path='tests.core.issue210'):
+    if compiler is None:
+        compiler = Compiler()
+    compiler.path = path
+    return compiler
 
 def _team_condition(t):
     return t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization)
@@ -100,12 +100,12 @@ class RegisterConditionGrammarTest(SimpleTestCase):
         self.assertEqual(len(conjunction.condition.predicates), 2)
 
     @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
-    def test_internal_registry_still_accepts_private_ir(self):
+    def test_internal_compiler_still_accepts_private_ir(self):
         TeamRepoGrant = _gh_models()[6]
-        registry = Compiler()
-        record = _register_team(registry, TeamRepoGrant)
+        compiler = Compiler()
+        record = _register_team(compiler, TeamRepoGrant)
         self.assertIsInstance(record.condition, All)
-        self.assertEqual(registry.records, (record,))
+        self.assertEqual(compiler.records, (record,))
 
 class RegisterConditionOnceTest(TransactionTestCase):
 
@@ -123,16 +123,16 @@ class RegisterConditionOnceTest(TransactionTestCase):
             bundle.operations.add(read)
             repo = Repository.objects.create(organization=org, title='once')
             TeamRepoGrant.objects.create(team=team, repository=repo, operation=read)
-            registry = Compiler()
-            handle = _handle(registry)
+            compiler = Compiler()
+            handle = _handle(compiler)
             builder = _CountCondition()
             record = handle.register(trust=TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=builder)
             self.assertEqual(builder.calls, 1)
             self.assertNotIn(builder, (record, record.condition))
             self.assertFalse(callable(record.condition))
-            self.assertTrue(built_catalog(registry).has_permission(member, repo, read))
-            list(built_catalog(registry).permissions_for(member, repo))
-            list(built_catalog(registry).filter_authorized(Repository.objects.all(), member, read))
+            self.assertTrue(built_catalog(compiler).has_permission(member, repo, read))
+            list(built_catalog(compiler).permissions_for(member, repo))
+            list(built_catalog(compiler).filter_authorized(Repository.objects.all(), member, read))
             self.assertEqual(builder.calls, 1)
 
 class RegisterConditionRejectPublicIRTest(TestCase):
@@ -216,8 +216,8 @@ class RegisterConditionFailClosedTest(TestCase):
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_condition_invoked_on_register_after_build(self):
-        registry = Compiler()
-        handle = _handle(registry)
+        compiler = Compiler()
+        handle = _handle(compiler)
         calls = []
 
         def condition(trust):
@@ -225,7 +225,7 @@ class RegisterConditionFailClosedTest(TestCase):
             return trust.user == trust.user
         record = handle.register(trust=DocumentGrant, user='user', permission='permission', content='document', condition=condition)
         self.assertEqual(len(calls), 1)
-        shape = registry.compile()
+        shape = compiler.compile()
         self.assertEqual(shape.records, (record,))
         self.assertIsNotNone(record.condition)
 
@@ -274,9 +274,9 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
         self.repo_a = self.Repository.objects.create(organization=self.org_a, title='repo-a')
         self.repo_other = self.Repository.objects.create(organization=self.org_b, title='repo-other')
         self.TeamRepoGrant.objects.create(team=self.writers, repository=self.repo_a, operation=self.read)
-        self.registry = Compiler()
-        _register_direct(self.registry, self.AccountRepoGrant)
-        handle = _handle(self.registry)
+        self.compiler = Compiler()
+        _register_direct(self.compiler, self.AccountRepoGrant)
+        handle = _handle(self.compiler)
         handle.register(trust=self.TeamRepoGrant, user=lambda t: t.team.members, permission=lambda t: t.operation, content=lambda t: t.repository, condition=_team_condition)
 
     def tearDown(self):
@@ -284,12 +284,12 @@ class RegisterConditionAuthorizationTest(TransactionTestCase):
 
     def test_conjunction_allows_aligned_ceiling_and_denies_the_rest(self):
         with self.assertNumQueries(1):
-            self.assertTrue(built_catalog(self.registry).has_permission(self.member, self.repo_a, self.read))
+            self.assertTrue(built_catalog(self.compiler).has_permission(self.member, self.repo_a, self.read))
         with self.assertNumQueries(1):
-            self.assertFalse(built_catalog(self.registry).has_permission(self.member, self.repo_a, self.write))
+            self.assertFalse(built_catalog(self.compiler).has_permission(self.member, self.repo_a, self.write))
         self.TeamRepoGrant.objects.create(team=self.writers, repository=self.repo_other, operation=self.read)
         with self.assertNumQueries(1):
-            self.assertFalse(built_catalog(self.registry).has_permission(self.member, self.repo_other, self.read))
+            self.assertFalse(built_catalog(self.compiler).has_permission(self.member, self.repo_other, self.read))
         self.bundle.operations.remove(self.read)
         with self.assertNumQueries(1):
-            self.assertFalse(built_catalog(self.registry).has_permission(self.member, self.repo_a, self.read))
+            self.assertFalse(built_catalog(self.compiler).has_permission(self.member, self.repo_a, self.read))
