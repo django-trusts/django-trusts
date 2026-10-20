@@ -41,7 +41,6 @@ from django.db.models.lookups import Lookup
 
 import trusts.plan.standards as standards
 from trusts.backends import configured_catalogs
-from trusts.plan.hops import resolved_hop
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
@@ -261,16 +260,14 @@ class _PolicyVisitor(object):
     """Snapshot visitor: renders each walked question to policy SQL.
 
     Supplies the alias and the user/permission/content sentinels for one
-    catalog. ``subject`` is that catalog. ``visit(question)`` is the
-    single visitor method :meth:`Registry.walk_questions` calls; it
-    accumulates the same document structure (and key order) the
-    hard-coded projection produced. The six ``_compile_*`` methods
+    catalog. ``visit(question)`` is the single visitor method
+    :meth:`Catalog.walk_questions` calls. The six ``_compile_*`` methods
     below are its per-question bodies.
     """
 
     def __init__(self, catalog, alias, *, trust_ids=None):
         self.alias = alias
-        self.subject = catalog
+        self.catalog = catalog
         self._trust_ids = dict(trust_ids or {})
         self._contents = {}
         self._classifier_records = {}
@@ -403,11 +400,11 @@ class _PolicyVisitor(object):
 
     def _compile_content_grant(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = _content_manager(model).all()
-        predicate = subject.complete_grant_q(queryset, user, permission)
+        predicate = catalog.complete_grant_q(queryset, user, permission)
         if predicate is None:
             raise TrustsConfigurationError(
                 'Policy SQL found no grant for %s.' % _model_label(model)
@@ -419,11 +416,11 @@ class _PolicyVisitor(object):
 
     def _compile_has_perm(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         instance = _content_sentinel(model, alias)
-        predicate = subject.complete_grant_q(instance, user, permission)
+        predicate = catalog.complete_grant_q(instance, user, permission)
         if predicate is None:
             raise TrustsConfigurationError(
                 'Policy SQL found no grant for %s.' % _model_label(model)
@@ -437,11 +434,11 @@ class _PolicyVisitor(object):
 
     def _compile_get_all_permissions(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
-            subject, instance, user, kind='complete',
+            catalog, instance, user, kind='complete',
         )
         if queryset is None:
             raise TrustsConfigurationError(
@@ -454,12 +451,12 @@ class _PolicyVisitor(object):
 
     def _compile_get_permitted_users(self, records, model):
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         content = _content_sentinel(model, alias)
         _populate_reverse_along_identity(content, records, alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         queryset = lock_permitted_users_queryset(
-            subject, content, permission,
+            catalog, content, permission,
         )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
@@ -469,17 +466,17 @@ class _PolicyVisitor(object):
     def _compile_filter_by_permitted_content(self, records, model):
         """One statement per proper prefix, the queryset that actually runs."""
 
-        subject, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         permission = _role_sentinel(records[0], 'permission', alias)
         rows = []
-        for prefix in _permitted_content_prefix_models(subject, model):
+        for prefix in catalog._permitted_content_prefix_models(model):
             queryset = _compile_permitted_content_queryset(
                 _content_manager(prefix).all(),
                 user,
                 permission,
                 content=model,
-                catalog=subject,
+                catalog=catalog,
             )
             if queryset.query.is_empty():
                 continue
@@ -495,7 +492,7 @@ class _PolicyVisitor(object):
 
     def _compile_get_group_permissions(self, records, model):
 
-        catalog, alias = self.subject, self.alias
+        catalog, alias = self.catalog, self.alias
         user = _role_sentinel(records[0], 'user', alias)
         instance = _content_sentinel(model, alias)
         queryset = _compile_common_permissions(
@@ -805,60 +802,32 @@ def _role_sentinel(record, role, alias):
     )
 
 
-def _compile_content_grant(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_content_grant(records, model)
+def _compile_content_grant(catalog, alias, records, model):
+    return _PolicyVisitor(catalog, alias)._compile_content_grant(records, model)
 
 
-def _compile_has_perm(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_has_perm(records, model)
+def _compile_has_perm(catalog, alias, records, model):
+    return _PolicyVisitor(catalog, alias)._compile_has_perm(records, model)
 
 
-def _compile_get_all_permissions(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_get_all_permissions(
+def _compile_get_all_permissions(catalog, alias, records, model):
+    return _PolicyVisitor(catalog, alias)._compile_get_all_permissions(
         records, model)
 
 
-def _compile_get_permitted_users(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_get_permitted_users(
+def _compile_get_permitted_users(catalog, alias, records, model):
+    return _PolicyVisitor(catalog, alias)._compile_get_permitted_users(
         records, model)
 
 
-def _permitted_content_prefix_models(catalog, model):
-    """Concrete models that are a proper prefix of this backend's content path.
-
-    Order is registration order, then path order. A model is listed once.
-    The protected model is included only when an earlier hop on the same
-    path also uses it.
-    """
-    plan = catalog.plan_for(model)
-    legs = tuple(plan.records) + tuple(plan.delegations)
-    found = []
-    seen = set()
-    for record in legs:
-        path = record.content_path
-        if not path:
-            continue
-        current = record.root
-        last = len(path) - 1
-        for index, name in enumerate(path):
-            field = current._meta.get_field(name)
-            related, _target = resolved_hop(field, 'content', path)
-            concrete = related._meta.concrete_model
-            if index != last and concrete not in seen:
-                seen.add(concrete)
-                found.append(concrete)
-            current = related
-    return tuple(found)
-
-
-def _compile_filter_by_permitted_content(subject, alias, records, model):
+def _compile_filter_by_permitted_content(catalog, alias, records, model):
     """One statement per proper prefix, the queryset that actually runs."""
-    return _PolicyVisitor(subject, alias)._compile_filter_by_permitted_content(
+    return _PolicyVisitor(catalog, alias)._compile_filter_by_permitted_content(
         records, model)
 
 
-def _compile_get_group_permissions(subject, alias, records, model):
-    return _PolicyVisitor(subject, alias)._compile_get_group_permissions(
+def _compile_get_group_permissions(catalog, alias, records, model):
+    return _PolicyVisitor(catalog, alias)._compile_get_group_permissions(
         records, model)
 
 

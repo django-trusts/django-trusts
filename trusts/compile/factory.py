@@ -222,16 +222,11 @@ class RegistryFactory(object):
         self.conditions = ConditionRegistry()
         self._lookup_explicit = False
         self._explicit_compiler = compiler is not None
-        self._compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
+        self.compiler = compiler if self._explicit_compiler else PlanQueryCompiler()
         self.path = path
         self.family = family
         self.user_model = user_model
         self.cls = cls
-
-    @property
-    def compiler(self):
-        """Compiler handed to every registry this factory builds."""
-        return self._compiler
 
     @property
     def filter_lookup(self):
@@ -847,7 +842,7 @@ class RegistryFactory(object):
             records=self.records, delegations=self.delegations, conditions=rows,
             user_conditions=stored, user_override=self._user_override,
             filter_lookup=lookup,
-            compiler=self._compiler if self._explicit_compiler else None,
+            compiler=self.compiler if self._explicit_compiler else None,
             cls=self.cls if self.cls is not None else type(self),
             path=self.path or '', family=self.family, user_model=model,
             user_rules=(primary, absent), override_q=override_q,
