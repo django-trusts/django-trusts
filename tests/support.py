@@ -64,10 +64,11 @@ def config_for_class(backend_cls, apps_registry=None):
     return config
 
 
-def _ensure_factory_user(factory):
-    if factory.user_model is None:
-        factory.user_model = get_user_model()
-    return factory
+def compiler(**kwargs):
+    """Test ``Compiler``. Passes the installed user model when omitted."""
+    if 'user_model' not in kwargs:
+        kwargs['user_model'] = get_user_model()
+    return Compiler(**kwargs)
 
 
 @contextmanager
@@ -126,7 +127,6 @@ def override_catalog(backend_cls, factory, path):
     config = config_for_class(backend_cls)
     saved = config.catalog
     factory.path = path
-    _ensure_factory_user(factory)
     config.catalog = built_catalog(factory)
     try:
         with override_settings(AUTHENTICATION_BACKENDS=tuple(
@@ -201,7 +201,6 @@ def _publish_catalog(backend_cls, factory, *, path=None):
         '%s.%s' % (backend_cls.__module__, backend_cls.__qualname__)
     )
     factory.path = published
-    _ensure_factory_user(factory)
     catalog = built_catalog(factory)
     config.catalog = catalog
     return catalog
@@ -236,7 +235,6 @@ def push_catalog(backend_cls, factory):
             backend_cls.__module__, backend_cls.__qualname__,
         )
     factory.family = backend_cls.family
-    _ensure_factory_user(factory)
     config.catalog = built_catalog(factory)
 
     def restore():
@@ -328,7 +326,6 @@ def listed_relationship(factories):
     for index, factory in enumerate(tuple(factories)):
         if not factory.path:
             factory.path = 'tests.support.Listed%d' % index
-        _ensure_factory_user(factory)
         built.append(built_catalog(factory))
     with _publish_built(built) as published:
         yield published

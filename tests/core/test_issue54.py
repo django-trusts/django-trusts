@@ -20,6 +20,7 @@ from tests.support import (
     listed_relationship,
     live_config,
     scoped_permitted_content,
+    compiler,
 )
 from tests.core import kernel_host_listed
 from tests.kernel_host.apps import KernelHostConfig
@@ -143,7 +144,7 @@ class KernelConfigTest(SimpleTestCase):
 
 class ConditionLookupBindTest(TestCase):
     def test_build_freezes_one_lookup_at_zero_sql(self):
-        registry = Compiler()
+        registry = compiler()
         with self.assertNumQueries(0):
             shape = registry.compile()
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
@@ -163,7 +164,7 @@ class ConditionLookupBindTest(TestCase):
             called.append((user, perm, obj))
             return obj.title == 'keep'
 
-        registry = Compiler()
+        registry = compiler()
         with self.assertNumQueries(0):
             record = registry.add_named_filter(
                 Document, 'named', builder,
@@ -339,7 +340,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
         self.FolderGrant.objects.create(
             folder=self.folder_a, user=self.alice, permission=self.add,
         )
-        registry = Compiler()
+        registry = compiler()
         _register_payload(registry, self.FolderGrant)
         self.handle = registry
 
@@ -380,7 +381,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
             self._filter(
                 self.Folder.objects.all(), content=self.Other, registry=built_catalog(self.handle),
             ),
-            self._filter(self.Folder.objects.all(), registry=built_catalog(Compiler(family='ordered_fold'))),
+            self._filter(self.Folder.objects.all(), registry=built_catalog(compiler(family='ordered_fold'))),
             self._filter(
                 self.Other.objects.all(), content=self.Payload, registry=built_catalog(self.handle),
             ),
@@ -538,7 +539,7 @@ class FilterAuthorizedScopesToFieldTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(Scope, Payload, Row, Grant):
-            registry = Compiler()
+            registry = compiler()
             j = Ref(Grant)
             record = registry.register_relation(
                 content=j.scope.rows.content,

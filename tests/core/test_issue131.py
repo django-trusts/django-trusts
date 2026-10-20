@@ -18,11 +18,11 @@ from trusts.compile.nodes import All, Equal, Ref
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
-from tests.support import built_catalog
+from tests.support import built_catalog, compiler
 
 def _handle(registry=None, path='tests.core.handle-a'):
     if registry is None:
-        registry = Compiler()
+        registry = compiler()
     registry.path = path
     return registry
 
@@ -42,7 +42,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(handle, 'strategies'))
 
     def test_string_register_matches_internal_ref_record(self):
-        via_ref = Compiler()
+        via_ref = compiler()
         j = Ref(DocumentGrant)
         expected = via_ref.register_relation(content=j.document, user=j.user, permission=j.permission)
         handle = _handle()
@@ -78,7 +78,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
         self.assertEqual(built_catalog(handle).records, ())
 
     def test_string_condition_is_not_legal_on_bare_registry(self):
-        registry = Compiler()
+        registry = compiler()
         j = Ref(DocumentGrant)
         with self.assertRaises(TrustsConfigurationError):
             registry.register_relation(content=j.document, user=j.user, permission=j.permission, condition=Equal('user', 'permission'))
@@ -97,7 +97,7 @@ class HandleRegisterSurfaceTest(SimpleTestCase):
 class HandleAfterBuildOrderTest(SimpleTestCase):
 
     def test_register_after_build_resolves_paths(self):
-        registry = Compiler()
+        registry = compiler()
         handle = _handle(registry)
         self.assertEqual(registry.records, ())
         record = handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
@@ -108,7 +108,7 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
         self.assertEqual(record.permission_path, ('permission',))
 
     def test_invalid_grammar_after_build_raises_its_own_error(self):
-        registry = Compiler()
+        registry = compiler()
         handle = _handle(registry)
         with self.assertRaises(TrustsConfigurationError) as ctx:
             handle.register(trust=DocumentGrant, user='', permission='permission', content='document')
@@ -136,7 +136,7 @@ class HandleConditionAndAlongTest(SimpleTestCase):
         from tests.core.test_issue98 import _gh_models, _register_team
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        via_ref = Compiler()
+        via_ref = compiler()
         expected = _register_team(via_ref, TeamRepoGrant)
         handle = _handle()
         record = handle.register(trust=TeamRepoGrant, user='team__members', permission='operation', content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
@@ -147,7 +147,7 @@ class HandleConditionAndAlongTest(SimpleTestCase):
     def test_along_tuple_matches_internal_along(self):
         from tests.core.test_issue92 import _node_graph_models
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
-        via_ref = Compiler()
+        via_ref = compiler()
         j = Ref(Grant)
         expected = via_ref.register_relation(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
         handle = _handle()
@@ -178,7 +178,7 @@ class CMethodsPublicSurfaceTest(SimpleTestCase):
         self.assertFalse(hasattr(backend, 'register_strategy'))
 
     def test_register_matches_internal_ref_record(self):
-        via_ref = Compiler()
+        via_ref = compiler()
         j = Ref(DocumentGrant)
         expected = via_ref.register_relation(content=j.document, user=j.user, permission=j.permission)
         backend = _handle()
@@ -223,7 +223,7 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
         from tests.core.test_issue98 import _gh_models, _register_team
         models_ = _gh_models()
         TeamRepoGrant = models_[6]
-        via_ref = Compiler()
+        via_ref = compiler()
         expected = _register_team(via_ref, TeamRepoGrant)
         backend = _handle()
         record = backend.register(trust=TeamRepoGrant, user='team__members', permission='operation', content='repository', condition=lambda t: t.team.permission_bundles.operations.contains(t.operation) & (t.team.organization == t.repository.organization))
@@ -234,7 +234,7 @@ class CMethodsRelationshipLongPathTest(SimpleTestCase):
     def test_along_tuple_on_register(self):
         from tests.core.test_issue92 import _node_graph_models
         _Node, _p, _r, _i, _im, _meta, _port, _link, Grant, _np = _node_graph_models()
-        via_ref = Compiler()
+        via_ref = compiler()
         j = Ref(Grant)
         expected = via_ref.register_relation(content=j.node, user=j.user, permission=j.permission, along=Along(j.node.parent, bound=8))
         backend = _handle()
@@ -262,7 +262,7 @@ class CMethodsNamedFilterLifecycleTest(SimpleTestCase):
 class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
 
     def test_relationship_and_filter_register_after_build(self):
-        registry = Compiler()
+        registry = compiler()
         backend = _handle(registry)
         log = _PredicateLog()
         record = backend.register(trust=DocumentGrant, user='user', permission='permission', content='document')

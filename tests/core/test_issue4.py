@@ -28,6 +28,7 @@ from trusts.plan.conditions import (
     validate_expression,
 )
 from trusts.compile.factory import Compiler
+from tests.support import compiler
 
 
 u, p, o = condition_refs()
@@ -121,7 +122,7 @@ class ConditionGrammarTest(SimpleTestCase):
         self.assertIsInstance(ordering, Expr)
         self.assertFalse(is_predicate(ordering))
         with self.assertRaises(TypeError):
-            Compiler().add_named_filter(
+            compiler().add_named_filter(
                 object, 'range', ordering,
             )
 
@@ -160,7 +161,7 @@ class ConditionGrammarTest(SimpleTestCase):
 
     def test_non_predicate_and_non_callable_rejected_at_register(self):
         u, p, o = condition_refs()
-        registry = Compiler()
+        registry = compiler()
         with self.assertRaises(TypeError):
             registry.add_named_filter(object, 'bare', o.owner)
         with self.assertRaises(TypeError):
@@ -199,7 +200,7 @@ class ConditionGrammarTest(SimpleTestCase):
             calls.append((u, p, o))
             return u == o.owner
 
-        registry = Compiler()
+        registry = compiler()
         record = registry.add_named_filter(Ticket, 'own', owned)
         self.assertEqual(len(calls), 1)
         validate_expression(record.expr, Ticket)

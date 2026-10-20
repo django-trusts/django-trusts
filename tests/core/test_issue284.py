@@ -20,7 +20,7 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog
+from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -223,7 +223,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             AccountGrant.objects.create(note=note, account=account, action=read)
             FolderGrant.objects.create(folder=folder, user=alice, permission=read)
             FolderGrant.objects.create(folder=folder, user=inactive, permission=read)
-            registry = Compiler()
+            registry = compiler()
             grant = Ref(NoteGrant)
             registry.register_relation(content=grant.note, user=grant.user, permission=grant.permission)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(alice, note)), {read.pk})
@@ -236,7 +236,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertEqual(_pks(built_catalog(registry).permissions_for(inactive, note, skip_is_active=True)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(inactive, '%s.%s' % (read.content_type.app_label, read.codename), note, skip_is_active=True))
             self.assertEqual(_pks(built_catalog(registry).filter_authorized(Note.objects.all(), inactive, read, skip_is_active=True)), {note.pk})
-            account_registry = Compiler()
+            account_registry = compiler()
             account_grant = Ref(AccountGrant)
             account_registry.register_relation(content=account_grant.note, user=account_grant.account, permission=account_grant.action)
             self.assertEqual(_pks(built_catalog(account_registry).permissions_for(account, note)), {read.pk})
@@ -249,7 +249,7 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
             self.assertEqual(_pks(skipped), {read.pk})
             self.assertEqual(skipped.query.sql_with_params()[0], built_catalog(registry).permissions_for(alice, note).query.sql_with_params()[0])
             self.assertIn('is_active', str(skipped.query))
-            scope_registry = Compiler()
+            scope_registry = compiler()
             scope_grant = Ref(FolderGrant)
             scope_registry.register_relation(content=scope_grant.folder.rows.note, user=scope_grant.user, permission=scope_grant.permission)
             handle = scope_registry
@@ -340,12 +340,12 @@ class InactiveRegistryInquiryTest(TransactionTestCase):
                             rows = AuthorizedQuerySet(Note).authorized(holder, read, skip_is_active=include_inactive)
                             self.assertEqual(list(rows), [])
             compiled.assert_not_called()
-            registry = Compiler()
+            registry = compiler()
             grant = Ref(LocalUserGrant)
             registry.register_relation(content=grant.note, user=grant.holder, permission=grant.action)
             self.assertEqual(_pks(built_catalog(registry).permissions_for(visible, note)), {read.pk})
             self.assertTrue(built_catalog(registry).has_perm(visible, '%s.%s' % (read.content_type.app_label, read.codename), note))
-            scope_registry = Compiler()
+            scope_registry = compiler()
             scope_grant = Ref(FolderGrant)
             scope_registry.register_relation(content=scope_grant.folder.identity_rows.note, user=scope_grant.holder, permission=scope_grant.permission)
             handle = scope_registry
@@ -452,7 +452,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
                 Grant.objects.create(cabinet=self.cabinet, user=user, permission=self.read)
             self.relationship = Relationship.objects.create(cabinet=self.cabinet, delegate=self.delegate, sponsor=self.sponsor)
             self.relationship.allowed_permissions.add(self.read)
-            self.handle = Compiler(path='tests.core.test_issue284._AcceptanceBackend')
+            self.handle = compiler(path='tests.core.test_issue284._AcceptanceBackend')
             self.handle.register(trust=Grant, user='user', permission='permission', content='cabinet__sheets')
             self.handle.register(trust=Relationship, delegate='delegate', sponsor='sponsor', content='cabinet__sheets', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
             self.handle.add_named_filter(Sheet, 'active_only', lambda user, permission, content: user.is_active == True)

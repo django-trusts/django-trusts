@@ -29,7 +29,7 @@ from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
 from trusts.conditions import PermissionConditionError
 from trusts.plan.relations import PlanQueryCompiler
-from tests.support import built_catalog
+from tests.support import built_catalog, compiler
 from trusts.compile.factory import Compiler
 
 PERM = 'trusts_tests.change_note'
@@ -111,7 +111,7 @@ def _note_models():
     return (Tag, Note, NoteGrant)
 
 def _handle(note_grant):
-    handle = Compiler(path='tests.core.issue203')
+    handle = compiler(path='tests.core.issue203')
     handle.register(trust=note_grant, user='user', permission='permission', content='note')
     return handle
 
@@ -184,7 +184,7 @@ class NamedFilterRejectBoundaryTest(TransactionTestCase):
             with self.assertNumQueries(1):
                 self.assertTrue(self.backend.has_perm(alice, PERM, secret))
             with self.assertNumQueries(0):
-                fresh = Compiler(path='tests.core.issue203-reject')
+                fresh = compiler(path='tests.core.issue203-reject')
                 with self.assertRaises(PermissionConditionError):
                     fresh.add_named_filter(self.Note, 'open', lambda u, p, o: o.title == Decimal('1.5'))
                 with self.assertRaises(PermissionConditionError):

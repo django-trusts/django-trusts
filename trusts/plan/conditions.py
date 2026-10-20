@@ -67,7 +67,6 @@ from django.db.models.fields import GenericIPAddressField
 from django.http import HttpRequest
 from django.utils.functional import Promise, SimpleLazyObject
 
-from trusts.apps import installed_user_model
 from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
@@ -557,15 +556,7 @@ TQ = Query
 
 
 def _entity_model(user_model):
-    """User model for a principal path.
-
-    Callers that have a catalog pass its user model. ``None`` is the
-    installed auth user once the app registry is ready, which is what
-    ``ready()`` used to store for standalone validation. Apps that are
-    not ready still raise.
-    """
-    if user_model is None:
-        user_model = installed_user_model()
+    """User model for a principal path. Callers pass the catalog's model."""
     if user_model is None:
         raise PermissionConditionError(
             'Principal references need the user model stored at ready().'

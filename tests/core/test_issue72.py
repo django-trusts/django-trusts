@@ -8,7 +8,7 @@ from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
 from tests.apps import TestsConfig
-from tests.support import configured_catalog
+from tests.support import configured_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.models import Document
@@ -52,4 +52,4 @@ class IsolatedAppsDoesNotDonateTicketContributionTest(
         self.assertIsNone(getattr(contributor, '_trusts_tup_ticket_registry_id', None))
         self.assertEqual(live_host.records, before_host)
         self.assertEqual(live_doc.records, before_doc)
-        self.assertIsInstance(Compiler(), Compiler)
+        self.assertIsInstance(compiler(), Compiler)

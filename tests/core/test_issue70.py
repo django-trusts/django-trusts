@@ -12,6 +12,7 @@ from tests.support import (
     isolate_live_registry,
     live_config,
     override_apps_ready,
+    compiler,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
@@ -49,7 +50,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
     def test_frozen_recorder_is_not_rewritten(self):
         from tests.myapp.backends import DocumentBackend
 
-        isolated = Compiler()
+        isolated = compiler()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
         recorder = DocumentBackend().recorder
         self.contributor.ready()
@@ -58,7 +59,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
         self.assertTrue(self.live_catalog.plan_for(Document).records)
 
     def test_conflicting_contribution_does_not_reach_the_frozen_recorder(self):
-        isolated = Compiler()
+        isolated = compiler()
         j = Ref(DocumentGrant)
         isolated.register_relation(
             content=j.document,
