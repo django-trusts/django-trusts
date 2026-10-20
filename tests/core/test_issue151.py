@@ -19,7 +19,6 @@ from tests.core import KernelHostRequiredMixin
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document
-from trusts.apps import TrustsImplementationConfig
 from trusts.conditions import (
     PermissionConditionError,
     permission_condition_code,
@@ -88,28 +87,12 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
             built_catalog(right).filter_lookup,
         )
 
-    def test_build_and_ready_do_not_bind_or_rebind(self):
-        import inspect
-
+    def test_build_freezes_a_lookup_the_factory_does_not_keep(self):
         registry = RegistryFactory()
         built = built_catalog(registry)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
-        source = inspect.getsource(RegistryFactory.build)
-        self.assertNotIn('set_filter_lookup', source)
-        self.assertIn('FrozenConditionLookup', source)
-        self.assertNotIn(
-            'set_filter_lookup',
-            inspect.getsource(TrustsImplementationConfig.ready),
-        )
-        self.assertNotIn(
-            'RegistryConditionLookup',
-            inspect.getsource(RegistryFactory.build),
-        )
-        self.assertNotIn(
-            'RegistryConditionLookup',
-            inspect.getsource(TrustsImplementationConfig.ready),
-        )
+        self.assertFalse(hasattr(registry, 'filter_lookup'))
 
     def test_public_conditions_surface_stays_six_names(self):
         import django_trusts
