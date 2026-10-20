@@ -1,0 +1,368 @@
+"""Listed backends OR their own catalogs. A miss is quiet.
+
+Two content apps each have a config and a backend. App B's model is
+registered only on B, then on both, and with ``along=`` only inside B.
+"""
+from contextlib import contextmanager
+from unittest import SkipTest
+
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
+from django.contrib.contenttypes.models import ContentType
+from django.core.checks import run_checks
+from django.core.exceptions import PermissionDenied
+from django.http import HttpRequest
+from django.test import TestCase, override_settings
+from django.utils.module_loading import import_string
+
+from tests.core.pair_alpha.backends import PairAlphaBackend
+from tests.core.pair_alpha.models import Note, NoteAlso, NoteGrant, Shelf
+from tests.core.pair_beta.backends import PairBetaBackend
+from tests.core.pair_beta.models import Binder, Page, PageDirect, PageGrant
+from tests.support import compiler, push_catalog
+from trusts.decorators import _declared_authorization_guards, authorization_required
+
+
+ALPHA = 'tests.core.pair_alpha.backends.PairAlphaBackend'
+BETA = 'tests.core.pair_beta.backends.PairBetaBackend'
+HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
+DOCUMENT = 'tests.myapp.backends.DocumentBackend'
+
+
+def _request(user):
+    request = HttpRequest()
+    request.user = user
+    request.META['SERVER_NAME'] = 'testserver'
+    request.META['SERVER_PORT'] = '80'
+    return request
+
+
+def _permission(model, codename):
+    content_type = ContentType.objects.get_for_model(model)
+    permission, _created = Permission.objects.get_or_create(
+        content_type=content_type, codename=codename,
+        defaults={'name': codename},
+    )
+    return permission
+
+
+def _note_catalog(*trusts):
+    handle = compiler()
+    for trust in trusts:
+        handle.register(
+            trust=trust, user='user', permission='permission',
+            content='shelf__notes',
+        )
+    return handle
+
+
+def _page_catalog(trust, *, along=None):
+    handle = compiler()
+    handle.register(
+        trust=trust, user='user', permission='permission',
+        content='binder__pages', along=along,
+    )
+    return handle
+
+
+@contextmanager
+def _listed(alpha, beta):
+    restore_alpha = push_catalog(PairAlphaBackend, alpha)
+    restore_beta = push_catalog(PairBetaBackend, beta)
+    try:
+        with override_settings(AUTHENTICATION_BACKENDS=(ALPHA, BETA)):
+            yield
+    finally:
+        restore_alpha()
+        restore_beta()
+
+
+class ListedBackendOrTest(TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if not apps.is_installed('tests.core.pair_alpha'):
+            raise SkipTest('pair content apps are not installed')
+
+    def setUp(self):
+        User = get_user_model()
+        self.holder = User.objects.create_user('pair-holder', password='x')
+        self.other = User.objects.create_user('pair-other', password='x')
+        self.superuser = User.objects.create_superuser(
+            'pair-root', password='x', email='pair-root@example.com',
+        )
+        self.inactive = User.objects.create_user('pair-inactive', password='x')
+        self.inactive.is_active = False
+        self.inactive.save(update_fields=['is_active'])
+        self.note_perm = _permission(Note, 'change_note')
+        self.page_perm = _permission(Page, 'change_page')
+        self.note_code = 'pair_alpha.change_note'
+        self.page_code = 'pair_beta.change_page'
+        self.shelf = Shelf.objects.create(title='shelf')
+        self.note = Note.objects.create(shelf=self.shelf, title='note')
+        self.root = Binder.objects.create(title='root')
+        self.child = Binder.objects.create(title='child', parent=self.root)
+        self.root_page = Page.objects.create(binder=self.root, title='root-page')
+        self.child_page = Page.objects.create(binder=self.child, title='child-page')
+
+    def _forget(self, model, permission):
+        try:
+            _declared_authorization_guards.remove((model, permission, ()))
+        except ValueError:
+            pass
+
+    def test_only_the_registering_catalog_answers(self):
+        NoteGrant.objects.create(
+            shelf=self.shelf, user=self.holder, permission=self.note_perm,
+        )
+        PageGrant.objects.create(
+            binder=self.root, user=self.holder, permission=self.page_perm,
+        )
+        alpha = _note_catalog(NoteGrant)
+        beta = _page_catalog(PageGrant, along=('binder__parent', 1))
+        with _listed(alpha, beta):
+            self._assert_note(allowed=('both', 'alpha'), denied=('beta',))
+            self._assert_page(allowed=('both', 'beta'), denied=('alpha',))
+            self.assertFalse(self.other.has_perm(self.note_code, self.note))
+            self.assertFalse(self.other.has_perm(self.page_code, self.child_page))
+
+    def test_both_catalogs_or_distinct_grant_tables(self):
+        NoteGrant.objects.create(
+            shelf=self.shelf, user=self.holder, permission=self.note_perm,
+        )
+        NoteAlso.objects.create(
+            shelf=self.shelf, user=self.other, permission=self.note_perm,
+        )
+        alpha = _note_catalog(NoteGrant)
+        beta = _note_catalog(NoteAlso)
+        with _listed(alpha, beta):
+            both = {self.holder.pk, self.other.pk}
+            self.assertEqual(self._user_pks(self.note), both)
+            self.assertEqual(
+                self._user_pks(self.note, backend=ALPHA), {self.holder.pk},
+            )
+            self.assertEqual(
+                self._user_pks(self.note, backend=BETA), {self.other.pk},
+            )
+            self.assertEqual(
+                set(Note.objects.permitted(self.note_code, self.holder)),
+                {self.note},
+            )
+            self.assertEqual(
+                set(Note.objects.permitted(
+                    self.note_code, self.holder, backend=BETA,
+                )),
+                set(),
+            )
+            self.assertEqual(
+                set(Note.objects.permitted(
+                    self.note_code, self.other, backend=ALPHA,
+                )),
+                set(),
+            )
+            self.assertTrue(self.holder.has_perm(self.note_code, self.note))
+            self.assertTrue(self.other.has_perm(self.note_code, self.note))
+            self.assertFalse(
+                PairAlphaBackend().has_perm(self.other, self.note_code, self.note),
+            )
+            self.assertFalse(
+                PairBetaBackend().has_perm(self.holder, self.note_code, self.note),
+            )
+
+    def test_along_stays_inside_the_catalog_that_registered_it(self):
+        PageGrant.objects.create(
+            binder=self.root, user=self.holder, permission=self.page_perm,
+        )
+        PageDirect.objects.create(
+            binder=self.child, user=self.other, permission=self.page_perm,
+        )
+        alpha = _page_catalog(PageDirect)
+        beta = _page_catalog(PageGrant, along=('binder__parent', 1))
+        with _listed(alpha, beta):
+            self.assertTrue(self.holder.has_perm(self.page_code, self.child_page))
+            self.assertFalse(
+                PairAlphaBackend().has_perm(
+                    self.holder, self.page_code, self.child_page,
+                ),
+            )
+            self.assertTrue(
+                PairBetaBackend().has_perm(
+                    self.holder, self.page_code, self.child_page,
+                ),
+            )
+            self.assertEqual(
+                set(Page.objects.permitted(self.page_code, self.holder)),
+                {self.root_page, self.child_page},
+            )
+            self.assertEqual(
+                set(Page.objects.permitted(
+                    self.page_code, self.holder, backend=ALPHA,
+                )),
+                set(),
+            )
+            self.assertEqual(
+                set(Page.objects.authorized(self.holder, self.page_perm)),
+                {self.root_page, self.child_page},
+            )
+            self.assertEqual(
+                set(Page.objects.authorized(
+                    self.holder, self.page_perm, backend=ALPHA,
+                )),
+                set(),
+            )
+            self.assertEqual(self._binders(backend=ALPHA), set())
+            self.assertEqual(self._binders(backend=BETA), {self.root.pk, self.child.pk})
+            self.assertEqual(self._binders(), {self.root.pk, self.child.pk})
+            self.assertEqual(
+                self._user_pks(self.child_page), {self.holder.pk, self.other.pk},
+            )
+            self.assertEqual(
+                self._user_pks(self.child_page, backend=ALPHA), {self.other.pk},
+            )
+            self.assertEqual(
+                self._user_pks(self.child_page, backend=BETA), {self.holder.pk},
+            )
+            self.assertNotIn(self.holder.pk, self._user_pks(self.root_page, backend=ALPHA))
+            self.assertIn(self.holder.pk, self._user_pks(self.root_page, backend=BETA))
+
+    def test_backend_argument_is_a_dotted_path(self):
+        NoteGrant.objects.create(
+            shelf=self.shelf, user=self.holder, permission=self.note_perm,
+        )
+        alpha = _note_catalog(NoteGrant)
+        beta = compiler()
+        with _listed(alpha, beta):
+            self.assertEqual(
+                set(Note.objects.permitted(
+                    self.note_code, self.holder, backend=ALPHA,
+                )),
+                {self.note},
+            )
+            with self.assertRaises(TypeError):
+                Note.objects.permitted(self.note_code, self.holder, backend=PairAlphaBackend)
+            loaded = import_string(ALPHA)()
+            self.assertTrue(loaded.has_perm(self.holder, self.note_code, self.note))
+
+    def test_with_perm_ors_catalogs_and_ignores_the_django_flags(self):
+        NoteGrant.objects.create(
+            shelf=self.shelf, user=self.holder, permission=self.note_perm,
+        )
+        NoteGrant.objects.create(
+            shelf=self.shelf, user=self.inactive, permission=self.note_perm,
+        )
+        NoteAlso.objects.create(
+            shelf=self.shelf, user=self.other, permission=self.note_perm,
+        )
+        User = get_user_model()
+        alpha = _note_catalog(NoteGrant)
+        beta = _note_catalog(NoteAlso)
+        with _listed(alpha, beta):
+            found = set(User.objects.with_perm(
+                self.note_code, obj=self.note,
+            ).values_list('pk', flat=True))
+            self.assertEqual(found, {self.holder.pk, self.other.pk})
+            self.assertNotIn(self.superuser.pk, found)
+            self.assertNotIn(self.inactive.pk, found)
+            inactive_flag = set(User.objects.with_perm(
+                self.note_code, is_active=False, include_superusers=True,
+                obj=self.note,
+            ).values_list('pk', flat=True))
+            self.assertEqual(inactive_flag, found)
+            alpha_only = set(User.objects.with_perm(
+                self.note_code, backend=ALPHA, obj=self.note,
+            ).values_list('pk', flat=True))
+            self.assertEqual(alpha_only, {self.holder.pk})
+            self.assertFalse(User.objects.with_perm(self.note_code).exists())
+
+    def test_unlisted_catalog_with_registrations_is_e010(self):
+        registered = _note_catalog(NoteGrant)
+        restore = push_catalog(PairAlphaBackend, registered)
+        self.addCleanup(restore)
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, DOCUMENT, BETA)):
+            labels = [
+                message.obj.label for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E010'
+            ]
+        self.assertIn('pair_alpha', labels)
+        self.assertNotIn('pair_beta', labels)
+        self.assertNotIn('myapp', labels)
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, DOCUMENT, ALPHA)):
+            labels = [
+                message.obj.label for message in run_checks()
+                if getattr(message, 'id', None) == 'trusts.E010'
+            ]
+        self.assertNotIn('pair_alpha', labels)
+
+    def _assert_note(self, *, allowed, denied):
+        self._assert_side(
+            self.note, self.note_code, self.note_perm, Note,
+            self._shelves, allowed, denied,
+        )
+
+    def _assert_page(self, *, allowed, denied):
+        self._assert_side(
+            self.child_page, self.page_code, self.page_perm, Page,
+            self._binders, allowed, denied,
+        )
+
+    def _assert_side(self, obj, code, perm, model, prefixes, allowed, denied):
+        backends = {'alpha': PairAlphaBackend, 'beta': PairBetaBackend}
+        paths = {'alpha': ALPHA, 'beta': BETA, 'both': None}
+        self.assertTrue(self.holder.has_perm(code, obj))
+        for name in denied:
+            self.assertFalse(backends[name]().has_perm(self.holder, code, obj))
+            self.assertEqual(set(model.objects.permitted(
+                code, self.holder, backend=paths[name],
+            )), set())
+            self.assertEqual(set(model.objects.authorized(
+                self.holder, perm, backend=paths[name],
+            )), set())
+            self.assertEqual(prefixes(backend=paths[name]), set())
+            self.assertNotIn(self.holder, set(self._users(obj, backend=paths[name])))
+            guard = authorization_required(model, code, backend=paths[name])(
+                lambda request, pk: 'ok',
+            )
+            self.addCleanup(self._forget, model, code)
+            with self.assertRaises(PermissionDenied):
+                guard(_request(self.holder), pk=obj.pk)
+        for name in allowed:
+            backend = None if name == 'both' else backends[name]
+            path = paths[name]
+            if backend is not None:
+                self.assertTrue(backend().has_perm(self.holder, code, obj))
+            self.assertEqual(set(model.objects.permitted(
+                code, self.holder, backend=path,
+            )), {obj} if obj is self.note else {self.root_page, self.child_page})
+            self.assertIn(obj, set(model.objects.authorized(
+                self.holder, perm, backend=path,
+            )))
+            self.assertIn(self.holder, set(self._users(obj, backend=path)))
+            self.assertTrue(prefixes(backend=path))
+            guard = authorization_required(model, code, backend=path)(
+                lambda request, pk: 'ok',
+            )
+            self.addCleanup(self._forget, model, code)
+            self.assertEqual(guard(_request(self.holder), pk=obj.pk), 'ok')
+
+    def _users(self, obj, backend=None):
+        perm = self.note_perm if obj is self.note else self.page_perm
+        return obj.get_permitted_users(perm, backend=backend)
+
+    def _user_pks(self, obj, backend=None):
+        return set(self._users(obj, backend=backend).values_list('pk', flat=True))
+
+    def _shelves(self, backend=None):
+        from trusts.decorators import filter_by_permitted_content
+        return set(filter_by_permitted_content(
+            Shelf.objects.all(), self.holder, self.note_perm,
+            content=Note, backend=backend,
+        ).values_list('pk', flat=True))
+
+    def _binders(self, backend=None):
+        from trusts.decorators import filter_by_permitted_content
+        return set(filter_by_permitted_content(
+            Binder.objects.all(), self.holder, self.page_perm,
+            content=Page, backend=backend,
+        ).values_list('pk', flat=True))

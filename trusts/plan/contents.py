@@ -304,15 +304,10 @@ def _delegated_prefix_predicates(delegations, sponsor_records, user, permission,
     return parts
 
 
-def _compile_permitted_content_queryset(
-    queryset, user, permission, *, content, catalog, skipped=(),
-):
-    """Compile the permitted-content queryset for one catalog.
-
-    A delegation uses this catalog's ordinary grants. Callers apply the
-    inactive-user gate before this helper runs.
-    """
-    scope_model = queryset.model._meta.concrete_model
+def permitted_content_q(scope_model, user, permission, *, content, catalog,
+                        skipped=()):
+    """Grant ``Q`` for scope rows that prefix ``content``, or ``None``."""
+    scope_model = scope_model._meta.concrete_model
     content_identity = _candidate_model(content)
     plan = _plan_for_permission(catalog, content, user, permission)
     if plan.content_identity is not None:
@@ -347,6 +342,16 @@ def _compile_permitted_content_queryset(
         permission._meta.concrete_model
         if isinstance(permission, Model) else plan.permission_model,
         complete=True,
+    )
+    return wrapped
+
+
+def _compile_permitted_content_queryset(
+    queryset, user, permission, *, content, catalog, skipped=(),
+):
+    wrapped = permitted_content_q(
+        queryset.model, user, permission, content=content, catalog=catalog,
+        skipped=skipped,
     )
     if wrapped is None:
         return queryset.none()

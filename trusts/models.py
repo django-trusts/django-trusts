@@ -4,18 +4,14 @@
 from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
-from trusts.apps import catalog_for_model
+from trusts.backends import _filter_listed
 from trusts.compile.catalogs import (
-    assert_authorization_preflight,
-    authorization_grant_q,
     codename_binding,
     compile_permitted_users,
     guard_conditions,
     guard_permission_string,
 )
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.relations import bind_checked_user, known_skip_names
-from trusts.plan.rewrites import bind_once
 
 
 class AuthorizedQuerySet(QuerySet):
@@ -36,39 +32,19 @@ class AuthorizedQuerySet(QuerySet):
     content-list inquiry is
     ``PermittedQuerySet.permitted(permission, user, conditions=())``.
     ``.authorized`` stays this lower-level projection: it does not use
-    that permitted-input validation. ``.authorized`` includes
-    relationship-family catalogs only. It is
-    not Django's object-level backend OR.
+    that permitted-input validation. It asks the listed backends, in
+    order, and ORs each catalog's grant.
     """
 
-    def authorized(self, user, permission, extra_q=None, **skip_flags):
+    def authorized(self, user, permission, extra_q=None, backend=None,
+                   **skip_flags):
         if not isinstance(permission, Model):
-            raise TrustsConfigurationError(
-                'permission must be a model instance, not %r.' % (permission,)
-            )
-
-        catalog = catalog_for_model(self.model)
-        subjects = () if catalog is None else (catalog,)
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags,
-            skip_names=known_skip_names(subjects),
-        )
+            raise TrustsConfigurationError('permission must be a model instance, not %r.' % (permission,))
         if user is None:
-            raise TrustsConfigurationError(
-                'user must be a model instance, not None.'
-            )
-        if catalog is None or inquiry.denied:
-            return self.none()
-        granted_q = catalog.complete_grant_q(
-            self, user, permission, skipped=inquiry.values,
-        )
-        if granted_q is None:
-            return self.none()
-        if extra_q is not None:
-            granted_q = granted_q & extra_q
-        return bind_once(
-            self.filter(granted_q).distinct(), user_model=catalog.user_model,
-        )
+            raise TrustsConfigurationError('user must be a model instance, not None.')
+        return _filter_listed(
+            self, self, user, permission, kind='authorized', backend=backend,
+            skip_flags=skip_flags, extra_q=extra_q)
 
 
 class AuthorizedManagerMixin:
@@ -89,7 +65,8 @@ class PermittedQuerySetMixin:
     cannot serve ``filter(...).permitted(...)``.
     """
 
-    def permitted(self, permission, user, conditions=(), **skip_flags):
+    def permitted(self, permission, user, conditions=(), backend=None,
+                  **skip_flags):
         """Rows in this queryset ``user`` may access for ``permission``.
 
         ``permission`` is one full ``app_label.codename`` string or one
@@ -102,42 +79,20 @@ class PermittedQuerySetMixin:
         ``is_active`` condition. Malformed input and incomplete
         configuration raise before that shortcut and before SQL.
 
-        A relationship-family backend participates only when it has an
-        applicable ``auth.Permission`` plan and owns every selected
-        name. This is the same semantic inquiry as object ``has_perm``,
-        not that method's current string codec. There is no
-        active-superuser shortcut. A listed backend with no catalog
-        contributes nothing.
+        Each listed backend answers from its own catalog, in
+        ``AUTHENTICATION_BACKENDS`` order. A catalog that did not
+        register this model contributes an empty grant and does not
+        raise. Grants are OR'd. ``backend`` is one dotted path.
+        There is no active-superuser shortcut.
         """
         model = self.model
         normalized = _normalize_permitted_permission(permission, api='permitted')
         conditions = guard_conditions(conditions, api='permitted')
-        catalog = catalog_for_model(model)
-        assert_authorization_preflight(
-            catalog, model, conditions, api='permitted',
-        )
-        inquiry = bind_checked_user(
-            user, skip_flags=skip_flags,
-            skip_names=known_skip_names((catalog,)),
-        )
-        if inquiry.denied:
-            return self.none()
-        granted_q = authorization_grant_q(
-            catalog,
-            self,
-            user,
-            model,
-            _condition_permission_label(model, normalized),
-            conditions,
-            _permitted_binding(model, normalized),
-            api='permitted',
-            skipped=inquiry.values,
-        )
-        if granted_q is None:
-            return self.none()
-        return bind_once(
-            self.filter(granted_q).distinct(), user_model=catalog.user_model,
-        )
+        return _filter_listed(
+            self, self, user, _condition_permission_label(model, normalized),
+            kind='permitted', backend=backend, skip_flags=skip_flags,
+            conditions=conditions, api='permitted',
+            binding=_permitted_binding(model, normalized), model=model)
 
 
 class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):
@@ -152,8 +107,8 @@ class PermittedUsersMixin:
     method: ``Content.objects`` keeps returning content rows.
     """
 
-    def get_permitted_users(self, perm, **skip_flags):
-        return compile_permitted_users(self, perm, **skip_flags)
+    def get_permitted_users(self, perm, backend=None, **skip_flags):
+        return compile_permitted_users(self, perm, backend=backend, **skip_flags)
 
 
 class PermittedUsersManagerMixin:
@@ -168,9 +123,10 @@ class PermittedUsersManagerMixin:
     user-manager change.
     """
 
-    def permitted(self, content, perm, **skip_flags):
+    def permitted(self, content, perm, backend=None, **skip_flags):
         return compile_permitted_users(
-            content, perm, user_queryset=self.get_queryset(), **skip_flags,
+            content, perm, user_queryset=self.get_queryset(), backend=backend,
+            **skip_flags,
         )
 
 
@@ -185,26 +141,14 @@ def _normalize_permitted_permission(permission, *, api):
         return ('string', app_label, codename, permission)
     if permission.__class__ is Permission:
         if permission.pk is None:
-            raise TrustsConfigurationError(
-                '%s permission must be a saved auth.Permission instance.'
-                % (api,)
-            )
+            raise TrustsConfigurationError('%s permission must be a saved auth.Permission instance.' % api)
         codename = permission.codename
-        if (
-            not isinstance(codename, str)
-            or not codename
-            or codename != codename.strip()
-            or ':' in codename
-        ):
-            raise TrustsConfigurationError(
-                '%s permission codename is malformed: %r.' % (api, codename)
-            )
+        if not isinstance(codename, str) or not codename or codename != codename.strip() or ':' in codename:
+            raise TrustsConfigurationError('%s permission codename is malformed: %r.' % (api, codename))
         return ('instance', permission, codename)
     raise TypeError(
-        '%s permission must be an app_label.codename string or a saved '
-        'auth.Permission instance, not %r.'
-        % (api, type(permission).__name__)
-    )
+        '%s permission must be an app_label.codename string or a saved auth.Permission instance, not %r.'
+        % (api, type(permission).__name__))
 
 
 def _permitted_binding(model, normalized):

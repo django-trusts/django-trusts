@@ -81,7 +81,7 @@ class PermittedQuerySetSurfaceTest(SimpleTestCase):
     def test_authorized_signature_stays_instance_projection(self):
         import inspect
         parameters = inspect.signature(AuthorizedQuerySet.authorized).parameters
-        self.assertEqual(list(parameters), ['self', 'user', 'permission', 'extra_q', 'skip_flags'])
+        self.assertEqual(list(parameters), ['self', 'user', 'permission', 'extra_q', 'backend', 'skip_flags'])
         self.assertIsNone(parameters['extra_q'].default)
         self.assertEqual(parameters['skip_flags'].kind, inspect.Parameter.VAR_KEYWORD)
         self.assertNotIn('skip_is_active', parameters)
@@ -225,15 +225,14 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
         messages = [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and 'missing_e008_270' in message.msg]
         self.assertEqual(messages, [])
 
-    def test_model_without_an_auth_permission_plan_raises(self):
+    def test_model_without_an_auth_permission_plan_is_empty(self):
         manager = PermittedManager()
         manager.model = DocumentGrant
         with self.assertNumQueries(0):
-            with self.assertRaises(TrustsConfigurationError) as ctx:
-                manager.permitted('myapp.change_documentgrant', self.alice)
-            self.assertIn('auth.Permission', str(ctx.exception))
-            with self.assertRaises(TrustsConfigurationError):
-                manager.permitted('myapp.change_documentgrant', AnonymousUser())
+            missing = manager.permitted('myapp.change_documentgrant', self.alice)
+            anonymous = manager.permitted('myapp.change_documentgrant', AnonymousUser())
+        self.assertEqual(list(missing), [])
+        self.assertEqual(list(anonymous), [])
 
     def test_unbound_filter_lookup_fails_before_the_principal(self):
         from tests.myapp.backends import DocumentBackend
@@ -286,8 +285,8 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
     def test_no_catalog_contributes_nothing(self):
         with listed_relationship(()):
             with self.assertNumQueries(0):
-                with self.assertRaises(TrustsConfigurationError):
-                    self.docs.permitted('myapp.change_document', self.alice)
+                empty = self.docs.permitted('myapp.change_document', self.alice)
+            self.assertEqual(list(empty), [])
 
 def _permission(codename, name):
     permission, _created = Permission.objects.get_or_create(content_type=ContentType.objects.get_for_model(Document), codename=codename, defaults={'name': name})

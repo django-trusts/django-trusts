@@ -7,7 +7,7 @@ from django.contrib.auth.models import Permission
 from django.db import router
 from django.db.models import Model, Q, QuerySet, Subquery
 
-from trusts.apps import catalog_for_model
+from trusts.backends import open_grant, trusts_backends
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.aggregates import (
     _compile_common_permissions,
@@ -42,7 +42,6 @@ from trusts.plan.relations import (
     RelationPlan,
     _candidate_model,
     bind_checked_user,
-    known_skip_names,
 )
 from trusts.plan.rewrites import bind_once
 from trusts.plan.standards import builtin_user_conditions
@@ -724,94 +723,49 @@ def codename_binding(model, app_label, codename):
     )
 
 
-def assert_authorization_preflight(catalog, model, conditions, *, api):
-    """Fail closed unless this catalog has a plan and owns the names."""
-    if catalog is not None:
-        has_plan, owns = catalog.authorization_preflight(model, conditions)
-        if has_plan and owns:
-            return
-        if has_plan:
-            raise TrustsConfigurationError(
-                '%s condition %r is not registered on %s.'
-                % (api, conditions[0], model._meta.label)
-            )
-    raise TrustsConfigurationError(
-        '%s has no applicable auth.Permission plan for %s.'
-        % (api, model._meta.label)
-    )
-
-
-def authorization_grant_q(catalog, candidates, user, model, permission,
-                           conditions, binding, *, api, skipped=()):
-    """This catalog's auth.Permission grant, or ``None`` when it grants nothing."""
-    if catalog is None:
-        return None
-    predicate, owned = catalog.authorization_grant(
-        candidates, user, model, permission, conditions, binding,
-        api=api, skipped=skipped,
-    )
-    if conditions and not owned:
-        raise TrustsConfigurationError(
-            '%s condition %r is not registered on %s.'
-            % (api, conditions[0], model._meta.label)
-        )
-    return predicate
-
-
-def compile_permitted_users(content, perm, *, user_queryset=None, **skip_flags):
+def compile_permitted_users(content, perm, *, user_queryset=None,
+                            backend=None, **skip_flags):
     """Lazy user queryset for one saved content object and one permission.
 
-    The candidate rows are ``user_queryset`` when given and otherwise the
-    user model on the catalog owned by the content model's app. That
-    catalog's predicate includes a registered user override. ``skip_<name>``
-    is a bound parameter on that predicate.
+    Listed backends are asked in order. Each catalog that registered
+    the content contributes its user predicate, including that catalog's
+    override. The predicates are OR'd. ``backend`` is one dotted path.
+    ``skip_<name>`` is a bound parameter on that predicate.
     """
     _require_saved_content(content)
     _reject_permission_shape(perm)
-    catalog = catalog_for_model(type(content))
-    subjects = () if catalog is None else (catalog,)
-    inquiry = bind_checked_user(
-        None, skip_flags=skip_flags,
-        skip_names=known_skip_names(subjects),
-        require_user=False,
-    )
+    chosen = trusts_backends(backend)
     if user_queryset is None:
-        if catalog is None or catalog.user_model is None:
+        user_model = next((
+            item.get_catalog().user_model for item in chosen
+            if item.get_catalog().user_model is not None
+        ), None)
+        if user_model is None:
             raise TrustsConfigurationError(
-                'get_permitted_users has no user model. '
-                'The catalog is not built yet.'
-            )
-        user_queryset = catalog.user_model._default_manager.get_queryset()
+                'get_permitted_users has no user model. The catalog is not built yet.')
+        user_queryset = user_model._default_manager.get_queryset()
     elif not isinstance(user_queryset, QuerySet):
         raise TrustsConfigurationError(
-            'user queryset must be a QuerySet, not %r.' % (user_queryset,)
-        )
+            'user queryset must be a QuerySet, not %r.' % (user_queryset,))
     principal_model = user_queryset.model
     assert_persisted_principal(principal_model)
     involved = [principal_model, type(content)]
     if isinstance(perm, (str, Permission)):
         involved.append(Permission)
-    combined = Q(pk__isnull=True)
-    if catalog is not None:
-        predicate = catalog.permitted_users_predicate(
-            content, perm, skipped=inquiry.values,
-        )
-        if predicate is not None and not isinstance(predicate, Q):
-            raise TrustsConfigurationError(
-                'permitted_users_predicate returned %s, not a Q or None.'
-                % type(predicate).__name__
-            )
-        if predicate is not None:
-            combined = predicate
-        involved.extend(_catalog_models(catalog, content, principal_model))
+    _inquiry, combined, grant_user = open_grant(
+        'users', content, None, perm, backend=backend,
+        skip_flags=skip_flags, require_user=False)
+    if combined is None:
+        combined = Q(pk__isnull=True)
+    else:
+        for item in chosen:
+            involved.extend(_catalog_models(item.get_catalog(), content, principal_model))
     alias = _database_alias(content, user_queryset)
     _assert_same_database(alias, involved)
     if user_queryset.db != alias:
         user_queryset = user_queryset.using(alias)
-    user_model = principal_model if catalog is None else catalog.user_model
-    return bind_once(
-        user_queryset.filter(combined).distinct(), user_model=user_model,
-    )
+    user_model = principal_model if grant_user is None else grant_user
+    return bind_once(user_queryset.filter(combined).distinct(), user_model=user_model)
 
 
 def _content_model(obj):

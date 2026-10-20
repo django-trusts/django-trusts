@@ -1,8 +1,8 @@
 """View guard and the public permitted-content filter.
 
-Answers come from each configured backend's catalog, in
-``get_backends()`` order. A listed backend with no catalog contributes
-nothing.
+Each listed backend answers from its own catalog, in
+``AUTHENTICATION_BACKENDS`` order. Grants are OR'd. A catalog that
+did not register the model contributes nothing and does not raise.
 """
 
 from functools import wraps
@@ -15,12 +15,9 @@ from django.http import Http404
 
 from trusts.plan.hops import require_instance
 from trusts.errors import TrustsConfigurationError
-from trusts.plan.relations import bind_checked_user, known_skip_names
 from trusts.plan.rewrites import bind_once
-from trusts.apps import catalog_for_model
+from trusts.backends import _filter_listed, open_grant
 from trusts.compile.catalogs import (
-    assert_authorization_preflight,
-    authorization_grant_q,
     codename_binding,
     guard_conditions,
     guard_permission_string,
@@ -33,7 +30,7 @@ _declared_authorization_guards = []
 
 
 def filter_by_permitted_content(queryset, user, permission, *, content,
-                                **skip_flags):
+                                backend=None, **skip_flags):
     """Filter scope-model rows that appear as a proper prefix of ``content``.
 
     Fail closed unless ``queryset.model`` is a proper prefix node of some
@@ -56,51 +53,35 @@ def filter_by_permitted_content(queryset, user, permission, *, content,
     ``queryset.model`` equal to the content terminal is allowed when a
     proper prefix hop of that same model exists (self-referential
     trees). A terminal-only path has no proper prefix, so the same-model
-    queryset still returns ``none()``. Unknown terminal, an empty catalog
-    list, or a scope model not on the path also return ``none()``.
+    queryset still returns ``none()``. A catalog that did not register
+    the model, or a scope model not on the path, returns ``none()``.
     ``permission`` must be a model instance. Construction of a
     fail-closed result issues zero SQL; SQL runs only when a compiled
-    predicate is evaluated. Only relationship-family catalogs from the
-    ready-time sweep participate, in ``get_backends()`` order. A backend
-    with no catalog contributes nothing.
+    predicate is evaluated. Listed backends are asked in order and
+    their grants are OR'd. ``backend`` selects one dotted path.
 
     """
     if not isinstance(queryset, QuerySet):
-        raise TrustsConfigurationError(
-            'filter_by_permitted_content requires a QuerySet, not %r.'
-            % (queryset,)
-        )
-    catalog = catalog_for_model(queryset.model)
+        raise TrustsConfigurationError('filter_by_permitted_content requires a QuerySet, not %r.' % (queryset,))
     user = require_instance(user, 'user')
     permission = require_instance(permission, 'permission')
-    subjects = () if catalog is None else (catalog,)
-    inquiry = bind_checked_user(
-        user, skip_flags=skip_flags,
-        skip_names=known_skip_names(subjects),
-    )
-    if catalog is None or inquiry.denied:
-        return queryset.none()
-    return catalog.filter_by_permitted_content(
-        queryset, user, permission, content=content,
-        skipped=inquiry.values,
-    )
+    return _filter_listed(
+        queryset, queryset, user, permission, kind='prefix', backend=backend,
+        skip_flags=skip_flags, content=content)
 
 
-def authorization_required(model, permission, conditions=(), **skip_flags):
+def authorization_required(model, permission, conditions=(), backend=None,
+                           **skip_flags):
     """Trusts-only view guard: explicit model, pk URL kwarg, optional names.
 
     Candidate identity is only ``view_kwargs["pk"]`` bound to
-    ``model._meta.pk``. Structural configuration is checked with zero
-    SQL before any candidate query: at least one applicable
-    ``auth.Permission`` plan is required, and selected names must be
-    owned together by one participating backend. Invalid configuration
-    raises before a grant query. Only applicable plans whose permission
-    terminal is ``django.contrib.auth.models.Permission`` participate.
-    Each of those backends composes its own grant with its own selected
-    names before the backends are OR'd; backend order does not change
-    the result. Only relationship-family catalogs participate. A listed
-    backend with no catalog contributes nothing. Does not use Django
-    backend OR, ``user.has_perm``, or the legacy ``permission_required``
+    ``model._meta.pk``. Each listed backend uses its own catalog, in
+    order. A catalog that did not register the model contributes
+    nothing and does not raise; the guard then answers 404 or denial.
+    Selected names must be owned together by one participating backend,
+    and that failure raises before a grant query. Grants are OR'd.
+    ``backend`` is one dotted path. Does not use ``user.has_perm``
+    or the legacy ``permission_required``
     / ``P`` / ``K`` / ``G`` / ``O`` surface. Django's object-level
     ``user.has_perm`` OR across authentication backends is a different
     layer.
@@ -122,8 +103,7 @@ def authorization_required(model, permission, conditions=(), **skip_flags):
         @wraps(view_func)
         def _wrapped_view(request, *args, **kwargs):
             _authorize_candidate(
-                request, kwargs, model, permission, conditions, skip_flags,
-            )
+                request, kwargs, model, permission, conditions, skip_flags, backend)
             return view_func(request, *args, **kwargs)
         return _wrapped_view
     return decorator
@@ -131,22 +111,16 @@ def authorization_required(model, permission, conditions=(), **skip_flags):
 
 def _guard_model(model):
     if not isinstance(model, type) or not issubclass(model, Model):
-        raise TypeError(
-            'authorization_required model must be a Django model class, not %r.'
-            % (model,)
-        )
+        raise TypeError('authorization_required model must be a Django model class, not %r.' % (model,))
     return model
 
 
 def _guard_permission(model, permission):
-    app_label, codename = guard_permission_string(
-        permission, api='authorization_required',
-    )
+    app_label, codename = guard_permission_string(permission, api='authorization_required')
     if app_label.lower() != model._meta.app_label.lower():
         raise TrustsConfigurationError(
-            'authorization_required permission app_label %r does not match '
-            'model %s.' % (app_label, model._meta.label)
-        )
+            'authorization_required permission app_label %r does not match model %s.'
+            % (app_label, model._meta.label))
     return app_label, codename
 
 
@@ -157,67 +131,39 @@ def _remember_authorization_guard(model, permission, conditions):
 
 
 def _coerce_pk(model, raw):
-    if raw is None:
-        raise Http404
-    if isinstance(raw, str) and raw.strip() == '':
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
         raise Http404
     field = model._meta.pk
     try:
         value = field.to_python(raw)
-    except (ValidationError, ValueError, TypeError):
-        raise Http404
-    if value is None:
-        raise Http404
-    try:
+        if value is None:
+            raise Http404
         field.get_prep_value(value)
-    except (ValidationError, ValueError, TypeError):
+    except (ValidationError, ValueError, TypeError, Http404):
         raise Http404
     return value
 
 
 def _authorize_candidate(request, view_kwargs, model, permission, conditions,
-                         skip_flags):
-    catalog = catalog_for_model(model)
-    user = request.user
-    raw_pk = view_kwargs.get('pk', None) if 'pk' in view_kwargs else None
+                         skip_flags, backend):
     if 'pk' not in view_kwargs:
         raise Http404
-    pk = _coerce_pk(model, raw_pk)
-
+    pk = _coerce_pk(model, view_kwargs.get('pk'))
     if not django_apps.ready:
         raise TrustsConfigurationError(
             'authorization_required cannot authorize before Django apps '
-            'are ready.'
-        )
-    assert_authorization_preflight(
-        catalog, model, conditions, api='authorization_required',
-    )
-    inquiry = bind_checked_user(
-        user, skip_flags=skip_flags,
-        skip_names=known_skip_names((catalog,)),
-    )
+            'are ready.')
+    candidates = model._default_manager.filter(pk=pk)
+    inquiry, granted_q, user_model = open_grant(
+        'permitted', candidates, request.user, permission, backend=backend,
+        skip_flags=skip_flags, conditions=conditions,
+        api='authorization_required', model=model,
+        binding=codename_binding(model, *permission.split('.', 1)))
     if inquiry.denied:
         raise PermissionDenied
-
-    candidates = model._default_manager.filter(pk=pk)
-    app_label, codename = permission.split('.', 1)
-    binding = codename_binding(model, app_label, codename)
-    granted_q = authorization_grant_q(
-        catalog, candidates, user, model, permission, conditions, binding,
-        api='authorization_required', skipped=inquiry.values,
-    )
-    if granted_q is None:
-        matched = None
-    else:
-        matched = bind_once(
-            candidates.filter(granted_q), user_model=catalog.user_model,
-        )
-        if matched.exists():
-            return
-    if matched is None:
-        if candidates.exists():
-            raise PermissionDenied
-        raise Http404
+    if granted_q is not None and bind_once(
+        candidates.filter(granted_q), user_model=user_model).exists():
+        return
     if candidates.exists():
         raise PermissionDenied
     raise Http404

@@ -19,15 +19,16 @@ __all__ = []
 
 from django.apps import apps as django_apps
 from django.core import checks as django_checks
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connections
-from django.db.utils import OperationalError
 
 # Importing the lockfile module registers the trusts.E009 model check.
 import trusts.inspect.snapshot  # noqa: F401
-from trusts.apps import installed_catalogs
+from trusts.apps import TrustsConfigMixin, installed_catalogs
+from trusts.backends import listed_catalogs, trusts_backends
 from trusts.compile.factory import probe_along_capabilities
 from trusts.decorators import _declared_authorization_guards
-from trusts.errors import PermissionConditionError
+from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import (
     obsolete_legacy_callback_setting_enabled,
     validate_expression,
@@ -40,6 +41,7 @@ CHECK_ID_MISSING_DECLARATION = 'trusts.E003'
 CHECK_ID_ALONG_RENDERER = 'trusts.E005'
 CHECK_ID_OBSOLETE_CALLBACK_SETTING = 'trusts.E007'
 CHECK_ID_AUTHORIZATION_REQUIRED = 'trusts.E008'
+CHECK_ID_UNLISTED_CATALOG = 'trusts.E010'
 
 _SILENCE_DOES_NOT_ENABLE_HINT = (
     'Silencing this check ID suppresses only the early diagnostic. '
@@ -125,15 +127,18 @@ def _is_concrete_model(model):
     return not opts.abstract and not opts.proxy
 
 
-def _covered_content_models():
-    """Content terminals that already have a plan record on a built catalog.
+def _runtime_catalogs():
+    """Catalogs the listed backends answer from. Empty when none are listed."""
+    try:
+        return listed_catalogs()
+    except (ImproperlyConfigured, TrustsConfigurationError):
+        return ()
 
-    Coverage on one configured catalog is enough. Does not register,
-    does not invent union authority, and does not require every backend
-    to hold the declaration.
-    """
+
+def _covered_content_models():
+    """Content terminals that a listed backend's catalog already records."""
     covered = set()
-    for catalog in installed_catalogs():
+    for catalog in _runtime_catalogs():
         for record in catalog.records:
             covered.add(record.content_model)
         for record in catalog.delegations:
@@ -181,7 +186,7 @@ def check_missing_declarations(app_configs, **kwargs):
     terminals still fail closed at runtime.
     """
 
-    if not installed_catalogs():
+    if not _runtime_catalogs():
         return []
 
     covered = _covered_content_models()
@@ -201,7 +206,7 @@ def check_missing_declarations(app_configs, **kwargs):
             seen.add(key)
             messages.append(django_checks.Error(
                 'Content model %s has no covering relation-plan record '
-                'on any configured Trusts catalog.' % _model_label(model),
+                'on any listed Trusts catalog.' % _model_label(model),
                 hint=_E003_HINT,
                 obj=model,
                 id=CHECK_ID_MISSING_DECLARATION,
@@ -224,7 +229,7 @@ def check_missing_declarations(app_configs, **kwargs):
             seen.add(key)
             messages.append(django_checks.Error(
                 'Junction %s targets %s, which has no covering '
-                'relation-plan record on any configured Trusts catalog.'
+                'relation-plan record on any listed Trusts catalog.'
                 % (_model_label(model), _model_label(content_model)),
                 hint=_E003_HINT,
                 obj=model,
@@ -313,7 +318,7 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     the superuser shortcut and never falls back to an unconditioned
     grant.
     """
-    catalogs = installed_catalogs()
+    catalogs = _runtime_catalogs()
     messages = []
     seen = set()
     for model, _permission, conditions in _declared_authorization_guards:
@@ -372,6 +377,31 @@ def check_authorization_required_conditions(app_configs, **kwargs):
     return messages
 
 
+@django_checks.register()
+def check_unlisted_catalog(app_configs, **kwargs):
+    """Registrations need a listed backend whose module lives in that app."""
+    try:
+        listed = set()
+        for candidate in trusts_backends():
+            config = django_apps.get_containing_app_config(type(candidate).__module__)
+            if isinstance(config, TrustsConfigMixin):
+                listed.add(id(config))
+    except (ImproperlyConfigured, TrustsConfigurationError):
+        listed = set()
+    messages = []
+    for config in django_apps.get_app_configs():
+        catalog = getattr(config, 'catalog', None)
+        registered = catalog is not None and (catalog.records or catalog.delegations)
+        if not isinstance(config, TrustsConfigMixin) or not registered or id(config) in listed:
+            continue
+        messages.append(django_checks.Error(
+            'Trusts app %s has registrations but no AUTHENTICATION_BACKENDS '
+            'entry resolves to it.' % config.label,
+            hint='List a backend whose module lives in this app.',
+            obj=config, id=CHECK_ID_UNLISTED_CATALOG))
+    return messages
+
+
 @django_checks.register(django_checks.Tags.models)
 def check_permission_conditions(app_configs, **kwargs):
     """Validate every registered condition after models are loaded.
@@ -412,9 +442,6 @@ def check_along_renderer(app_configs, **kwargs):
     databases = kwargs.get('databases')
     if not databases:
         return []
-
-
-
     if not installed_catalogs():
         return []
     along_records = _live_along_records()
@@ -439,15 +466,6 @@ def check_along_renderer(app_configs, **kwargs):
             continue
         try:
             probe_along_capabilities(connection)
-        except OperationalError as exc:
-            messages.append(django_checks.Error(
-                'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
-                'Along reachability: recursive CTE probe '
-                'failed (%s).' % (alias, engine, vendor, exc),
-                hint=_E005_HINT,
-                obj=None,
-                id=CHECK_ID_ALONG_RENDERER,
-            ))
         except Exception as exc:
             messages.append(django_checks.Error(
                 'Database alias %r (ENGINE=%s, vendor=%s) cannot render '
