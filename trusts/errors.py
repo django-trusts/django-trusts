@@ -1,11 +1,10 @@
 """Configuration and permission-condition errors.
 
-``TrustsConfigurationError`` and ``TrustsCompilerError`` are re-exported
-from ``trusts.core``. ``trusts.conditions`` re-exports the
-permission-condition errors as Core's own public surface. That package
-is not a compatibility shim for django-trusts-zero: Zero imports
-``PermissionConditionNotQueryable`` from here and carries its own
-``permission_has_condition``.
+``TrustsConfigurationError`` and ``TrustsCompilerError`` are defined
+here. ``trusts.conditions`` re-exports the permission-condition errors.
+That package is not a compatibility shim for django-trusts-zero: Zero
+imports ``PermissionConditionNotQueryable`` from here and carries its
+own ``permission_has_condition``.
 """
 
 

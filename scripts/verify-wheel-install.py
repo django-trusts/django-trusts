@@ -183,15 +183,14 @@ def main() -> int:
     from trusts.compile.factory import (
         RegisteredDelegation,
         RegisteredRelation,
+        RegistryFactory,
     )
-    from trusts.plan.contents import filter_by_permitted_content
-    from trusts.core import (
-    ConditionLookup,
-    Ref,
-    RelationPlan,
-    RegistryFactory,
-    filter_authorized_scopes,
-)
+    from trusts.compile.nodes import Ref
+    from trusts.plan.contents import (
+        filter_authorized_scopes,
+        filter_by_permitted_content,
+    )
+    from trusts.plan.relations import ConditionLookup, RelationPlan
     from trusts.query import AuthorizedManager, AuthorizedManagerMixin, AuthorizedQuerySet
     from trusts.conditions import (
         PermissionConditionError,
@@ -204,13 +203,13 @@ def main() -> int:
         raise SystemExit('Imported trusts from the checkout: %s' % trusts_file)
     if 'site-packages' not in str(trusts_file) and 'dist-packages' not in str(trusts_file):
         raise SystemExit('trusts.__file__ is not a site-packages install: %s' % trusts_file)
-    core_file = Path(trusts.core.__file__).resolve()
-    if 'site-packages' not in str(core_file) and 'dist-packages' not in str(core_file):
-        raise SystemExit('trusts.core is not a site-packages install: %s' % core_file)
+    factory_file = Path(trusts.compile.factory.__file__).resolve()
+    if 'site-packages' not in str(factory_file) and 'dist-packages' not in str(factory_file):
+        raise SystemExit('trusts.compile.factory is not a site-packages install: %s' % factory_file)
     typed_marker = Path(trusts.__file__).resolve().parent / 'py.typed'
     if not typed_marker.is_file():
         raise SystemExit('installed wheel missing trusts/py.typed')
-    if hasattr(trusts.core, 'BackendHandle'):
+    if hasattr(trusts, 'BackendHandle') or hasattr(trusts.backends, 'BackendHandle'):
         raise SystemExit('library wheel still exports BackendHandle')
     if hasattr(RegistryFactory, 'register_relationship'):
         raise SystemExit('library wheel still exposes register_relationship')
@@ -318,7 +317,7 @@ def main() -> int:
         raise SystemExit('self-bound lookup does not wrap registry.conditions')
     print('condition lookup self-bound')
     print(
-        'trusts.core', RegistryFactory, Ref, RegisteredRelation,
+        'defining modules', RegistryFactory, Ref, RegisteredRelation,
         RegisteredDelegation, RelationPlan,
     )
     print('permission_has_condition', permission_has_condition)

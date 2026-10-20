@@ -19,8 +19,9 @@ from trusts.compile.factory import (
     PublicRegistration,
     RegisteredDelegation,
     RegisteredRelation,
+    RegistryFactory,
 )
-from trusts.core import Ref, RegistryFactory
+from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 
 

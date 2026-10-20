@@ -1,7 +1,6 @@
 """Content grants and permitted-content filters.
 
-Not a public import surface. ``trusts.core`` re-exports ``granted``
-and ``filter_authorized_scopes``.
+``granted`` and ``filter_authorized_scopes`` are defined here.
 """
 
 __all__ = []

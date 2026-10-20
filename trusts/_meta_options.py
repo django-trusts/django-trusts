@@ -1,6 +1,6 @@
 """Import-time ``Meta.permission_conditions`` registration (zero SQL).
 
-This module must not import ``trusts.core`` or ``trusts.conditions``.
+This module must not import ``trusts.conditions``.
 ``trusts.apps`` imports it so Django can construct models that declare
 the option when a host loads ``TrustsImplementationConfig``. Applications
 do not import this module.
