@@ -151,13 +151,6 @@ class TrustsConfigMixin(django.apps.AppConfig):
         self.catalog = compiler.compile()
 
 
-def installed_user_model():
-    """Auth user model once the app registry is ready, else ``None``."""
-    if not django.apps.apps.ready:
-        return None
-    return get_user_model()
-
-
 def installed_catalogs():
     """Built catalogs of installed mixin configs, in ``INSTALLED_APPS`` order."""
     found = []

@@ -1,4 +1,4 @@
-from tests.support import render_configured_policy, built_catalog
+from tests.support import render_configured_policy, built_catalog, compiler
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 import datetime
 import json
@@ -186,7 +186,7 @@ class FolderGrant(models.Model):
 
 def _handle(path, registry=None):
     if registry is None:
-        registry = Compiler()
+        registry = compiler()
     registry.path = path
     return registry
 

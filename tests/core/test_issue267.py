@@ -29,7 +29,7 @@ from trusts.compile.factory import Compiler
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog, install_class_handle
+from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
 
 
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
@@ -63,7 +63,7 @@ def _code(permission):
     return '%s.%s' % (permission.content_type.app_label, permission.codename)
 
 def _handle(path):
-    return Compiler(path=path)
+    return compiler(path=path)
 
 def _request(user):
     request = HttpRequest()
@@ -399,7 +399,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
     def test_terminal_without_content_type_keeps_primary_key_identity(self):
         operation = self.Operation.objects.create(code='review')
         self.OperationGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, operation=operation)
-        registry = Compiler()
+        registry = compiler()
         with self.assertNumQueries(0):
             registry.register_relation(content=self._ref(self.OperationGrant).organization, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
             registry.register_relation(content=self._ref(self.OperationGrant).repository, user=self._ref(self.OperationGrant).user, permission=self._ref(self.OperationGrant).operation)
@@ -418,7 +418,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         repo_permit = self.TypedPermit.objects.create(content_type=repo_ct, codename='read_repository')
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=repo_permit)
         self.TypedGrant.objects.create(user=self.owner, organization=self.org, repository=self.repo, permit=org_permit)
-        registry = Compiler()
+        registry = compiler()
         grant = self._ref(self.TypedGrant)
         registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permit)
         registry.register_relation(content=grant.repository, user=grant.user, permission=grant.permit)
@@ -437,7 +437,7 @@ class PermissionTerminalIdentityTest(TransactionTestCase):
         read = _perm(self.Repository, 'read_repository')
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=manage)
         self.DirectGrant.objects.create(user=self.owner, organization=self.org, permission=read)
-        registry = Compiler()
+        registry = compiler()
         grant = self._ref(self.DirectGrant)
         registry.register_relation(content=grant.organization, user=grant.user, permission=grant.permission)
         catalog = built_catalog(registry)

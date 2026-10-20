@@ -24,7 +24,7 @@ from trusts.plan.contents import _compile_granted
 from trusts.compile.catalogs import Question
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.plan.rewrites import bind_once
-from tests.support import built_catalog
+from tests.support import built_catalog, compiler
 
 
 def _permission(model, codename):
@@ -108,7 +108,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         return (Folder, Document, Grant, Share, GroupGrant)
 
     def _registry(self, *, delegated=False, group=False):
-        registry = Compiler()
+        registry = compiler()
         grant = Ref(self.Grant)
         registry.register_relation(content=grant.document, user=grant.user, permission=grant.permission)
         if delegated:
@@ -134,7 +134,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(built.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a), instance_match(built_catalog(handle), self.doc_a, self.alice, self.read))
         built_qs = built.filter_authorized(self.Document.objects.all(), self.alice, self.read)
         granted_q = _compile_granted(built_catalog(handle), self.Document.objects.all(), self.alice, self.read)
-        production_qs = bind_once(self.Document.objects.filter(granted_q).distinct())
+        production_qs = bind_once(self.Document.objects.filter(granted_q).distinct(), user_model=get_user_model())
         self.assertEqual(str(built_qs.query), str(production_qs.query))
         self.assertEqual(_pks(built_qs), {self.doc_a.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
@@ -144,7 +144,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(built.permitted_users(self.doc_a, self.read)), {self.alice.pk})
         code = '%s.%s' % (self.read.content_type.app_label, self.read.codename)
         self.assertEqual(_pks(built.permitted_users(self.doc_a, code)), {self.alice.pk})
-        prefix_registry = Compiler()
+        prefix_registry = compiler()
         grant = Ref(self.Grant)
         prefix_registry.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.filter(user=self.alice).update(folder=self.folder_a)
@@ -204,7 +204,7 @@ class RegistryQuestionsTest(TransactionTestCase):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):
-        prefix_registry = Compiler()
+        prefix_registry = compiler()
         grant = Ref(self.Grant)
         prefix_registry.register_relation(content=grant.folder.documents, user=grant.user, permission=grant.permission)
         self.Grant.objects.create(user=self.alice, document=self.doc_a, folder=self.folder_a, permission=self.read)
@@ -246,7 +246,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a, kind='group')), {self.read.pk})
         self.assertEqual(_pks(built.permissions_for(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(list(built.permissions_for(self.bob, self.doc_a, kind='group')), [])
-        empty_factory = Compiler(user_model=self.User)
+        empty_factory = compiler(user_model=self.User)
         empty = built_catalog(empty_factory)
         self.assertFalse(empty.has_perm(self.alice, '%s.%s' % (self.read.content_type.app_label, self.read.codename), self.doc_a))
         self.assertEqual(list(empty.permissions_for(self.alice, self.doc_a)), [])

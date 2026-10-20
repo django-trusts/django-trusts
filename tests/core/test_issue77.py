@@ -7,7 +7,7 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.query import QuerySet
 from django.test import TestCase
-from tests.support import configured_catalog, live_config, built_catalog
+from tests.support import configured_catalog, live_config, built_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
@@ -38,7 +38,7 @@ class CompilerFailureTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_propagates_on_granted(self):
         User = get_user_model()
-        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
+        registry = compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = 'tests.backends.RaisingCompilerBackend'
         handle = registry
         _contribute_document(handle)
@@ -64,7 +64,7 @@ class CompilerIsolationBackendTest(KernelHostRequiredMixin, TestCase):
         self.assertTrue(document.plan_for(Document).records)
 
     def test_mixin_only_alone_does_not_see_document_plan(self):
-        mixin = Compiler(path='tests.backends.MixinOnlyBackend')
+        mixin = compiler(path='tests.backends.MixinOnlyBackend')
         self.assertFalse(built_catalog(mixin).plan_for(Document).records)
 
 class CoordinatorQueryCountTest(KernelHostRequiredMixin, TestCase):

@@ -21,11 +21,11 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, install_class_handle
+from tests.support import render_configured_policy, install_class_handle, compiler
 
 
 def _handle(path='tests.core.issue282'):
-    return Compiler(path=path)
+    return compiler(path=path)
 
 def _contribute_m2m(field, model):
     if not hasattr(field, 'm2m_field_name'):

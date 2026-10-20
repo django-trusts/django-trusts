@@ -21,7 +21,7 @@ from trusts.plan.relations import RelationPlan
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.compile.catalogs import Catalog
-from tests.support import built_catalog
+from tests.support import built_catalog, compiler
 
 
 def _projection_models():
@@ -157,7 +157,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         self._table_cm.__exit__(None, None, None)
 
     def _registry(self, *grants):
-        registry = Compiler()
+        registry = compiler()
         for grant in grants or (self.DocumentGrant,):
             _register(registry, grant)
         return registry
@@ -466,7 +466,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
         )
 
     def test_custom_user_terminal_works_through_registered_metadata(self):
-        registry = Compiler()
+        registry = compiler()
         _register(
             registry,
             self.AccountGrant,
@@ -520,7 +520,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
 
     def test_instances_are_isolated(self):
         left = self._registry()
-        right = Compiler()
+        right = compiler()
         self.assertEqual(len(left.records), 1)
         self.assertEqual(right.records, ())
         self.DocumentGrant.objects.create(
@@ -583,7 +583,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(SlugDocument, ActionCode, SlugGrant):
-            registry = Compiler()
+            registry = compiler()
             _register(registry, SlugGrant)
             doc_alpha = SlugDocument.objects.create(slug='alpha', title='A')
             doc_beta = SlugDocument.objects.create(slug='beta', title='B')
@@ -652,7 +652,7 @@ class TrustsRegistryProjectionTest(TransactionTestCase):
                 app_label = 'trusts_tests'
 
         with _tables(OptionalGrant):
-            registry = Compiler()
+            registry = compiler()
             _register(registry, OptionalGrant)
             OptionalGrant.objects.create(
                 document=self.doc_a, user=self.alice, permission=self.read,

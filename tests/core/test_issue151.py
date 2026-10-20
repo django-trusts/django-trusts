@@ -1,4 +1,4 @@
-from tests.support import built_catalog, configured_catalog, unbound_named_filters
+from tests.support import built_catalog, configured_catalog, unbound_named_filters, compiler
 """#151 C1: the catalog's condition lookup is the frozen rows.
 
 Library-only proofs. Applications register builders; they do not import
@@ -73,14 +73,14 @@ class _IsolatedTables(object):
 
 class ConstructTimeSelfBindTest(SimpleTestCase):
     def test_new_registry_self_binds_private_store_adapter(self):
-        registry = Compiler()
+        registry = compiler()
         built = built_catalog(registry)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
 
     def test_handles_do_not_share_lookup_or_store(self):
-        left = Compiler()
-        right = Compiler()
+        left = compiler()
+        right = compiler()
         self.assertIsNot(left.conditions, right.conditions)
         self.assertIsNot(
             built_catalog(left).filter_lookup,
@@ -88,7 +88,7 @@ class ConstructTimeSelfBindTest(SimpleTestCase):
         )
 
     def test_build_freezes_a_lookup_the_factory_does_not_keep(self):
-        registry = Compiler()
+        registry = compiler()
         built = built_catalog(registry)
         self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
         self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
@@ -210,7 +210,7 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
 
 class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
     def test_catalog_uses_the_shapes_lookup(self):
-        registry = Compiler()
+        registry = compiler()
         shape = registry.compile()
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
         self.assertIsNone(shape.filter_lookup.record_for(Document, 'missing'))
@@ -240,7 +240,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
     def test_zero_sql_construction_registration_and_finalization(self):
         Note = _note_model()
         with self.assertNumQueries(0):
-            registry = Compiler()
+            registry = compiler()
             registry.add_named_filter(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
@@ -267,7 +267,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
             )
             keep = Note.objects.create(title='keep', owner=alice)
             drop = Note.objects.create(title='drop', owner=bob)
-            registry = Compiler()
+            registry = compiler()
             with self.assertNumQueries(0):
                 registry.add_named_filter(
                     Note, 'owned', lambda u, p, o: u == o.owner,
@@ -307,7 +307,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 'alice-151u', 'alice-151u@example.com', 'x',
             )
             note = Note.objects.create(title='n', owner=alice)
-            registry = Compiler()
+            registry = compiler()
             lookup = FrozenConditionLookup(())
             self.assertIsNone(lookup.record_for(Note, 'missing'))
             with self.assertRaises(AttributeError) as missing:

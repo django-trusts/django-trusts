@@ -24,7 +24,7 @@ from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 import trusts
 from trusts.compile.nodes import permission_in
-from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog
+from tests.support import scoped_permitted_content as filter_by_permitted_content, built_catalog, compiler
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -281,7 +281,7 @@ class LongPathRegistrationTest(TestCase):
         models_ = _long_path_models()
         Placement = models_[-1]
         Artifact = models_[-2]
-        registry = Compiler()
+        registry = compiler()
         with self.assertNumQueries(0):
             direct = _direct_ceiling(registry, Placement)
             clustered = _cluster_ceiling(registry, Placement)
@@ -299,8 +299,8 @@ class LongPathRegistrationTest(TestCase):
     def test_handle_string_paths_match_ref_registration(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        via_ref = Compiler()
-        via_handle = Compiler()
+        via_ref = compiler()
+        via_handle = compiler()
         via_handle.path = 'tests.core.longpath'
         handle = via_handle
         with self.assertNumQueries(0):
@@ -315,7 +315,7 @@ class LongPathRegistrationTest(TestCase):
     def test_exact_duplicate_rejects_and_leaves_store_unchanged(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = Compiler()
+        registry = compiler()
         first = _cluster_ceiling(registry, Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'Duplicate'):
@@ -325,7 +325,7 @@ class LongPathRegistrationTest(TestCase):
     def test_different_bindings_still_conflict(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = Compiler()
+        registry = compiler()
         first = _cluster_ceiling(registry, Placement)
         p = Ref(Placement)
         with self.assertNumQueries(0):
@@ -336,7 +336,7 @@ class LongPathRegistrationTest(TestCase):
     def test_wrong_terminal_malformed_and_gfk_fail_closed(self):
         models_ = _long_path_models()
         Placement = models_[-1]
-        registry = Compiler()
+        registry = compiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'permission model'):
@@ -372,7 +372,7 @@ class LongPathRegistrationTest(TestCase):
 
     def test_colliding_to_field_membership_fails_closed(self):
         _Actor, _Token, _Hall, Cluster, _Through, _Building, _Floor, _Wing, Artifact, Placement = _colliding_to_field_models()
-        registry = Compiler()
+        registry = compiler()
         p = Ref(Placement)
         with self.assertNumQueries(0):
             with self.assertRaisesRegex(TrustsConfigurationError, 'resolved comparison field'):
@@ -401,7 +401,7 @@ class LongPathAuthorizationTest(TransactionTestCase):
         self.artifact = self.Artifact.objects.create(title='scope')
         self.other = self.Artifact.objects.create(title='other')
         self.Placement.objects.create(artifact=self.artifact, actor=self.actor, alt_actor=self.stranger, token=self.read, wing=self.wing)
-        self.registry = Compiler()
+        self.registry = compiler()
         _direct_ceiling(self.registry, self.Placement)
         _cluster_ceiling(self.registry, self.Placement)
 
@@ -564,13 +564,13 @@ class MembershipGroupExistsTest(TransactionTestCase):
         self.desk.holders.add(self.member)
         self.Seat.objects.create(folder=self.folder, desk=self.desk, token=self.read)
         self.Title.objects.create(folder=self.folder, owner=self.owner, token=self.read)
-        self.membership = Compiler()
+        self.membership = compiler()
         s = Ref(self.Seat)
         self.membership.register_relation(content=s.folder, user=s.desk.holders, permission=s.token)
-        self.trustee = Compiler()
+        self.trustee = compiler()
         t = Ref(self.Title)
         self.trustee.register_relation(content=t.folder, user=t.owner, permission=t.token)
-        self.mixed = Compiler()
+        self.mixed = compiler()
         s = Ref(self.Seat)
         t = Ref(self.Title)
         self.mixed.register_relation(content=s.folder, user=s.desk.holders, permission=s.token)
@@ -645,7 +645,7 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.child = self.Node.objects.create(title='child', parent=self.parent)
         self.other = self.Node.objects.create(title='other')
         self.NodeGrant.objects.create(node=self.parent, holder=self.holder, token=self.add)
-        self.registry = Compiler()
+        self.registry = compiler()
         g = Ref(self.NodeGrant)
         self.registry.register_relation(content=g.node.children, user=g.holder, permission=g.token)
         self.registry.path = 'issue18-prefix'
@@ -667,7 +667,7 @@ class SelfReferentialPrefixScopeTest(TransactionTestCase):
         self.assertFalse(filter_by_permitted_content(self.Node.objects.all(), self.stranger, self.add, content=self.Node, registry=built_catalog(self.handle)).exists())
 
     def test_terminal_only_same_model_is_none(self):
-        registry = Compiler()
+        registry = compiler()
         g = Ref(self.NodeGrant)
         registry.register_relation(content=g.node, user=g.holder, permission=g.token)
         registry.path = 'issue18-terminal'

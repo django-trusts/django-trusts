@@ -1,4 +1,4 @@
-from tests.support import listed_relationship, configured_catalog, replay_recorder
+from tests.support import listed_relationship, configured_catalog, replay_recorder, compiler
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -248,7 +248,7 @@ def _document_backend():
 
     from tests.myapp.backends import DocumentBackend
 
-    factory = Compiler(
+    factory = compiler(
         path=DOCUMENT_BACKEND,
         family=DocumentBackend.family,
         query_compiler=DocumentBackend.query_compiler,
@@ -257,7 +257,7 @@ def _document_backend():
     return replay_recorder(factory, DocumentBackend)
 
 def _extra_handle(path='tests.core.issue138-extra'):
-    return Compiler(path=path)
+    return compiler(path=path)
 
 def _extra_grant_models():
     User = get_user_model()

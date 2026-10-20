@@ -22,6 +22,7 @@ from tests.support import (
     override_apps_ready,
     empty_catalogs,
     sweep_listed_backends,
+    compiler,
 )
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.backends import MalformedCompilerBackend, MixinOnlyBackend, MissingCompilerBackend, RaisingCompilerBackend
@@ -213,7 +214,7 @@ class CompilerProtocolTest(KernelHostRequiredMixin, _LiveRegistryRestoreMixin, S
 
     def test_raising_compiler_propagates(self):
         User = get_user_model()
-        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
+        registry = compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)
@@ -261,7 +262,7 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.assertFalse(Document.objects.authorized(self.bob, self.change).exists())
 
     def test_aggregate_ors_both_complete_proofs_in_one_statement(self):
-        isolated = Compiler()
+        isolated = compiler()
         _contribute_document(isolated)
         isolated.path = MIXIN
         extra = isolated
@@ -298,7 +299,7 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
-        registry = Compiler(query_compiler=RaisingCompilerBackend.query_compiler)
+        registry = compiler(query_compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry
         _contribute_document(handle)

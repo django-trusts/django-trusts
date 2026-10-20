@@ -1,4 +1,4 @@
-from tests.support import listed_relationship, replay_recorder, unbound_named_filters
+from tests.support import listed_relationship, replay_recorder, unbound_named_filters, compiler
 """#270: queryset.permitted(permission, user, conditions=())."""
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -323,13 +323,13 @@ def _extra_models():
     return (ExtraDocumentGrant, OtherPermission, OtherPermissionGrant)
 
 def _handle(path):
-    return Compiler(path=path)
+    return compiler(path=path)
 
 def _document_factory():
     """Replay the document recorder onto a factory this test owns."""
     from tests.myapp.backends import DocumentBackend
 
-    factory = Compiler(
+    factory = compiler(
         path=DOCUMENT_BACKEND,
         family=DocumentBackend.family,
         query_compiler=DocumentBackend.query_compiler,

@@ -28,14 +28,14 @@ from trusts.compile.factory import (
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.conditions import ConditionRegistry, FrozenConditionLookup
-from tests.support import built_catalog, forget_models
+from tests.support import built_catalog, forget_models, compiler
 
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
 class BuildRelationTest(SimpleTestCase):
     def test_build_relation_returns_frozen_shape_without_storing(self):
         Document, DocumentGrant = _document_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(DocumentGrant)
 
         built = registry.build_relation(
@@ -62,7 +62,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_equality_and_register_appends_same_shape(self):
         _Document, DocumentGrant = _document_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(DocumentGrant)
         kwargs = dict(
             content=root.document, user=root.user,
@@ -78,7 +78,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_group_shape(self):
         Document, GroupGrant = _group_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(GroupGrant)
 
         built = registry.build_relation(
@@ -98,7 +98,7 @@ class BuildRelationTest(SimpleTestCase):
     def test_build_relation_rejects_bad_permission_source_and_roots(self):
         _Document, DocumentGrant = _document_models()
         _Other, OtherGrant = _other_grant_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(DocumentGrant)
 
         with self.assertRaises(TrustsConfigurationError):
@@ -117,7 +117,7 @@ class BuildRelationTest(SimpleTestCase):
 
     def test_build_relation_after_build_still_builds_and_registers(self):
         _Document, DocumentGrant = _document_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(DocumentGrant)
         built = registry.build_relation(
             content=root.document, user=root.user,
@@ -138,7 +138,7 @@ class BuildRelationTest(SimpleTestCase):
 class BuildDelegationTest(SimpleTestCase):
     def test_build_delegation_returns_shape_without_storing(self):
         Document, Share = _share_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(Share)
 
         built = registry.build_delegation(
@@ -160,7 +160,7 @@ class BuildDelegationTest(SimpleTestCase):
 
     def test_register_delegation_appends_shape_with_sponsor_rules(self):
         _Document, Share = _share_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(Share)
         kwargs = dict(
             content=root.document, delegate=root.delegate,
@@ -177,7 +177,7 @@ class BuildDelegationTest(SimpleTestCase):
 
     def test_build_delegation_rejects_mismatched_principals(self):
         _Document, Share = _share_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(Share)
 
         with self.assertRaises(TrustsConfigurationError):
@@ -192,7 +192,7 @@ class BuildDelegationTest(SimpleTestCase):
 class BuildPublicRegistrationTest(SimpleTestCase):
     def test_build_public_registration_ordinary_shape(self):
         _Document, DocumentGrant = _document_models()
-        registry = Compiler()
+        registry = compiler()
 
         shape = registry.build_public_registration(
             trust=DocumentGrant, content='document', user='user',
@@ -225,7 +225,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 
     def test_build_public_registration_invokes_builder_once(self):
         _Document, DocumentGrant = _document_models()
-        registry = Compiler()
+        registry = compiler()
         calls = []
 
         def content_builder(trust):
@@ -245,7 +245,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
     def test_build_public_registration_group_and_delegated_shapes(self):
         _Document, GroupGrant = _group_models()
         _Doc2, Share = _share_models()
-        registry = Compiler()
+        registry = compiler()
 
         group_shape = registry.build_public_registration(
             trust=GroupGrant, content='document', user='user', group='group',
@@ -267,7 +267,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 
     def test_build_public_registration_rejects_mixed_modes(self):
         _Document, DocumentGrant = _document_models()
-        registry = Compiler()
+        registry = compiler()
 
         with self.assertRaises(TrustsConfigurationError):
             registry.build_public_registration(
@@ -291,7 +291,7 @@ class BuildPublicRegistrationTest(SimpleTestCase):
 class BuildCatalogShapeTest(SimpleTestCase):
     def test_build_freezes_rows_and_fragments(self):
         Document, DocumentGrant = _document_models()
-        registry = Compiler()
+        registry = compiler()
         root = Ref(DocumentGrant)
         record = registry.register_relation(
             content=root.document, user=root.user,
@@ -335,7 +335,7 @@ class PlanTableBuildTest(SimpleTestCase):
     def test_records_become_a_plan_table(self):
         User = get_user_model()
         Paper, PaperGrant, Note, NoteGrant, Reader, PaperShare = _plan_models()
-        registry = Compiler()
+        registry = compiler()
         grant = registry.register_relation(
             content=Ref(PaperGrant).paper, user=Ref(PaperGrant).user,
             permission=Ref(PaperGrant).permission,
@@ -432,7 +432,7 @@ class PlanTableBuildTest(SimpleTestCase):
             class Meta:
                 app_label = 'trusts_tests'
 
-        registry = Compiler()
+        registry = compiler()
         registry.register_relation(
             content=Ref(PaperGrant).paper, user=Ref(PaperGrant).user,
             permission=Ref(PaperGrant).permission,

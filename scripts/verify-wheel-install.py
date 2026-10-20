@@ -306,7 +306,8 @@ def main() -> int:
     print('filter_by_permitted_content', filter_by_permitted_content)
     from trusts.plan.conditions import FrozenConditionLookup
     print('FrozenConditionLookup', FrozenConditionLookup)
-    standalone = Compiler()
+    from django.contrib.auth import get_user_model
+    standalone = Compiler(user_model=get_user_model())
     shape = standalone.compile()
     bound = shape.filter_lookup
     if not isinstance(bound, FrozenConditionLookup):

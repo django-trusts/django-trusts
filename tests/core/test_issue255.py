@@ -33,7 +33,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog
+from tests.support import render_configured_policy, built_catalog, compiler
 
 HOST = 'tests.kernel_host.backends.HostTrustModelBackend'
 MODEL_BACKEND = 'django.contrib.auth.backends.ModelBackend'
@@ -212,7 +212,7 @@ def _document_registry():
         snapshot_installed_catalogs,
     )
     saved = snapshot_installed_catalogs()
-    registry = Compiler(path=DOCUMENT_BACKEND)
+    registry = compiler(path=DOCUMENT_BACKEND)
     try:
         yield registry
     finally:

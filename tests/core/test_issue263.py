@@ -31,6 +31,7 @@ from tests.support import (
     listed_relationship,
     built_catalog,
     install_class_handle,
+    compiler,
 )
 class _ListedBackend(TrustModelBackendMixin, ModelBackend):
     """Settings-listed probe. The test installs a registry for one block."""
@@ -68,7 +69,7 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue263'):
     if registry is None:
-        registry = Compiler()
+        registry = compiler()
     registry.path = path
     return registry
 
@@ -151,7 +152,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
         User = get_user_model()
-        registry = Compiler()
+        registry = compiler()
         team = Ref(Team)
         access = Ref(Access)
         with self.assertNumQueries(0):
@@ -193,7 +194,7 @@ class PermissionCollectionRegistrationTest(TestCase):
                 app_label = 'trusts_tests'
         link = Ref(DeskLink)
         with self.assertNumQueries(0):
-            two_hops = Compiler().register_relation(content=link.repository, user=link.desk.team.members, permission=link.desk.team.permissions)
+            two_hops = compiler().register_relation(content=link.repository, user=link.desk.team.members, permission=link.desk.team.permissions)
         self.assertEqual(two_hops.permission_path, ('desk', 'team', 'permissions'))
         self.assertEqual(two_hops.permission_field, 'desk__team__permissions')
         self.assertEqual(two_hops.user_path, ('desk', 'team', 'members'))
@@ -206,8 +207,8 @@ class PermissionCollectionRegistrationTest(TestCase):
         direct_ref = Ref(DirectGrant)
         group_ref = Ref(GroupGrant)
         with self.assertNumQueries(0):
-            direct = Compiler().register_relation(content=direct_ref.repository, user=direct_ref.user, permission=direct_ref.permission)
-            grouped = Compiler().register_relation(content=group_ref.repository, user=group_ref.group.user, group=group_ref.group)
+            direct = compiler().register_relation(content=direct_ref.repository, user=direct_ref.user, permission=direct_ref.permission)
+            grouped = compiler().register_relation(content=group_ref.repository, user=group_ref.group.user, group=group_ref.group)
         self.assertFalse(direct.via_group)
         self.assertEqual(direct.permission_path, ('permission',))
         self.assertEqual(direct.permission_field, 'permission')
@@ -226,7 +227,7 @@ class PermissionCollectionRegistrationTest(TestCase):
         Team = models_['Team']
         Access = models_['TeamRepositoryAccess']
         Repository = models_['Repository']
-        kept = Compiler()
+        kept = compiler()
         team = Ref(Team)
         with self.assertNumQueries(0):
             existing = kept.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
@@ -302,7 +303,7 @@ class PermissionCollectionRegistrationTest(TestCase):
 
     def test_duplicate_collection_registration_does_not_mutate(self):
         Team = _collection_models()['Team']
-        registry = Compiler()
+        registry = compiler()
         team = Ref(Team)
         with self.assertNumQueries(0):
             first = registry.register_relation(content=team.organization.repositories, user=team.members, permission=team.permissions)
@@ -360,11 +361,11 @@ class PermissionCollectionAuthorizationTest(TransactionTestCase):
         self._link(self.removers, self.delete, 'bob')
         self.access_spec = self.Access.objects.create(team=self.writers, repository=self.spec)
         self.Access.objects.create(team=self.writers, repository=self.spec)
-        self.org_handle = _handle(Compiler(), path='tests.core.issue263-org')
+        self.org_handle = _handle(compiler(), path='tests.core.issue263-org')
         self.org_handle.register(trust=self.Team, user='members', permission='permissions', content='organization__repositories')
-        self.access_handle = _handle(Compiler(), path='tests.core.issue263-access')
+        self.access_handle = _handle(compiler(), path='tests.core.issue263-access')
         self.access_handle.register(trust=self.Access, user='team__members', permission='team__permissions', content='repository')
-        self.classic = _handle(Compiler(), path='tests.core.issue263-classic')
+        self.classic = _handle(compiler(), path='tests.core.issue263-classic')
         self.classic.register(trust=self.DirectGrant, user='user', permission='permission', content='repository')
         self.classic.register(trust=self.GroupGrant, user='group__user', group='group', content='repository')
         self.DirectGrant.objects.create(user=self.alice, repository=self.secret, permission=self.read)

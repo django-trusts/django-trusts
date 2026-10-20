@@ -18,6 +18,7 @@ from tests.support import (
     replay_recorder,
     bound_handle,
     built_catalog,
+    compiler,
 )
 from tests.kernel_host.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
@@ -42,7 +43,7 @@ def _replay_listed(path):
     from django.utils.module_loading import import_string
 
     cls = import_string(path)
-    factory = Compiler(
+    factory = compiler(
         path=path,
         family=cls.family,
         query_compiler=cls.query_compiler,
@@ -52,7 +53,7 @@ def _replay_listed(path):
 
 def _extra_handle():
     """Second complete Document path plus an always-true filter on B."""
-    handle = Compiler(path='tests.core.issue132-extra')
+    handle = compiler(path='tests.core.issue132-extra')
     handle.register(trust=DocumentGrant, user='user', permission='permission', content='document')
     handle.add_named_filter(Repository, 'always', lambda u, p, o: o.name != '')
     return handle

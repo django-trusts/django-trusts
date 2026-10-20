@@ -23,6 +23,7 @@ from tests.support import (
     override_apps_ready,
     sweep_listed_backends,
     built_catalog,
+    compiler,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
@@ -52,8 +53,8 @@ class StandaloneIndependenceTest(SimpleTestCase):
 
     def test_standalone_stays_writable_after_global_ready(self):
         self.assertTrue(apps.ready)
-        first = Compiler()
-        second = Compiler()
+        first = compiler()
+        second = compiler()
         self.assertEqual(first.records, ())
         _contribute_document(second)
         self.assertEqual(len(built_catalog(second).plan_for(Document).records), 1)
@@ -63,7 +64,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
         self.assertIsNot(first.records[0], second.records[0])
 
     def test_build_is_repeatable_and_register_does_not_inspect_apps_ready(self):
-        registry = Compiler()
+        registry = compiler()
         _contribute_document(registry)
         before = registry.records
         first_build = built_catalog(registry)
@@ -81,7 +82,7 @@ class StandaloneIndependenceTest(SimpleTestCase):
 class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 
     def test_valid_duplicate_conflict_and_malformed_all_raise(self):
-        registry = Compiler()
+        registry = compiler()
         j = Ref(DocumentGrant)
         registry.register_relation(content=j.document, user=j.user, permission=j.permission)
         before = registry.records
@@ -96,7 +97,7 @@ class RegisterAfterBuildLeavesRecordsUnchangedTest(SimpleTestCase):
 class BuiltPlanProjectionsTest(KernelHostRequiredMixin, TestCase):
 
     def test_built_plan_still_projects(self):
-        registry = Compiler()
+        registry = compiler()
         _contribute_document(registry)
         before = built_catalog(registry).plan_for(Document)
         built_catalog(registry)
@@ -177,12 +178,12 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         _contribute_recorder(config.recorder)
         self.assertFalse(config.recorder.frozen)
         with self.assertRaisesRegex(TrustsConfigurationError, 'not frozen'):
-            config.recorder.play(Compiler(path='tests.core.fresh89-open'))
+            config.recorder.play(compiler(path='tests.core.fresh89-open'))
         config.recorder.freeze()
-        played = Compiler(user_model=get_user_model(), path='tests.core.fresh89')
+        played = compiler(user_model=get_user_model(), path='tests.core.fresh89')
         self.assertIs(played.get_recorder_target(), played)
         config.recorder.play(played.get_recorder_target())
-        again = Compiler(user_model=get_user_model(), path='tests.core.fresh89-again')
+        again = compiler(user_model=get_user_model(), path='tests.core.fresh89-again')
         config.recorder.play(again.get_recorder_target())
         self.assertIs(played.records[0].root, DocumentGrant)
         self.assertIs(again.records[0].root, DocumentGrant)
@@ -206,7 +207,7 @@ class LiveBuildLifecycleTest(KernelHostRequiredMixin, _CatalogRestoreMixin, Simp
         from tests.kernel_host.backends import HostTrustModelBackend
 
         first = HostTrustModelBackend().catalog
-        private = Compiler()
+        private = compiler()
         apps.get_app_config('trusts_kernel_host').ready()
         self.assertIs(HostTrustModelBackend().catalog, first)
         _contribute_document(private)
@@ -270,13 +271,13 @@ class HandleBuildRegistrySignalTest(SimpleTestCase):
     """A configured path holds a registry. The registry builds itself."""
 
     def test_factory_builds_a_fresh_registry(self):
-        registry = Compiler(path='tests.core.builder')
+        registry = compiler(path='tests.core.builder')
         handle = registry
         first = built_catalog(handle)
         second = built_catalog(handle)
         self.assertIsNot(first, second)
         self.assertEqual(first.records, ())
-        fresh = Compiler(path='tests.core.builder')
+        fresh = compiler(path='tests.core.builder')
         _contribute_document(fresh)
         self.assertEqual(built_catalog(fresh).records, fresh.records)
         self.assertEqual(first.records, ())

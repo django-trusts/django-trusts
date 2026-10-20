@@ -9,7 +9,7 @@ from django.test.utils import isolate_apps
 from tests.apps import TestsConfig
 from django.apps import apps
 
-from tests.support import configured_catalog
+from tests.support import configured_catalog, compiler
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import TrustsConfigMixin
@@ -50,7 +50,7 @@ class TrustsRegistryOwnershipTest(KernelHostRequiredMixin, SimpleTestCase):
         from tests.kernel_host.backends import HostTrustModelBackend
 
         live = HostTrustModelBackend().catalog
-        isolated = Compiler()
+        isolated = compiler()
         self.assertIsNot(isolated, live)
         self.assertEqual(isolated.records, ())
 

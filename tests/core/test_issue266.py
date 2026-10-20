@@ -21,11 +21,11 @@ from trusts.compile.catalogs import compile_permitted_users
 from trusts.compile.factory import Compiler
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.models import PermittedManager, PermittedQuerySet, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog, install_class_handle
+from tests.support import render_configured_policy, built_catalog, install_class_handle, compiler
 
 
 def _handle(path='tests.core.issue266'):
-    return Compiler(path=path)
+    return compiler(path=path)
 
 def _permission(model, codename):
     content_type = ContentType.objects.get_for_model(model)
@@ -707,7 +707,7 @@ class DelegationRootGuardTest(TestCase):
         self.assertEqual(built_catalog(handle).delegations, ())
 
     def test_refs_from_two_roots_are_rejected(self):
-        registry = Compiler()
+        registry = compiler()
         delegation = Ref(DocumentDelegation)
         grant = Ref(DocumentGrant)
         with self.assertNumQueries(0):

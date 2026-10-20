@@ -24,6 +24,7 @@ from tests.support import (
     listed_relationship,
     bound_handle,
     built_catalog,
+    compiler,
 )
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
@@ -58,7 +59,7 @@ def _code(permission):
 
 def _handle(registry=None, path='tests.core.issue246'):
     if registry is None:
-        registry = Compiler()
+        registry = compiler()
     registry.path = path
     return registry
 
@@ -157,7 +158,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             handle.register(trust=Grant, user='group__user', permission='paper', group='group', content='paper')
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
             handle.register(trust=Grant, user=boom, permission=boom, group=boom, content=boom)
-        registry = Compiler()
+        registry = compiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'not both'):
             registry.register_relation(content=ref.paper, user=ref.group.user, permission=ref.paper, group=ref.group)
@@ -171,7 +172,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
             handle.register(trust=Grant, user='group__user', content='paper')
         with self.assertRaises(TypeError):
             handle.register(trust=Grant, user='group__user')
-        registry = Compiler()
+        registry = compiler()
         ref = Ref(Grant)
         with self.assertRaisesRegex(TrustsConfigurationError, 'requires permission= or group='):
             registry.register_relation(content=ref.paper, user=ref.group.user)
@@ -205,7 +206,7 @@ class ExplicitGroupRegistrationTest(SimpleTestCase):
 
     def test_public_group_registration_matches_ref_and_compiler_hop(self):
         Grant = self._grant_model()
-        via_ref = Compiler()
+        via_ref = compiler()
         ref = Ref(Grant)
         expected = via_ref.register_relation(content=ref.paper, user=ref.group.user, group=ref.group)
         strings = _handle(path='tests.core.issue246-strings').register(trust=Grant, user='group__user', group='group', content='paper')
@@ -286,7 +287,7 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
         self.DirectPaperGrant.objects.create(user=self.alice, paper=self.paper_b, permission=self.write)
         self.station = self.Station.objects.create(title='desk', group=self.editors)
         self.StationPaperGrant.objects.create(station=self.station, paper=self.paper_d)
-        self.registry = Compiler()
+        self.registry = compiler()
         self.handle = _handle(self.registry)
         self.handle.register(trust=self.GroupPaperGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper)
         self.handle.register(trust=self.GroupFolderGrant, user='group__user', group='group', content='folder__papers')
@@ -440,7 +441,7 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
         self.other = self.Paper.objects.create(title='other', folder=self.Folder.objects.create(title='other'))
         grant = self.Grant.objects.create(group=self.editors, folder=self.folder)
         grant.grants.add(self.read)
-        self.registry = Compiler()
+        self.registry = compiler()
         self.handle = _handle(self.registry, path='tests.core.issue246-ceiling')
         self.handle.register(trust=self.Grant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.folder.papers, condition=lambda t: t.grants.contains(t.group.permissions))
         self.backend = _ProbeBackend()
@@ -593,12 +594,12 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
             raise
 
     def _register_handles(self):
-        self.local = _handle(Compiler(), path='tests.core.issue246-matrix-local')
+        self.local = _handle(compiler(), path='tests.core.issue246-matrix-local')
         self.local.register(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
-        self.roots = _handle(Compiler(), path='tests.core.issue246-matrix-roots')
+        self.roots = _handle(compiler(), path='tests.core.issue246-matrix-roots')
         self.roots.register(trust=self.LocalGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.grants.contains(t.group.permissions))
         self.roots.register(trust=self.OtherGrant, user=lambda t: t.group.user, group=lambda t: t.group, content=lambda t: t.paper, condition=lambda t: t.stamps.contains(t.group.permissions))
-        self.role = _handle(Compiler(), path='tests.core.issue246-matrix-role')
+        self.role = _handle(compiler(), path='tests.core.issue246-matrix-role')
         self.role_record = self.role.register(trust=self.TrustGroupPermission, user=lambda t: t.link.group.user, permission=lambda t: t.permission, content=lambda t: t.paper, condition=lambda t: t.link.role.permissions.contains(t.permission))
 
     def _create_people(self):

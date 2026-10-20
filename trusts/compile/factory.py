@@ -57,7 +57,6 @@ from trusts.compile.resolution import (
 from trusts.errors import TrustsConfigurationError
 
 T = TypeVar('T', bound=Model)
-from trusts.apps import installed_user_model
 from trusts.compile.catalogs import Catalog, CatalogShape, plan_table
 from trusts.plan.conditions import (
     ConditionRegistry,
@@ -203,10 +202,8 @@ class Compiler(object):
     ``set_user_override`` raise ``TrustsConfigurationError``.
     """
 
-    def __init__(self, *, query_compiler=None, path='', family='relationship',
-                 user_model=None):
-        if user_model is None:
-            user_model = installed_user_model()
+    def __init__(self, *, user_model, query_compiler=None, path='',
+                 family='relationship'):
         self._by_root = {}
         self._order = []
         self._delegations_by_root = {}

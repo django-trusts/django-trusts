@@ -22,7 +22,7 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
-from tests.support import built_catalog
+from tests.support import built_catalog, compiler
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import Compiler
@@ -133,7 +133,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         one = self._granted_qs(self.open_one)
         two = self._granted_qs(self.open_two)
         both = self._granted_qs(self.open_one, self.open_two)
-        alt = Compiler(user_model=get_user_model(), path='tests.core.alt181')
+        alt = compiler(user_model=get_user_model(), path='tests.core.alt181')
         alt.register(
             trust=DocumentAltGrant, user='user',
             permission='permission', content='document',
