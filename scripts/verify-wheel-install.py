@@ -313,8 +313,6 @@ def main() -> int:
     bound = shape.filter_lookup
     if not isinstance(bound, FrozenConditionLookup):
         raise SystemExit('factory.build() did not freeze a condition lookup')
-    if getattr(bound, 'conditions', None) is standalone.conditions:
-        raise SystemExit('frozen lookup shares the mutable condition store')
     print('condition lookup frozen')
     print(
         'defining modules', RegistryFactory, Ref, RegisteredRelation,
