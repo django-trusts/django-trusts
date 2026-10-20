@@ -34,7 +34,7 @@ class TrustModelBackendMixin(object):
         if cls not in recorders:
             recorders[cls] = Recorder()
 
-    def get_registry(self):
+    def get_registry(self) -> "Recorder":
         """Open recorder for registration. Not the built catalog."""
         return recorders[type(self)]
 
