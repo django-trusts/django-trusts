@@ -23,6 +23,5 @@ INSTALLED_APPS = (
     'django.contrib.contenttypes',
     'django.contrib.auth',
     'tests.kernel_host.apps.KernelHostConfig',
-    'trusts.apps.TrustsImplementationConfig',
 )
 MIGRATION_MODULES = {}

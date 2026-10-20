@@ -1,11 +1,9 @@
 """Authorized queryset and manager."""
 
-from functools import reduce
-from operator import or_
-
 from django.contrib.auth.models import Permission
 from django.db.models import Manager, Model, QuerySet
 
+from trusts.apps import catalog_for_model
 from trusts.compile.catalogs import (
     assert_authorization_preflight,
     authorization_grant_q,
@@ -13,7 +11,6 @@ from trusts.compile.catalogs import (
     compile_permitted_users,
     guard_conditions,
     guard_permission_string,
-    relationship_catalogs,
 )
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import bind_checked_user, known_skip_names
@@ -49,30 +46,28 @@ class AuthorizedQuerySet(QuerySet):
                 'permission must be a model instance, not %r.' % (permission,)
             )
 
-        catalogs = relationship_catalogs()
+        catalog = catalog_for_model(self.model)
+        subjects = () if catalog is None else (catalog,)
         inquiry = bind_checked_user(
             user, skip_flags=skip_flags,
-            skip_names=known_skip_names(catalogs),
+            skip_names=known_skip_names(subjects),
         )
         if user is None:
             raise TrustsConfigurationError(
                 'user must be a model instance, not None.'
             )
-        if inquiry.denied:
+        if catalog is None or inquiry.denied:
             return self.none()
-        parts = []
-        for catalog in catalogs:
-            part = catalog.complete_grant_q(
-                self, user, permission, skipped=inquiry.values,
-            )
-            if part is not None:
-                parts.append(part)
-        if not parts:
+        granted_q = catalog.complete_grant_q(
+            self, user, permission, skipped=inquiry.values,
+        )
+        if granted_q is None:
             return self.none()
-        granted_q = parts[0] if len(parts) == 1 else reduce(or_, parts)
         if extra_q is not None:
             granted_q = granted_q & extra_q
-        return bind_once(self.filter(granted_q).distinct())
+        return bind_once(
+            self.filter(granted_q).distinct(), user_model=catalog.user_model,
+        )
 
 
 class AuthorizedManagerMixin:
@@ -116,18 +111,18 @@ class PermittedQuerySetMixin:
         model = self.model
         normalized = _normalize_permitted_permission(permission, api='permitted')
         conditions = guard_conditions(conditions, api='permitted')
-        catalogs = relationship_catalogs()
+        catalog = catalog_for_model(model)
         assert_authorization_preflight(
-            catalogs, model, conditions, api='permitted',
+            catalog, model, conditions, api='permitted',
         )
         inquiry = bind_checked_user(
             user, skip_flags=skip_flags,
-            skip_names=known_skip_names(catalogs),
+            skip_names=known_skip_names((catalog,)),
         )
         if inquiry.denied:
             return self.none()
         granted_q = authorization_grant_q(
-            catalogs,
+            catalog,
             self,
             user,
             model,
@@ -139,7 +134,9 @@ class PermittedQuerySetMixin:
         )
         if granted_q is None:
             return self.none()
-        return bind_once(self.filter(granted_q).distinct())
+        return bind_once(
+            self.filter(granted_q).distinct(), user_model=catalog.user_model,
+        )
 
 
 class PermittedQuerySet(PermittedQuerySetMixin, QuerySet):

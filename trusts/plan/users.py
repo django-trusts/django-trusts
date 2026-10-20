@@ -86,6 +86,7 @@ def lock_permitted_users_queryset(catalog, content, permission):
         )
     return bind_once(
         user_model._default_manager.all().filter(predicate).distinct(),
+        user_model=catalog.user_model,
     )
 
 

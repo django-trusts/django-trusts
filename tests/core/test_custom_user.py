@@ -26,7 +26,6 @@ settings.configure(
         'django.contrib.contenttypes',
         'django.contrib.auth',
         'tests.custom_user.apps.CustomUserConfig',
-        'trusts.apps.TrustsImplementationConfig',
     ),
     AUTHENTICATION_BACKENDS=(
         'django.contrib.auth.backends.ModelBackend',

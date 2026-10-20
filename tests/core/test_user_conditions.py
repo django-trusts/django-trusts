@@ -812,9 +812,9 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
 
     def setUp(self):
         from django.apps import apps
-        from trusts.backends import catalogs
+        from tests.support import config_for_class
         self.config = apps.get_app_config('myapp')
-        self.original = catalogs.get(DocumentBackend)
+        self.original = config_for_class(DocumentBackend).catalog
         self.original_sentinel = getattr(self.config, '_document_grant_registry_id', None)
         registry = RegistryFactory(path=DOCUMENT_BACKEND, user_model=get_user_model())
         registry.set_user_condition('staff', lambda u: u.is_staff)
@@ -967,21 +967,29 @@ class StaffPrefixFilterTest(TransactionTestCase):
                 editor.delete_model(Scope)
 
 def _seal_document_factory(factory):
-    """The test filled ``factory``. Pass that built registry into Catalog."""
-    from trusts.backends import catalogs
-    previous = catalogs.get(DocumentBackend)
+    """Install ``factory`` on every mixin config and return the snapshot."""
+    from tests.support import (
+        config_for_class,
+        mixin_configs,
+        snapshot_installed_catalogs,
+    )
+    saved = snapshot_installed_catalogs()
+    config = config_for_class(DocumentBackend)
+    previous = config.catalog
     family = DocumentBackend.family if previous is None else previous.family
     factory.path = DOCUMENT_BACKEND
     factory.family = family
-    catalogs[DocumentBackend] = built_catalog(factory)
-    return previous
+    catalog = built_catalog(factory)
+    for installed in mixin_configs():
+        installed.catalog = catalog
+    return saved
 
 def _restore_document_catalog(previous):
-    from trusts.backends import catalogs
-    if previous is None:
-        catalogs.pop(DocumentBackend, None)
-    else:
-        catalogs[DocumentBackend] = previous
+    from tests.support import config_for_class, restore_installed_catalogs
+    if isinstance(previous, tuple) and previous and isinstance(previous[0], tuple):
+        restore_installed_catalogs(previous)
+        return
+    config_for_class(DocumentBackend).catalog = previous
 _CATALOG_UNSET = object()
 
 def _donate_document(registry):
@@ -1011,9 +1019,9 @@ def _restore_document_registry(config, original, sentinel, saved_catalog=_CATALO
 
 def _install_document_registry(*, override):
     from django.apps import apps
-    from trusts.backends import catalogs
+    from tests.support import config_for_class
     config = apps.get_app_config('myapp')
-    original = catalogs.get(DocumentBackend)
+    original = config_for_class(DocumentBackend).catalog
     sentinel = getattr(config, '_document_grant_registry_id', None)
     registry = RegistryFactory(path=DOCUMENT_BACKEND, user_model=get_user_model())
     if override:
@@ -1049,7 +1057,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         DocumentGrant.objects.create(document=self.doc, user=self.peer, permission=self.change)
 
     def _expect(self, handle, user, allowed, **flags):
-        flags_out = _inquiry_flags(self.backend, handle, user, self.doc, self.change, self.perm, **flags)
+        flags_out = _inquiry_flags(DocumentBackend(), handle, user, self.doc, self.change, self.perm, **flags)
         self.assertEqual(set(flags_out.values()), {allowed})
 
     def test_without_override_superuser_is_an_ordinary_principal(self):
@@ -1272,9 +1280,9 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
                 app_label = 'trusts_tests'
         self.assertFalse(any((field.name == 'is_superuser' for field in PlainPrincipal._meta.local_fields)))
         from django.apps import apps
-        from trusts.backends import catalogs
+        from tests.support import config_for_class
         config = apps.get_app_config('myapp')
-        original = catalogs.get(DocumentBackend)
+        original = config_for_class(DocumentBackend).catalog
         sentinel = getattr(config, '_document_grant_registry_id', None)
         saved_catalog = original
         with connection.schema_editor() as editor:
@@ -1282,9 +1290,9 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
             editor.create_model(PlainNote)
             editor.create_model(PlainNoteGrant)
         try:
-            registry = RegistryFactory(path=DOCUMENT_BACKEND, user_model=get_user_model())
+            registry = RegistryFactory(path=DOCUMENT_BACKEND, user_model=PlainPrincipal)
             registry.register_public(trust=PlainNoteGrant, user='user', permission='permission', content='note')
-            _seal_document_factory(registry)
+            saved_catalog = _seal_document_factory(registry)
             permission = _permission(PlainNote, 'change_plainnote')
             note = PlainNote.objects.create(title='plain')
             holder = PlainPrincipal.objects.create(username='holder-plain', is_active=True)

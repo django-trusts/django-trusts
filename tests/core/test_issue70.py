@@ -25,21 +25,16 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
     def setUp(self):
         super().setUp()
         from tests.myapp.backends import DocumentBackend
-        from trusts.backends import catalogs
+        from tests.support import config_for_class
 
         self.contributor = apps.get_app_config('myapp')
         self.assertIsInstance(self.contributor, DocumentConfig)
-        self._document_cls = DocumentBackend
-        self.saved_catalog = catalogs.get(DocumentBackend)
+        self._document_config = config_for_class(DocumentBackend)
+        self.saved_catalog = self._document_config.catalog
         self.live_catalog = configured_catalog(DOCUMENT_BACKEND)
 
     def tearDown(self):
-        from trusts.backends import catalogs
-
-        if self.saved_catalog is None:
-            catalogs.pop(self._document_cls, None)
-        else:
-            catalogs[self._document_cls] = self.saved_catalog
+        self._document_config.catalog = self.saved_catalog
 
     def test_reenter_same_contributor_ready_is_noop(self):
         before = self.live_catalog.records
@@ -56,7 +51,7 @@ class DocumentContributionIdempotenceTest(KernelHostRequiredMixin, SimpleTestCas
 
         isolated = RegistryFactory()
         isolate_live_registry(self.contributor, isolated, DOCUMENT_BACKEND)
-        recorder = DocumentBackend().get_registry()
+        recorder = DocumentBackend().recorder
         self.contributor.ready()
         self.assertTrue(recorder.frozen)
         self.assertEqual(isolated.records, ())

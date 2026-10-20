@@ -270,7 +270,10 @@ class PolicyLockConfigurationTest(SimpleTestCase):
 
         with override_settings(AUTHENTICATION_BACKENDS=()):
             empty = _load_policy_sql_document(render_policy_sql_bytes())
-        self.assertEqual(empty['backends'], [])
+        paths = [row['path'] for row in empty['backends']]
+        self.assertIn('tests.apps.TestsConfig', paths)
+        self.assertIn('tests.myapp.apps.DocumentConfig', paths)
+        self.assertIn('tests.kernel_host.apps.KernelHostConfig', paths)
 
         handle = _document_handle('documents.backends.FilterlessBackend')
         populated = built_catalog(handle)

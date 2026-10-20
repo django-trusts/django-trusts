@@ -324,23 +324,21 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
     def _e008_messages(self, *needles):
         return [message for message in run_checks() if getattr(message, 'id', None) == 'trusts.E008' and all((needle in message.msg for needle in needles))]
 
-    def _assert_both_orders(self, primary, extra, view, pk, expect_ok):
-        for handles in ((primary, extra), (extra, primary)):
-            with listed_relationship(handles):
-                if expect_ok:
-                    self.assertEqual(view(_request(self.alice), pk=pk), 'ok')
-                else:
-                    with self.assertRaises(PermissionDenied):
-                        view(_request(self.alice), pk=pk)
-
     def test_dual_backend_condition_order_does_not_broaden(self):
         primary = _document_backend()
         extra = _extra_handle()
         extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
         extra.register_permission_condition(Document, 'non_confidential', lambda u, p, o: o.title != 'nope')
         with _tables(self.ExtraDocumentGrant):
-            self._assert_both_orders(primary, extra, _edit_non_confidential, self.secret.pk, False)
-            self._assert_both_orders(primary, extra, _edit_non_confidential, self.open_doc.pk, True)
+            with listed_relationship((primary,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
+                self.assertEqual(_edit_non_confidential(_request(self.alice), pk=self.open_doc.pk), 'ok')
+            with listed_relationship((extra,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.open_doc.pk)
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
 
     def test_incomplete_second_backend_grant_is_omitted(self):
         primary = _document_backend()
@@ -348,7 +346,12 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         extra.register_public(trust=self.ExtraDocumentGrant, user='user', permission='permission', content='document')
         with _tables(self.ExtraDocumentGrant):
             self.ExtraDocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
-            self._assert_both_orders(primary, extra, _edit_non_confidential, self.secret.pk, False)
+            with listed_relationship((primary,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
+            with listed_relationship((extra,)):
+                with self.assertRaises(TrustsConfigurationError):
+                    _edit_non_confidential(_request(self.alice), pk=self.secret.pk)
 
     def test_incompatible_permission_terminal_cannot_collide(self):
         primary = _document_backend()
@@ -357,11 +360,13 @@ class AuthorizationRequiredCompositionTest(KernelHostRequiredMixin, TransactionT
         with _tables(self.OtherPermission, self.OtherPermissionGrant):
             self.OtherPermission.objects.create(pk=self.change.pk, label='collide')
             self.OtherPermissionGrant.objects.create(document=self.open_doc, user=self.bob, permission_id=self.change.pk)
-            for handles in ((primary, extra), (extra, primary)):
-                with listed_relationship(handles):
-                    with self.assertRaises(PermissionDenied):
-                        _edit(_request(self.bob), pk=self.open_doc.pk)
-                    self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
+            with listed_relationship((primary,)):
+                with self.assertRaises(PermissionDenied):
+                    _edit(_request(self.bob), pk=self.open_doc.pk)
+                self.assertEqual(_edit(_request(self.alice), pk=self.open_doc.pk), 'ok')
+            with listed_relationship((extra,)):
+                with self.assertRaises(TrustsConfigurationError):
+                    _edit(_request(self.bob), pk=self.open_doc.pk)
 
     def test_e008_split_names_across_backends_fail_closed(self):
         handle_a = _extra_handle(path='tests.core.issue138-split-a')

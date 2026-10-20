@@ -179,7 +179,7 @@ def main() -> int:
     import trusts
     from trusts.backends import TrustModelBackendMixin
     from trusts.apps import (
-        TrustsImplementationConfig)
+        TrustsConfigMixin)
     from trusts.compile.factory import (
         RegisteredDelegation,
         RegisteredRelation,
@@ -262,18 +262,20 @@ def main() -> int:
     else:
         raise SystemExit('trusts.core_backends still imports from the library wheel')
     import trusts.apps as apps_mod
-    from trusts.backends import catalogs as installed_catalogs
-    from trusts.backends import recorders as installed_recorders
-    if installed_catalogs or installed_recorders:
-        raise SystemExit('library-only populate must not build catalogs before ready')
+    for config in django_apps.get_app_configs():
+        if isinstance(config, TrustsConfigMixin):
+            raise SystemExit(
+                'library-only populate must not install a TrustsConfigMixin'
+            )
     for removed in (
         'implementation_configs',
         'implementation_for_path',
         'implementation_for_class',
         'relationship_registries',
         'trusts_backend_paths',
+        'TrustsImplementationConfig',
     ):
-        if hasattr(apps_mod, removed) or hasattr(TrustsImplementationConfig, removed):
+        if hasattr(apps_mod, removed):
             raise SystemExit('library wheel still exposes %s' % removed)
     try:
         from trusts.backends import TrustModelBackend  # noqa: F401
@@ -281,9 +283,6 @@ def main() -> int:
         pass
     else:
         raise SystemExit('historical TrustModelBackend still imports')
-    if TrustsImplementationConfig.name == 'trusts' or TrustsImplementationConfig.label == 'trusts':
-        raise SystemExit('sweep config must not take the trusts app label')
-
     import trusts.models as models_mod
     try:
         from trusts.models import Trust
@@ -302,8 +301,7 @@ def main() -> int:
     print('TrustModelBackendMixin', TrustModelBackendMixin)
     print('library apps', sorted(labels))
     print('kernel_config absent')
-    print('TrustsImplementationConfig', TrustsImplementationConfig)
-    print('catalogs', installed_catalogs)
+    print('TrustsConfigMixin', TrustsConfigMixin)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
     from trusts.plan.conditions import FrozenConditionLookup

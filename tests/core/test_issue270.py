@@ -411,8 +411,11 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
             self.ExtraDocumentGrant.objects.create(document=self.secret, user=self.alice, permission=self.change)
             self.ExtraDocumentGrant.objects.create(document=self.open_doc, user=self.alice, permission=self.change)
             self.ExtraDocumentGrant.objects.create(document=self.plain, user=self.alice, permission=self.change)
-            with listed_relationship((primary, extra)):
+            with listed_relationship((primary,)):
                 self.assertEqual(_pks(self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))), {self.open_doc.pk})
+            with listed_relationship((extra,)):
+                with self.assertRaises(TrustsConfigurationError):
+                    self.docs.permitted('myapp.change_document', self.alice, conditions=('non_confidential',))
             with listed_relationship((owned,)):
                 self.assertEqual(_pks(self.docs.permitted(self.change, self.alice, conditions=('open_title_270', 'not_secret_270'))), {self.open_doc.pk})
 
@@ -424,13 +427,12 @@ class PermittedQuerySetOwnershipTest(KernelHostRequiredMixin, TransactionTestCas
             self.OtherPermission.objects.create(pk=self.change.pk, label='collide')
             self.OtherPermissionGrant.objects.create(document=self.open_doc, user=self.bob, permission_id=self.change.pk)
             for permission in ('myapp.change_document', self.change):
-                for handles in ((primary, extra), (extra, primary)):
-                    with self.subTest(permission=type(permission).__name__, order=handles[0].path):
-                        with listed_relationship(handles):
-                            denied = self.docs.permitted(permission, self.bob)
-                            self.assertNotIn('issue270_other_permission', str(denied.query))
-                            self.assertEqual(list(denied), [])
-                            self.assertEqual(_pks(self.docs.permitted(permission, self.alice)), {self.open_doc.pk, self.secret.pk})
+                with self.subTest(permission=type(permission).__name__):
+                    with listed_relationship((primary,)):
+                        denied = self.docs.permitted(permission, self.bob)
+                        self.assertNotIn('issue270_other_permission', str(denied.query))
+                        self.assertEqual(list(denied), [])
+                        self.assertEqual(_pks(self.docs.permitted(permission, self.alice)), {self.open_doc.pk, self.secret.pk})
 
 @isolate_apps('django.contrib.auth')
 class PermittedPermissionExactnessTest(KernelHostRequiredMixin, TestCase):

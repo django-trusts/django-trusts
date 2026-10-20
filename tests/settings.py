@@ -22,7 +22,6 @@ INSTALLED_APPS = (
     'tests.myapp.apps.DocumentConfig',
     'tests.gh_permissions.apps.GhPermissionsConfig',
     'tests.apps.TestsConfig',
-    'trusts.apps.TrustsImplementationConfig',
 )
 
 # Test-app migrations depend on trusts.0001_initial (Zero-owned after C2).
@@ -32,7 +31,7 @@ MIGRATION_MODULES = {
 }
 
 AUTHENTICATION_BACKENDS = (
-    'tests.backends.HostTrustModelBackend',
+    'tests.kernel_host.backends.HostTrustModelBackend',
     'tests.myapp.backends.DocumentBackend',
 )
 

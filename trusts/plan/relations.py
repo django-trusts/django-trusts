@@ -84,6 +84,7 @@ class PlanQueryCompiler(object):
             records=grouped,
             permission_model=plan.permission_model,
             content_identity=getattr(plan, 'content_identity', None),
+            user_model=plan.user_model,
         ).content_exists(user, permission)
 
 
@@ -325,6 +326,7 @@ class RelationPlan:
     user_rules: object | None = None
     user_rules_closed: object | None = None
     user_override_q: object | None = None
+    user_model: object = None
 
     def _bound_root_qs(self, record, **bindings):
         return bind_record_qs(
@@ -420,7 +422,10 @@ class RelationPlan:
         if checked.predicate is None:
             return empty
         filtered = queryset.filter(checked.predicate)
-        return bind_once(filtered.distinct() if distinct else filtered)
+        return bind_once(
+            filtered.distinct() if distinct else filtered,
+            user_model=self.user_model,
+        )
 
     def common_permissions(self, user, content, *,
                            skipped=()):

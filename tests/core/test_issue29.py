@@ -197,7 +197,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
         self.assertIn('does not enable', errors[0].msg)
 
     def test_catalog_check_does_not_raise_on_invalid_expr(self):
-        from tests.backends import HostTrustModelBackend
+        from tests.kernel_host.backends import HostTrustModelBackend
 
         Note = _note_model()
         u, _p, o = condition_refs()
@@ -206,7 +206,7 @@ class PermissionConditionCheckLifecycleTest(SimpleTestCase):
 
         with override_catalog(
             HostTrustModelBackend, registry,
-            'tests.backends.HostTrustModelBackend',
+            'tests.kernel_host.backends.HostTrustModelBackend',
         ):
             errors = _messages_with_id(
                 check_permission_conditions(None), CHECK_ID_INVALID_EXPR,
@@ -235,7 +235,7 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
         self.assertNotIn(CHECK_ID_OBSOLETE_CALLBACK_SETTING, output)
 
     def test_manage_py_check_reports_invalid_registration_via_catalog(self):
-        from tests.backends import HostTrustModelBackend
+        from tests.kernel_host.backends import HostTrustModelBackend
         from tests.myapp.models import Document
 
         u, _p, o = condition_refs()
@@ -244,7 +244,7 @@ class ManagePyCheckLifecycleTest(SimpleTestCase):
 
         with override_catalog(
             HostTrustModelBackend, registry,
-            'tests.backends.HostTrustModelBackend',
+            'tests.kernel_host.backends.HostTrustModelBackend',
         ):
             with self.assertRaises(SystemCheckError) as ctx:
                 call_command('check')

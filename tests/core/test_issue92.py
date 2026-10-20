@@ -34,7 +34,7 @@ from trusts.compile.nodes import Ref
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
-CONCRETE = 'tests.backends.HostTrustModelBackend'
+CONCRETE = 'tests.kernel_host.backends.HostTrustModelBackend'
 
 @contextmanager
 def _tables(*model_classes):
@@ -989,14 +989,14 @@ class _LiveRegistryRestoreMixin(object):
 
     def setUp(self):
         super().setUp()
-        from trusts.backends import catalogs
-        self.live = live_config()
-        self._saved_catalogs = dict(catalogs)
+        from django.apps import apps
+        from tests.support import snapshot_installed_catalogs
+        self.live = apps.get_app_config('trusts_kernel_host')
+        self._saved_catalogs = snapshot_installed_catalogs()
 
     def tearDown(self):
-        from trusts.backends import catalogs
-        catalogs.clear()
-        catalogs.update(self._saved_catalogs)
+        from tests.support import restore_installed_catalogs
+        restore_installed_catalogs(self._saved_catalogs)
         super().tearDown()
 
 @isolate_apps('tests', 'django.contrib.auth', 'django.contrib.contenttypes')
@@ -1025,7 +1025,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_no_aliases_is_not_all_clear(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
+        isolate_live_registry(self.live, registry, 'tests.kernel_host.backends.HostTrustModelBackend')
         self.assertEqual(check_along_renderer(None), [])
         self.assertEqual(check_along_renderer(None, databases=None), [])
         self.assertEqual(check_along_renderer(None, databases=()), [])
@@ -1033,13 +1033,13 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_supported_alias(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
+        isolate_live_registry(self.live, registry, 'tests.kernel_host.backends.HostTrustModelBackend')
         messages = check_along_renderer(None, databases=['default'])
         self.assertEqual(messages, [])
 
     def test_unsupported_and_several_aliases(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
+        isolate_live_registry(self.live, registry, 'tests.kernel_host.backends.HostTrustModelBackend')
         fake = MagicMock()
         fake.settings_dict = {'ENGINE': 'django.db.backends.oracle'}
         fake.vendor = 'oracle'
@@ -1061,7 +1061,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_mariadb_is_rejected_before_the_probe(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
+        isolate_live_registry(self.live, registry, 'tests.kernel_host.backends.HostTrustModelBackend')
 
         class Maria(object):
             vendor = 'mysql'
@@ -1084,7 +1084,7 @@ class AlongE005Test(_LiveRegistryRestoreMixin, TransactionTestCase):
 
     def test_failed_probe(self):
         registry, Node, NodeGrant = self._along_registry()
-        isolate_live_registry(self.live, registry, 'tests.backends.HostTrustModelBackend')
+        isolate_live_registry(self.live, registry, 'tests.kernel_host.backends.HostTrustModelBackend')
 
         class BoomCursor(object):
 

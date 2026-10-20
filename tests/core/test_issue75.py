@@ -23,13 +23,14 @@ from tests.support import (
     empty_catalogs,
     sweep_listed_backends,
 )
-from tests.backends import HostTrustModelBackend, MalformedCompilerBackend, MixinOnlyBackend, MissingCompilerBackend, RaisingCompilerBackend
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.backends import MalformedCompilerBackend, MixinOnlyBackend, MissingCompilerBackend, RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.aggregates import compiler_for_class
-from trusts.backends import catalogs
+from tests.gh_permissions.backends import OutsideBackend
 from trusts.backends import TrustModelBackendMixin
 from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.relations import PlanQueryCompiler
@@ -40,7 +41,7 @@ import tests as tests_module
 HOST = HOST_BACKEND
 DOCUMENT = DOCUMENT_BACKEND
 MIXIN = 'tests.backends.MixinOnlyBackend'
-ALIASED = 'tests.backends.AliasedTrustModelBackend'
+OUTSIDE = 'tests.gh_permissions.backends.OutsideBackend'
 MISSING = 'tests.backends.MissingCompilerBackend'
 MALFORMED = 'tests.backends.MalformedCompilerBackend'
 RAISING = 'tests.backends.RaisingCompilerBackend'
@@ -66,46 +67,54 @@ def _evaluate(handle, queryset, user, permission):
 class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 
     def test_one_path_registry_alias_is_exact_store(self):
+        from django.apps import apps
+
         catalog = configured_catalog(HOST)
-        self.assertEqual(catalog.path, HOST)
-        self.assertIs(catalog, catalogs[HostTrustModelBackend])
-        self.assertIs(catalog.compiler, HostTrustModelBackend.query_compiler)
+        self.assertEqual(
+            catalog.path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
+        self.assertIs(catalog, HostTrustModelBackend().catalog)
         self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
 
-    def test_duplicate_identical_paths_dedupe(self):
-        with empty_catalogs():
-            with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    sweep_listed_backends()
-        self.assertIn('multiple paths', str(ctx.exception))
-        self.assertEqual(configured_catalog(HOST).path, HOST)
+    def test_duplicate_identical_paths_do_not_raise(self):
+        from django.apps import apps
 
-    def test_same_class_alias_is_ambiguity_error(self):
-        with empty_catalogs():
-            with override_settings(AUTHENTICATION_BACKENDS=(HOST, ALIASED)):
-                with self.assertRaises(TrustsConfigurationError) as ctx:
-                    sweep_listed_backends()
-        self.assertIn('multiple paths', str(ctx.exception))
-        self.assertIsNone(MixinOnlyBackend().get_catalog())
+        with override_settings(AUTHENTICATION_BACKENDS=(HOST, HOST)):
+            sweep_listed_backends()
+        self.assertEqual(
+            configured_catalog(HOST).path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
 
-    def test_unconfigured_path_fails_loud(self):
+    def test_backend_outside_a_mixin_app_fails_loud(self):
         with self.assertRaises(TrustsConfigurationError) as ctx:
-            configured_catalog(MIXIN)
-        self.assertIn(MIXIN, str(ctx.exception))
-        self.assertIsNone(MixinOnlyBackend().get_catalog())
+            OutsideBackend()
+        self.assertIn(OUTSIDE, str(ctx.exception))
+        self.assertIn('TrustsConfigMixin', str(ctx.exception))
 
-    def test_zero_and_multiple_alias_access_fail(self):
-        self.assertEqual(configured_catalog(HOST).path, HOST)
-        handle_doc = configured_catalog(DOCUMENT)
-        self.assertEqual(handle_doc.path, DOCUMENT)
+    def test_document_and_host_catalogs_use_config_paths(self):
+        from django.apps import apps
         from tests.myapp.backends import DocumentBackend
-        self.assertIs(handle_doc, catalogs[DocumentBackend])
+
+        self.assertEqual(
+            configured_catalog(HOST).path,
+            apps.get_app_config('trusts_kernel_host').catalog_path(),
+        )
+        handle_doc = configured_catalog(DOCUMENT)
+        self.assertEqual(
+            handle_doc.path,
+            apps.get_app_config('myapp').catalog_path(),
+        )
+        self.assertIs(handle_doc, DocumentBackend().catalog)
 
     def test_ready_does_not_replace_store_or_registry(self):
-        live = live_config()
-        first = catalogs[HostTrustModelBackend]
+        from django.apps import apps
+
+        live = apps.get_app_config('trusts_kernel_host')
+        first = HostTrustModelBackend().catalog
         live.ready()
-        self.assertIs(catalogs[HostTrustModelBackend], first)
+        self.assertIs(HostTrustModelBackend().catalog, first)
 
     def test_compiler_is_class_owned_not_instance_state(self):
         first = HostTrustModelBackend()
@@ -121,12 +130,12 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 class IsolatedAppsPathStoreTest(SimpleTestCase):
 
     def test_isolate_apps_without_owner_does_not_donate(self):
-        before = catalogs[HostTrustModelBackend].records
+        before = HostTrustModelBackend().catalog.records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
-        self.assertEqual(catalogs[HostTrustModelBackend].records, before)
+        self.assertEqual(HostTrustModelBackend().catalog.records, before)
 
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 
@@ -135,13 +144,16 @@ class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
         self.assertFalse(configured_catalog(HOST).plan_for(Document).records)
 
     def test_omitted_ambiguous_path_fails_before_writing(self):
-        with self.assertRaises(TrustsConfigurationError):
-            configured_catalog(MIXIN)
+        with self.assertRaises(TrustsConfigurationError) as ctx:
+            OutsideBackend()
+        self.assertIn('TrustsConfigMixin', str(ctx.exception))
 
     def test_no_mixin_fan_out(self):
-        live = live_config()
+        from django.apps import apps
+
+        live = apps.get_app_config('trusts_kernel_host')
         with self.assertRaises(TrustsConfigurationError):
-            configured_catalog(MIXIN)
+            OutsideBackend()
         self.assertFalse(hasattr(live, 'registries'))
         self.assertFalse(hasattr(live, 'trusts_backend_paths'))
 
@@ -286,7 +298,6 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
 
     def test_raising_compiler_is_not_caught_by_aggregate(self):
         User = get_user_model()
-        live = live_config()
         registry = RegistryFactory(compiler=RaisingCompilerBackend.query_compiler)
         registry.path = RAISING
         handle = registry

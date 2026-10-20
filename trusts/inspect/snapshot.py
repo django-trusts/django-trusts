@@ -39,8 +39,7 @@ from django.core import checks as django_checks
 from django.db.models.expressions import Value
 from django.db.models.lookups import Lookup
 
-import trusts.plan.standards as standards
-from trusts.backends import configured_catalogs
+from trusts.apps import installed_catalogs
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.inspect.format import _format_policy_sql
@@ -198,7 +197,7 @@ def render_policy_sql_bytes(*, alias=None):
     A failure raises before a partial document is returned.
     """
     resolved = resolve_policy_database(alias)
-    document = _build_document(tuple(configured_catalogs()), resolved)
+    document = _build_document(installed_catalogs(), resolved)
     return _dump_document(document)
 
 
@@ -409,7 +408,10 @@ class _PolicyVisitor(object):
             raise TrustsConfigurationError(
                 'Policy SQL found no grant for %s.' % _model_label(model)
             )
-        queryset = bind_once(queryset.filter(predicate).distinct())
+        queryset = bind_once(
+            queryset.filter(predicate).distinct(),
+            user_model=catalog.user_model,
+        )
         return _compile_queryset(
             queryset, alias, record=records[0], expr=None, records=records,
         )
@@ -426,7 +428,7 @@ class _PolicyVisitor(object):
                 'Policy SQL found no grant for %s.' % _model_label(model)
             )
         exists = _content_manager(model).filter(pk=instance.pk).filter(predicate)
-        compiled = bound_exists_query(exists)
+        compiled = bound_exists_query(exists, user_model=catalog.user_model)
         return _compile_queryset(
             _Query(compiled),
             alias, record=records[0], expr=None, records=records,
@@ -1015,7 +1017,9 @@ def _project_named_filters(catalog, alias):
                 % (model_label, code)
             )
         expr = getattr(record, 'expr', None)
-        sql, params = _compile_named_filter(model, expr, alias)
+        sql, params = _compile_named_filter(
+            model, expr, alias, catalog.user_model,
+        )
         rows.append({
             'model': model_label,
             'id': _dotless_id(model_label, code),
@@ -1025,24 +1029,24 @@ def _project_named_filters(catalog, alias):
     return rows
 
 
-def _compile_named_filter(model, expr, alias):
+def _compile_named_filter(model, expr, alias, user_model):
 
     compiled = compile_expression_q(
         expr, model,
-        _any_sentinel_user(alias),
+        _any_sentinel_user(alias, user_model),
         _any_sentinel_permission(alias),
+        user_model=user_model,
     )
     queryset = model._meta.concrete_model._default_manager.filter(compiled)
     return _compile_queryset(queryset, alias, record=None, expr=expr)
 
 
-def _any_sentinel_user(alias):
-    model = standards.user_model
-    if model is None:
+def _any_sentinel_user(alias, user_model):
+    if user_model is None:
         raise TrustsConfigurationError(
-            'Policy SQL has no user model. TrustsImplementationConfig.ready has not stored one.'
+            'Policy SQL has no user model. The catalog is not built yet.'
         )
-    return _sentinel(model, model._meta.pk.attname, alias=alias)
+    return _sentinel(user_model, user_model._meta.pk.attname, alias=alias)
 
 
 def _any_sentinel_permission(alias):

@@ -212,7 +212,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
     def test_catalog_uses_the_shapes_lookup(self):
         registry = RegistryFactory()
         shape = registry.build()
-        catalog = Catalog(shape)
+        catalog = Catalog(shape, user_model=None)
         self.assertIs(catalog.filter_lookup, shape.filter_lookup)
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
         self.assertIsNone(shape.filter_lookup.record_for(Document, 'missing'))
@@ -232,7 +232,7 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
         document = Document(title='unbind')
         user = get_user_model()(username='unbind-151')
         with unbound_named_filters(DocumentBackend):
-            self.assertFalse(backend.has_perm(
+            self.assertFalse(DocumentBackend().has_perm(
                 user, 'myapp.change_document:non_confidential', document,
             ))
 

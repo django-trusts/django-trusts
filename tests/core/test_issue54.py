@@ -24,7 +24,7 @@ from tests.support import (
 from tests.core import kernel_host_listed
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
-from trusts.apps import TrustsImplementationConfig
+from trusts.apps import TrustsConfigMixin
 from trusts.decorators import filter_by_permitted_content
 from trusts.plan.conditions import FrozenConditionLookup
 from trusts.compile.catalogs import Catalog
@@ -124,14 +124,11 @@ class KernelConfigTest(SimpleTestCase):
             self.skipTest('kernel-only host path is not listed on the pair')
         import trusts.apps as apps_mod
 
-        config = live_config()
-        self.assertIs(type(config), TrustsImplementationConfig)
-        self.assertNotIsInstance(
-            __import__('django.apps', fromlist=['apps']).apps.get_app_config(
-                'trusts_kernel_host',
-            ),
-            TrustsImplementationConfig,
-        )
+        from django.apps import apps as django_apps
+
+        config = django_apps.get_app_config('trusts_kernel_host')
+        self.assertIsInstance(config, TrustsConfigMixin)
+        self.assertIsNot(type(config), TrustsConfigMixin)
         self.assertFalse(hasattr(apps_mod, 'kernel_config'))
         self.assertFalse(hasattr(apps_mod, 'AppConfig'))
 
@@ -152,7 +149,7 @@ class ConditionLookupBindTest(TestCase):
             shape = registry.build()
         self.assertIsInstance(shape.filter_lookup, FrozenConditionLookup)
         self.assertIsNone(shape.filter_lookup.record_for(Document, 'own'))
-        catalog = Catalog(shape)
+        catalog = Catalog(shape, user_model=None)
         self.assertIs(catalog.filter_lookup, shape.filter_lookup)
         with self.assertNumQueries(0):
             again = registry.build()
@@ -467,7 +464,7 @@ class FilterAuthorizedScopesIsolatedTest(TransactionTestCase):
 
         ghost = Ghost()
         ghost.is_anonymous = True
-        with listed_relationship((self.handle, self.handle)):
+        with listed_relationship((self.handle,)):
             with self.assertNumQueries(0):
                 denied = filter_by_permitted_content(
                     self.Folder.objects.all(),

@@ -15,7 +15,8 @@ from django.contrib.auth.models import AnonymousUser, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, override_settings
 
-from tests.backends import HostTrustModelBackend, MixinOnlyBackend
+from tests.kernel_host.backends import HostTrustModelBackend
+from tests.backends import MixinOnlyBackend
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
@@ -148,8 +149,11 @@ class KernelMixinEnumerationTest(KernelHostRequiredMixin, TestCase):
 
     def test_other_path_and_duplicate_path_stay_empty_or_one_sql(self):
         qs = self._granted_qs(self.document)
+        from django.apps import apps
+
         mixin = MixinOnlyBackend()
-        self.assertIsNone(mixin.get_catalog())
+        self.assertIs(mixin.get_catalog(), apps.get_app_config('trusts_tests').get_catalog())
+        self.assertFalse(mixin.get_catalog().plan_for(self.document).records)
         with override_settings(AUTHENTICATION_BACKENDS=(
             HOST_BACKEND, DOCUMENT_BACKEND, MIXIN,
         )):

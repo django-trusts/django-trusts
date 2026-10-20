@@ -19,7 +19,7 @@ from tests.support import (
     bound_handle,
     built_catalog,
 )
-from tests.backends import HostTrustModelBackend
+from tests.kernel_host.backends import HostTrustModelBackend
 from tests.core import KernelHostRequiredMixin
 from tests.gh_permissions.models import Repository
 from tests.kernel_host.apps import HOST_BACKEND
@@ -92,25 +92,14 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
     def test_unregistered_content_is_rejected_before_sql(self):
         self.assertTrue(self.alice.has_perm(PERM, self.document))
         self.assertIn(PERM, self.alice.get_all_permissions(self.document))
-        from trusts.backends import configured_catalogs
-        handles = configured_catalogs()
+        from trusts.apps import installed_catalogs
+        handles = installed_catalogs()
         self.assertGreaterEqual(len(handles), 2)
         extra = _extra_handle()
         with self.assertNumQueries(0):
             self._assert_public_deny()
-            from trusts.backends import catalogs
-            cls = type(self.document_backend)
-            saved = catalogs.get(cls)
-            extra.family = cls.family if saved is None else saved.family
-            catalogs[cls] = built_catalog(extra)
-            try:
-                with bound_handle(self.document_backend, extra):
-                    self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))
-            finally:
-                if saved is None:
-                    catalogs.pop(cls, None)
-                else:
-                    catalogs[cls] = saved
+            with bound_handle(self.document_backend, extra):
+                self.assertFalse(self.document_backend.has_perm(self.alice, '%s:always' % PERM, self.report))
             host_factory = _replay_listed(HOST_BACKEND)
             document_factory = _replay_listed(DOCUMENT_BACKEND)
             for bundled in ((host_factory, document_factory, extra), (extra, host_factory, document_factory)):
