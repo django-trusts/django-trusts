@@ -21,6 +21,7 @@ from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentAltGrant, DocumentGrant
+from tests.support import empty_catalogs, sweep_listed_backends
 
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.factory import RegistryFactory
@@ -131,7 +132,6 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         one = self._granted_qs(self.open_one)
         two = self._granted_qs(self.open_two)
         both = self._granted_qs(self.open_one, self.open_two)
-        from tests.support import empty_catalogs, sweep_listed_backends
         from trusts.backends import recorders
 
         alt_path = 'tests.core.test_issue181._AltGrantBackend'

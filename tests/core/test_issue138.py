@@ -1,4 +1,4 @@
-from tests.support import listed_relationship, configured_catalog, built_registries
+from tests.support import listed_relationship, configured_catalog, built_registries, replay_recorder
 """#138: authorization_required Trusts-only pk guard."""
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -246,7 +246,6 @@ def _document_backend():
     """Factory replay of the document recorder. Not the live catalog."""
     from django.contrib.auth import get_user_model
 
-    from tests.support import replay_recorder
     from tests.myapp.backends import DocumentBackend
 
     factory = RegistryFactory(

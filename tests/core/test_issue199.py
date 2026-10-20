@@ -1,4 +1,4 @@
-from tests.support import configured_catalog
+from tests.support import configured_catalog, unbound_named_filters
 """#199 / #189 B1: backend principal, object, and ownership fail-closed.
 
 Public ``TrustModelBackendMixin`` methods, ``set_filter_lookup``,
@@ -173,7 +173,6 @@ class BackendFailClosedPrincipalObjectTest(KernelHostRequiredMixin, TestCase):
             )
 
     def test_owned_unbound_named_condition_raises_on_instance_at_zero_sql(self):
-        from tests.support import unbound_named_filters
         from tests.myapp.backends import DocumentBackend
 
         qs = Document.objects.filter(pk=self.document.pk)

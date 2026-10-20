@@ -31,6 +31,7 @@ from tests.support import (
     listed_relationship,
     built_registries,
     built_catalog,
+    install_class_handle,
 )
 from trusts.compile.catalogs import Catalog
 
@@ -45,7 +46,6 @@ def _seal_factory(backend_cls, factory):
 
 @contextmanager
 def _listed(handle):
-    from tests.support import install_class_handle
     from trusts.backends import catalogs
     install_class_handle(_ListedBackend, handle)
     _seal_factory(_ListedBackend, handle)

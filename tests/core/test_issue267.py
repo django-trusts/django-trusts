@@ -29,7 +29,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.decorators import _declared_authorization_guards, authorization_required
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.support import render_configured_policy, built_catalog
+from tests.support import render_configured_policy, built_catalog, install_class_handle
 from trusts.compile.catalogs import Catalog
 
 
@@ -43,7 +43,6 @@ def _seal_factory(backend_cls, factory):
 
 @contextmanager
 def _installed(handle):
-    from tests.support import install_class_handle
     from trusts.backends import catalogs
     install_class_handle(_ListedBackend, handle)
     _seal_factory(_ListedBackend, handle)
