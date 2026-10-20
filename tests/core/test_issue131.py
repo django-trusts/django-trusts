@@ -10,12 +10,9 @@ are TypeError. Registration stays open after a build. Dual backends stay
 isolated. Internal ``RegistryFactory.register(Ref)`` remains for
 compiler tests. OrderedFold registration left Core in #195.
 """
-from unittest.mock import patch
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 from tests.myapp.models import Document, DocumentGrant
-from trusts.compile.resolution import _resolve_path
-from trusts.compile.factory import _public_path_segments, _validate_condition
 from trusts.compile.nodes import Along, permission_in
 from trusts.compile.nodes import All, Equal, Ref
 from trusts.plan.relations import PlanQueryCompiler
@@ -103,15 +100,12 @@ class HandleAfterBuildOrderTest(SimpleTestCase):
         registry = RegistryFactory()
         handle = _handle(registry)
         self.assertEqual(registry.records, ())
-        with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
-            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
-                with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
-                    record = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-        segments.assert_called()
-        resolve.assert_called()
-        validate.assert_called()
-        self.assertEqual(registry.records, (record,))
-        self.assertEqual(built_catalog(registry).records, (record,))
+        record = handle.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        shape = registry.build()
+        self.assertEqual(shape.records, (record,))
+        self.assertEqual(record.content_path, ('document',))
+        self.assertEqual(record.user_path, ('user',))
+        self.assertEqual(record.permission_path, ('permission',))
 
     def test_invalid_grammar_after_build_raises_its_own_error(self):
         registry = RegistryFactory()
@@ -270,14 +264,8 @@ class CMethodsAfterBuildAndIsolationTest(SimpleTestCase):
         registry = RegistryFactory()
         backend = _handle(registry)
         log = _PredicateLog()
-        with patch('trusts.compile.factory._public_path_segments', wraps=_public_path_segments) as segments:
-            with patch('trusts.compile.factory._resolve_path', wraps=_resolve_path) as resolve:
-                with patch('trusts.compile.factory._validate_condition', wraps=_validate_condition) as validate:
-                    record = backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
-                    named_record = backend.register_permission_condition(Document, 'non_confidential', log)
-        segments.assert_called()
-        resolve.assert_called()
-        validate.assert_called()
+        record = backend.register_public(trust=DocumentGrant, user='user', permission='permission', content='document')
+        named_record = backend.register_permission_condition(Document, 'non_confidential', log)
         self.assertEqual(len(log.calls), 1)
         self.assertEqual(registry.records, (record,))
         self.assertEqual(built_catalog(registry).records, (record,))

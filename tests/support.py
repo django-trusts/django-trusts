@@ -339,13 +339,3 @@ def forget_models(*model_classes):
                 app_models.pop(name, None)
     django_apps.clear_cache()
 
-
-def clone_writable_registry(registry):
-    """Copy records onto a new writable registry for test isolation."""
-
-    cloned = RegistryFactory()
-    cloned._by_root = {
-        root: list(rows) for root, rows in registry._by_root.items()
-    }
-    cloned._order = list(registry._order)
-    return cloned
