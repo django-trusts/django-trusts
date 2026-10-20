@@ -265,7 +265,9 @@ def main() -> int:
     else:
         raise SystemExit('trusts.core_backends still imports from the library wheel')
     import trusts.apps as apps_mod
-    if apps_mod.catalogs or apps_mod.recorders:
+    from trusts.installed import catalogs as installed_catalogs
+    from trusts.installed import recorders as installed_recorders
+    if installed_catalogs or installed_recorders:
         raise SystemExit('library-only populate must not build catalogs before ready')
     for removed in (
         'implementation_configs',
@@ -304,7 +306,7 @@ def main() -> int:
     print('library apps', sorted(labels))
     print('kernel_config absent')
     print('TrustsImplementationConfig', TrustsImplementationConfig)
-    print('catalogs', apps_mod.catalogs)
+    print('catalogs', installed_catalogs)
     print('AuthorizedQuerySet', AuthorizedQuerySet, AuthorizedManagerMixin, AuthorizedManager)
     print('filter_by_permitted_content', filter_by_permitted_content)
     print('filter_authorized_scopes', filter_authorized_scopes)

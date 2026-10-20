@@ -16,12 +16,12 @@ from django.db.models import Exists, Model, OuterRef, Q, QuerySet
 from django.db.models.base import ModelBase
 
 from trusts.plan.rewrites import bind_once
-from trusts.plan.hops import _require_instance
+from trusts.plan.hops import require_instance
 from trusts.plan.predicates import (
-    _bind_record_qs,
-    _bind_terminal,
-    _content_type_identity,
-    _permission_terminal_is_auth_permission,
+    bind_record_qs,
+    bind_terminal,
+    content_type_identity,
+    permission_terminal_is_auth_permission,
 )
 from trusts.plan.recursions import GrantReach
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
@@ -30,6 +30,7 @@ from trusts.plan.standards import (
     bind_skip_flags,
     condition_names,
 )
+from django.contrib.auth.models import Permission
 
 
 class QueryCompiler(object):
@@ -144,7 +145,7 @@ class SkipParams(object):
 
 
 def user_skip_params(user, skip_flags, *, registries=None, registry=None,
-                     require_user=True):
+                     require_user=True, skip_names=None):
     """Validate ``skip_*`` keywords and return their bound values.
 
     Anonymous, unauthenticated, and ``None`` are denied before SQL.
@@ -162,7 +163,9 @@ def user_skip_params(user, skip_flags, *, registries=None, registry=None,
     )
     if denied:
         return SkipParams(True, {})
-    if registry is not None:
+    if skip_names is not None:
+        known = frozenset(skip_names)
+    elif registry is not None:
         known = registry._known_skip_names()
     else:
         known = _known_skip_names(registries or ())
@@ -198,10 +201,10 @@ def _outer_permission_identity(permission_model, content_model):
     if (
         permission_model is None
         or content_model is None
-        or not _permission_terminal_is_auth_permission(permission_model)
+        or not permission_terminal_is_auth_permission(permission_model)
     ):
         return Q()
-    app_label, model_name = _content_type_identity(content_model)
+    app_label, model_name = content_type_identity(content_model)
     return Q(**{
         'content_type__app_label': app_label,
         'content_type__model': model_name,
@@ -217,11 +220,10 @@ def _bound_permission_identity(permission, content_model, permission_model):
         permission is None
         or permission_model is None
         or content_model is None
-        or not _permission_terminal_is_auth_permission(permission_model)
+        or not permission_terminal_is_auth_permission(permission_model)
     ):
         return Q()
-    app_label, model_name = _content_type_identity(content_model)
-    from django.contrib.auth.models import Permission
+    app_label, model_name = content_type_identity(content_model)
 
     identity = permission.pk if isinstance(permission, Model) else permission
     return Exists(Permission.objects.filter(
@@ -264,7 +266,7 @@ def _user_identity_denied(user):
 def bind_checked_user(subject, grant=None, *, rules=None, override=None,
                       identity=None, values=None, plan=None, closed=False,
                       with_override=True, skip_flags=None, require_user=True,
-                      registry=None, registries=None):
+                      registry=None, registries=None, skip_names=None):
     """Validate ``skip_*``, deny before SQL, and bind one registration fragment.
 
     ``skip_flags`` is a public inquiry. ``values`` means that inquiry
@@ -274,7 +276,7 @@ def bind_checked_user(subject, grant=None, *, rules=None, override=None,
     if skip_flags is not None:
         inquiry = user_skip_params(
             subject, skip_flags, registries=registries, registry=registry,
-            require_user=require_user,
+            require_user=require_user, skip_names=skip_names,
         )
         if inquiry.denied:
             return SkipParams(True, {}, None)
@@ -357,7 +359,7 @@ class RelationPlan:
     user_override_q: object | None = None
 
     def _bound_root_qs(self, record, **bindings):
-        return _bind_record_qs(
+        return bind_record_qs(
             record,
             content_identity=self.content_identity,
             **bindings,
@@ -411,8 +413,8 @@ class RelationPlan:
         lookup (``Subquery`` / nested ``OuterRef``) so callers can bind
         permission identity in the same SQL statement.
         """
-        user = _require_instance(user, 'user')
-        permission = _bind_terminal(permission, 'permission')
+        user = require_instance(user, 'user')
+        permission = bind_terminal(permission, 'permission')
         if not self.records:
             return None
         return self._correlated_exists(
@@ -429,13 +431,13 @@ class RelationPlan:
         without the outer user. Eligible grants and candidate users join
         outside the recursive CTE.
         """
-        content = _require_instance(content, 'content')
+        content = require_instance(content, 'content')
         if content.pk is None:
             raise TrustsConfigurationError(
                 'content must be a saved %s instance.'
                 % content._meta.label
             )
-        permission = _bind_terminal(permission, 'permission')
+        permission = bind_terminal(permission, 'permission')
         if not self.records:
             return None
         return self._correlated_exists(
@@ -460,7 +462,7 @@ class RelationPlan:
         an empty permission queryset. Group extras belong to the handle
         compiler, not this plan-only projection.
         """
-        user = _require_instance(user, 'user')
+        user = require_instance(user, 'user')
         if not self.records or self.permission_model is None:
             if self.permission_model is None:
                 return ()
@@ -481,8 +483,8 @@ class RelationPlan:
 
     def permissions(self, user, content, *, skipped=()):
         """Distinct permission rows for ``(user, content)``."""
-        user = _require_instance(user, 'user')
-        content = _require_instance(content, 'content')
+        user = require_instance(user, 'user')
+        content = require_instance(content, 'content')
         if not self.records or self.permission_model is None:
             return ()
         exists = self._correlated_exists(
@@ -500,9 +502,9 @@ class RelationPlan:
     def has_permission(self, user, content, permission, *,
                        skipped=()):
         """SQL ``EXISTS`` membership of ``permission`` in ``permissions()``."""
-        user = _require_instance(user, 'user')
-        content = _require_instance(content, 'content')
-        permission = _require_instance(permission, 'permission')
+        user = require_instance(user, 'user')
+        content = require_instance(content, 'content')
+        permission = require_instance(permission, 'permission')
         if permission._meta.concrete_model is not self.permission_model:
             return False
         if not self.records or self.permission_model is None:

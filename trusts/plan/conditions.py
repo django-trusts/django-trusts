@@ -18,9 +18,7 @@ Prebuilt ``Expr`` trees are not accepted at register.
 
 Permission-condition records live on an instantiable
 ``ConditionRegistry`` (also exposed on each built registry and the
-recorder's ``add_named_filter``). There is no
-process-global store: each implementation registry owns its own records
-so owners cannot share or overwrite each other.
+recorder's ``add_named_filter``).
 
 V1 grammar: principal/object field refs and relationship traversal
 (``_meta`` fields on the content model and the entity/user model; not
@@ -41,12 +39,14 @@ from io import IOBase
 from uuid import UUID
 
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.contrib.auth.models import Permission
 from django.db.models import (
     F,
     Manager,
     Model,
     Q,
     QuerySet,
+    Subquery,
     BinaryField,
     BooleanField,
     CharField,
@@ -60,9 +60,14 @@ from django.db.models import (
     TimeField,
     UUIDField,
 )
+from django.apps import apps as django_apps
+from django.conf import settings as django_settings
+from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.fields import GenericIPAddressField
+from django.http import HttpRequest
+from django.utils.functional import Promise, SimpleLazyObject
 
-from trusts.apps import user_model
+from trusts.installed import user_model
 from trusts.errors import (
     PermissionConditionBooleanError,
     PermissionConditionError,
@@ -93,6 +98,23 @@ def parse_perm_code(perm):
     return applabel, modelname, action, cond
 
 
+def permission_binding(perm, model):
+    """Unevaluated ``auth.Permission`` pk for a codename string.
+
+    A ``Permission`` instance is returned unchanged.
+    """
+    if isinstance(perm, Permission):
+        return perm
+    applabel, modelname, action, _cond = parse_perm_code(perm)
+    return Subquery(
+        Permission.objects.filter(
+            codename='%s_%s' % (action, modelname),
+            content_type__app_label=applabel.lower(),
+            content_type__model=modelname,
+        ).values('pk')[:1]
+    )
+
+
 def permission_has_condition(perm):
     """True when ``perm`` is a string with a ``:condition`` suffix."""
     return isinstance(perm, str) and ':' in perm
@@ -117,7 +139,6 @@ def obsolete_legacy_callback_setting_enabled():
     a configuration error (``trusts.E007``). Missing or False is quiet.
     Read at call time so ``override_settings`` works.
     """
-    from django.conf import settings as django_settings
 
     return bool(getattr(
         django_settings, 'TRUSTS_ALLOW_LEGACY_PERMISSION_CALLBACKS', False
@@ -426,25 +447,13 @@ def _reject_forbidden_constant(value):
         _unsupported('Mutable or collection constants of type %s' % type(value).__name__)
     if isinstance(value, IOBase):
         _unsupported('File / stream constants')
-    try:
-        from django.http import HttpRequest
-    except Exception:
-        HttpRequest = None
-    if HttpRequest is not None and isinstance(value, HttpRequest):
+    if isinstance(value, HttpRequest):
         _unsupported('HttpRequest constants')
-    try:
-        from django.utils.functional import Promise, SimpleLazyObject
-    except Exception:
-        Promise = SimpleLazyObject = None
-    if Promise is not None and isinstance(value, Promise):
+    if isinstance(value, Promise):
         _unsupported('Lazy / promise constants')
-    if SimpleLazyObject is not None and isinstance(value, SimpleLazyObject):
+    if isinstance(value, SimpleLazyObject):
         _unsupported('Lazy / request object constants')
-    try:
-        from django.db.backends.base.base import BaseDatabaseWrapper
-    except Exception:
-        BaseDatabaseWrapper = None
-    if BaseDatabaseWrapper is not None and isinstance(value, BaseDatabaseWrapper):
+    if isinstance(value, BaseDatabaseWrapper):
         _unsupported('Database connection constants')
     if callable(value) and not isinstance(value, type) and not isinstance(value, Model):
         _unsupported('Callable constants')
@@ -652,24 +661,18 @@ def _scalar_types_for_field(field):
     if isinstance(field, FloatField):
         return (float, int)
     if isinstance(field, DecimalField):
-        from decimal import Decimal
         return (Decimal,)
     if isinstance(field, (CharField, TextField, GenericIPAddressField)):
         return (str,)
     if isinstance(field, UUIDField):
-        from uuid import UUID
         return (UUID,)
     if isinstance(field, DateTimeField):
-        from datetime import datetime
         return (datetime,)
     if isinstance(field, DateField):
-        from datetime import date
         return (date,)
     if isinstance(field, TimeField):
-        from datetime import time
         return (time,)
     if isinstance(field, DurationField):
-        from datetime import timedelta
         return (timedelta,)
     if isinstance(field, BinaryField):
         return (bytes,)
@@ -685,7 +688,6 @@ def _spec_from_field(field):
 
 
 def _model_from_identity(identity):
-    from django.apps import apps as django_apps
 
     return django_apps.get_model(identity.app_label, identity.model_name)
 

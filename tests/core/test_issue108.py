@@ -19,7 +19,8 @@ from tests.apps import (
 )
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND
-from trusts.apps import TrustsImplementationConfig, catalogs
+from trusts.apps import TrustsImplementationConfig
+from trusts.installed import catalogs
 from trusts.backends import TrustModelBackendMixin, configured_catalogs
 from trusts.compile.factory import RegistryFactory
 from trusts.compile.nodes import Ref
@@ -136,7 +137,7 @@ class ImplementationReadyTest(SimpleTestCase):
         catalog = configured_catalog(HOST)
         self.assertIs(catalog, catalogs[HostTrustModelBackend])
         self.assertEqual(catalog.path, HOST)
-        self.assertEqual(catalog.records, catalogs[HostTrustModelBackend].records)
+        self.assertEqual(catalog.policy().records, catalogs[HostTrustModelBackend].policy().records)
 
 
 class MixinCatalogResolveTest(SimpleTestCase):

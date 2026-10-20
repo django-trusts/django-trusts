@@ -85,15 +85,15 @@ class ReadmeExampleAuthorizationTest(TestCase):
         self.assertNotIsInstance(owner, TrustsImplementationConfig)
         catalog = configured_catalog(DOCUMENT_BACKEND)
         self.assertEqual(catalog.path, DOCUMENT_BACKEND)
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
 
         self.assertIs(catalog, catalogs[DocumentBackend])
-        self.assertTrue(catalog.records)
+        self.assertTrue(catalog.policy().records)
         self.assertIs(
-            catalog.records[0].content_model,
+            catalog.policy().records[0].content_model,
             Document,
         )
-        record = catalog.get_permission_condition_record(
+        record = catalog.policy().get_permission_condition_record(
             Document, 'non_confidential',
         )
         self.assertIsNotNone(record)

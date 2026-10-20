@@ -1,10 +1,4 @@
-"""Multi-handle authorization aggregates.
-
-These combine several registries. Single-registry grants stay in
-``trusts.plan.contents``. This module may import other ``plan`` modules
-and ``errors``. It does not import ``trusts.compile``,
-``trusts.backends``, or ``trusts.apps``.
-"""
+"""Authorization aggregates over several registries."""
 
 __all__ = []
 
@@ -14,7 +8,7 @@ from operator import or_
 from django.db.models import Count, Exists, OuterRef, Q
 
 from trusts.plan.rewrites import bind_once
-from trusts.plan.hops import _require_instance
+from trusts.plan.hops import require_instance
 from trusts.errors import TrustsCompilerError, TrustsConfigurationError
 from trusts.plan.contents import (
     _apply_checked_user,
@@ -24,7 +18,7 @@ from trusts.plan.contents import (
     _delegation_reaches,
     _delegation_sponsor_q,
     _ordinary_records,
-    _relationship_registries,
+    relationship_family,
 )
 from trusts.plan.delegations import (
     _compatible_sponsor_records,
@@ -37,6 +31,7 @@ from trusts.plan.relations import (
     bind_checked_user,
     candidate_queryset,
 )
+from django.contrib.auth.models import Permission
 
 
 def compiler_for_class(cls):
@@ -229,7 +224,7 @@ def common_permissions(registries, candidates, user, *, kind='complete',
     Anonymous, unauthenticated, and ``None`` are an empty queryset when
     a registry applies, and ``None`` only when no registry applies.
     """
-    participating = _relationship_registries(registries)
+    participating = relationship_family(registries)
     inquiry = bind_checked_user(
         user, skip_flags=skip_flags, registries=participating)
     if inquiry.denied:
@@ -265,7 +260,6 @@ def _anonymous_common_permissions(registries, candidates):
     if not applicable:
         return None
     if permission_model is None:
-        from django.contrib.auth.models import Permission
 
         permission_model = Permission
     return permission_model._default_manager.none()
@@ -274,7 +268,7 @@ def _anonymous_common_permissions(registries, candidates):
 def _delegated_user_exists(delegations, sponsor_records, content, permission,
                            *, content_identity=None, skipped=()):
     """Candidate-user predicate for one-level delegated authority."""
-    content = _require_instance(content, 'content')
+    content = require_instance(content, 'content')
     parts = []
     for record in delegations:
         sponsor_q = _delegation_sponsor_q(

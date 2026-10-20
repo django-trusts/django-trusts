@@ -22,6 +22,7 @@ from trusts.inspect.snapshot import (
     resolve_policy_database,
     write_policy_lock,
 )
+import django.core.management as management
 
 _POLICY_COMMAND_APP = 'trusts.policy_commands'
 _INSTALLED = False
@@ -85,7 +86,6 @@ def install_policy_commands():
     global _INSTALLED
     if _INSTALLED:
         return
-    import django.core.management as management
 
     original_get = management.get_commands
     original_load = management.load_command_class

@@ -19,7 +19,7 @@ from tests.myapp.apps import DOCUMENT_BACKEND
 from tests.myapp.models import Document, DocumentGrant
 
 from trusts.plan.aggregates import compiler_for_class
-from trusts.apps import catalogs
+from trusts.installed import catalogs
 from trusts.backends import TrustModelBackendMixin
 from trusts.inspect.checks import CHECK_ID_MISSING_COMPILER, check_query_compilers
 from trusts.plan.relations import PlanQueryCompiler
@@ -60,8 +60,8 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         catalog = configured_catalog(HOST)
         self.assertEqual(catalog.path, HOST)
         self.assertIs(catalog, catalogs[HostTrustModelBackend])
-        self.assertIs(catalog.compiler, HostTrustModelBackend.query_compiler)
-        self.assertIsInstance(catalog.compiler, PlanQueryCompiler)
+        self.assertIs(catalog.policy().compiler, HostTrustModelBackend.query_compiler)
+        self.assertIsInstance(catalog.policy().compiler, PlanQueryCompiler)
 
     def test_duplicate_identical_paths_dedupe(self):
         from tests.apps import empty_catalogs, sweep_listed_backends
@@ -99,7 +99,7 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
         first = catalogs[HostTrustModelBackend]
         live.ready()
         self.assertIs(catalogs[HostTrustModelBackend], first)
-        self.assertIs(catalogs[HostTrustModelBackend]._registry, first._registry)
+        self.assertIs(catalogs[HostTrustModelBackend].policy(), first.policy())
 
     def test_compiler_is_class_owned_not_instance_state(self):
         first = HostTrustModelBackend()
@@ -115,12 +115,12 @@ class PathScopedRegistryStoreTest(KernelHostRequiredMixin, SimpleTestCase):
 class IsolatedAppsPathStoreTest(SimpleTestCase):
 
     def test_isolate_apps_without_owner_does_not_donate(self):
-        before = catalogs[HostTrustModelBackend].records
+        before = catalogs[HostTrustModelBackend].policy().records
         contributor = TestsConfig('tests', tests_module)
         contributor.apps = self.isolated_apps
         contributor.ready()
         self.assertIsNone(getattr(contributor, '_trusts_tup_category_registry_id', None))
-        self.assertEqual(catalogs[HostTrustModelBackend].records, before)
+        self.assertEqual(catalogs[HostTrustModelBackend].policy().records, before)
 
 class ContributionPathTest(KernelHostRequiredMixin, SimpleTestCase):
 
@@ -205,8 +205,8 @@ class TwoPathAuthorizationTest(KernelHostRequiredMixin, TestCase):
         self.doc_a = Document.objects.create(title='a')
         self.doc_b = Document.objects.create(title='b')
         DocumentGrant.objects.create(document=self.doc_a, user=self.alice, permission=self.change)
-        self.host = configured_catalog(HOST)._registry
-        self.document = configured_catalog(DOCUMENT)._registry
+        self.host = configured_catalog(HOST).policy()
+        self.document = configured_catalog(DOCUMENT).policy()
 
     def test_grant_only_through_document_path(self):
         self.assertFalse(self.host.build_registry().plan_for(Document).records)
@@ -260,7 +260,7 @@ class CompilerIsolationTest(KernelHostRequiredMixin, TestCase):
         handle = [registry, setattr(registry, 'path', RAISING)][0]
         _contribute_document(handle)
         with self.assertRaises(RuntimeError) as ctx:
-            granted(built_registries((configured_catalog(HOST)._registry, handle)), Document, User(), Permission(), kind='complete')
+            granted(built_registries((configured_catalog(HOST).policy(), handle)), Document, User(), Permission(), kind='complete')
         self.assertIn('compiler exploded', str(ctx.exception))
 
     def test_mixin_only_alone_does_not_inherit_document_plan(self):

@@ -6,9 +6,9 @@ from django.db.models import F, Model, Q
 
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.hops import (
-    _auth_group_and_permission,
-    _lookup_text,
-    _require_instance,
+    auth_group_and_permission,
+    lookup_text,
+    require_instance,
 )
 
 _BINDING_FIELDS = {
@@ -23,11 +23,11 @@ def _is_lookup_expression(value):
     return hasattr(value, 'resolve_expression') and not isinstance(value, Model)
 
 
-def _bind_terminal(value, role):
+def bind_terminal(value, role):
     """Accept a model instance or an unevaluated lookup expression."""
     if _is_lookup_expression(value):
         return value
-    return _require_instance(value, role)
+    return require_instance(value, role)
 
 
 class _PredicateCompiler(object):
@@ -61,14 +61,14 @@ class _PredicateCompiler(object):
 
     def visit_equal(self, node):
         return Q(**{
-            _lookup_text(node.left._path): F(_lookup_text(node.right._path)),
+            lookup_text(node.left._path): F(lookup_text(node.right._path)),
         })
 
     def visit_permission_in(self, node):
         compiled = Q()
         for ref in node.refs:
             compiled &= Q(**{
-                _lookup_text(ref._path): F(self.record.permission_field),
+                lookup_text(ref._path): F(self.record.permission_field),
             })
         return compiled
 
@@ -88,17 +88,17 @@ class _PredicateCompiler(object):
             node.ref, self.record.root, 'delegated inquiry permission',
         )
         return Q(**{
-            _lookup_text(ref._path): _bind_terminal(
+            lookup_text(ref._path): bind_terminal(
                 self.permission, 'permission',
             ),
         })
 
 
-def _compile_predicate(node, record, *, permission=None):
+def compile_predicate(node, record, *, permission=None):
     return _PredicateCompiler(record, permission).compile(node)
 
 
-def _permission_terminal_is_auth_permission(permission_model):
+def permission_terminal_is_auth_permission(permission_model):
     """True when the terminal's concrete model is ``auth.Permission``.
 
     Typed content identity applies only to that model, on a direct
@@ -108,14 +108,14 @@ def _permission_terminal_is_auth_permission(permission_model):
     exact model-identity check, not a field-name scan and not a
     codename parse.
     """
-    _group, permission = _auth_group_and_permission()
+    _group, permission = auth_group_and_permission()
     return (
         permission_model._meta.concrete_model
         is permission._meta.concrete_model
     )
 
 
-def _content_type_identity(model):
+def content_type_identity(model):
     """``(app_label, model_name)`` for ``for_concrete_model=False``.
 
     ``ContentType.get_for_model(model, for_concrete_model=False)`` uses
@@ -132,10 +132,10 @@ def _permission_content_type_filters(record, content_identity):
     A second many-to-many alias would let one group row satisfy the
     permission id and a different row satisfy the content type.
     """
-    if not _permission_terminal_is_auth_permission(record.permission_model):
+    if not permission_terminal_is_auth_permission(record.permission_model):
         return {}
     model = content_identity if content_identity is not None else record.content_model
-    app_label, model_name = _content_type_identity(model)
+    app_label, model_name = content_type_identity(model)
     field = record.permission_field
     return {
         '%s__content_type__app_label' % field: app_label,
@@ -154,12 +154,12 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
     """
     filters = {}
     for role, value in bindings.items():
-        filters[getattr(record, _BINDING_FIELDS[role])] = _bind_terminal(
+        filters[getattr(record, _BINDING_FIELDS[role])] = bind_terminal(
             value, role,
         )
     filters.update(_permission_content_type_filters(record, content_identity))
     combined = Q(**filters)
-    compiled = _compile_predicate(record.condition, record)
+    compiled = compile_predicate(record.condition, record)
     if compiled is not None:
         combined &= compiled
     if correlation is not None:
@@ -167,7 +167,7 @@ def _record_predicate(record, correlation=None, *, content_identity=None,
     return combined
 
 
-def _bind_record_qs(record, correlation=None, *, content_identity=None, **bindings):
+def bind_record_qs(record, correlation=None, *, content_identity=None, **bindings):
     """Root rows for one record. One ``filter()`` for every predicate."""
     return record.root._default_manager.filter(
         _record_predicate(

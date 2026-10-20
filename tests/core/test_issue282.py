@@ -40,7 +40,7 @@ class _PairBackend(TrustModelBackendMixin, ModelBackend):
     pass
 
 def _seal_factory(backend_cls, factory):
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     from trusts.compile.catalogs import Catalog
     built = factory.build_registry()
     catalogs[backend_cls] = Catalog(cls=backend_cls, path='%s.%s' % (backend_cls.__module__, backend_cls.__qualname__), family=backend_cls.family, registry=built, family_registries=built_registries(()))
@@ -48,7 +48,7 @@ def _seal_factory(backend_cls, factory):
 @contextmanager
 def _listed(handle):
     from tests.apps import install_class_handle
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     install_class_handle(_PairBackend, handle)
     _seal_factory(_PairBackend, handle)
     with override_settings(AUTHENTICATION_BACKENDS=('tests.core.test_issue282._PairBackend',)):

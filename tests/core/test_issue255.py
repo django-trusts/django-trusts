@@ -185,7 +185,7 @@ def _assert_agrees(test, content, perm, candidates):
 def _seal_document_factory(factory):
     """This test filled ``factory``. Pass that built registry into Catalog."""
     from tests.myapp.backends import DocumentBackend
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     from trusts.compile.catalogs import Catalog
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
@@ -196,7 +196,7 @@ def _seal_document_factory(factory):
 @contextmanager
 def _document_registry():
     from tests.myapp.backends import DocumentBackend
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     had_catalog = DocumentBackend in catalogs
     saved_catalog = catalogs.get(DocumentBackend)
     registry = RegistryFactory(path=DOCUMENT_BACKEND)

@@ -1,14 +1,16 @@
 """Front over one built registry. Not a builder and not a second store."""
 
 from django.contrib.auth.models import Permission
-from django.db.models import Model, QuerySet, Subquery
+from django.db.models import Model, QuerySet
 
 from trusts.errors import PermissionConditionError, TrustsConfigurationError
 from trusts.plan.conditions import (
     evaluate_registered_expression,
     parse_perm_code,
+    permission_binding,
     permission_has_condition,
 )
+from trusts.plan.standards import condition_names
 from trusts.plan.contents import _ordinary_records, granted
 from trusts.plan.delegations import _sponsor_record_matches
 from trusts.plan.relations import bind_checked_user
@@ -31,61 +33,14 @@ class Catalog(object):
         self._registry = registry
         self.family_registries = tuple(family_registries)
 
-    @property
-    def records(self):
-        return self._registry.records
+    def policy(self):
+        """Built registry for policy SQL and registration questions."""
+        return self._registry
 
-    @property
-    def delegations(self):
-        return self._registry.delegations
-
-    @property
-    def compiler(self):
-        return self._registry.compiler
-
-    @property
-    def user_model(self):
-        return self._registry.user_model
-
-    @property
-    def condition_lookup(self):
-        return self._registry.condition_lookup
-
-    @property
-    def user_conditions(self):
-        return self._registry.user_conditions
-
-    @property
-    def user_override(self):
-        return self._registry.user_override
-
-    def plan_for(self, content, *, user=None, permission=None):
-        return self._registry.plan_for(
-            content, user=user, permission=permission,
-        )
-
-    def applies(self, plan):
-        return self._registry.applies(plan)
-
-    def iter_permission_conditions(self):
-        return self._registry.iter_permission_conditions()
-
-    def get_permission_condition_record(self, model, cond_code):
-        return self._registry.get_permission_condition_record(model, cond_code)
-
-    def has_permission(self, user, content, permission, **skip_flags):
-        return self._registry.has_permission(
-            user, content, permission,
-            family_registries=self.family_registries,
-            **skip_flags,
-        )
-
-    def filter_authorized(self, queryset, user, permission, **skip_flags):
-        return self._registry.filter_authorized(
-            queryset, user, permission,
-            family_registries=self.family_registries,
-            **skip_flags,
-        )
+    def known_skip_names(self):
+        """User-condition and override names this catalog can skip."""
+        registry = self._registry
+        return condition_names(registry.user_conditions, registry.user_override)
 
     def filter_by_permitted_content(self, queryset, user, permission, *,
                                     content, skipped=None, **skip_flags):
@@ -146,23 +101,6 @@ class Catalog(object):
             return None, False
         return part, False
 
-    def complete_grant_q(self, candidates, user, permission, *, skipped=()):
-        """This catalog's complete grant predicate, or None when it grants nothing."""
-        return granted(
-            (self._registry,), candidates, user, permission,
-            kind='complete',
-            family_registries=(self._registry,) + tuple(self.family_registries),
-            skipped=skipped,
-        )
-
-    def permissions_for(self, user, content, *, kind='complete', skipped=None,
-                        **skip_flags):
-        return self._registry.permissions_for(
-            user, content, kind=kind,
-            family_registries=self.family_registries,
-            skipped=skipped, **skip_flags,
-        )
-
     def permitted_users_predicate(self, content, perm, *, skipped=(),
                                   accepts_permission=None, owner_name=None):
         return self._registry.permitted_users_predicate(
@@ -213,7 +151,7 @@ class Catalog(object):
         if permission_has_condition(permext) and record is None:
             return PreparedInquiry(model, result=False)
         held = registry.has_permission(
-            user_obj, obj, _permission_binding(perm, model),
+            user_obj, obj, permission_binding(perm, model),
             extra_q=extra_q, family_registries=self.family_registries,
             permission_model=Permission,
             skipped=dict(skipped) if isinstance(skipped, dict) else {},
@@ -379,14 +317,12 @@ def _selected_condition_q(registry, model, permission, conditions, user, *, api)
     return extra_q
 
 
-def _permission_binding(perm, model):
-    if isinstance(perm, Permission):
-        return perm
-    applabel, modelname, action, _cond = parse_perm_code(perm)
-    return Subquery(
-        Permission.objects.filter(
-            codename='%s_%s' % (action, modelname),
-            content_type__app_label=applabel.lower(),
-            content_type__model=modelname,
-        ).values('pk')[:1]
+def grant_q(catalog, candidates, user, permission, *, skipped=()):
+    """This catalog's complete grant predicate, or None when it grants nothing."""
+    registry = catalog._registry
+    return granted(
+        (registry,), candidates, user, permission,
+        kind='complete',
+        family_registries=(registry,) + tuple(catalog.family_registries),
+        skipped=skipped,
     )

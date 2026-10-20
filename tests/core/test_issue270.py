@@ -236,7 +236,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                 manager.permitted('myapp.change_documentgrant', AnonymousUser())
 
     def test_unbound_condition_lookup_fails_before_the_principal(self):
-        registry = configured_catalog(DOCUMENT_BACKEND)._registry
+        registry = configured_catalog(DOCUMENT_BACKEND).policy()
         previous = registry.condition_lookup
         try:
             registry.condition_lookup = None

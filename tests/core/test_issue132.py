@@ -79,7 +79,7 @@ class UnsupportedContentPublicBoundaryTest(KernelHostRequiredMixin, TestCase):
         with self.assertNumQueries(0):
             self._assert_public_deny()
             from tests.apps import bound_handle
-            from trusts.apps import catalogs
+            from trusts.installed import catalogs
             from trusts.compile.catalogs import Catalog
             cls = type(self.document_backend)
             saved = catalogs.get(cls)

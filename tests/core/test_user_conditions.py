@@ -827,7 +827,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
 
     def setUp(self):
         from django.apps import apps
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         self.config = apps.get_app_config('myapp')
         self.original = catalogs.get(DocumentBackend)
         self.original_sentinel = getattr(self.config, '_document_grant_registry_id', None)
@@ -904,7 +904,7 @@ class StaffSurfaceTest(KernelHostRequiredMixin, TestCase):
 
     def test_lockfile_records_staff_and_the_override(self):
         handle = configured_catalog(self.config, DOCUMENT_BACKEND)
-        raw = render_policy_sql_bytes(registries=[handle._registry])
+        raw = render_policy_sql_bytes(registries=[handle.policy()])
         self.assertIn(b'user.is_staff=True', raw)
         self.assertIn(b'user.is_superuser=True', raw)
         self.assertIn(b'skip_is_active=False', raw)
@@ -982,7 +982,7 @@ class StaffPrefixFilterTest(TransactionTestCase):
 
 def _seal_document_factory(factory):
     """The test filled ``factory``. Pass that built registry into Catalog."""
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     from trusts.compile.catalogs import Catalog
     previous = catalogs.get(DocumentBackend)
     family = DocumentBackend.family if previous is None else previous.family
@@ -990,7 +990,7 @@ def _seal_document_factory(factory):
     return previous
 
 def _restore_document_catalog(previous):
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     if previous is None:
         catalogs.pop(DocumentBackend, None)
     else:
@@ -1024,7 +1024,7 @@ def _restore_document_registry(config, original, sentinel, saved_catalog=_CATALO
 
 def _install_document_registry(*, override):
     from django.apps import apps
-    from trusts.apps import catalogs
+    from trusts.installed import catalogs
     config = apps.get_app_config('myapp')
     original = catalogs.get(DocumentBackend)
     sentinel = getattr(config, '_document_grant_registry_id', None)
@@ -1042,8 +1042,8 @@ def _inquiry_flags(backend, handle, user, doc, change, perm, **flags):
     """
     permitted = PermittedQuerySet(model=Document, using=Document.objects.db)
     held = common_permissions(built_registries((handle,)), doc, user, **flags)
-    listed = handle._registry.permissions_for(user, doc, **flags)
-    return {'has_perm': backend.has_perm(user, perm, doc, **flags), 'authorized': Document.objects.authorized(user, change, **flags).filter(pk=doc.pk).exists(), 'permitted': permitted.permitted(change, user, **flags).filter(pk=doc.pk).exists(), 'common': change.pk in set(held.values_list('pk', flat=True)), 'reverse': user.pk in set(doc.get_permitted_users(change, **flags).values_list('pk', flat=True)), 'enumerated': perm in backend.get_all_permissions(user, doc, **flags), 'permissions_for': change.pk in set(listed.values_list('pk', flat=True)), 'has_permission': handle._registry.has_permission(user, doc, change, **flags)}
+    listed = handle.policy().permissions_for(user, doc, **flags)
+    return {'has_perm': backend.has_perm(user, perm, doc, **flags), 'authorized': Document.objects.authorized(user, change, **flags).filter(pk=doc.pk).exists(), 'permitted': permitted.permitted(change, user, **flags).filter(pk=doc.pk).exists(), 'common': change.pk in set(held.values_list('pk', flat=True)), 'reverse': user.pk in set(doc.get_permitted_users(change, **flags).values_list('pk', flat=True)), 'enumerated': perm in backend.get_all_permissions(user, doc, **flags), 'permissions_for': change.pk in set(listed.values_list('pk', flat=True)), 'has_permission': handle.policy().has_permission(user, doc, change, **flags)}
 
 class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
     """Active and inactive superusers, with and without the override."""
@@ -1071,7 +1071,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         handle = configured_catalog(config, DOCUMENT_BACKEND)
         self.assertIsNone(registry._user_override)
-        raw = render_policy_sql_bytes(registries=[handle._registry])
+        raw = render_policy_sql_bytes(registries=[handle.policy()])
         document = _load_policy_sql_document(raw)
         for content in document['backends'][0]['contents']:
             for row in content.values():
@@ -1095,7 +1095,7 @@ class SuperuserSurfaceTest(KernelHostRequiredMixin, TestCase):
         self.addCleanup(_restore_document_registry, config, original, sentinel, saved_catalog)
         handle = configured_catalog(config, DOCUMENT_BACKEND)
         self.assertEqual(registry._user_override.name, 'superuser')
-        raw = render_policy_sql_bytes(registries=[handle._registry])
+        raw = render_policy_sql_bytes(registries=[handle.policy()])
         self.assertIn(b'user.is_superuser=True', raw)
         where = str(self.doc.get_permitted_users(self.change).query)
         self.assertIn('is_superuser', where.split('WHERE', 1)[-1])
@@ -1285,7 +1285,7 @@ class PlainUserWithoutSuperuserTest(KernelHostRequiredMixin, TransactionTestCase
                 app_label = 'trusts_tests'
         self.assertFalse(any((field.name == 'is_superuser' for field in PlainPrincipal._meta.local_fields)))
         from django.apps import apps
-        from trusts.apps import catalogs
+        from trusts.installed import catalogs
         config = apps.get_app_config('myapp')
         original = catalogs.get(DocumentBackend)
         sentinel = getattr(config, '_document_grant_registry_id', None)
