@@ -449,7 +449,7 @@ def check_along_renderer(app_configs, **kwargs):
 
     Honors Django's ``databases`` argument exactly. ``None`` or empty
     opens no connections, executes no SQL, and is not an all-clear.
-    Isolated ``TrustsRegistry()`` instances are not scanned.
+    Only configured catalogs are scanned.
     """
     databases = kwargs.get('databases')
     if not databases:

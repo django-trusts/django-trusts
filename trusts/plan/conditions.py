@@ -1217,21 +1217,11 @@ class ConditionRegistry(object):
 class RegistryConditionLookup(ConditionLookup):
     """Generic ``ConditionLookup`` over a ``ConditionRegistry``.
 
-    ``TrustsRegistry`` self-binds this adapter at construct. Applications
-    register builders; they do not import or construct this type.
-    Accepts a ``ConditionRegistry`` or any object with a ``conditions``
-    store (a ``TrustsRegistry``). Core never imports Zero nouns.
+    The factory binds this adapter to its condition registry at construct.
+    Applications register builders; they do not import or construct this type.
     """
 
-    def __init__(self, registry):
-        conditions = getattr(registry, 'conditions', registry)
-        record_for = getattr(conditions, 'get_permission_condition_record', None)
-        compile_q = getattr(conditions, 'compile_registered_condition_q', None)
-        if not callable(record_for) or not callable(compile_q):
-            raise TypeError(
-                'RegistryConditionLookup requires a ConditionRegistry '
-                'or TrustsRegistry, not %r.' % (type(registry).__name__,)
-            )
+    def __init__(self, conditions):
         self.conditions = conditions
 
     def record_for(self, model, cond_code):
