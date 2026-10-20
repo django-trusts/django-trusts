@@ -20,13 +20,13 @@ from tests.myapp.backends import DocumentBackend
 from tests.myapp.models import Document, DocumentDelegation, DocumentGrant
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from tests.apps import scoped_permitted_content as filter_by_permitted_content
+from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.query import AuthorizedQuerySet, PermittedQuerySet, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import built_registries
+from tests.support import built_registries
 from trusts.compile.catalogs import Catalog
 
 PERM = 'myapp.change_document'
@@ -459,7 +459,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             self.handle.register_public(trust=Relationship, delegate='delegate', sponsor='sponsor', content='cabinet__sheets', condition=lambda relationship, permission: relationship.allowed_permissions.contains(permission))
             self.handle.register_permission_condition(Sheet, 'active_only', lambda user, permission, content: user.is_active == True)
             self.handle.register_permission_condition(Sheet, 'unexpired', lambda user, permission, content: content.expires_on == content.as_of)
-            from tests.apps import install_class_handle
+            from tests.support import install_class_handle
             install_class_handle(_AcceptanceBackend, self.handle)
             from trusts.backends import catalogs
             factory = self.handle
@@ -473,7 +473,7 @@ class DelegationAcceptanceInquiryTest(TransactionTestCase):
             raise
 
     def tearDown(self):
-        from tests.apps import install_class_handle
+        from tests.support import install_class_handle
         install_class_handle(_AcceptanceBackend, None)
         from trusts.backends import catalogs
         catalogs.pop(_AcceptanceBackend, None)

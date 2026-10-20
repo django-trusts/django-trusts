@@ -12,7 +12,7 @@ from django.apps import apps
 from django.test import SimpleTestCase, override_settings
 
 import tests as tests_module
-from tests.apps import configured_catalog, live_config
+from tests.support import configured_catalog, live_config
 from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 from tests.kernel_host.apps import HOST_BACKEND, KernelHostConfig
 from trusts.apps import (

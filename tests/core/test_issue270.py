@@ -1,4 +1,4 @@
-from tests.apps import listed_relationship, replay_recorder, built_registries
+from tests.support import listed_relationship, replay_recorder, built_registries
 """#270: queryset.permitted(permission, user, conditions=())."""
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -236,7 +236,7 @@ class PermittedQuerySetTest(KernelHostRequiredMixin, TestCase):
                 manager.permitted('myapp.change_documentgrant', AnonymousUser())
 
     def test_unbound_filter_lookup_fails_before_the_principal(self):
-        from tests.apps import unbound_named_filters
+        from tests.support import unbound_named_filters
         from tests.myapp.backends import DocumentBackend
 
         with unbound_named_filters(DocumentBackend):

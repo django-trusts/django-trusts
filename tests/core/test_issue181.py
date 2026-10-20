@@ -131,7 +131,7 @@ class ShareNothingQuerySetAuthorizationTest(KernelHostRequiredMixin, TestCase):
         one = self._granted_qs(self.open_one)
         two = self._granted_qs(self.open_two)
         both = self._granted_qs(self.open_one, self.open_two)
-        from tests.apps import empty_catalogs, sweep_listed_backends
+        from tests.support import empty_catalogs, sweep_listed_backends
         from trusts.backends import recorders
 
         alt_path = 'tests.core.test_issue181._AltGrantBackend'

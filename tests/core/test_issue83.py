@@ -21,7 +21,7 @@ from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
-from tests.apps import built_registries
+from tests.support import built_registries
 from trusts.compile.catalogs import Catalog
 
 

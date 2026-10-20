@@ -37,7 +37,7 @@ from trusts.inspect.yaml import (
     dump_policy_yaml,
     _load_policy_yaml,
 )
-from tests.apps import render_configured_policy, built_registries
+from tests.support import render_configured_policy, built_registries
 
 
 ROOT = Path(__file__).resolve().parents[3]

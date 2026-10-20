@@ -21,6 +21,8 @@ from trusts.plan.conditions import ConditionLookup, ConditionRecord, ConditionRe
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 
+from tests.support import override_catalog
+
 def _store_expr(registry, model, code, expr):
     store = getattr(registry, 'conditions', registry)
     store._records[model._meta.label, code] = ConditionRecord(expr=expr, model=model)
@@ -386,7 +388,6 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         self.assertIn('does not enable', messages[0].msg)
 
     def test_check_permission_conditions_reads_catalog_registry(self):
-        from tests.apps import override_catalog
         from tests.backends import HostTrustModelBackend
 
         Note, _Memo = _note_models()
@@ -403,7 +404,6 @@ class ConditionRegistryCheckTest(SimpleTestCase):
         self.assertTrue(any(("'typo'" in m.msg for m in errors)))
 
     def test_two_owners_same_model_code_both_validated(self):
-        from tests.apps import override_catalog
         from tests.backends import HostTrustModelBackend, MixinOnlyBackend
 
         Note, _Memo = _note_models()

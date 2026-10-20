@@ -15,7 +15,12 @@ from django.db.models.query import QuerySet
 from django.db.utils import OperationalError
 from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
-from tests.apps import forget_models, isolate_live_registry, live_config, built_registries
+from tests.support import (
+    forget_models,
+    isolate_live_registry,
+    live_config,
+    built_registries,
+)
 from trusts.inspect.checks import CHECK_ID_ALONG_RENDERER, check_along_renderer
 from trusts.inspect.format import _format_policy_sql, _tokenize_policy_sql
 from trusts.plan.aggregates import all_match, common_permissions

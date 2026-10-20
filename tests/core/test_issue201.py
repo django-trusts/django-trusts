@@ -250,7 +250,7 @@ class AuthorizationRequiredReadinessPreflightTest(
         def _filtered(request, pk):
             return 'ok'
 
-        from tests.apps import unbound_named_filters
+        from tests.support import unbound_named_filters
         from tests.myapp.backends import DocumentBackend
 
         with unbound_named_filters(DocumentBackend):

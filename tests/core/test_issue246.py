@@ -18,14 +18,19 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
 from trusts.backends import TrustModelBackendMixin
-from tests.apps import render_configured_policy, scoped_permitted_content as filter_by_permitted_content
+from tests.support import (
+    render_configured_policy,
+    scoped_permitted_content as filter_by_permitted_content,
+    listed_relationship,
+    built_registries,
+    bound_handle,
+)
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedManager
-from tests.apps import listed_relationship, built_registries
 from trusts.compile.catalogs import Catalog
 
 
@@ -298,7 +303,6 @@ class ExplicitGroupAuthorizationTest(TransactionTestCase):
 
     @contextmanager
     def _backend(self):
-        from tests.apps import bound_handle
         from trusts.backends import catalogs
         cls = type(self.backend)
         saved = catalogs.get(cls)
@@ -458,7 +462,6 @@ class GroupPermissionCeilingJoinTest(TransactionTestCase):
 
     @contextmanager
     def _backend(self):
-        from tests.apps import bound_handle
         from trusts.backends import catalogs
         cls = type(self.backend)
         saved = catalogs.get(cls)
@@ -659,7 +662,6 @@ class OverUnderGrantCeilingTest(TransactionTestCase):
         backend = _ProbeBackend()
         granted_codes = _codes(granted)
         one = self.Paper.objects.filter(pk=paper.pk)
-        from tests.apps import bound_handle
         from trusts.backends import catalogs
         cls = type(backend)
         saved = catalogs.get(cls)

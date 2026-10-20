@@ -20,7 +20,7 @@ from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.test.utils import isolate_apps
 from trusts.compile.nodes import permission_in
-from tests.apps import scoped_permitted_content as filter_by_permitted_content
+from tests.support import scoped_permitted_content as filter_by_permitted_content
 from trusts.plan.relations import PlanQueryCompiler, RelationPlan
 from trusts.compile.nodes import Ref
 from trusts.errors import TrustsConfigurationError
@@ -28,7 +28,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.plan.aggregates import all_match, common_permissions, instance_match
 from trusts.query import AuthorizedManager
-from tests.apps import listed_relationship, built_registries
+from tests.support import listed_relationship, built_registries
 from trusts.compile.catalogs import Catalog
 
 

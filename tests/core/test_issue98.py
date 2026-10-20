@@ -16,7 +16,7 @@ from trusts.compile.nodes import All, Equal, PermissionIn, Ref, permission_in
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.relations import PlanQueryCompiler
 from trusts.query import AuthorizedManager
-from tests.apps import listed_relationship, built_registries
+from tests.support import listed_relationship, built_registries
 from trusts.compile.catalogs import Catalog
 
 

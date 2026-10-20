@@ -33,7 +33,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _compile_queryset, _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import PermittedManager, PermittedUsersManagerMixin, PermittedUsersMixin
-from tests.apps import render_configured_policy, built_registries
+from tests.support import render_configured_policy, built_registries
 from trusts.compile.catalogs import Catalog
 
 HOST = 'tests.backends.HostTrustModelBackend'

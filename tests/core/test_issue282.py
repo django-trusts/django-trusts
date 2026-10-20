@@ -21,7 +21,7 @@ from trusts.errors import TrustsConfigurationError
 from trusts.compile.factory import RegistryFactory
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.apps import render_configured_policy
+from tests.support import render_configured_policy
 
 
 def _handle(path='tests.core.issue282'):
@@ -47,7 +47,7 @@ def _seal_factory(backend_cls, factory):
 
 @contextmanager
 def _listed(handle):
-    from tests.apps import install_class_handle
+    from tests.support import install_class_handle
     from trusts.backends import catalogs
     install_class_handle(_PairBackend, handle)
     _seal_factory(_PairBackend, handle)

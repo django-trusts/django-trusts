@@ -7,7 +7,7 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.query import QuerySet
 from django.test import TestCase
-from tests.apps import configured_catalog, live_config, built_registries
+from tests.support import configured_catalog, live_config, built_registries
 from tests.core import KernelHostRequiredMixin
 from tests.backends import RaisingCompilerBackend
 from tests.kernel_host.apps import HOST_BACKEND

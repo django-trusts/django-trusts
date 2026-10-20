@@ -14,7 +14,7 @@ from django.http import HttpRequest
 from django.test import SimpleTestCase, TestCase
 from django.test.utils import override_settings
 
-from tests.apps import configured_catalog
+from tests.support import configured_catalog
 from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.apps import DOCUMENT_BACKEND, DocumentConfig
 from tests.myapp.backends import DocumentBackend

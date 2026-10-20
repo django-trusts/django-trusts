@@ -10,7 +10,7 @@ from tests.models import Organization
 from tests.myapp.models import Document, DocumentGrant
 from trusts.compile.nodes import Ref
 from trusts.compile.factory import RegistryFactory
-from tests.apps import built_registries
+from tests.support import built_registries
 from trusts.plan.aggregates import any_plan_records
 
 

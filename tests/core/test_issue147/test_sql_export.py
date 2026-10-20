@@ -1,4 +1,4 @@
-from tests.apps import render_configured_policy
+from tests.support import render_configured_policy
 """Schema-1 SQL policy export, lockfile bytes, and trusts.E009."""
 import datetime
 import json

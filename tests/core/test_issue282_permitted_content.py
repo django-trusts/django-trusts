@@ -18,12 +18,15 @@ from django.test.utils import isolate_apps
 
 from tests.core.test_issue282 import _handle, _listed, _permission, _tables
 from tests.runtests import KERNEL_SUITE, PAIR_KERNEL_SUITE
-from tests.apps import render_configured_policy, scoped_permitted_content as filter_by_permitted_content
+from tests.support import (
+    render_configured_policy,
+    scoped_permitted_content as filter_by_permitted_content,
+)
 from trusts.errors import TrustsConfigurationError
 from trusts.plan.aggregates import common_permissions
 from trusts.decorators import authorization_required
 from trusts.query import AuthorizedQuerySet, PermittedQuerySetMixin, PermittedUsersMixin
-from tests.apps import built_registries
+from tests.support import built_registries
 from trusts.compile.catalogs import Catalog
 
 

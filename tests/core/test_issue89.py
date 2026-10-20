@@ -16,9 +16,12 @@ from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.auth.backends import ModelBackend
 from django.test import SimpleTestCase, TestCase, override_settings
-from tests.apps import (
-    configured_catalog, empty_catalogs, live_config,
-    override_apps_ready, sweep_listed_backends,
+from tests.support import (
+    configured_catalog,
+    empty_catalogs,
+    live_config,
+    override_apps_ready,
+    sweep_listed_backends,
 )
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND

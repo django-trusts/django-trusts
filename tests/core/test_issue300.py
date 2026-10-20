@@ -24,7 +24,7 @@ from trusts.compile.factory import RegistryFactory
 from trusts.plan.contents import granted
 from trusts.inspect.snapshot import _load_policy_sql_document, render_policy_sql_bytes
 from trusts.plan.users import _trusts_eligibility_q
-from tests.apps import render_configured_policy, built_registries
+from tests.support import render_configured_policy, built_registries
 from trusts.compile.catalogs import Catalog
 
 

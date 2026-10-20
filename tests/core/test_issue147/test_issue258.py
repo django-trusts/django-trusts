@@ -41,7 +41,11 @@ from trusts.inspect.yaml import (
     parse_canonical_float,
     _load_policy_yaml,
 )
-from tests.apps import render_configured_policy, render_published_subjects, built_registries
+from tests.support import (
+    render_configured_policy,
+    render_published_subjects,
+    built_registries,
+)
 
 
 

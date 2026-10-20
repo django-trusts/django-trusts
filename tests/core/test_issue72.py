@@ -7,7 +7,8 @@ from django.apps import apps
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps
 
-from tests.apps import configured_catalog, TestsConfig, live_config
+from tests.apps import TestsConfig
+from tests.support import configured_catalog, live_config
 from tests.core import KernelHostRequiredMixin
 from tests.kernel_host.apps import HOST_BACKEND
 from tests.myapp.models import Document
