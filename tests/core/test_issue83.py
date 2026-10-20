@@ -258,7 +258,7 @@ def _perm(codename, model=None):
 def _pks(rows):
     return {row.pk for row in rows}
 
-class _SplitCompiler(object):
+class _SplitCompiler(PlanQueryCompiler):
     """Direct plan OR group-registry plan. Group-only uses the group plan."""
     historical_fallback = False
 

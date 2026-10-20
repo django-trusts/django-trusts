@@ -25,7 +25,7 @@ from trusts.conditions import (
     permission_condition_code,
     permission_has_condition,
 )
-from trusts.plan.conditions import ConditionRecord, RegistryConditionLookup
+from trusts.plan.conditions import ConditionRecord, FrozenConditionLookup
 from trusts.compile.factory import RegistryFactory
 from trusts.errors import TrustsConfigurationError
 
@@ -75,33 +75,36 @@ class _IsolatedTables(object):
 class ConstructTimeSelfBindTest(SimpleTestCase):
     def test_new_registry_self_binds_private_store_adapter(self):
         registry = RegistryFactory()
-        lookup = registry.filter_lookup
-        self.assertIsInstance(lookup, RegistryConditionLookup)
-        self.assertIs(lookup.conditions, registry.conditions)
+        self.assertIsNone(registry.filter_lookup)
+        built = built_catalog(registry)
+        self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
+        self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
 
     def test_handles_do_not_share_lookup_or_store(self):
         left = RegistryFactory()
         right = RegistryFactory()
         self.assertIsNot(left.conditions, right.conditions)
-        self.assertIsNot(left.filter_lookup, right.filter_lookup)
-        self.assertIs(left.filter_lookup.conditions, left.conditions)
-        self.assertIs(right.filter_lookup.conditions, right.conditions)
+        self.assertIsNone(left.filter_lookup)
+        self.assertIsNone(right.filter_lookup)
 
     def test_build_and_ready_do_not_bind_or_rebind(self):
         import inspect
 
         registry = RegistryFactory()
-        lookup = registry.filter_lookup
         built = built_catalog(registry)
-        self.assertIsNot(built.filter_lookup, lookup)
-        self.assertIs(registry.filter_lookup, lookup)
-        self.assertIs(lookup.conditions, registry.conditions)
+        self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
+        self.assertIsNone(registry.filter_lookup)
+        self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
         source = inspect.getsource(RegistryFactory.build)
         self.assertNotIn('set_filter_lookup', source)
         self.assertIn('FrozenConditionLookup', source)
         self.assertNotIn(
             'set_filter_lookup',
             inspect.getsource(TrustsImplementationConfig.ready),
+        )
+        self.assertNotIn(
+            'RegistryConditionLookup',
+            inspect.getsource(RegistryFactory.build),
         )
         self.assertNotIn(
             'RegistryConditionLookup',
@@ -225,8 +228,8 @@ class LiveEnsureSelfBindTest(KernelHostRequiredMixin, SimpleTestCase):
 class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
     def test_explicit_unbind_and_partial_bind_do_not_mutate_wrongly(self):
         registry = RegistryFactory()
-        default = registry.filter_lookup
-        self.assertIs(default.conditions, registry.conditions)
+        frozen = FrozenConditionLookup(())
+        self.assertIsNone(registry.filter_lookup)
 
         class OnlyRecord(object):
             def record_for(self, model, cond_code):
@@ -234,12 +237,14 @@ class OverrideUnbindAndFailClosedTest(KernelHostRequiredMixin, TestCase):
 
         with self.assertRaises(TrustsConfigurationError):
             registry.set_filter_lookup(OnlyRecord())
-        self.assertIs(registry.filter_lookup, default)
+        self.assertIsNone(registry.filter_lookup)
 
+        registry.set_filter_lookup(frozen)
+        self.assertIs(registry.filter_lookup, frozen)
         registry.set_filter_lookup(None)
         self.assertIsNone(registry.filter_lookup)
-        registry.set_filter_lookup(default)
-        self.assertIs(registry.filter_lookup, default)
+        registry.set_filter_lookup(frozen)
+        self.assertIs(registry.filter_lookup, frozen)
 
     def test_unknown_condition_fail_closes_through_supported_backend_path(self):
         backend = DocumentBackend()
@@ -267,14 +272,14 @@ class NamedConditionCompilationTest(TransactionTestCase):
         Note = _note_model()
         with self.assertNumQueries(0):
             registry = RegistryFactory()
-            lookup = registry.filter_lookup
-            self.assertIs(lookup.conditions, registry.conditions)
+            self.assertIsNone(registry.filter_lookup)
             registry.register_permission_condition(
                 Note, 'owned', lambda u, p, o: u == o.owner,
             )
             built = built_catalog(registry)
-        self.assertIsNot(built.filter_lookup, lookup)
-        self.assertIs(registry.filter_lookup, lookup)
+        self.assertIsInstance(built.filter_lookup, FrozenConditionLookup)
+        self.assertIsNone(registry.filter_lookup)
+        self.assertFalse(hasattr(built.filter_lookup, 'conditions'))
         self.assertIs(
             built.get_permission_condition_record(Note, 'owned'),
             registry.conditions.get_permission_condition_record(Note, 'owned'),
@@ -300,8 +305,9 @@ class NamedConditionCompilationTest(TransactionTestCase):
                 registry.register_permission_condition(
                     Note, 'owned', lambda u, p, o: u == o.owner,
                 )
-            lookup = registry.filter_lookup
-            self.assertIs(lookup.conditions, registry.conditions)
+            built = built_catalog(registry)
+            lookup = built.filter_lookup
+            self.assertIsInstance(lookup, FrozenConditionLookup)
             record = lookup.record_for(Note, 'owned')
             self.assertIsNotNone(record)
             self.assertIs(
@@ -335,7 +341,7 @@ class NamedConditionCompilationTest(TransactionTestCase):
             )
             note = Note.objects.create(title='n', owner=alice)
             registry = RegistryFactory()
-            lookup = registry.filter_lookup
+            lookup = FrozenConditionLookup(())
             self.assertIsNone(lookup.record_for(Note, 'missing'))
             with self.assertRaises(AttributeError) as missing:
                 registry.conditions.compile_registered_condition_q(

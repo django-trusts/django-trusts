@@ -1201,25 +1201,6 @@ class ConditionRegistry(object):
         )
 
 
-class RegistryConditionLookup(ConditionLookup):
-    """Generic ``ConditionLookup`` over a ``ConditionRegistry``.
-
-    The factory binds this adapter to its condition registry at construct.
-    Applications register builders; they do not import or construct this type.
-    """
-
-    def __init__(self, conditions):
-        self.conditions = conditions
-
-    def record_for(self, model, cond_code):
-        return self.conditions.get_permission_condition_record(model, cond_code)
-
-    def compile_q(self, model, perm_string, user):
-        return self.conditions.compile_registered_condition_q(
-            model, perm_string, user,
-        )
-
-
 def compile_stored_condition_q(record, model, perm, user):
     """Compile one stored condition record, or raise fail-closed."""
     cond = permission_condition_code(perm)

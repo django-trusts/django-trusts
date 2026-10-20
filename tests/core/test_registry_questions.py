@@ -200,7 +200,7 @@ class RegistryQuestionsTest(TransactionTestCase):
         self.assertEqual(_pks(by_name['get_all_permissions'].question(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(_pks(by_name['get_group_permissions'].question(self.alice, self.doc_a)), {self.read.pk})
         self.assertEqual(_pks(by_name['get_permitted_users'].question(self.doc_a, self.read)), {self.alice.pk})
-        with self.assertRaises(TypeError):
+        with self.assertRaises(AttributeError):
             built.walk_questions(object())
 
     def test_walk_questions_prefix_and_delegation_descriptors(self):

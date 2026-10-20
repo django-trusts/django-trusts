@@ -17,7 +17,7 @@ from trusts.plan.aggregates import (
     instance_match,
 )
 from trusts.plan.conditions import (
-    _condition_model_key,
+    FrozenConditionLookup,
     compile_stored_condition_q,
     evaluate_registered_expression,
     parse_perm_code,
@@ -43,7 +43,6 @@ from trusts.plan.relations import (
     PlanQueryCompiler,
     RelationPlan,
     _candidate_model,
-    answering_compiler,
     bind_checked_user,
     known_skip_names,
 )
@@ -146,6 +145,11 @@ class Catalog(object):
         self.user_override = shape.user_override
         self.filter_lookup = shape.filter_lookup
         self._conditions = shape.conditions
+        self._condition_lookup = (
+            shape.filter_lookup
+            if shape.filter_lookup is not None
+            else FrozenConditionLookup(shape.conditions)
+        )
         self._user_rules = shape.user_rules
         self._override_q = shape.override_q
 
@@ -210,25 +214,14 @@ class Catalog(object):
         )
 
     def get_permission_condition_record(self, model, cond_code):
-        key = (_condition_model_key(model), cond_code)
-        for row_model, code, record in self._conditions:
-            if (_condition_model_key(row_model), code) == key:
-                return record
-        return None
+        return self._condition_lookup.record_for(model, cond_code)
 
     def iter_permission_conditions(self):
         return iter(self._conditions)
 
     def applies(self, plan):
         """Whether this catalog's compiler will compile ``plan``."""
-        compiler = answering_compiler(self)
-        try:
-            applies = compiler.applies
-        except AttributeError:
-            return bool(plan.records)
-        if not callable(applies):
-            return bool(plan.records)
-        return bool(applies(plan))
+        return bool(self.compiler.applies(plan))
 
     def has_permission(self, user, content, permission, *,
                        extra_q=None, permission_model=None,
@@ -390,15 +383,7 @@ class Catalog(object):
         ``via_group`` record, and ``filter_by_permitted_content`` only for
         a group whose content path has a proper prefix.
         """
-        try:
-            visit = visitor.visit
-        except AttributeError:
-            visit = None
-        if not callable(visit):
-            raise TypeError(
-                'walk_questions visitor must supply a callable '
-                'visit(question), not %r.' % (visitor,)
-            )
+        visit = visitor.visit
         results = []
         for model, records, delegations in self._content_groups():
             for descriptor in self._descriptors_for(

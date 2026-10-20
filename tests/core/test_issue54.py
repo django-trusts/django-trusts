@@ -26,6 +26,7 @@ from tests.kernel_host.apps import KernelHostConfig
 from tests.myapp.models import Document, DocumentGrant
 from trusts.apps import TrustsImplementationConfig
 from trusts.decorators import filter_by_permitted_content
+from trusts.plan.conditions import FrozenConditionLookup
 from trusts.plan.relations import (
     ConditionLookup,
     PlanQueryCompiler,
@@ -150,39 +151,21 @@ class ConditionLookupBindTest(TestCase):
     def test_construct_self_binds_and_unbind_is_zero_sql(self):
         with self.assertNumQueries(0):
             registry = RegistryFactory()
-            lookup = registry.filter_lookup
-        self.assertIsNotNone(lookup)
-        self.assertIs(lookup.conditions, registry.conditions)
-
-        class Bound(ConditionLookup):
-            def record_for(self, model, cond_code):
-                raise AssertionError('must not invoke at bind')
-
-            def compile_q(self, model, perm_string, user):
-                raise AssertionError('must not invoke at bind')
-
-        override = Bound()
+        self.assertIsNone(registry.filter_lookup)
+        frozen = FrozenConditionLookup(())
         with self.assertNumQueries(0):
-            registry.set_filter_lookup(override)
-        self.assertIs(registry.filter_lookup, override)
+            registry.set_filter_lookup(frozen)
+        self.assertIs(registry.filter_lookup, frozen)
         with self.assertNumQueries(0):
             registry.set_filter_lookup(None)
         self.assertIsNone(registry.filter_lookup)
         built_catalog(registry)
         with self.assertRaises(TrustsConfigurationError):
-            registry.set_filter_lookup(override)
+            registry.set_filter_lookup(frozen)
 
     def test_missing_methods_raise_and_do_not_partial_bind(self):
         registry = RegistryFactory()
-        default = registry.filter_lookup
-        self.assertIs(default.conditions, registry.conditions)
-
-        class Complete(object):
-            def record_for(self, model, cond_code):
-                return None
-
-            def compile_q(self, model, perm_string, user):
-                return Q(pk__isnull=True)
+        self.assertIsNone(registry.filter_lookup)
 
         class OnlyRecord(object):
             def record_for(self, model, cond_code):
@@ -199,10 +182,9 @@ class ConditionLookupBindTest(TestCase):
                 registry.set_filter_lookup(OnlyCompile())
             with self.assertRaises(TrustsConfigurationError):
                 registry.set_filter_lookup(object())
-        self.assertIs(registry.filter_lookup, default)
-        self.assertIs(default.conditions, registry.conditions)
+        self.assertIsNone(registry.filter_lookup)
 
-        complete = Complete()
+        complete = FrozenConditionLookup(())
         with self.assertNumQueries(0):
             registry.set_filter_lookup(complete)
         with self.assertNumQueries(0):
